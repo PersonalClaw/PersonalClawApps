@@ -1,0 +1,59 @@
+{
+  "name": "anthropic-models",
+  "version": "0.1.0",
+  "displayName": "Anthropic",
+  "description": "Anthropic Claude chat models (Messages API). Bring your own Anthropic API key.",
+  "icon": "Sparkles",
+  "heroImage": "assets/hero.svg",
+  "author": "PersonalClaw",
+  "tags": [
+    "model",
+    "llm",
+    "bundled"
+  ],
+  "provider": {
+    "type": "model",
+    "providerType": "anthropic",
+    "implementation": "provider:create_provider",
+    "multiInstance": true,
+    "capabilities": [
+      "chat",
+      "code_tools",
+      "streaming",
+      "vision"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Anthropic API Key",
+            "help": "Your Anthropic API key (console.anthropic.com). Leave empty to fall back to the ANTHROPIC_API_KEY environment variable.",
+            "sensitive": true
+          }
+        },
+        "default_model": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Default Model",
+            "help": "Anthropic model id. Empty = newest from the app's built-in catalog."
+          }
+        },
+        "endpoint": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Base URL",
+            "help": "Optional custom Anthropic-compatible base URL. Empty uses the Anthropic default.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

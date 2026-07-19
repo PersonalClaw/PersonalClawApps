@@ -1,0 +1,56 @@
+{
+  "name": "together-models",
+  "version": "0.1.0",
+  "displayName": "Together AI",
+  "description": "Together AI serverless inference (OpenAI-compatible). Bring your own Together API key.",
+  "icon": "Boxes",
+  "author": "PersonalClaw",
+  "tags": [
+    "model",
+    "llm"
+  ],
+  "provider": {
+    "type": "model",
+    "implementation": "provider:create_provider",
+    "multiInstance": true,
+    "capabilities": [
+      "chat",
+      "code_tools",
+      "streaming",
+      "vision"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Together AI API Key",
+            "help": "Your Together AI API key. Leave empty to fall back to the TOGETHER_API_KEY environment variable.",
+            "sensitive": true
+          }
+        },
+        "default_model": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Default Model",
+            "help": "A Together AI model id. Empty = resolved from live /v1/models discovery."
+          }
+        },
+        "endpoint": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Base URL",
+            "help": "Optional override of the Together AI base URL. Empty uses https://api.together.xyz/v1.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

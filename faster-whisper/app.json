@@ -1,0 +1,58 @@
+{
+  "name": "faster-whisper",
+  "version": "0.1.0",
+  "displayName": "Faster Whisper",
+  "description": "Speech-to-text using CTranslate2-optimized Whisper models. Download and manage STT models for voice input.",
+  "icon": "Mic",
+  "author": "PersonalClaw",
+  "tags": [
+    "model",
+    "stt"
+  ],
+  "dependencies": {
+    "pythonDependencies": [
+      "faster-whisper>=1.0"
+    ]
+  },
+  "provider": {
+    "type": "model",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "stt"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "device": {
+          "type": "string",
+          "default": "cpu",
+          "enum": [
+            "cpu",
+            "cuda",
+            "mps"
+          ],
+          "x-meta": {
+            "label": "Compute Device",
+            "help": "Hardware acceleration for inference."
+          }
+        },
+        "language_code": {
+          "type": "string",
+          "default": "en-US",
+          "x-meta": {
+            "label": "Language",
+            "help": "Primary language for transcription. Leave empty for auto-detection."
+          }
+        },
+        "streaming": {
+          "type": "boolean",
+          "default": true,
+          "x-meta": {
+            "label": "Streaming Mode",
+            "help": "Enable real-time streaming transcription via WebSocket."
+          }
+        }
+      }
+    }
+  }
+}

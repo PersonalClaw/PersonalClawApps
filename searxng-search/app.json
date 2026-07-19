@@ -1,0 +1,46 @@
+{
+  "name": "searxng-search",
+  "version": "0.1.0",
+  "displayName": "SearXNG",
+  "description": "Self-hosted, no-key web search via a SearXNG meta-search instance. Point it at your own SearXNG URL for private, free web search and links.",
+  "icon": "Search",
+  "author": "PersonalClaw",
+  "tags": [
+    "search",
+    "self-hosted"
+  ],
+  "provider": {
+    "type": "search",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "search"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "SearXNG Endpoint",
+            "help": "Base URL of your SearXNG instance (e.g. https://searxng.example.com). The JSON API must be enabled."
+          }
+        },
+        "timeout_secs": {
+          "type": "integer",
+          "default": 20,
+          "x-meta": {
+            "label": "Request Timeout",
+            "help": "Maximum seconds to wait for a search response.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      },
+      "required": [
+        "endpoint"
+      ]
+    }
+  }
+}

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="240" viewBox="0 0 600 240" fill="none">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="600" y2="240" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#d97757"/>
+      <stop offset="1" stop-color="#1a1a1a"/>
+    </linearGradient>
+  </defs>
+  <rect width="600" height="240" fill="url(#g)"/>
+  <g fill="#ffffff" opacity="0.95">
+    <text x="48" y="120" font-family="system-ui, sans-serif" font-size="44" font-weight="700">Anthropic</text>
+    <text x="49" y="158" font-family="system-ui, sans-serif" font-size="20" opacity="0.85">Claude models · Messages API</text>
+  </g>
+</svg>

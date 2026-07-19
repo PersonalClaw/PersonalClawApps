@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="240" viewBox="0 0 600 240" fill="none">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="600" y2="240" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7c5cff"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+  <rect width="600" height="240" fill="url(#g)"/>
+  <g fill="#ffffff" opacity="0.92">
+    <circle cx="120" cy="120" r="10"/>
+    <circle cx="160" cy="90" r="6"/>
+    <circle cx="160" cy="150" r="6"/>
+    <path d="M128 116 L154 94 M128 124 L154 146" stroke="#fff" stroke-width="4"/>
+    <text x="220" y="115" font-family="system-ui, sans-serif" font-size="40" font-weight="700">skills.sh</text>
+    <text x="221" y="150" font-family="system-ui, sans-serif" font-size="20" opacity="0.85">Community skill marketplace</text>
+  </g>
+</svg>

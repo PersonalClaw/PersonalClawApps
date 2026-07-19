@@ -1,0 +1,48 @@
+{
+  "name": "openai-tools",
+  "version": "0.1.0",
+  "displayName": "OpenAI Tool Servers",
+  "description": "Connect OpenAI-compatible tool servers that expose tools via REST API.",
+  "icon": "Wrench",
+  "author": "PersonalClaw",
+  "tags": [
+    "tool"
+  ],
+  "provider": {
+    "type": "tool",
+    "implementation": "provider:create_openai_tool_provider",
+    "capabilities": [
+      "tool_execution",
+      "tool_discovery"
+    ],
+    "multiInstance": true,
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "x-meta": {
+            "label": "Endpoint URL",
+            "help": "Base URL of the tool server (e.g. https://tools.example.com)."
+          }
+        },
+        "api_key": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "API Key",
+            "help": "Optional bearer token for authentication."
+          }
+        },
+        "tool_filter": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Tool Filter",
+            "help": "Comma-separated list of tool names to expose. Leave empty for all."
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "name": "webhook-action",
+  "version": "0.1.0",
+  "displayName": "HTTP Webhook Hooks",
+  "description": "POST agent lifecycle events to an HTTP endpoint. Supports method/headers overrides and a templated body.",
+  "icon": "Webhook",
+  "author": "PersonalClaw",
+  "tags": [
+    "action"
+  ],
+  "provider": {
+    "type": "action",
+    "entity": "webhook",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "execute"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "x-meta": {
+            "label": "Webhook URL",
+            "help": "The HTTPS endpoint the event is POSTed to when this trigger fires."
+          }
+        },
+        "method": {
+          "type": "string",
+          "default": "POST",
+          "enum": [
+            "POST",
+            "PUT",
+            "PATCH"
+          ],
+          "x-meta": {
+            "label": "Method",
+            "help": "HTTP method (default POST)."
+          }
+        },
+        "headers": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Headers (JSON)",
+            "help": "Optional JSON object of extra request headers, e.g. {\"Authorization\": \"Bearer \u2026\"}. Content-Type defaults to application/json."
+          }
+        },
+        "body_template": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Body template",
+            "help": "Optional. Template with $EVENT, $CONTEXT, $now, $job_name, etc. Leave blank to send the full event JSON as-is."
+          }
+        }
+      }
+    }
+  }
+}

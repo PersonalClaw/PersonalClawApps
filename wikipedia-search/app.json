@@ -1,0 +1,43 @@
+{
+  "name": "wikipedia-search",
+  "version": "0.1.0",
+  "displayName": "Wikipedia Search",
+  "description": "Keyless encyclopedic search over Wikipedia: ranked articles with intro-extract snippets. No API key \u2014 uses the public MediaWiki API. Links-only (web_fetch an article to read its full body). Best for factual/reference lookups.",
+  "icon": "BookMarked",
+  "author": "PersonalClaw",
+  "tags": [
+    "search",
+    "bundled"
+  ],
+  "provider": {
+    "type": "search",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "search"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "lang": {
+          "type": "string",
+          "default": "en",
+          "x-meta": {
+            "label": "Language",
+            "help": "Wikipedia language edition to search (e.g. en, de, fr, ja)."
+          }
+        },
+        "timeout_secs": {
+          "type": "integer",
+          "default": 20,
+          "x-meta": {
+            "label": "Request Timeout",
+            "help": "Maximum seconds to wait for a search response.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

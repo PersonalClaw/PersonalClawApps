@@ -1,0 +1,58 @@
+{
+  "name": "anthropic-compatible",
+  "version": "0.1.0",
+  "displayName": "Anthropic-Compatible",
+  "description": "Any Anthropic-compatible (Messages API) endpoint. Supply the base URL + API key.",
+  "icon": "Sparkles",
+  "author": "PersonalClaw",
+  "tags": [
+    "model",
+    "llm",
+    "bundled"
+  ],
+  "provider": {
+    "type": "model",
+    "providerType": "anthropic_compatible",
+    "implementation": "provider:create_provider",
+    "multiInstance": true,
+    "capabilities": [
+      "chat",
+      "code_tools",
+      "streaming",
+      "vision"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Base URL",
+            "help": "The Anthropic-compatible base URL, e.g. https://my-gateway."
+          }
+        },
+        "api_key": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "API Key",
+            "help": "API key for the endpoint. Leave empty to fall back to the ANTHROPIC_API_KEY environment variable.",
+            "sensitive": true
+          }
+        },
+        "default_model": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Default Model",
+            "help": "The Anthropic model id served by your endpoint."
+          }
+        }
+      },
+      "required": [
+        "endpoint"
+      ]
+    }
+  }
+}

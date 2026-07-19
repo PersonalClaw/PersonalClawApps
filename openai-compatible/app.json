@@ -1,0 +1,59 @@
+{
+  "name": "openai-compatible",
+  "version": "0.1.0",
+  "displayName": "OpenAI-Compatible",
+  "description": "Any OpenAI-compatible Chat Completions endpoint (self-hosted, proxy, or an unlisted cloud). Supply the base URL + API key.",
+  "icon": "Brain",
+  "author": "PersonalClaw",
+  "tags": [
+    "model",
+    "llm",
+    "bundled"
+  ],
+  "provider": {
+    "type": "model",
+    "providerType": "openai_compatible",
+    "implementation": "provider:create_provider",
+    "multiInstance": true,
+    "capabilities": [
+      "chat",
+      "code_tools",
+      "streaming",
+      "embedding",
+      "vision"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Base URL",
+            "help": "The OpenAI-compatible base URL (should end at /v1), e.g. https://my-gateway/v1."
+          }
+        },
+        "api_key": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "API Key",
+            "help": "Bearer API key for the endpoint. Leave empty to fall back to the OPENAI_API_KEY environment variable.",
+            "sensitive": true
+          }
+        },
+        "default_model": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Default Model",
+            "help": "The model id served by your endpoint."
+          }
+        }
+      },
+      "required": [
+        "endpoint"
+      ]
+    }
+  }
+}

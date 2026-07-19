@@ -1,0 +1,45 @@
+{
+  "name": "exa-search",
+  "version": "0.1.0",
+  "displayName": "Exa",
+  "description": "Neural/semantic web search: embeddings-ranked results with relevant highlights and extracted content, plus single-URL content retrieval. Good for discovering non-obvious sources. API key from exa.ai.",
+  "icon": "Search",
+  "author": "PersonalClaw",
+  "tags": [
+    "search",
+    "bundled"
+  ],
+  "provider": {
+    "type": "search",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "search",
+      "fetch"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Exa API Key",
+            "help": "Your Exa API key (exa.ai). Leave empty to fall back to the EXA_API_KEY environment variable.",
+            "sensitive": true
+          }
+        },
+        "timeout_secs": {
+          "type": "integer",
+          "default": 30,
+          "x-meta": {
+            "label": "Request Timeout",
+            "help": "Maximum seconds to wait for a search/contents response.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

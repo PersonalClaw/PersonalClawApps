@@ -1,0 +1,44 @@
+{
+  "name": "brave-search",
+  "version": "0.1.0",
+  "displayName": "Brave Search",
+  "description": "Cheap, broad web search: ranked links with descriptions + extra snippets and a recency filter. Links-only (no answer or page content \u2014 web_fetch a result to read it). API key from search.brave.com.",
+  "icon": "Search",
+  "author": "PersonalClaw",
+  "tags": [
+    "search",
+    "bundled"
+  ],
+  "provider": {
+    "type": "search",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "search"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Brave API Key",
+            "help": "Your Brave Search API subscription token (search.brave.com). Leave empty to fall back to the BRAVE_API_KEY environment variable.",
+            "sensitive": true
+          }
+        },
+        "timeout_secs": {
+          "type": "integer",
+          "default": 20,
+          "x-meta": {
+            "label": "Request Timeout",
+            "help": "Maximum seconds to wait for a search response.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
