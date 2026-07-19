@@ -1,0 +1,45 @@
+{
+  "name": "kiro-cli-agent",
+  "version": "0.1.0",
+  "displayName": "Kiro CLI",
+  "description": "Run the kiro-cli agent (acp:kiro-cli) over ACP. kiro-cli is an Amazon-internal CLI; this provider activates only when the `kiro-cli` binary is present on the machine, and is unavailable otherwise.",
+  "icon": "SquareTerminal",
+  "author": "PersonalClaw",
+  "tags": [
+    "agent",
+    "acp",
+    "kiro-cli",
+    "bundled"
+  ],
+  "provider": {
+    "type": "agent",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "acp"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Default Model",
+            "help": "Optional model the agent defaults to. Empty uses the kiro CLI's own default."
+          }
+        },
+        "acp_bin": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "CLI Path",
+            "help": "Optional absolute path to the kiro-cli binary. Empty auto-resolves via PATH. Equivalent to the KIRO_CLI_BIN env var.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

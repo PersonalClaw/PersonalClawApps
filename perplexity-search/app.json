@@ -1,0 +1,44 @@
+{
+  "name": "perplexity-search",
+  "version": "0.1.0",
+  "displayName": "Perplexity Sonar",
+  "description": "Answer-first web search: the Sonar models answer a query directly from live web results and return the cited sources. Best when you want a synthesized answer with citations, not just links. API key from perplexity.ai.",
+  "icon": "Search",
+  "author": "PersonalClaw",
+  "tags": [
+    "search",
+    "bundled"
+  ],
+  "provider": {
+    "type": "search",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "search"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Perplexity API Key",
+            "help": "Your Perplexity API key (perplexity.ai). Leave empty to fall back to the PERPLEXITY_API_KEY environment variable.",
+            "sensitive": true
+          }
+        },
+        "timeout_secs": {
+          "type": "integer",
+          "default": 40,
+          "x-meta": {
+            "label": "Request Timeout",
+            "help": "Maximum seconds to wait for a Sonar response (answer synthesis can take longer than a plain search).",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,49 @@
+_entity: prompt
+use_case: web_extract
+name: task-web-extract
+kind: user
+category: internal
+description: Extract structured data from a fetched web page per the caller's instructions
+  (JSON out).
+tags:
+- system
+- bundled
+variables:
+- name: instructions
+  type: textarea
+  description: What to extract (the caller's field spec).
+  required: true
+- name: title
+  type: text
+  description: The page title.
+  required: false
+  default: (none)
+- name: url
+  type: text
+  description: The page URL.
+  required: false
+  default: ''
+- name: content
+  type: textarea
+  description: The page content (capped).
+  required: true
+content: 'Extract structured data from the page content below. Return ONLY a single
+  JSON object — no prose, no markdown fence — matching exactly what is requested.
+
+
+  WHAT TO EXTRACT:
+
+  {{instructions}}
+
+
+  PAGE TITLE: {{title}}
+
+  PAGE URL: {{url}}
+
+
+  PAGE CONTENT:
+
+  {{content}}
+
+
+  Respond with the JSON object only. Use null for fields not present on the page.'

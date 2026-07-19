@@ -1,0 +1,24 @@
+{
+  "name": "meta-muse-spark",
+  "displayName": "Meta Muse Spark",
+  "version": "0.1.0",
+  "description": "Meta Muse Spark chat models via the Meta AI API (OpenAI-compatible). Bring your own Meta Model API key.",
+  "author": "PersonalClaw",
+  "icon": "brain",
+  "native": false,
+  "tags": [
+    "model",
+    "llm"
+  ],
+  "provider": {
+    "type": "model",
+    "providerType": "meta_muse_spark",
+    "implementation": "provider:create_provider",
+    "multiInstance": true,
+    "capabilities": [
+      "chat",
+      "streaming",
+      "vision"
+    ]
+  }
+}

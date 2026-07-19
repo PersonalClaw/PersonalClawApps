@@ -1,0 +1,36 @@
+{
+  "name": "skills-sh",
+  "version": "0.1.0",
+  "displayName": "Skills.sh Marketplace",
+  "description": "Browse and install community skills from skills.sh. Search, preview, and manage external skill packages.",
+  "icon": "Store",
+  "heroImage": "assets/hero.svg",
+  "author": "PersonalClaw",
+  "tags": [
+    "skills",
+    "bundled"
+  ],
+  "provider": {
+    "type": "skills",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "search",
+      "install",
+      "uninstall"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "API Key",
+            "help": "Skills.sh API key for search and install. Get one at skills.sh/settings. Without this, search uses npx CLI (slower) and install may fail.",
+            "sensitive": true
+          }
+        }
+      }
+    }
+  }
+}

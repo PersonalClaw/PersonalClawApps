@@ -1,0 +1,44 @@
+{
+  "name": "claude-code-agent",
+  "version": "0.1.0",
+  "displayName": "Claude Code",
+  "description": "Run Anthropic's Claude Code as an agent (acp:claude-code) via the Zed ACP adapter. Claude self-authenticates with your `claude` login; PersonalClaw stores no key. Spawned Claude is hardened: an isolated CLAUDE_CONFIG_DIR strips inherited auto-approve permissions so every tool routes through the host approval gate.",
+  "icon": "SquareTerminal",
+  "author": "PersonalClaw",
+  "tags": [
+    "agent",
+    "acp",
+    "claude-code"
+  ],
+  "provider": {
+    "type": "agent",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "acp"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Default Model",
+            "help": "Optional. Leave empty to use the Claude CLI's own current default (recommended). The Claude adapter advertises the live model set for selection; set this only to pin a specific model."
+          }
+        },
+        "acp_bin": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "ACP Adapter Path",
+            "help": "Optional absolute path to the claude-code-acp adapter. Empty auto-resolves: PATH \u2192 node-manager dirs \u2192 npx @zed-industries/claude-code-acp. Equivalent to the CLAUDE_CODE_ACP_BIN env var.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

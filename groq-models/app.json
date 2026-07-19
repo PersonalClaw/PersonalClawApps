@@ -1,0 +1,55 @@
+{
+  "name": "groq-models",
+  "version": "0.1.0",
+  "displayName": "Groq",
+  "description": "Groq LPU inference (OpenAI-compatible), very low latency. Bring your own Groq API key.",
+  "icon": "Zap",
+  "author": "PersonalClaw",
+  "tags": [
+    "model",
+    "llm"
+  ],
+  "provider": {
+    "type": "model",
+    "implementation": "provider:create_provider",
+    "multiInstance": true,
+    "capabilities": [
+      "chat",
+      "code_tools",
+      "streaming"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Groq API Key",
+            "help": "Your Groq API key. Leave empty to fall back to the GROQ_API_KEY environment variable.",
+            "sensitive": true
+          }
+        },
+        "default_model": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Default Model",
+            "help": "A Groq model id. Empty = resolved from live /v1/models discovery."
+          }
+        },
+        "endpoint": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Base URL",
+            "help": "Optional override of the Groq base URL. Empty uses https://api.groq.com/openai/v1.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

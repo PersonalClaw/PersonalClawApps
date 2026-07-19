@@ -1,0 +1,44 @@
+{
+  "name": "codex-agent",
+  "version": "0.1.0",
+  "displayName": "OpenAI Codex",
+  "description": "Run the OpenAI Codex CLI as an agent (acp:codex) via the Zed ACP adapter. Codex manages its own configuration and authentication; every tool call routes through PersonalClaw's host approval gate.",
+  "icon": "SquareTerminal",
+  "author": "PersonalClaw",
+  "tags": [
+    "agent",
+    "acp",
+    "codex"
+  ],
+  "provider": {
+    "type": "agent",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "acp"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Default Model",
+            "help": "Optional. Leave empty to use the Codex CLI's own current default (recommended). The adapter advertises the live model set for selection; set this only to pin a specific model."
+          }
+        },
+        "acp_bin": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "ACP Adapter Path",
+            "help": "Optional absolute path to the codex-acp adapter. Empty auto-resolves: PATH \u2192 node-manager dirs \u2192 npx @zed-industries/codex-acp. Equivalent to the CODEX_ACP_BIN env var.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

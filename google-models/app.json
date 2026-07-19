@@ -1,0 +1,65 @@
+{
+  "name": "google-models",
+  "version": "0.1.0",
+  "displayName": "Google Gemini",
+  "description": "Google Gemini models \u2014 chat, embedding, image generation (Imagen / gemini-image), video generation (Veo), and text-to-speech. Bring your own Gemini API key; one instance serves every use case.",
+  "icon": "Sparkle",
+  "author": "PersonalClaw",
+  "tags": [
+    "model",
+    "llm",
+    "embedding",
+    "image_gen",
+    "video_gen",
+    "tts"
+  ],
+  "provider": {
+    "type": "model",
+    "providerType": "google",
+    "implementation": "provider:create_provider",
+    "multiInstance": true,
+    "capabilities": [
+      "chat",
+      "code_tools",
+      "streaming",
+      "vision",
+      "embedding",
+      "image_gen",
+      "video_gen",
+      "tts"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Google Gemini API Key",
+            "help": "Your Google Gemini API key. Leave empty to fall back to the GEMINI_API_KEY environment variable.",
+            "sensitive": true
+          }
+        },
+        "default_model": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Default Model",
+            "help": "A Gemini model id. Empty = resolved from live /v1/models discovery."
+          }
+        },
+        "endpoint": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Base URL",
+            "help": "Optional override of the Google Gemini base URL. Empty uses https://generativelanguage.googleapis.com/v1beta/openai/.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

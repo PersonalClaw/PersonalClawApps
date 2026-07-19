@@ -1,0 +1,61 @@
+{
+  "name": "minutes",
+  "version": "0.1.0",
+  "displayName": "Minutes",
+  "description": "Tie recordings, videos, notes and docs into one meeting; watch it cohesively on a synced timeline with speaker-attributed transcripts. Tag participants, generate multiple minutes/summaries from templates, and consolidate dates, action items, follow-ups and decisions \u2014 then turn action items into a task list under a project.",
+  "icon": "CalendarClock",
+  "author": "PersonalClaw",
+  "license": "MIT-0",
+  "tags": [
+    "meetings",
+    "minutes",
+    "notes",
+    "transcription",
+    "knowledge",
+    "productivity"
+  ],
+  "backend": {
+    "entryPoint": "backend/server.py",
+    "type": "python",
+    "port": "auto",
+    "healthCheck": "/health"
+  },
+  "ui": {
+    "entry": "dist/index.mjs",
+    "pages": [
+      {
+        "route": "/apps/minutes",
+        "label": "Minutes",
+        "icon": "CalendarClock",
+        "entryPoint": "dist/index.mjs",
+        "mountFunction": "mount"
+      }
+    ],
+    "sidebar": {
+      "section": "Apps",
+      "order": 20
+    }
+  },
+  "permissions": {
+    "api": [
+      "/api/knowledge",
+      "/api/lexicon",
+      "/api/apps/minutes",
+      "/api/projects",
+      "/api/task-lists",
+      "/api/tasks"
+    ],
+    "events": [
+      "knowledge",
+      "refresh"
+    ],
+    "storage": true,
+    "network": false,
+    "agent": true
+  },
+  "setup": {
+    "onInstall": "bash setup.sh",
+    "onUpdate": "bash setup.sh",
+    "onEnableTimeout": 60
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "name": "deepseek-models",
+  "version": "0.1.0",
+  "displayName": "DeepSeek",
+  "description": "DeepSeek chat + reasoner models (OpenAI-compatible). Bring your own DeepSeek API key.",
+  "icon": "Waves",
+  "author": "PersonalClaw",
+  "tags": [
+    "model",
+    "llm"
+  ],
+  "provider": {
+    "type": "model",
+    "implementation": "provider:create_provider",
+    "multiInstance": true,
+    "capabilities": [
+      "chat",
+      "code_tools",
+      "streaming"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "DeepSeek API Key",
+            "help": "Your DeepSeek API key. Leave empty to fall back to the DEEPSEEK_API_KEY environment variable.",
+            "sensitive": true
+          }
+        },
+        "default_model": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Default Model",
+            "help": "A DeepSeek model id. Empty = resolved from live /v1/models discovery."
+          }
+        },
+        "endpoint": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Base URL",
+            "help": "Optional override of the DeepSeek base URL. Empty uses https://api.deepseek.com/v1.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

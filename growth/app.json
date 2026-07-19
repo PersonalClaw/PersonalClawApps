@@ -1,0 +1,67 @@
+{
+  "name": "growth",
+  "version": "0.1.0",
+  "displayName": "Growth Tracker",
+  "description": "Turn your real work \u2014 chat sessions, projects you ran, tasks you closed, and notes \u2014 into evidenced growth artifacts. Track growth areas, score against a customizable rubric, and generate a shareable accomplishment doc that cites its evidence.",
+  "icon": "TrendingUp",
+  "author": "PersonalClaw",
+  "license": "MIT-0",
+  "tags": [
+    "career",
+    "worklog",
+    "brag-doc",
+    "growth",
+    "productivity"
+  ],
+  "backend": {
+    "entryPoint": "backend/server.py",
+    "type": "python",
+    "port": "auto",
+    "healthCheck": "/health"
+  },
+  "ui": {
+    "entry": "dist/index.mjs",
+    "pages": [
+      {
+        "route": "/apps/growth",
+        "label": "Growth",
+        "icon": "TrendingUp",
+        "entryPoint": "dist/index.mjs",
+        "mountFunction": "mount"
+      }
+    ],
+    "sidebar": {
+      "section": "Apps",
+      "order": 30
+    }
+  },
+  "permissions": {
+    "api": [
+      "/api/apps/growth",
+      "/api/projects",
+      "/api/tasks",
+      "/api/knowledge"
+    ],
+    "events": [
+      "refresh"
+    ],
+    "storage": true,
+    "network": false,
+    "agent": true,
+    "cron": true
+  },
+  "crons": [
+    {
+      "name": "daily-capture",
+      "message": "Read the growth-tracker daily-capture SOP at the app's DAILY_CAPTURE.md and follow every step: scan today's memory-history file + recent completed projects/loops and closed tasks, extract 0-5 genuine growth artifacts in SBI form with evidence links, and POST each to /apps/growth/api/artifacts with source='auto'. Skip trivia.",
+      "cron_expr": "3 18 * * *",
+      "silent": true,
+      "persistent_session": false
+    }
+  ],
+  "setup": {
+    "onInstall": "bash setup.sh",
+    "onUpdate": "bash setup.sh",
+    "onEnableTimeout": 60
+  }
+}

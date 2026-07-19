@@ -1,0 +1,26 @@
+{
+  "name": "sentence-transformers",
+  "version": "0.1.0",
+  "displayName": "Sentence Transformers (local embeddings)",
+  "description": "Local, in-process text embedding models via sentence-transformers (runs on your machine, no API key). Provides the embedding capability; bind a model in Settings \u2192 Models. Needs the sentence-transformers/torch package (server or container build).",
+  "icon": "Binary",
+  "author": "PersonalClaw",
+  "tags": [
+    "model",
+    "embedding",
+    "local"
+  ],
+  "dependencies": {
+    "pythonDependencies": [
+      "sentence-transformers>=3.0",
+      "faiss-cpu>=1.7"
+    ]
+  },
+  "provider": {
+    "type": "model",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "embedding"
+    ]
+  }
+}

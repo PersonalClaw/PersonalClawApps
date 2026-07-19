@@ -1,0 +1,95 @@
+{
+  "name": "bedrock-models",
+  "version": "0.1.0",
+  "displayName": "Amazon Bedrock",
+  "description": "Amazon Bedrock \u2014 chat (Converse API), embedding (Titan/Cohere), image generation (Nova Canvas), video generation (Nova Reel), and speech-to-text. One instance per AWS profile/region; authentication uses your AWS credential chain \u2014 no key is stored by PersonalClaw.",
+  "icon": "Cloud",
+  "author": "PersonalClaw",
+  "tags": [
+    "model",
+    "llm",
+    "embedding",
+    "image_gen",
+    "video_gen",
+    "stt",
+    "bundled"
+  ],
+  "dependencies": {
+    "pythonDependencies": [
+      "boto3>=1.34"
+    ]
+  },
+  "provider": {
+    "type": "model",
+    "providerType": "bedrock",
+    "implementation": "provider:create_provider",
+    "multiInstance": true,
+    "capabilities": [
+      "chat",
+      "code_tools",
+      "streaming",
+      "vision",
+      "embedding",
+      "image_gen",
+      "video_gen",
+      "stt"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "region": {
+          "type": "string",
+          "default": "us-east-1",
+          "x-meta": {
+            "label": "AWS Region",
+            "help": "Bedrock region (e.g. us-east-1). Credentials come from your AWS environment / profile \u2014 no key is stored here."
+          }
+        },
+        "profile": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "AWS Profile",
+            "help": "Optional named profile from ~/.aws. Empty uses the default credential chain (env / SSO / instance role). Add a second instance with a different profile to use another AWS account.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        },
+        "default_model": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Default Chat Model",
+            "help": "Bedrock chat model id (full versioned id). Empty = resolved from live Bedrock discovery (Claude preferred)."
+          }
+        },
+        "system_prompt": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "System Prompt",
+            "help": "Optional system prompt prepended to every chat turn.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        },
+        "video_s3_bucket": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Video S3 Bucket",
+            "help": "S3 bucket for Nova Reel video-generation output. Falls back to the BEDROCK_VIDEO_S3_BUCKET env var. Required only for video generation.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      },
+      "required": [
+        "region"
+      ]
+    }
+  }
+}

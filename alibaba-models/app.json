@@ -1,0 +1,55 @@
+{
+  "name": "alibaba-models",
+  "version": "0.1.0",
+  "displayName": "Alibaba Model Studio",
+  "description": "Alibaba Cloud Model Studio (DashScope) \u2014 Qwen chat + embedding, image generation (Qwen-Image, Wan), and more. Select your regional endpoint.",
+  "icon": "Cloud",
+  "author": "PersonalClaw",
+  "tags": [
+    "model",
+    "llm",
+    "embedding",
+    "image_gen"
+  ],
+  "provider": {
+    "type": "model",
+    "providerType": "alibaba",
+    "implementation": "provider:create_provider",
+    "multiInstance": true,
+    "capabilities": [
+      "chat",
+      "code_tools",
+      "streaming",
+      "embedding",
+      "image_gen"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "API Key",
+            "help": "Your Alibaba Model Studio API key. Falls back to ALIBABA_API_KEY env var.",
+            "sensitive": true
+          }
+        },
+        "endpoint": {
+          "type": "string",
+          "default": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+          "enum": [
+            "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "https://dashscope-us.aliyuncs.com/compatible-mode/v1"
+          ],
+          "x-meta": {
+            "label": "Endpoint",
+            "help": "Regional API endpoint. Token Plan users select their plan endpoint; workspace users enter their workspace URL."
+          }
+        }
+      }
+    }
+  }
+}

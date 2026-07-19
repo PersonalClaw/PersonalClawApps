@@ -1,0 +1,29 @@
+{
+  "name": "piper-tts",
+  "version": "0.1.0",
+  "displayName": "Piper TTS",
+  "description": "Text-to-speech using Piper neural voice models. Download and manage TTS voices for audio output.",
+  "icon": "Volume2",
+  "author": "PersonalClaw",
+  "tags": [
+    "model",
+    "tts"
+  ],
+  "dependencies": {
+    "pythonDependencies": [
+      "piper-tts>=1.2",
+      "huggingface-hub>=0.23"
+    ]
+  },
+  "provider": {
+    "type": "model",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "tts"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {}
+    }
+  }
+}

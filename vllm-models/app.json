@@ -1,0 +1,48 @@
+{
+  "name": "vllm-models",
+  "version": "0.1.0",
+  "displayName": "vLLM",
+  "description": "A local vLLM server (OpenAI-compatible). Point it at your vLLM endpoint; capabilities are model-dependent.",
+  "icon": "Cpu",
+  "author": "PersonalClaw",
+  "tags": [
+    "model",
+    "llm"
+  ],
+  "provider": {
+    "type": "model",
+    "implementation": "provider:create_provider",
+    "multiInstance": true,
+    "capabilities": [
+      "chat",
+      "code_tools",
+      "streaming",
+      "embedding",
+      "vision"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "x-meta": {
+            "label": "vLLM Base URL",
+            "help": "The OpenAI-compatible base URL of your vLLM server (e.g. http://localhost:8000)."
+          }
+        },
+        "default_model": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Default Model",
+            "help": "The model id served by your vLLM deployment."
+          }
+        }
+      },
+      "required": [
+        "endpoint"
+      ]
+    }
+  }
+}
