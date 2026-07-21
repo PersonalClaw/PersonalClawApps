@@ -1175,7 +1175,7 @@ import os
 import tempfile
 import time as _time
 
-from personalclaw.embedding_providers.base import EmbeddingProvider
+from personalclaw.sdk.embedding import EmbeddingProvider
 from personalclaw.sdk.image import (
     ImageGenError,
     ImageGenModel,
@@ -1188,7 +1188,7 @@ from personalclaw.sdk.video import (
     VideoGenProvider,
     VideoResult,
 )
-from personalclaw.stt.provider import SttProvider, TranscriptResult
+from personalclaw.sdk.stt import SttProvider, TranscriptResult
 
 
 def _resolve_region(config: dict | None) -> str:
@@ -1801,7 +1801,7 @@ def _scan_stt(entries: list[dict[str, Any]]) -> list:
 
 
 try:
-    from personalclaw.providers.media_scanners import register_scanner as _reg_scanner
+    from personalclaw.sdk.model import register_scanner as _reg_scanner
 
     _reg_scanner("embedding", _scan_embedding)
     _reg_scanner("image_gen", _scan_image)
