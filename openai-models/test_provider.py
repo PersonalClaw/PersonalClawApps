@@ -318,7 +318,15 @@ async def test_openai_embed_returns_vectors(fake_openai: types.ModuleType) -> No
     from personalclaw.sdk.model import OpenAIProvider
 
     cred = Credential(name="x", kind="api_key", secret="sk-test", source="env")
-    provider = OpenAIProvider(model="gpt-4o-mini", credential=cred)
+    # The embedding model is supplied via extra_options (the app threads the
+    # embedding use-case binding through as embedding_model — it is NOT hardcoded
+    # in the base provider, whose default is "" so a non-OpenAI compatible endpoint
+    # never gets an OpenAI-specific id silently).
+    provider = OpenAIProvider(
+        model="gpt-4o-mini",
+        credential=cred,
+        extra_options={"embedding_model": "text-embedding-3-small"},
+    )
     fake_embeddings = _FakeEmbeddings(vectors=[[0.1, 0.2, 0.3]])
     provider._client.embeddings = fake_embeddings
 

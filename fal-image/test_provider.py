@@ -58,7 +58,7 @@ class TestFalSizeNormalization:
     async def test_generate_sends_normalized_size_object(self):
         prov = FalImageProvider(api_key="k")
         seq = [
-            _resp(200, {"status_url": "https://q/s", "response_url": "https://q/r"}),
+            _resp(200, {"request_id": "req-123"}),
             _resp(200, {"status": "COMPLETED"}),
             _resp(200, {"images": [{"url": "https://cdn/x.png"}]}),
         ]
@@ -75,7 +75,7 @@ class TestFalImageProvider:
     async def test_generate_submit_poll_result(self):
         prov = FalImageProvider(api_key="k")
         seq = [
-            _resp(200, {"status_url": "https://q/s", "response_url": "https://q/r"}),
+            _resp(200, {"request_id": "req-123"}),
             _resp(200, {"status": "IN_PROGRESS"}),
             _resp(200, {"status": "COMPLETED"}),
             _resp(200, {"images": [{"url": "https://cdn/x.png", "content_type": "image/png"}]}),
@@ -107,7 +107,7 @@ class TestFalImageProvider:
         src = tmp_path / "s.png"
         src.write_bytes(b"\x89PNG\r\nsource")
         seq = [
-            _resp(200, {"status_url": "https://q/s", "response_url": "https://q/r"}),
+            _resp(200, {"request_id": "req-123"}),
             _resp(200, {"status": "COMPLETED"}),
             _resp(200, {"images": [{"url": "https://cdn/e.png"}]}),
         ]
@@ -123,7 +123,7 @@ class TestFalImageProvider:
     async def test_failed_job_raises(self):
         prov = FalImageProvider(api_key="k")
         seq = [
-            _resp(200, {"status_url": "https://q/s", "response_url": "https://q/r"}),
+            _resp(200, {"request_id": "req-123"}),
             _resp(200, {"status": "FAILED"}),
         ]
         with patch("personalclaw.sdk.net.fetch", AsyncMock(side_effect=seq)), \
@@ -159,7 +159,7 @@ class TestFalVideoProvider:
     async def test_generate_submit_poll_result(self):
         prov = FalVideoProvider(api_key="k")
         seq = [
-            _resp(200, {"status_url": "https://q/s", "response_url": "https://q/r"}),
+            _resp(200, {"request_id": "req-123"}),
             _resp(200, {"status": "COMPLETED"}),
             _resp(200, {"video": {"url": "https://cdn/v.mp4", "content_type": "video/mp4"}}),
         ]
@@ -179,7 +179,7 @@ class TestFalVideoProvider:
     async def test_generate_sends_duration_and_aspect_ratio(self):
         prov = FalVideoProvider(api_key="k")
         seq = [
-            _resp(200, {"status_url": "https://q/s", "response_url": "https://q/r"}),
+            _resp(200, {"request_id": "req-123"}),
             _resp(200, {"status": "COMPLETED"}),
             _resp(200, {"video": {"url": "https://cdn/v.mp4"}}),
         ]
@@ -192,7 +192,9 @@ class TestFalVideoProvider:
                 aspect_ratio="16:9",
             )
         body = json.loads(fake_fetch.call_args_list[0].kwargs["data"])
-        assert body["duration"] == 8.0
+        # veo2 (the default video model) takes a literal '<n>s' duration string,
+        # not a raw float — see FalVideoProvider._format_duration.
+        assert body["duration"] == "8s"
         assert body["aspect_ratio"] == "16:9"
 
     @pytest.mark.asyncio
@@ -210,7 +212,7 @@ class TestFalVideoProvider:
     async def test_failed_job_raises(self):
         prov = FalVideoProvider(api_key="k")
         seq = [
-            _resp(200, {"status_url": "https://q/s", "response_url": "https://q/r"}),
+            _resp(200, {"request_id": "req-123"}),
             _resp(200, {"status": "FAILED"}),
         ]
         with patch("personalclaw.sdk.net.fetch", AsyncMock(side_effect=seq)), \
@@ -222,7 +224,7 @@ class TestFalVideoProvider:
     async def test_no_video_in_result_raises(self):
         prov = FalVideoProvider(api_key="k")
         seq = [
-            _resp(200, {"status_url": "https://q/s", "response_url": "https://q/r"}),
+            _resp(200, {"request_id": "req-123"}),
             _resp(200, {"status": "COMPLETED"}),
             _resp(200, {"other": "data"}),  # no video/videos key
         ]
