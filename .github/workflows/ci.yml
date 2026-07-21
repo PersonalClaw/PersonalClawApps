@@ -27,9 +27,9 @@ jobs:
     # not a hand-rolled schema — so a manifest that core would reject fails CI.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Install core (for personalclaw.apps.manifest)
@@ -69,9 +69,9 @@ jobs:
     env:
       PERSONALCLAW_SKIP_APP_BACKENDS: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Install core + pytest
@@ -114,10 +114,10 @@ jobs:
     # tests/test_apps_import_boundary.py, run against this checkout.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Pure-stdlib ast lint — no uv, no core install needed. (An earlier
       # `uv python install` step was dead cruft: uv isn't set up in this job.)
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Lint app imports (personalclaw.sdk.* only)
