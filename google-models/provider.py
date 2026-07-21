@@ -754,7 +754,7 @@ def _scan_tts(entries: list[dict[str, Any]]) -> list:
 
 
 try:
-    from personalclaw.providers.media_scanners import register_scanner as _reg_scanner
+    from personalclaw.sdk.model import register_scanner as _reg_scanner
 
     _reg_scanner("image_gen", _scan_image)
     _reg_scanner("video_gen", _scan_video)
