@@ -290,7 +290,7 @@ def _scan_image(entries: list[dict[str, Any]]) -> list:
 
 
 try:
-    from personalclaw.providers.media_scanners import register_scanner as _reg_scanner
+    from personalclaw.sdk.model import register_scanner as _reg_scanner
 
     _reg_scanner("image_gen", _scan_image)
 except Exception:  # noqa: BLE001 — older core without the extension point
