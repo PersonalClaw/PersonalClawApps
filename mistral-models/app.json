@@ -9,6 +9,11 @@
     "model",
     "llm"
   ],
+  "dependencies": {
+    "pythonDependencies": [
+      "openai>=1.0"
+    ]
+  },
   "provider": {
     "type": "model",
     "implementation": "provider:create_provider",
