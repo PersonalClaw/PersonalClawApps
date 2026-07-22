@@ -10,6 +10,11 @@
     "model",
     "llm"
   ],
+  "dependencies": {
+    "pythonDependencies": [
+      "openai>=1.0"
+    ]
+  },
   "provider": {
     "type": "model",
     "providerType": "meta_muse_spark",

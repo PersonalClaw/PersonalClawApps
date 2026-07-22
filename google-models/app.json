@@ -13,6 +13,11 @@
     "video_gen",
     "tts"
   ],
+  "dependencies": {
+    "pythonDependencies": [
+      "openai>=1.0"
+    ]
+  },
   "provider": {
     "type": "model",
     "providerType": "google",
