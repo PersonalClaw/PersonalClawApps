@@ -10,6 +10,11 @@
     "llm",
     "bundled"
   ],
+  "dependencies": {
+    "pythonDependencies": [
+      "openai>=1.0"
+    ]
+  },
   "provider": {
     "type": "model",
     "providerType": "openai_compatible",

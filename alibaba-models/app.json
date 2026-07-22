@@ -11,6 +11,11 @@
     "embedding",
     "image_gen"
   ],
+  "dependencies": {
+    "pythonDependencies": [
+      "openai>=1.0"
+    ]
+  },
   "provider": {
     "type": "model",
     "providerType": "alibaba",
