@@ -1,0 +1,52 @@
+name: Bug report
+description: An app bundle behaves incorrectly.
+labels: ["needs-triage", "bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Before pasting logs or config: redact API keys,
+        tokens, and private file paths** — app logs can contain them. If the bug
+        is in the platform itself (scanner, install pipeline, SDK), file it on the
+        [core repo](https://github.com/PersonalClaw/PersonalClaw/issues) instead.
+  - type: input
+    id: app
+    attributes:
+      label: Which app
+      placeholder: "e.g. openai-models, slack-channel"
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: App version + PersonalClaw version
+      placeholder: "app 0.1.0 / personalclaw 0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and architecture
+      placeholder: "macOS 15 (arm64) / Ubuntu 24.04 (x86_64)"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: "**Redact tokens/paths first.**"
+      render: text
+    validations:
+      required: false

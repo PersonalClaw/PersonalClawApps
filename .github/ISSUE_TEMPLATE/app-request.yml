@@ -1,0 +1,55 @@
+name: App request
+description: Request a new first-party app (provider, tool, channel, or capability).
+labels: ["needs-triage", "app-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Requesting an integration PersonalClaw doesn't have yet. If you intend to
+        build it yourself, say so — and see [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md)
+        for the front-door bar.
+  - type: input
+    id: service
+    attributes:
+      label: Service / integration
+      placeholder: "e.g. Mistral models, Linear tool, Matrix channel"
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: App kind
+      options:
+        - Model provider
+        - Search provider
+        - Speech (STT/TTS)
+        - Channel connector
+        - Tool provider
+        - Agent runtime
+        - Other / not sure
+    validations:
+      required: true
+  - type: textarea
+    id: value
+    attributes:
+      label: What it unlocks
+      description: What you'd be able to do that you can't today.
+    validations:
+      required: true
+  - type: input
+    id: api-docs
+    attributes:
+      label: API / SDK reference
+      description: Link to the service's API docs, if applicable.
+    validations:
+      required: false
+  - type: dropdown
+    id: building
+    attributes:
+      label: Are you planning to build it?
+      options:
+        - "Yes — I'd like to contribute the app"
+        - "No — requesting someone else builds it"
+        - "Maybe, with guidance"
+    validations:
+      required: true
