@@ -11,6 +11,11 @@
     "llm",
     "bundled"
   ],
+  "dependencies": {
+    "pythonDependencies": [
+      "anthropic>=0.20"
+    ]
+  },
   "provider": {
     "type": "model",
     "providerType": "anthropic",
