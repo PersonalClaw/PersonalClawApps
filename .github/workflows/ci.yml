@@ -1,7 +1,7 @@
 # CI — first-party app bundles. Verifies every app against the platform contract
 # WITHOUT installing vendor SDKs (the apps stub them; a test needing a real SDK
 # fails loudly here, which is correct). Jobs per CI-RELEASE-ENGINEERING §"apps repo":
-# manifest-validate · tests · boundary.
+# manifest-validate · tests · boundary · dco (PR-only).
 name: CI
 
 on:
@@ -151,3 +151,28 @@ jobs:
               sys.exit(1)
           print("OK: all app imports go through personalclaw.sdk.*")
           PY
+
+  dco:
+    # Every commit in a PR must carry a Signed-off-by trailer (DCO — plan 37),
+    # same provenance rule as core. Pure-git check, PR-only.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Verify DCO sign-off on every commit
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          missing=0
+          for sha in $(git rev-list "$BASE_SHA".."$HEAD_SHA"); do
+            author="$(git show -s --format='%an <%ae>' "$sha")"
+            if ! git show -s --format='%(trailers:key=Signed-off-by,valueonly)' "$sha" | grep -qF "$author"; then
+              echo "::error::commit $sha is missing a matching 'Signed-off-by: $author' trailer — run: git commit -s (or git rebase --signoff)"
+              missing=1
+            fi
+          done
+          [ "$missing" -eq 0 ] && echo "DCO: all commits signed off."
+          exit "$missing"
