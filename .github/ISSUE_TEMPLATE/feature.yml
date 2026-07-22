@@ -1,0 +1,17 @@
+name: Feature / improvement
+description: Improve an existing app or the apps-repo tooling (not a new app — use "App request" for that).
+labels: ["needs-triage", "feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What's hard or missing in an existing app or the repo tooling?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed direction
+    validations:
+      required: false

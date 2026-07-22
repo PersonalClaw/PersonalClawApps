@@ -60,6 +60,13 @@ Third-party content is scanned at the **community** trust tier (the full gate):
 | `warning` | Install stops (HTTP 409, `needs_consent: true`) with the findings listed. The UI shows a consent dialog; confirming re-submits with `confirm: true`. |
 | `dangerous` | **Refused, terminally.** No consent flag overrides it. |
 
+This gate is where the install pipeline sits in PersonalClaw's overall trust model
+(the "install pipeline ↔ sources" boundary). For the full picture — including the
+OWASP Agentic Top-10 mapping and an honest statement of what is *not* enforced
+(e.g. an app's `network` permission is declaration-only) — see the core
+[threat model](https://github.com/PersonalClaw/PersonalClaw/blob/main/docs/security/threat-model.md).
+To report a security issue in an app bundle or the scanner, see [`SECURITY.md`](../SECURITY.md).
+
 Setup hooks are real code execution — that's exactly why they only run after
 the gate, and never auto-forced for an unattended/agent-initiated install.
 
