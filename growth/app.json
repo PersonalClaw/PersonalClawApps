@@ -17,7 +17,140 @@
     "entryPoint": "backend/server.py",
     "type": "python",
     "port": "auto",
-    "healthCheck": "/health"
+    "healthCheck": "/health",
+    "routes": [
+      {
+        "op": "list_artifacts",
+        "method": "GET",
+        "path": "/artifacts",
+        "summary": "List growth artifacts, optionally filtered by dimension, area, or period.",
+        "params": {
+          "dimension": { "type": "string" },
+          "area_id": { "type": "string" },
+          "period": { "type": "string" }
+        }
+      },
+      {
+        "op": "create_artifact",
+        "method": "POST",
+        "path": "/artifacts",
+        "summary": "Create a growth artifact in SBI form with evidence; auto-classifies dimensions.",
+        "body": {
+          "title": { "type": "string" },
+          "date": { "type": "string" },
+          "situation": { "type": "string" },
+          "behavior": { "type": "string" },
+          "impact": { "type": "string" },
+          "narrative": { "type": "string" },
+          "dimensions": { "type": "array" },
+          "evidence": { "type": "array" },
+          "area_id": { "type": "string" },
+          "source": { "type": "string" }
+        }
+      },
+      {
+        "op": "patch_artifact",
+        "method": "PATCH",
+        "path": "/artifacts/{id}",
+        "summary": "Update fields of an existing growth artifact."
+      },
+      {
+        "op": "delete_artifact",
+        "method": "DELETE",
+        "path": "/artifacts/{id}",
+        "summary": "Delete a growth artifact."
+      },
+      {
+        "op": "list_areas",
+        "method": "GET",
+        "path": "/areas",
+        "summary": "List tracked growth areas."
+      },
+      {
+        "op": "create_area",
+        "method": "POST",
+        "path": "/areas",
+        "summary": "Create a growth area to track.",
+        "body": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "target": { "type": "string" },
+          "dimension": { "type": "string" },
+          "status": { "type": "string" }
+        }
+      },
+      {
+        "op": "patch_area",
+        "method": "PATCH",
+        "path": "/areas/{id}",
+        "summary": "Update a growth area."
+      },
+      {
+        "op": "delete_area",
+        "method": "DELETE",
+        "path": "/areas/{id}",
+        "summary": "Delete a growth area."
+      },
+      {
+        "op": "list_dismissed",
+        "method": "GET",
+        "path": "/dismissed",
+        "summary": "List evidence sources the user has dismissed from auto-capture."
+      },
+      {
+        "op": "dismiss_source",
+        "method": "POST",
+        "path": "/dismissed",
+        "summary": "Dismiss an evidence source so auto-capture skips it.",
+        "body": { "ref": { "type": "string" } }
+      },
+      {
+        "op": "readiness",
+        "method": "GET",
+        "path": "/readiness",
+        "summary": "Report readiness scores against the rubric across dimensions."
+      },
+      {
+        "op": "get_rubric",
+        "method": "GET",
+        "path": "/rubric",
+        "summary": "Get the current scoring rubric."
+      },
+      {
+        "op": "put_rubric",
+        "method": "PUT",
+        "path": "/rubric",
+        "summary": "Replace the scoring rubric."
+      },
+      {
+        "op": "reset_rubric",
+        "method": "POST",
+        "path": "/rubric/reset",
+        "summary": "Reset the scoring rubric to the shipped default."
+      },
+      {
+        "op": "list_digests",
+        "method": "GET",
+        "path": "/digests",
+        "summary": "List generated accomplishment digests."
+      },
+      {
+        "op": "create_digest",
+        "method": "POST",
+        "path": "/digests",
+        "summary": "Store a generated accomplishment digest for a period.",
+        "body": {
+          "content_md": { "type": "string" },
+          "period": { "type": "string" }
+        }
+      },
+      {
+        "op": "delete_digest",
+        "method": "DELETE",
+        "path": "/digests/{id}",
+        "summary": "Delete an accomplishment digest."
+      }
+    ]
   },
   "ui": {
     "entry": "dist/index.mjs",

@@ -1,0 +1,71 @@
+{
+  "name": "openrouter-models",
+  "version": "0.1.0",
+  "displayName": "OpenRouter",
+  "description": "OpenRouter — one key for hundreds of models across providers. Chat (with image input), embedding, image generation, and video generation from a single instance. Bring your own OpenRouter API key.",
+  "icon": "Route",
+  "author": "PersonalClaw",
+  "tags": [
+    "model",
+    "llm",
+    "embedding",
+    "image_gen",
+    "video_gen"
+  ],
+  "dependencies": {
+    "pythonDependencies": [
+      "openai>=1.0"
+    ]
+  },
+  "permissions": {
+    "network": true
+  },
+  "provider": {
+    "type": "model",
+    "providerType": "openrouter",
+    "implementation": "provider:create_provider",
+    "multiInstance": true,
+    "capabilities": [
+      "chat",
+      "code_tools",
+      "streaming",
+      "vision",
+      "embedding",
+      "image_gen",
+      "video_gen"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "OpenRouter API Key",
+            "help": "Your OpenRouter API key (openrouter.ai/keys). Leave empty to fall back to the OPENROUTER_API_KEY environment variable.",
+            "sensitive": true
+          }
+        },
+        "default_model": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Default Model",
+            "help": "An OpenRouter model id (e.g. anthropic/claude-sonnet-4.5). Empty = resolved from live /v1/models discovery."
+          }
+        },
+        "endpoint": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Base URL",
+            "help": "Optional override of the OpenRouter base URL. Empty uses https://openrouter.ai/api/v1.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

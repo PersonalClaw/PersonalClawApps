@@ -1450,7 +1450,10 @@ _VIDEO_MODELS = [
 ]
 
 _VIDEO_POLL_INTERVAL = 10  # seconds
-_VIDEO_POLL_TIMEOUT = 300  # seconds
+# 600s, not 300s: an async-invoke job still InProgress after 5 minutes has not
+# failed — abandoning the poll reports FAILURE for a generation that completes (and
+# is billed) moments later. The ceiling tracks the slowest legitimate job.
+_VIDEO_POLL_TIMEOUT = 600  # seconds
 
 
 class BedrockVideoProvider(VideoGenProvider):
