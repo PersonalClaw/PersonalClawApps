@@ -55,7 +55,11 @@ logger = logging.getLogger(__name__)
 _OPENAI_COMPAT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
 _NATIVE_BASE = "https://generativelanguage.googleapis.com/v1beta/"
 
-_VIDEO_TIMEOUT_S = 300.0
+# 600s, not 300s: a timeout that fires on a job the upstream provider is still
+# happily working on reports FAILURE for something that succeeds — and the user is
+# billed either way. Veo's long-running operation can outlive 5 minutes under load,
+# so the ceiling is set by the slowest legitimate job, not the median one.
+_VIDEO_TIMEOUT_S = 600.0
 _VIDEO_POLL_INTERVAL_S = 5.0
 _IMAGE_TIMEOUT_S = 120.0
 
