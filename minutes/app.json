@@ -18,7 +18,185 @@
     "entryPoint": "backend/server.py",
     "type": "python",
     "port": "auto",
-    "healthCheck": "/health"
+    "healthCheck": "/health",
+    "routes": [
+      {
+        "op": "list_meetings",
+        "method": "GET",
+        "path": "/meetings",
+        "summary": "List meetings."
+      },
+      {
+        "op": "create_meeting",
+        "method": "POST",
+        "path": "/meetings",
+        "summary": "Create a meeting.",
+        "body": {
+          "title": { "type": "string" },
+          "date": { "type": "string" },
+          "tags": { "type": "array" },
+          "notes": { "type": "string" }
+        }
+      },
+      {
+        "op": "get_meeting",
+        "method": "GET",
+        "path": "/meetings/{id}",
+        "summary": "Get one meeting with its members, participants, and outputs."
+      },
+      {
+        "op": "patch_meeting",
+        "method": "PATCH",
+        "path": "/meetings/{id}",
+        "summary": "Update a meeting's fields, member order, or linked project/task-list."
+      },
+      {
+        "op": "delete_meeting",
+        "method": "DELETE",
+        "path": "/meetings/{id}",
+        "summary": "Delete a meeting."
+      },
+      {
+        "op": "add_member",
+        "method": "POST",
+        "path": "/meetings/{id}/members",
+        "summary": "Attach a knowledge item (recording, note, doc) as a meeting member.",
+        "body": {
+          "item_id": { "type": "string" },
+          "role": { "type": "string" }
+        }
+      },
+      {
+        "op": "remove_member",
+        "method": "DELETE",
+        "path": "/meetings/{id}/members/{item_id}",
+        "summary": "Detach a member from a meeting."
+      },
+      {
+        "op": "list_participants",
+        "method": "GET",
+        "path": "/meetings/{id}/participants",
+        "summary": "List a meeting's participants."
+      },
+      {
+        "op": "add_participant",
+        "method": "POST",
+        "path": "/meetings/{id}/participants",
+        "summary": "Add a participant to a meeting.",
+        "body": {
+          "name": { "type": "string" },
+          "speaker_label": { "type": "string" },
+          "role": { "type": "string" },
+          "entity_ref": { "type": "string" }
+        }
+      },
+      {
+        "op": "patch_participant",
+        "method": "PATCH",
+        "path": "/meetings/{id}/participants/{pid}",
+        "summary": "Update a meeting participant."
+      },
+      {
+        "op": "delete_participant",
+        "method": "DELETE",
+        "path": "/meetings/{id}/participants/{pid}",
+        "summary": "Remove a meeting participant."
+      },
+      {
+        "op": "roster",
+        "method": "GET",
+        "path": "/roster",
+        "summary": "List the known participant roster across meetings."
+      },
+      {
+        "op": "list_templates",
+        "method": "GET",
+        "path": "/templates",
+        "summary": "List minutes/summary generation templates."
+      },
+      {
+        "op": "create_template",
+        "method": "POST",
+        "path": "/templates",
+        "summary": "Create a minutes/summary generation template.",
+        "body": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "prompt": { "type": "string" },
+          "output": { "type": "string" },
+          "meeting_type_hint": { "type": "string" }
+        }
+      },
+      {
+        "op": "patch_template",
+        "method": "PATCH",
+        "path": "/templates/{id}",
+        "summary": "Update a generation template."
+      },
+      {
+        "op": "delete_template",
+        "method": "DELETE",
+        "path": "/templates/{id}",
+        "summary": "Delete a generation template."
+      },
+      {
+        "op": "list_outputs",
+        "method": "GET",
+        "path": "/meetings/{id}/outputs",
+        "summary": "List generated minutes/summaries for a meeting."
+      },
+      {
+        "op": "create_output",
+        "method": "POST",
+        "path": "/meetings/{id}/outputs",
+        "summary": "Store a generated minutes/summary output for a meeting.",
+        "body": {
+          "content_md": { "type": "string" },
+          "title": { "type": "string" },
+          "template_id": { "type": "string" },
+          "template_name": { "type": "string" },
+          "action_items": { "type": "array" },
+          "model": { "type": "string" }
+        }
+      },
+      {
+        "op": "patch_output",
+        "method": "PATCH",
+        "path": "/meetings/{id}/outputs/{oid}",
+        "summary": "Update a generated output's content, title, or action items."
+      },
+      {
+        "op": "delete_output",
+        "method": "DELETE",
+        "path": "/meetings/{id}/outputs/{oid}",
+        "summary": "Delete a generated output."
+      },
+      {
+        "op": "list_extractions",
+        "method": "GET",
+        "path": "/meetings/{id}/extractions",
+        "summary": "List extracted action items, decisions, and follow-ups for a meeting."
+      },
+      {
+        "op": "add_extractions",
+        "method": "POST",
+        "path": "/meetings/{id}/extractions",
+        "summary": "Add extracted action items / decisions / follow-ups to a meeting.",
+        "body": { "items": { "type": "array" } }
+      },
+      {
+        "op": "patch_extraction",
+        "method": "PATCH",
+        "path": "/meetings/{id}/extractions/{eid}",
+        "summary": "Update an extraction (text, assignee, due date, linked task, done)."
+      },
+      {
+        "op": "delete_extraction",
+        "method": "DELETE",
+        "path": "/meetings/{id}/extractions/{eid}",
+        "summary": "Delete an extraction."
+      }
+    ]
   },
   "ui": {
     "entry": "dist/index.mjs",
