@@ -126,7 +126,10 @@ def _default_video_model() -> str:
 # Bound the internal poll loop.
 _POLL_INTERVAL_S = 2.0
 _IMAGE_POLL_TIMEOUT_S = 180.0
-_VIDEO_POLL_TIMEOUT_S = 300.0  # video generation takes longer
+# 600s, not 300s: video generation takes longer, and a timeout that fires while the
+# upstream job is still running reports FAILURE for a generation that succeeded (and
+# was billed). The ceiling tracks the slowest legitimate job, not the median one.
+_VIDEO_POLL_TIMEOUT_S = 600.0
 
 # FAL's named aspect presets for images.
 _FAL_SIZE_PRESETS = frozenset(
