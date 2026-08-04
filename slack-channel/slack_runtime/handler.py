@@ -32,7 +32,14 @@ from personalclaw.sdk.channel import STOP_REASON_CANCELLED, STOP_REASON_END_TURN
 from personalclaw.sdk.channel import AppConfig, config_dir, config_path
 from slack_runtime.settings import ACTIVATION_REVIEW
 from personalclaw.sdk.channel import ContextBuilder
-from personalclaw.sdk.channel import ScheduleService, compute_next_run_ts, format_schedule
+from personalclaw.sdk.channel import (
+    TriggerStore,
+    delete_all_automations,
+    delete_automation,
+    describe_cadence,
+    set_automation_paused,
+    to_schedule_row,
+)
 from personalclaw.sdk.channel import ConversationLog, HistoryConsolidator
 from personalclaw.sdk.channel import HOOK_REPLY, TOOL_AUTO_APPROVE, TOOL_DENY, validate_file_path
 from personalclaw.sdk.channel import save_conversation_turn
@@ -1616,7 +1623,6 @@ async def handle_message(
     team_id: str = "",
     approval_mode: str = APPROVAL_AUTO,
     context_builder: ContextBuilder | None = None,
-    cron_service: ScheduleService | None = None,
     conversation_log: ConversationLog | None = None,
     consolidator: HistoryConsolidator | None = None,
     subagent_manager: SubagentManager | None = None,
@@ -1860,21 +1866,23 @@ async def handle_message(
                 )
             return
 
-    # ── Natural language cron: intercept wakeup patterns ──
-    if cron_service:
-        cron_reply = _handle_cron_command(text, cron_service, channel, reply_ts)
-        if cron_reply:
-            await slack.post_message(channel, cron_reply, reply_ts)
-            if conversation_log and not _is_slack_restricted(session_key):
-                save_conversation_turn(
-                    conversation_log,
-                    session_key,
-                    text,
-                    cron_reply,
-                    source_thread=session_key,
-                    source_user=user_id,
-                )
-            return
+    # ── Automation commands (`cron list` / `remove` / `pause` / `resume`) ──
+    # The store is built from the ACTIVE HOME rather than injected (S112): a `cron_service`
+    # parameter let the caller decide which scheduler this surface read, and six call sites passed
+    # `orch.cron_svc` — the legacy service core has deleted. One home, one store, one answer.
+    cron_reply = _handle_cron_command(text, TriggerStore(base_dir=config_dir()), channel, reply_ts)
+    if cron_reply:
+        await slack.post_message(channel, cron_reply, reply_ts)
+        if conversation_log and not _is_slack_restricted(session_key):
+            save_conversation_turn(
+                conversation_log,
+                session_key,
+                text,
+                cron_reply,
+                source_thread=session_key,
+                source_user=user_id,
+            )
+        return
 
     from slack_runtime.settings import get_settings
 
@@ -3019,15 +3027,23 @@ def _build_approval_blocks(event: LLMEvent, is_dm: bool = True, source: str = ""
     return blocks
 
 
-def _remove_all_jobs(cron_service: ScheduleService) -> str:
-    """Remove all cron jobs and return a summary."""
-    jobs = cron_service.list_jobs(include_disabled=True)
-    if not jobs:
-        return "No cron jobs to remove."
-    lines = [f"- `{j.id}` — {j.name}" for j in jobs]
-    for j in jobs:
-        cron_service.remove_job(j.id)
-    return f"✅ Removed {len(lines)} cron job(s):\n" + "\n".join(lines)
+def _remove_all_jobs(store: TriggerStore) -> str:
+    """Remove every automation the ASSISTANT created, and return a summary.
+
+    Scoped to `created_by="agent"` by the SDK helper. The old version removed EVERYTHING the
+    scheduler held, including the automations the user built by hand — `cron remove all` from a chat
+    message could wipe them with no confirmation step. The scoped delete is what the core
+    `automation_delete_all` tool enforces, and this command now inherits it rather than re-deriving a
+    broader blast radius.
+    """
+    rows = [r for r in store.load() if r.trigger.created_by == "agent"]
+    if not rows:
+        return "No agent-created automations to remove."
+    lines = [f"- `{r.trigger.id}` — {r.trigger.name}" for r in rows]
+    result = delete_all_automations(store, created_by="agent", confirm=True)
+    if not result.ok:
+        return f"⚠️ {result.text}"
+    return f"✅ Removed {len(lines)} automation(s):\n" + "\n".join(lines)
 
 
 def _handle_spawn_command(text: str, manager: SubagentManager, session_key: str = "") -> str | None:
@@ -3063,10 +3079,42 @@ def _do_spawn(task: str, manager: SubagentManager, session_key: str = "") -> str
     return f"🚀 Spawned subagent `{info.id}`\n_{task[:100]}_"
 
 
+def _relative_next_run(nxt: float | None, now: float) -> str:
+    """"⏭ in 2h 15m" for a next-run timestamp, or "" when there is none."""
+    if nxt is None:
+        return ""
+    delta = nxt - now
+    if delta >= 86400:
+        rel = f"in {int(delta // 86400)}d {int((delta % 86400) // 3600)}h"
+    elif delta >= 3600:
+        rel = f"in {int(delta // 3600)}h {int((delta % 3600) // 60)}m"
+    elif delta > 0:
+        minutes = int(delta // 60)
+        rel = f"in {minutes}m" if minutes >= 1 else "in <1m"
+    else:
+        rel = "now"
+    return f" | ⏭ {rel}"
+
+
 def _handle_cron_command(
-    text: str, cron_service: ScheduleService, channel: str, thread_ts: str
+    text: str, store: TriggerStore, channel: str, thread_ts: str
 ) -> str | None:
-    """Handle cron keyword commands. Returns reply or None."""
+    """Handle cron keyword commands against the unified trigger store. Returns reply or None.
+
+    🔴 Re-pointed off `ScheduleService`, which core deleted (S112). That service read
+    `crons.json` — a file nothing has written since core's S108 — so **every one of these commands
+    was already broken**: `cron list` showed an empty list to a user with live automations, and
+    remove/pause/resume answered "not found" for every real id. Measured against a store-only home
+    before re-pointing.
+
+    Reads the same store, projection and tool functions the Automations page and the `automation_*`
+    chat tools use, so a `/cron` reply can no longer disagree with the UI.
+
+    The surface is unchanged for the user, with two honest improvements the store makes possible:
+    a BROKEN automation is listed with its parse error rather than silently omitted, and every kind
+    is visible (a file watch or an event trigger used to be invisible here because the legacy
+    scheduler only held clocks).
+    """
     t = text.strip().lower()
     parts = t.split()
 
@@ -3076,40 +3124,35 @@ def _handle_cron_command(
     action = parts[1]
 
     if action == "list":
-        jobs = cron_service.list_jobs(include_disabled=True)
-        if not jobs:
-            return "No cron jobs scheduled."
-        lines = ["*Your cron jobs:*"]
+        rows = store.load()
+        if not rows:
+            return "No automations scheduled."
+        lines = ["*Your automations:*"]
         now = time.time()
-        for j in jobs:
-            status = "✅" if j.enabled else "⏸️"
-            sched = format_schedule(j.schedule)
+        for row in rows:
+            trigger = row.trigger
+            # A row that failed to parse is SHOWN with its reason. The legacy list could not
+            # represent one at all, and silently omitting an automation the user created is how
+            # "where did my automation go" happens.
+            if not row.ok:
+                reason = row.errors[0].message if row.errors else "invalid"
+                lines.append(f"⚠️ `{trigger.id}` | {reason}")
+                continue
+            view = to_schedule_row(trigger)
+            status = "✅" if trigger.enabled else "⏸️"
             last = ""
-            if j.last_status == "ok":
+            if view.get("last_status") == "ok":
                 last = " ✓"
-            elif j.last_status == "error":
+            elif view.get("last_status") in ("error", "failure", "timeout"):
                 last = " ❌"
-            nxt = compute_next_run_ts(j, now=now)
-            next_part = ""
-            if nxt is not None:
-                delta = nxt - now
-                if delta >= 86400:
-                    d = int(delta // 86400)
-                    h = int((delta % 86400) // 3600)
-                    rel = f"in {d}d {h}h"
-                elif delta >= 3600:
-                    h = int(delta // 3600)
-                    m = int((delta % 3600) // 60)
-                    rel = f"in {h}h {m}m"
-                elif delta > 0:
-                    m = int(delta // 60)
-                    rel = f"in {m}m" if m >= 1 else "in <1m"
-                else:
-                    rel = "now"
-                next_part = f" | ⏭ {rel}"
-            safe_msg, _ = redact_credentials(redact_exfiltration_urls(j.message)[0])
-            safe_msg = safe_msg[:50]
-            lines.append(f"{status} `{j.id}` | `{sched}` | {safe_msg}{last}{next_part}")
+            safe_msg, _ = redact_credentials(
+                redact_exfiltration_urls(str(view.get("message") or ""))[0]
+            )
+            next_part = _relative_next_run(view.get("next_run_ts"), now)
+            lines.append(
+                f"{status} `{trigger.id}` | `{describe_cadence(trigger)}` "
+                f"| {safe_msg[:50]}{last}{next_part}"
+            )
         return "\n".join(lines)
 
     if len(parts) < 3:
@@ -3119,20 +3162,25 @@ def _handle_cron_command(
 
     if action == "remove":
         if job_id == "all":
-            return _remove_all_jobs(cron_service)
-        if cron_service.remove_job(job_id):
-            return f"✅ Removed cron job `{job_id}`"
-        return f"❌ Job `{job_id}` not found"
+            return _remove_all_jobs(store)
+        # `confirm=True`: the flag exists so a TOOL CALL cannot delete by accident. A user who typed
+        # `cron remove <id>` has already expressed the intent.
+        if delete_automation(store, trigger_id=job_id, confirm=True).ok:
+            return f"✅ Removed automation `{job_id}`"
+        return f"❌ Automation `{job_id}` not found"
 
     if action == "pause":
-        if cron_service.enable_job(job_id, enabled=False):
-            return f"⏸️ Paused cron job `{job_id}`"
-        return f"❌ Job `{job_id}` not found"
+        if set_automation_paused(store, trigger_id=job_id, paused=True).ok:
+            return f"⏸️ Paused automation `{job_id}`"
+        return f"❌ Automation `{job_id}` not found"
 
     if action == "resume":
-        if cron_service.enable_job(job_id, enabled=True):
-            return f"▶️ Resumed cron job `{job_id}`"
-        return f"❌ Job `{job_id}` not found"
+        result = set_automation_paused(store, trigger_id=job_id, paused=False)
+        if result.ok:
+            return f"▶️ Resumed automation `{job_id}`"
+        # `set_paused` REFUSES to resume a row with a parse error and NAMES it — strictly more useful
+        # than "not found", and the row does exist, so "not found" was wrong as well as unhelpful.
+        return f"❌ {result.text}"
 
     return None
 
