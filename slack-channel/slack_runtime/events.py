@@ -36,7 +36,7 @@ from slack_runtime.settings import (
     ACTIVATION_OFF,
     ACTIVATION_REVIEW,
 )
-from personalclaw.sdk.channel import format_schedule
+from personalclaw.sdk.channel import TriggerStore, config_dir, describe_cadence
 from personalclaw.sdk.channel import parse_duration
 from personalclaw.sdk.channel import list_servers
 from personalclaw.sdk.channel import redact_credentials, redact_exfiltration_urls
@@ -895,42 +895,35 @@ async def _publish_home_tab(orch: "GatewayServices", user_id: str) -> None:
             )
         blocks.append({"type": "divider"})
 
-        # ── Cron Jobs ──
-        blocks.append({"type": "header", "text": {"type": "plain_text", "text": "⏰ Cron Jobs"}})
-        if orch.cron_svc is not None:
-            jobs = orch.cron_svc.list_jobs(include_disabled=True)
-            if jobs:
-                try:
-                    _tz = AppConfig.load().timezone
-                except Exception:
-                    _tz = ""
-                if not _tz and orch.slack is not None:
-                    try:
-                        profile = await orch.slack.get_user_profile(user_id)
-                        _tz = profile.get("timezone", "")
-                    except Exception:
-                        _tz = ""
-                lines = []
-                for j in jobs[:15]:
-                    status = "✅" if j.enabled else "⏸️"
-                    sched = format_schedule(j.schedule, tz_name=_tz)
-                    raw = f"{status} *{j.name}* — `{sched}`"
-                    lines.append(redact_credentials(redact_exfiltration_urls(raw)[0])[0])
-                if len(jobs) > 15:
-                    lines.append(f"_…and {len(jobs) - 15} more_")
-                blocks.append(
-                    {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}}
-                )
-            else:
-                blocks.append(
-                    {"type": "section", "text": {"type": "mrkdwn", "text": "_No cron jobs._"}}
-                )
+        # ── Automations ──
+        #
+        # 🔴 Read the unified TRIGGER STORE (S112). This asked `orch.cron_svc`, which core deleted —
+        # and that service described `crons.json`, a file nothing has written since core's S108. So
+        # the status card showed "_No cron jobs._" to a user with live automations, and every
+        # file-watch or event trigger was invisible here because the legacy scheduler only held
+        # clocks. There is no "service unavailable" branch any more: a store is a file, so the honest
+        # empty state is "no automations".
+        blocks.append({"type": "header", "text": {"type": "plain_text", "text": "⏰ Automations"}})
+        rows = TriggerStore(base_dir=config_dir()).load()
+        if rows:
+            lines = []
+            for row in rows[:15]:
+                trigger = row.trigger
+                if not row.ok:
+                    reason = row.errors[0].message if row.errors else "invalid"
+                    lines.append(f"⚠️ *{trigger.name}* — {reason}")
+                    continue
+                status = "✅" if trigger.enabled else "⏸️"
+                raw = f"{status} *{trigger.name}* — `{describe_cadence(trigger)}`"
+                lines.append(redact_credentials(redact_exfiltration_urls(raw)[0])[0])
+            if len(rows) > 15:
+                lines.append(f"_…and {len(rows) - 15} more_")
+            blocks.append(
+                {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines)}}
+            )
         else:
             blocks.append(
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": "_Cron service unavailable._"},
-                }
+                {"type": "section", "text": {"type": "mrkdwn", "text": "_No automations._"}}
             )
         blocks.append({"type": "divider"})
 
@@ -1279,7 +1272,6 @@ async def _dispatch_queued(
         team_id=kwargs.get("team_id", ""),
         approval_mode=APPROVAL_INTERACTIVE,
         context_builder=orch.ctx_builder,
-        cron_service=orch.cron_svc,
         conversation_log=orch.conv_log,
         consolidator=orch.consolidator,
         subagent_manager=orch.subagent_mgr,
@@ -1722,7 +1714,6 @@ async def _route_message(
                 team_id=team_id,
                 approval_mode=APPROVAL_INTERACTIVE,
                 context_builder=orch.ctx_builder,
-                cron_service=orch.cron_svc,
                 conversation_log=orch.conv_log,
                 consolidator=orch.consolidator,
                 subagent_manager=orch.subagent_mgr,
