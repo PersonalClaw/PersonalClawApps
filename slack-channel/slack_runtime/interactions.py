@@ -835,7 +835,6 @@ async def _route_action_to_session(
             team_id=team_id,
             approval_mode=APPROVAL_INTERACTIVE,
             context_builder=_orch.ctx_builder,
-            cron_service=_orch.cron_svc,
             conversation_log=_orch.conv_log,
             consolidator=_orch.consolidator,
             subagent_manager=_orch.subagent_mgr,
@@ -1003,7 +1002,6 @@ async def _handle_options_submit(payload: dict, channel: str, msg_ts: str) -> No
             team_id=team_id,
             approval_mode=APPROVAL_INTERACTIVE,
             context_builder=_orch.ctx_builder,
-            cron_service=_orch.cron_svc,
             conversation_log=_orch.conv_log,
             consolidator=_orch.consolidator,
             subagent_manager=_orch.subagent_mgr,
@@ -1154,7 +1152,6 @@ async def _handle_options(payload: dict, action: dict, channel: str, msg_ts: str
             team_id=team_id,
             approval_mode=APPROVAL_INTERACTIVE,
             context_builder=_orch.ctx_builder,
-            cron_service=_orch.cron_svc,
             conversation_log=_orch.conv_log,
             consolidator=_orch.consolidator,
             subagent_manager=_orch.subagent_mgr,
@@ -1165,12 +1162,20 @@ async def _handle_options(payload: dict, action: dict, channel: str, msg_ts: str
 
 
 async def _handle_cron_ack(payload: dict, action: dict, channel: str, msg_ts: str) -> None:
+    """Acknowledge a cron notification from its Slack button.
+
+    🔴 The `cron_svc.ack_job(...)` call is GONE (S112). Core deleted `ScheduleService`, and that write
+    was already dead weight: its `acked_items` field maps to `None` in `LEGACY_FIELD_MAP` (core S98
+    verified the whole ack surface had zero consumers — no frontend client method, no MCP tool, and an
+    empty field on the owner's real store) and the route was removed in S110.
+
+    The load-bearing half stays, and always was: acknowledging the DASHBOARD notification, exactly as
+    the sibling `_handle_subagent_ack` does. The gate now needs no scheduler either.
+    """
     job_id = action.get("value", "")
-    if not (job_id and _orch and _orch.cron_svc):
+    if not (job_id and _orch):
         return
     await ack_button(payload, channel, msg_ts)
-    msg_text = payload.get("message", {}).get("text", "")[:200]
-    _orch.cron_svc.ack_job(job_id, msg_text)
     if _orch.dashboard_state:
         for n in _orch.dashboard_state._notification_log:
             if n.get("job_id") == job_id and not n.get("acked"):
@@ -2406,7 +2411,6 @@ async def _handle_review_revise_submit(payload: dict) -> None:
                 caller,
                 approval_mode=APPROVAL_INTERACTIVE,
                 context_builder=_orch.ctx_builder,
-                cron_service=_orch.cron_svc,
                 conversation_log=_orch.conv_log,
                 consolidator=_orch.consolidator,
                 subagent_manager=_orch.subagent_mgr,
