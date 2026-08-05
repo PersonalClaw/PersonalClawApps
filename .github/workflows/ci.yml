@@ -155,7 +155,9 @@ jobs:
   dco:
     # Every commit in a PR must carry a Signed-off-by trailer (DCO — plan 37),
     # same provenance rule as core. Pure-git check, PR-only.
-    if: github.event_name == 'pull_request'
+    # Dependabot is exempt: its bot commits cannot carry a Signed-off-by trailer,
+    # and dependency bumps are provenance-clear by construction.
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
