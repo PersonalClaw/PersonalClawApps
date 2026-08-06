@@ -1,0 +1,32 @@
+{
+  "name": "dir-sync",
+  "version": "0.1.0",
+  "displayName": "Folder Sync",
+  "description": "Sync PersonalClaw state between your machines through a shared/synced folder — a cloud-sync mount, an NFS share, or a mounted USB drive. No credentials, no server: point two machines at the same folder and durability converges. The folder holds shard objects only; secrets are excluded upstream and never touch it.",
+  "icon": "FolderSync",
+  "author": "PersonalClaw",
+  "tags": [
+    "sync",
+    "bundled"
+  ],
+  "provider": {
+    "type": "sync",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "sync"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Sync folder",
+            "help": "Absolute path to the shared/synced folder both machines point at (e.g. ~/synced/personalclaw-sync or /Volumes/usb/pc-sync). Supports ~ and $VARS. Leave empty to configure later — the transport stays idle until set."
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "name": "git-sync",
+  "version": "0.1.0",
+  "displayName": "Git Sync",
+  "description": "Sync PersonalClaw state between your machines through a git remote you own. The transport keeps a local working clone and moves durability shard objects as files it commits and pushes, so `git log -p` over the shards is a human-diffable audit history of what the assistant knows — the whole point of this transport. It stays plaintext (never encrypted) so that history stays readable; secrets are excluded upstream and never touch it.",
+  "icon": "GitBranch",
+  "author": "PersonalClaw",
+  "tags": [
+    "sync",
+    "bundled"
+  ],
+  "provider": {
+    "type": "sync",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "sync"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "repo_url": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Git remote URL",
+            "help": "The ssh or https URL of a git remote you own (both machines point at the same one). Leave empty to configure later — the transport stays idle until set."
+          }
+        },
+        "local_clone": {
+          "type": "string",
+          "default": "~/.personalclaw/sync/git-sync",
+          "x-meta": {
+            "label": "Local working clone",
+            "help": "Where the working clone lives on this machine. Supports ~ and $VARS. The transport clones the remote here on first use and reuses it after."
+          }
+        },
+        "branch": {
+          "type": "string",
+          "default": "main",
+          "x-meta": {
+            "label": "Branch",
+            "help": "The branch to sync on. Both machines must use the same branch."
+          }
+        }
+      }
+    }
+  }
+}
