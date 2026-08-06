@@ -1,21 +1,72 @@
-"""Tests for the redesigned Growth Tracker backend — artifacts + growth areas + rubric lens."""
+"""Tests for the redesigned Growth Tracker backend — artifacts + growth areas + rubric lens.
+
+The backend now installs the SDK proxy-signature middleware (PHF-3): every request must
+carry a valid ``X-PersonalClaw-Proxy`` HMAC or it is refused fail-closed. So the test
+client SIGNS every request with a known secret (the same secret the gateway supervisor
+would inject via ``PERSONALCLAW_APP_SECRET``) — the tests run WITH the middleware, not
+around it — and one test asserts an unsigned request is rejected.
+"""
 
 from __future__ import annotations
 
 import importlib
+import json as _json
 import sys
 from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from aiohttp.test_utils import TestClient, TestServer
+from personalclaw.sdk.security import PROXY_SIGNATURE_HEADER, sign_proxy_request
+from yarl import URL
 
 pytestmark = pytest.mark.asyncio
+
+_SECRET = "f" * 64
+
+
+class _SignedClient:
+    """Wraps a TestClient, attaching a valid proxy signature to every request.
+
+    ``.raw`` exposes the underlying unsigned client so a test can prove an unsigned
+    request is refused.
+    """
+
+    def __init__(self, client: TestClient, secret: str) -> None:
+        self.raw = client
+        self._secret = secret
+
+    async def _req(self, method, path, *, json=None):
+        if json is not None:
+            body = _json.dumps(json).encode()
+            headers = {"Content-Type": "application/json"}
+        else:
+            body, headers = b"", {}
+        path_qs = URL(path).raw_path_qs
+        headers[PROXY_SIGNATURE_HEADER] = sign_proxy_request(self._secret, method, path_qs, body)
+        return await self.raw.request(method, path, data=body or None, headers=headers)
+
+    async def get(self, path):
+        return await self._req("GET", path)
+
+    async def post(self, path, json=None):
+        return await self._req("POST", path, json=json)
+
+    async def patch(self, path, json=None):
+        return await self._req("PATCH", path, json=json)
+
+    async def put(self, path, json=None):
+        return await self._req("PUT", path, json=json)
+
+    async def delete(self, path):
+        return await self._req("DELETE", path)
 
 
 @pytest_asyncio.fixture
 async def env(tmp_path, monkeypatch):
     monkeypatch.setenv("PERSONALCLAW_APP_DATA_DIR", str(tmp_path))
+    # The middleware reads the secret from the env at make_app() time.
+    monkeypatch.setenv("PERSONALCLAW_APP_SECRET", _SECRET)
     sys.path.insert(0, str(Path(__file__).parent / "backend"))
     if "server" in sys.modules:
         del sys.modules["server"]
@@ -23,13 +74,22 @@ async def env(tmp_path, monkeypatch):
     importlib.reload(server)
     c = TestClient(TestServer(server.make_app()))
     await c.start_server()
-    yield c, server
+    yield _SignedClient(c, _SECRET), server
     await c.close()
 
 
 async def test_health(env):
     c, _ = env
     assert (await (await c.get("/health")).json())["ok"] is True
+
+
+async def test_unsigned_request_is_refused_but_health_is_exempt(env):
+    c, _ = env
+    # A raw (unsigned) request to a real route is refused fail-closed.
+    assert (await c.raw.get("/artifacts")).status == 401
+    assert (await c.raw.post("/artifacts", json={"title": "x"})).status == 401
+    # /health is exempt (the gateway watchdog probes it directly).
+    assert (await c.raw.get("/health")).status == 200
 
 
 async def test_default_rubric_is_neutral(env):

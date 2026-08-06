@@ -29,6 +29,7 @@ import time
 from pathlib import Path
 
 from aiohttp import web
+from personalclaw.sdk.security import require_proxy_signature
 
 DATA_DIR = Path(os.environ.get("PERSONALCLAW_APP_DATA_DIR", os.path.expanduser("~/.personalclaw/apps/minutes/data")))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -183,8 +184,15 @@ def _bad(msg: str, status: int = 400):
 
 
 async def _json(request):
+    # The proxy-signature middleware already read the body once (aiohttp bodies are
+    # single-read) and stashed the raw bytes on request["body_bytes"] — parse THAT so
+    # we never consume the stream twice. Falls back to a direct read only if the stash
+    # is absent (e.g. a unit test that skips the middleware).
     try:
-        b = await request.json()
+        raw = request.get("body_bytes")
+        if raw is None:
+            raw = await request.read()
+        b = json.loads(raw) if raw else None
         return b if isinstance(b, dict) else None
     except Exception:
         return None
@@ -472,7 +480,9 @@ async def delete_extraction(request):
 
 
 def make_app() -> web.Application:
-    app = web.Application()
+    # Inbound authentication: every request must carry a valid gateway-proxy signature
+    # (fail-closed). /health is exempt so the gateway watchdog can probe it directly.
+    app = web.Application(middlewares=[require_proxy_signature()])
     r = app.router
     r.add_get("/health", health)
     # meetings
