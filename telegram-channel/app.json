@@ -1,0 +1,54 @@
+{
+  "name": "telegram-channel",
+  "version": "0.1.0",
+  "displayName": "Telegram Channel",
+  "description": "Telegram bot integration over the raw Bot API. Pair a chat, converse in DMs, track groups, and receive results with inline approvals.",
+  "icon": "Send",
+  "author": "PersonalClaw",
+  "tags": [
+    "channel",
+    "bundled"
+  ],
+  "cli": {
+    "setup": "cli_setup:run",
+    "doctor": "cli_doctor:probe"
+  },
+  "loggerRoots": [
+    "telegram_runtime"
+  ],
+  "provider": {
+    "type": "channel",
+    "implementation": "telegram_runtime.transport:create_provider",
+    "capabilities": [
+      "messaging",
+      "threads"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "bot_token": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Bot Token",
+            "help": "Telegram Bot API token from @BotFather (123456:ABC-...).",
+            "sensitive": true
+          }
+        },
+        "dm_activation": {
+          "type": "string",
+          "default": "always",
+          "enum": [
+            "always",
+            "mention",
+            "off"
+          ],
+          "x-meta": {
+            "label": "DM Activation",
+            "help": "Default activation mode for direct messages."
+          }
+        }
+      }
+    }
+  }
+}
