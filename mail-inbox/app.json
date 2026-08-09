@@ -1,0 +1,96 @@
+{
+  "name": "mail-inbox",
+  "version": "0.1.0",
+  "displayName": "Mail Inbox",
+  "description": "IMAP mail as an inbox source. Polls a mailbox, surfaces messages from a fail-closed sender allowlist as inbox items, and extracts multipart/HTML/attachment text. Credentials live in the credential store, never in app config.",
+  "icon": "Mail",
+  "author": "PersonalClaw",
+  "license": "MIT",
+  "tags": [
+    "inbox",
+    "email"
+  ],
+  "cli": {
+    "setup": "cli_setup:run",
+    "doctor": "cli_doctor:probe"
+  },
+  "loggerRoots": [
+    "mail_inbox_runtime"
+  ],
+  "permissions": {
+    "storage": true,
+    "network": true
+  },
+  "provider": {
+    "type": "inbox",
+    "implementation": "mail_inbox_runtime.provider:create_provider",
+    "capabilities": [
+      "poll",
+      "attachments"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "IMAP Host",
+            "help": "IMAP server hostname (e.g. imap.gmail.com)."
+          }
+        },
+        "port": {
+          "type": "integer",
+          "default": 993,
+          "x-meta": {
+            "label": "IMAP Port",
+            "help": "IMAP port. 993 for implicit SSL (the default)."
+          }
+        },
+        "use_ssl": {
+          "type": "boolean",
+          "default": true,
+          "x-meta": {
+            "label": "Use SSL",
+            "help": "Connect with implicit TLS (IMAP4_SSL). Leave on for port 993."
+          }
+        },
+        "username": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Username",
+            "help": "IMAP login (usually the full email address)."
+          }
+        },
+        "address": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Receiving Address",
+            "help": "The address mail arrives at — used as the inbox channel id. Defaults to the username when blank."
+          }
+        },
+        "folder": {
+          "type": "string",
+          "default": "INBOX",
+          "x-meta": {
+            "label": "Folder",
+            "help": "IMAP folder/mailbox to poll."
+          }
+        },
+        "allow_senders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "x-meta": {
+            "label": "Allowed Senders",
+            "help": "Glob patterns of From addresses permitted to trigger (e.g. alerts@*.example.com). EMPTY means fail-closed — nothing is surfaced at all."
+          }
+        }
+      }
+    }
+  }
+}
