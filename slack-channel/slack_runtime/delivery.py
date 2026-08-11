@@ -16,6 +16,7 @@ from personalclaw.sdk.channel import redact_credentials, redact_exfiltration_url
 
 from slack_runtime.client import RealSlackClient
 from slack_runtime.format import (
+    SLACK_BLOCK_SECTION_LIMIT,
     build_cron_ack_block,
     split_message,
     to_slack_mrkdwn,
@@ -23,7 +24,11 @@ from slack_runtime.format import (
 
 logger = logging.getLogger(__name__)
 
-_CRON_MSG_LIMIT = 3800
+# deliver_cron_result puts parts[0] into a Block Kit `section.text`, so every part must
+# respect the 3000-char section bound — not the 3900 plain-message bound. This was 3800,
+# which let a cron result between 3001 and 3800 chars build a section Slack rejects
+# (invalid_blocks); the overflow parts go out as plain messages, where 3000 is also fine.
+_CRON_MSG_LIMIT = SLACK_BLOCK_SECTION_LIMIT
 
 
 class SlackDelivery:

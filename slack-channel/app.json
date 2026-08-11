@@ -139,5 +139,17 @@
         }
       }
     }
-  }
+  },
+  "providers": [
+    {
+      "type": "inbox",
+      "implementation": "slack_runtime.inbox_source:create_provider",
+      "capabilities": [
+        "poll",
+        "reply",
+        "reactions",
+        "history"
+      ]
+    }
+  ]
 }
