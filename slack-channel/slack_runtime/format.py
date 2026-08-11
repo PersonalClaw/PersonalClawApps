@@ -287,6 +287,11 @@ def _mermaid_sequence(body: str) -> str:
 
 # Slack message character limit (API rejects above ~4000)
 SLACK_MSG_LIMIT = 3900
+
+# Slack Block Kit `section.text` max_length. A plain chat.postMessage body may run to
+# SLACK_MSG_LIMIT, but text placed in a section block is rejected (invalid_blocks) above
+# this. Anything split for Block Kit delivery must use this bound, not SLACK_MSG_LIMIT.
+SLACK_BLOCK_SECTION_LIMIT = 3000
 TRUNCATION_NOTICE = "\n\n⚠️ _Response truncated (Slack message limit)_"
 CONTINUATION = "\n\n_(continued…)_"
 

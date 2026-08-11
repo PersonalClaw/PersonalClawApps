@@ -94,7 +94,14 @@ jobs:
           rc=0
           for d in */; do
             d=${d%/}
-            [ -d "$d" ] || [ "$d" = docs ] && continue
+            # Two INDEPENDENT guards. `[ -d "$d" ] || [ "$d" = docs ] && continue`
+            # parsed as `([ -d ] || [ = docs ]) && continue`: since `for d in */`
+            # only yields directories the first test always passed, so `continue`
+            # fired every iteration and the job ran zero tests. Keep them separate,
+            # and use `if` (not `&& continue`) so a false test can't be the step's
+            # last command and fail it under `bash -e`.
+            if [ ! -d "$d" ]; then continue; fi
+            if [ "$d" = docs ]; then continue; fi
             # any test file, incl. a tests/ subdir (slack-channel) or test_catalog.py
             if compgen -G "$d/test_*.py" >/dev/null || compgen -G "$d/tests/test_*.py" >/dev/null; then
               echo "::group::$d"
