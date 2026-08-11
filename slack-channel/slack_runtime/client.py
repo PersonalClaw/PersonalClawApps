@@ -162,6 +162,16 @@ class SlackClientOps(ABC):
         """Fetch thread replies. Returns list of message dicts with 'user'/'bot_id' and 'text'."""
         return []
 
+    async def fetch_history(self, channel: str, oldest: str, limit: int = 200) -> list[dict]:
+        """Fetch channel messages newer than ``oldest``, newest-first.
+
+        ``oldest`` is EXCLUSIVE (see the concrete implementation) — a message whose
+        ``ts`` equals ``oldest`` is not returned. Returns message dicts carrying
+        'ts'/'user'/'bot_id'/'text'/'thread_ts'. Not abstract (mirrors
+        ``fetch_message``/``fetch_thread_replies``) so existing mocks keep working.
+        """
+        return []
+
     async def download_file(self, url: str, dest: str) -> None:
         """Download a Slack-hosted file to a local path."""
         raise NotImplementedError
@@ -540,6 +550,22 @@ class RealSlackClient(SlackClientOps):
         except (SlackClientError, aiohttp.ClientError, asyncio.TimeoutError):
             logger.debug("fetch_thread_replies failed for %s/%s", channel, thread_ts, exc_info=True)
         return []
+
+    async def fetch_history(self, channel: str, oldest: str, limit: int = 200) -> list[dict]:
+        """Fetch channel messages newer than ``oldest`` via conversations.history.
+
+        ``inclusive`` is deliberately NOT passed. Slack's ``conversations.history``
+        treats ``oldest`` as exclusive unless ``inclusive=True`` is set (which
+        ``fetch_message`` above DOES set, to fetch one exact ts). Leaving it off is
+        what makes ``oldest=<last seen ts>`` a correct resume cursor: the message
+        already delivered is not returned again. Raises on API/transport failure so
+        the caller can distinguish "no new messages" from "the poll failed" — a
+        swallowed error here would advance a cursor past unread messages.
+        """
+        resp = await self._web.conversations_history(channel=channel, oldest=oldest, limit=limit)
+        data: dict = resp.data if hasattr(resp, "data") else dict(resp)  # type: ignore[assignment,call-overload]
+        messages: list[dict] = data.get("messages", [])
+        return messages if isinstance(messages, list) else []
 
     async def download_file(self, url: str, dest: str) -> None:
         """Download a Slack-hosted file using the bot token for auth."""
