@@ -1644,7 +1644,6 @@ async def handle_message(
     *channel_agent* overrides the default agent for this channel (set via
     per-channel config in ``slack.channels``).
     """
-    Stats().inc_message_received()
     _t0 = time.monotonic()
     session_key = thread_ts or msg_ts
     reply_ts = thread_ts or msg_ts
@@ -2230,7 +2229,6 @@ async def handle_message(
                     tool_result = context_builder.hooks.on_tool_call(event.title)
                     if tool_result.action == TOOL_AUTO_APPROVE:
                         await client.approve_tool(event.request_id)
-                        Stats().inc_tool_auto_approved()
                         sel().log_tool_invocation(
                             session_key=session_key,
                             source="slack",
@@ -2243,7 +2241,6 @@ async def handle_message(
                         continue
                     if tool_result.action == TOOL_DENY:
                         await client.reject_tool(event.request_id)
-                        Stats().inc_tool_denial()
                         accumulated += f"\n🚫 _Tool `{event.title}` blocked by hooks._"
                         sel().log_tool_invocation(
                             session_key=session_key,
@@ -2259,7 +2256,6 @@ async def handle_message(
                 # auto_approve_subagent_spawn → auto-approve subagent_run tool calls
                 if _should_auto_approve_spawn(context_builder, event.title or ""):
                     await client.approve_tool(event.request_id)
-                    Stats().inc_tool_auto_approved()
                     sel().log_tool_invocation(
                         session_key=session_key,
                         source="slack",
@@ -2273,7 +2269,6 @@ async def handle_message(
 
                 if approval_mode == APPROVAL_AUTO:
                     await client.approve_tool(event.request_id)
-                    Stats().inc_tool_auto_approved()
                     sel().log_tool_invocation(
                         session_key=session_key,
                         source="slack",
@@ -2289,7 +2284,6 @@ async def handle_message(
                 _yolo_now = is_yolo_mode()  # delegates to trust_mode (expires on read)
                 if _yolo_now or session_key in _trusted_sessions:
                     await client.approve_tool(event.request_id)
-                    Stats().inc_tool_auto_approved()
                     logger.info(
                         "Auto-approved %s (%s)",
                         event.title,
@@ -2371,7 +2365,6 @@ async def handle_message(
         else:
             task.complete()
             sessions.record_success(session_key)
-            Stats().inc_message_success()
 
         # Check context usage — fires background compaction at configured threshold, never blocks
         sessions.check_context_usage(session_key, client)
@@ -2381,27 +2374,22 @@ async def handle_message(
         accumulated = e.partial_output or "⏱️ Request timed out. Please try again."
         task.fail("timeout")
         await sessions.record_failure(session_key)
-        Stats().inc_timeout()
-        Stats().inc_message_failed()
     except AcpProcessDied:
         _had_error = True
         accumulated = accumulated or "💀 Agent process died. Please try again."
         task.fail("process_died")
         await sessions.record_failure(session_key)
-        Stats().inc_message_failed()
     except AcpError as e:
         _had_error = True
         accumulated = f"❌ {e}"
         task.fail(str(e))
         await sessions.record_failure(session_key)
-        Stats().inc_message_failed()
     except Exception:
         _had_error = True
         logger.exception("Unexpected error handling message")
         accumulated = accumulated or "🔧 Something went wrong. Please try again."
         task.fail("unexpected")
         await sessions.record_failure(session_key)
-        Stats().inc_message_failed()
     finally:
         if _acquired:
             sessions.release(session_key)
@@ -2753,7 +2741,6 @@ async def _request_approval(
     except asyncio.TimeoutError:
         outcome = _OUTCOME_REJECTED
         await provider.reject_tool(event.request_id)
-        Stats().inc_tool_denial()
     finally:
         _pending_approvals.pop(key, None)
 
@@ -2911,7 +2898,6 @@ async def handle_interaction(channel: str, msg_ts: str, action_id: str, user_id:
             await pending.provider.approve_tool(pending.request_id)
         if not pending.future.done():
             pending.future.set_result(_OUTCOME_APPROVED)
-        Stats().inc_tool_approval()
         sel().log_api_access(
             caller=user_id,
             operation="slack.interactive.approval",
