@@ -529,8 +529,15 @@ class TestApprovalReplyToken:
         task = asyncio.ensure_future(
             delivery.request_approval(self._Event(), source="tool", on_prompted=seen.append)
         )
-        await asyncio.sleep(0)
-        assert seen and seen[0].request_id == "req-1"
+        # `on_prompted` fires only AFTER the send, and `_send` hops to a real worker
+        # thread (`asyncio.to_thread`). One `sleep(0)` yields once, which cannot span
+        # that hop — it passed on a fast machine and failed under CI's slower
+        # scheduling. Poll for the hook instead of guessing a tick count.
+        deadline = asyncio.get_running_loop().time() + 1.0
+        while not seen:
+            assert asyncio.get_running_loop().time() < deadline, "on_prompted never fired"
+            await asyncio.sleep(0.001)
+        assert seen[0].request_id == "req-1"
         delivery.resolve_reply_token(f"{DENY_WORD} {seen[0].token}")
         await asyncio.wait_for(task, timeout=1.0)
 

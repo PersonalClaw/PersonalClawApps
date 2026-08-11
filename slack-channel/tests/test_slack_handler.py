@@ -8,7 +8,12 @@ from slack_helpers import MockSlackClient
 from personalclaw.context import ContextBuilder
 from personalclaw.hooks import AutoReplyHook, HookManager, HooksConfig
 from personalclaw.llm.base import LLMEvent
-from slack_runtime.format import CONTINUATION, SLACK_MSG_LIMIT, split_message
+from slack_runtime.format import (
+    CONTINUATION,
+    SLACK_BLOCK_SECTION_LIMIT,
+    SLACK_MSG_LIMIT,
+    split_message,
+)
 from slack_runtime.handler import (
     _build_phase_emojis,
     _pending_approvals,
@@ -877,12 +882,11 @@ class TestCronMessageSplitting:
     async def test_short_cron_result_sends_single_block_message(self):
         """Short cron output posts one Block Kit message with ack button."""
         from slack_runtime.format import build_cron_ack_block, to_slack_mrkdwn
-        from personalclaw.gateway import _CRON_MSG_LIMIT
 
         slack = MockSlackClient()
         result_text = "All systems healthy."
         post_text = f"⏰ *Cron: health-check*\n\n{to_slack_mrkdwn(result_text)}"
-        parts = split_message(post_text, limit=_CRON_MSG_LIMIT)
+        parts = split_message(post_text, limit=SLACK_BLOCK_SECTION_LIMIT)
 
         assert len(parts) == 1
 
@@ -899,13 +903,12 @@ class TestCronMessageSplitting:
     async def test_long_cron_result_splits_into_multiple_messages(self):
         """Long cron output splits: first as Block Kit, overflow as threaded messages."""
         from slack_runtime.format import build_cron_ack_block, to_slack_mrkdwn
-        from personalclaw.gateway import _CRON_MSG_LIMIT
 
         slack = MockSlackClient()
         # Generate text that exceeds the 3000-char Block Kit section limit
         result_text = "line of text\n" * 500  # ~6500 chars
         post_text = f"⏰ *Cron: big-report*\n\n{to_slack_mrkdwn(result_text)}"
-        parts = split_message(post_text, limit=_CRON_MSG_LIMIT)
+        parts = split_message(post_text, limit=SLACK_BLOCK_SECTION_LIMIT)
 
         assert len(parts) >= 2
 
@@ -932,24 +935,22 @@ class TestCronMessageSplitting:
     async def test_all_cron_parts_within_block_kit_limit(self):
         """Every split part fits within the Block Kit section text limit."""
         from slack_runtime.format import to_slack_mrkdwn
-        from personalclaw.gateway import _CRON_MSG_LIMIT
 
         result_text = "x" * 10000
         post_text = f"⏰ *Cron: stress*\n\n{to_slack_mrkdwn(result_text)}"
-        parts = split_message(post_text, limit=_CRON_MSG_LIMIT)
+        parts = split_message(post_text, limit=SLACK_BLOCK_SECTION_LIMIT)
 
         for part in parts:
-            assert len(part) <= _CRON_MSG_LIMIT
+            assert len(part) <= SLACK_BLOCK_SECTION_LIMIT
 
     @pytest.mark.asyncio
     async def test_cron_split_preserves_full_content(self):
         """All original content is present across the split parts (no data loss)."""
         from slack_runtime.format import to_slack_mrkdwn
-        from personalclaw.gateway import _CRON_MSG_LIMIT
 
         result_text = "unique_token_abc\n" * 400
         post_text = f"⏰ *Cron: check*\n\n{to_slack_mrkdwn(result_text)}"
-        parts = split_message(post_text, limit=_CRON_MSG_LIMIT)
+        parts = split_message(post_text, limit=SLACK_BLOCK_SECTION_LIMIT)
 
         # Strip continuation markers and rejoin
         joined = "".join(p.replace(CONTINUATION, "") for p in parts)
