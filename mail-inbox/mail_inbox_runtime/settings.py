@@ -14,6 +14,13 @@ Where each value lives, and why (the app/core boundary, provider-boundary.md §2
 
 The allowlist is the inbound security surface: it is stored here but ENFORCED in the
 provider, fail-closed — an empty/absent allowlist surfaces ZERO messages (§2.7).
+
+The **prompt-bound address table** (EIAT-4, contract C4) is non-secret behavioral config
+too, so it lives in the same store under ``bound_addresses`` — see ``addresses.py`` for
+the row shape and the fail-closed per-address rule. It is declared in ``app.json``'s
+schema, which is what makes it editable from the platform's generated app-settings page
+(core's config PUT rejects any key the schema does not declare) and what puts the write
+path and this read path on the SAME file (``data/config.json``).
 """
 
 from __future__ import annotations
@@ -22,6 +29,15 @@ import logging
 from dataclasses import dataclass, field
 
 from personalclaw.sdk.settings import ProviderSettings
+
+from mail_inbox_runtime.addresses import (
+    SETTINGS_KEY as _ADDRESSES_KEY,
+    BoundAddress,
+    load_bound_addresses,
+    # ONE definition of allowlist normalization, shared with the per-address lists — so the
+    # app-wide list and a bound row's can never disagree about what a pattern means.
+    normalize_senders as _coerce_senders,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,20 +59,6 @@ def _coerce_port(value: object) -> int:
     return port if 1 <= port <= 65535 else _DEFAULT_PORT
 
 
-def _coerce_senders(value: object) -> list[str]:
-    """Normalize the allowlist: strip, drop blanks, dedupe (order-preserving)."""
-    if not isinstance(value, (list, tuple)):
-        return []
-    seen: set[str] = set()
-    out: list[str] = []
-    for item in value:
-        s = str(item).strip().lower()
-        if s and s not in seen:
-            seen.add(s)
-            out.append(s)
-    return out
-
-
 @dataclass
 class MailInboxSettings:
     """The mail-inbox app's behavioral config (its own store). No secrets here."""
@@ -68,6 +70,8 @@ class MailInboxSettings:
     address: str = ""
     folder: str = _DEFAULT_FOLDER
     allow_senders: list[str] = field(default_factory=list)
+    #: Prompt-bound receiving addresses (C4). Coerced at load; see ``addresses.py``.
+    bound_addresses: list[BoundAddress] = field(default_factory=list)
 
     @property
     def receiving_address(self) -> str:
@@ -92,6 +96,7 @@ class MailInboxSettings:
             address=str(d.get("address", "")).strip(),
             folder=str(d.get("folder", _DEFAULT_FOLDER)).strip() or _DEFAULT_FOLDER,
             allow_senders=_coerce_senders(d.get("allow_senders", [])),
+            bound_addresses=load_bound_addresses(d.get(_ADDRESSES_KEY, [])),
         )
 
 

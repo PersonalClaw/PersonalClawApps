@@ -1,7 +1,7 @@
 """MailInboxProvider — a MessageSourceProvider that polls an IMAP mailbox.
 
-This is the whole inbound story for EIAT-2 (send_reply/SMTP is EIAT-3, prompt-bound
-addresses are EIAT-4). On each ``poll`` the provider:
+This is the whole inbound story (send_reply/SMTP is EIAT-3). On each ``poll`` the
+provider:
 
 1. reads the latest app settings + the IMAP password from the SDK credential store
    (NEVER from app.json/ProviderSettings — EIAT guardrail);
@@ -15,8 +15,19 @@ addresses are EIAT-4). On each ``poll`` the provider:
    ``mail_sender_rejected`` event fires) and a duplicate ``Message-ID`` (a second belt
    over the UID cursor);
 5. extracts the body per T2.3 (prefer text/plain, sanitize HTML, pull attachment text
-   through core's document readers) and maps the mail onto ``IncomingMessage`` — RAW;
-   fencing happens downstream at prompt time, never here.
+   through core's document readers) and maps the mail onto ``IncomingMessage``;
+6. **binds a prompt-bound address** (EIAT-4, C4): when the mail was delivered to one of
+   the configured ``bound_addresses``, the item text becomes that row's stored,
+   user-authored ``default_prompt`` followed by the mail FENCED with
+   ``source="mail:<address>"`` (``addresses.compose_prompt`` — the one composition point),
+   and ``channel_id`` becomes the BOUND address so core's inbox→event bridge reports it as
+   the event's ``meta.address``. That is what lets the mail fire an inbox
+   ``run-prompt``/``invoke-agent`` action running exactly the stored prompt: core's fire
+   path re-fences only text that is not already fenced, so the app's attribution survives
+   to the action provider. Mail to an UNbound address is carried RAW exactly as before.
+
+Fencing therefore happens exactly ONCE and only at prompt-composition time — never in
+``mime.py``, never for unbound mail.
 
 The gateway's app loader keeps this app's dir on sys.path only while it execs THIS
 module, so pin it back (mirrors telegram-channel/transport.py) to keep the sibling
@@ -29,7 +40,6 @@ import asyncio
 import email
 import email.policy
 import email.utils
-import fnmatch
 import json
 import logging
 import sys as _sys
@@ -45,6 +55,12 @@ from personalclaw.sdk.channel import AppConfig, atomic_write, sel
 from personalclaw.sdk.inbox import IncomingMessage, MessageSourceProvider
 from personalclaw.sdk.util import app_data_dir
 
+from mail_inbox_runtime.addresses import (
+    BoundAddress,
+    compose_prompt,
+    match_bound_address,
+    sender_matches,
+)
 from mail_inbox_runtime.imap_client import ImapClient, ImapError, Imap4Client
 from mail_inbox_runtime.mime import extract_body
 from mail_inbox_runtime.settings import CRED_MAIL_PASSWORD, MailInboxSettings, reload_settings
@@ -65,15 +81,20 @@ def _parse_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def _sender_allowed(from_addr: str, allow_senders: list[str]) -> bool:
-    """Fail-closed glob match. An empty allowlist allows NOTHING (never reached — the
-    provider short-circuits before fetching — but defensive here too)."""
-    if not allow_senders:
-        return False
-    addr = from_addr.strip().lower()
-    if not addr:
-        return False
-    return any(fnmatch.fnmatch(addr, pattern) for pattern in allow_senders)
+#: Recipient headers a bound address can appear in, most authoritative first. ``To``/``Cc``
+#: carry the address the sender typed (the Gmail ``+suffix`` case); ``Delivered-To`` /
+#: ``X-Original-To`` carry it for a catch-all domain or a forwarding rule, where the
+#: envelope recipient is the only place the purpose address survives.
+_RECIPIENT_HEADERS = ("delivered-to", "x-original-to", "to", "cc")
+
+
+def _recipients(msg: "email.message.EmailMessage") -> list[str]:
+    """Every address this mail was delivered to, across the recipient headers."""
+    pairs: list[tuple[str, str]] = []
+    for header in _RECIPIENT_HEADERS:
+        values = msg.get_all(header) or []
+        pairs.extend(email.utils.getaddresses([str(v) for v in values]))
+    return [addr.strip().lower() for _, addr in pairs if addr and addr.strip()]
 
 
 class MailInboxProvider(MessageSourceProvider):
@@ -135,6 +156,39 @@ class MailInboxProvider(MessageSourceProvider):
                 source="channel",
                 resources=f"from={from_addr or '?'} uid={uid}",
                 error="sender not in allowlist",
+            )
+        except Exception:
+            logger.debug("mail-inbox: SEL log failed", exc_info=True)
+
+    @staticmethod
+    def _log_address_rejection(bound: BoundAddress, from_addr: str, uid: int) -> None:
+        """Emit ``mail_address_sender_rejected`` — a sender the app-wide allowlist admitted
+        but this BOUND address does not. Audited separately from the global rejection
+        because it answers a different question: not "who is allowed to mail me" but "who
+        is allowed to run THIS prompt"."""
+        try:
+            sel().log_api_access(
+                caller=_APP,
+                operation="mail_address_sender_rejected",
+                outcome="rejected",
+                source="channel",
+                resources=f"address={bound.address} from={from_addr or '?'} uid={uid}",
+                error="sender not in the bound address allowlist",
+            )
+        except Exception:
+            logger.debug("mail-inbox: SEL log failed", exc_info=True)
+
+    @staticmethod
+    def _log_prompt_bound(bound: BoundAddress, from_addr: str, uid: int) -> None:
+        """Emit ``mail_prompt_bound`` — this mail will run a stored prompt unattended, so
+        the fire is auditable without reading the prompt or the mail (neither is logged)."""
+        try:
+            sel().log_api_access(
+                caller=_APP,
+                operation="mail_prompt_bound",
+                outcome="allowed",
+                source="channel",
+                resources=f"address={bound.address} from={from_addr or '?'} uid={uid}",
             )
         except Exception:
             logger.debug("mail-inbox: SEL log failed", exc_info=True)
@@ -248,8 +302,18 @@ class MailInboxProvider(MessageSourceProvider):
             return None
 
         _, from_addr = email.utils.parseaddr(str(msg.get("From", "")))
-        if not _sender_allowed(from_addr, settings.allow_senders):
+        if not sender_matches(from_addr, settings.allow_senders):
             self._log_rejection(from_addr, uid)
+            return None
+
+        # Prompt-bound address (C4). Matched AFTER the app-wide allowlist, so a bound row's
+        # own list can only NARROW: a sender the global list rejects never reaches here.
+        bound = match_bound_address(settings.bound_addresses, _recipients(msg))
+        if bound is not None and not bound.sender_allowed(from_addr):
+            # Fail closed, and drop the message entirely rather than surfacing it unbound:
+            # an ingested item emits an inbox event, so surfacing it could still fire a
+            # broader trigger the user authored. "Fires nothing" has to mean nothing.
+            self._log_address_rejection(bound, from_addr, uid)
             return None
 
         message_id = str(msg.get("Message-ID", "")).strip()
@@ -258,7 +322,9 @@ class MailInboxProvider(MessageSourceProvider):
         if message_id:
             new_ids.append(message_id)
 
-        return self._to_incoming(msg, settings, from_addr, uid, message_id)
+        if bound is not None:
+            self._log_prompt_bound(bound, from_addr, uid)
+        return self._to_incoming(msg, settings, from_addr, uid, message_id, bound)
 
     @staticmethod
     def _to_incoming(
@@ -267,12 +333,18 @@ class MailInboxProvider(MessageSourceProvider):
         from_addr: str,
         uid: int,
         message_id: str,
+        bound: BoundAddress | None = None,
     ) -> IncomingMessage:
         subject = str(msg.get("Subject", "")).strip()
         body = extract_body(msg)
-        # Subject + body carried RAW into the item text (and thus the event value);
-        # fencing is downstream (EIAT-4), never here.
-        text = f"Subject: {subject}\n\n{body}".strip() if subject else body
+        if bound is not None:
+            # The ONE prompt-composition point: the user's stored instruction, then the mail
+            # fenced as `mail:<address>` (subject inside the fence — it is wire data too).
+            text = compose_prompt(bound, subject=subject, body=body)
+        else:
+            # Unbound mail is carried RAW into the item text (and thus the event value);
+            # fencing is a prompt-time concern, and there is no prompt here.
+            text = f"Subject: {subject}\n\n{body}".strip() if subject else body
 
         display, _ = email.utils.parseaddr(str(msg.get("From", "")))
         # thread_id from the reply chain (In-Reply-To wins; else the first References id).
@@ -283,10 +355,17 @@ class MailInboxProvider(MessageSourceProvider):
 
         ts = MailInboxProvider._parse_date(msg)
 
+        # The channel id IS the receiving address, which is how a bound address is told
+        # apart downstream: core's inbox→event bridge publishes it as the event's
+        # `meta.address`, so an inbox trigger's address glob matches the BOUND address
+        # (`travel@…`) rather than the mailbox login it was delivered into.
+        channel_id = bound.address if bound is not None else settings.receiving_address
+        channel_name = bound.label if bound is not None else settings.receiving_address
+
         return IncomingMessage(
             id=message_id or f"{settings.folder}:{uid}",
-            channel_id=settings.receiving_address,  # the address → how a bound address is told apart
-            channel_name=settings.receiving_address or SOURCE_NAME,
+            channel_id=channel_id,
+            channel_name=channel_name or SOURCE_NAME,
             thread_id=thread_id or None,
             text=text,
             sender_id=from_addr,  # the allowlist key
