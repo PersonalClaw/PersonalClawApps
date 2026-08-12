@@ -2,7 +2,7 @@
   "name": "mail-inbox",
   "version": "0.1.0",
   "displayName": "Mail Inbox",
-  "description": "IMAP mail as an inbox source. Polls a mailbox, surfaces messages from a fail-closed sender allowlist as inbox items, and extracts multipart/HTML/attachment text. Credentials live in the credential store, never in app config.",
+  "description": "IMAP mail as an inbox source. Polls a mailbox, surfaces messages from a fail-closed sender allowlist as inbox items, and extracts multipart/HTML/attachment text. Purpose-specific addresses can each carry a stored prompt, so mail to them runs it against the fenced mail body. Credentials live in the credential store, never in app config.",
   "icon": "Mail",
   "author": "PersonalClaw",
   "license": "MIT",
@@ -88,6 +88,43 @@
           "x-meta": {
             "label": "Allowed Senders",
             "help": "Glob patterns of From addresses permitted to trigger (e.g. alerts@*.example.com). EMPTY means fail-closed — nothing is surfaced at all."
+          }
+        },
+        "bound_addresses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "address": {
+                "type": "string"
+              },
+              "default_prompt": {
+                "type": "string"
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "allow_senders": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "address",
+              "default_prompt",
+              "allow_senders"
+            ]
+          },
+          "default": [],
+          "x-meta": {
+            "label": "Prompt-Bound Addresses",
+            "help": "Purpose-specific receiving addresses, each carrying a stored prompt. Mail to one runs that prompt against the mail body, which is always fenced as untrusted data. One JSON object per address: {\"name\": \"Business Travel\", \"address\": \"you+travel@gmail.com\", \"default_prompt\": \"Build my itinerary and add calendar entries.\", \"enabled\": true, \"allow_senders\": [\"*@booking.example.com\"]}. allow_senders NARROWS the Allowed Senders list above — it never widens it, and an EMPTY list fires nothing (fail-closed). No secrets here: the IMAP password lives in the credential store."
           }
         }
       }
