@@ -10,26 +10,29 @@ installs through the same scanner-gated lifecycle as any third-party app.
 
 ## What's here
 
-36 apps across the capability types:
+45 apps across the capability types:
 
-- **Model providers** (16) — branded APIs (`anthropic-models`, `openai-models`,
+- **Model providers** (21) — branded APIs (`anthropic-models`, `openai-models`,
   `bedrock-models`, `google-models`, `deepseek-models`, `groq-models`,
-  `mistral-models`, `together-models`), generic endpoints
-  (`anthropic-compatible`, `openai-compatible`, `vllm-models`, `ollama-models`),
-  and local inference (`faster-whisper` STT, `piper-tts` TTS,
-  `sentence-transformers` embeddings, `diarization-onnx` /
-  `diarization-pyannote`), plus `fal-image` image generation.
+  `mistral-models`, `together-models`, `alibaba-models`, `openrouter-models`,
+  `meta-muse-spark`), generic endpoints (`anthropic-compatible`,
+  `openai-compatible`, `vllm-models`, `ollama-models`), and local inference
+  (`faster-whisper` STT, `piper-tts` TTS, `sentence-transformers` embeddings,
+  `diarization-onnx` / `diarization-pyannote`), plus `fal-image` image generation.
 - **Search providers** (7) — `duckduckgo-search` (keyless default),
   `brave-search`, `tavily-search`, `exa-search`, `perplexity-search`,
   `searxng-search`, `wikipedia-search`.
+- **Channels** (4) — `slack-channel` (see [docs/SLACK_SETUP.md](docs/SLACK_SETUP.md)),
+  `discord-channel`, `telegram-channel`, `email-channel`.
 - **Agents** (3) — `claude-code-agent`, `codex-agent`, `kiro-cli-agent`
   (ACP bundles).
 - **Tools** (3) — `mcp-tools`, `openai-tools`, `web-tools`.
-- **Channel** (1) — `slack-channel` (see [docs/SLACK_SETUP.md](docs/SLACK_SETUP.md)).
-- **Action** (1) — `webhook-action`.
-- **Skills marketplace** (1) — `skills-sh`.
+- **Sync** (2) — `dir-sync`, `git-sync`.
 - **Backend + UI apps** (2) — `growth` (growth/brag-doc tracker), `minutes`
   (meeting minutes on a synced timeline).
+- **Action** (1) — `webhook-action`.
+- **Inbox** (1) — `mail-inbox`.
+- **Skills marketplace** (1) — `skills-sh`.
 
 Building your own app? See the [app creation guide](docs/app-creation-guide.md) —
 the `demo-dashboard` worked example there exercises every platform surface
