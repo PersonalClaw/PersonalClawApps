@@ -1,5 +1,7 @@
 # PersonalClaw Apps
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE)
+
 First-party app bundles for [PersonalClaw](https://github.com/PersonalClaw/PersonalClaw). Each subdirectory
 is a **self-contained app**: an `app.json` manifest plus its implementation.
 Apps import core ONLY through the stable SDK surface (`personalclaw.sdk.*`) —
