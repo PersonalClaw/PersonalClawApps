@@ -1,4 +1,5 @@
 # PersonalClaw Apps
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-informational.svg)](LICENSE)
 
 First-party app bundles for [PersonalClaw](https://github.com/PersonalClaw/PersonalClaw). Each subdirectory
@@ -9,7 +10,7 @@ installs through the same scanner-gated lifecycle as any third-party app.
 
 ## What's here
 
-39 apps across the capability types:
+36 apps across the capability types:
 
 - **Model providers** (16) — branded APIs (`anthropic-models`, `openai-models`,
   `bedrock-models`, `google-models`, `deepseek-models`, `groq-models`,
