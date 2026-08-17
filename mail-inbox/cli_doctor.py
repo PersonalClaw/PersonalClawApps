@@ -13,7 +13,12 @@ CANNOT fire (no stored prompt, or an empty per-address allowlist) is reported he
 from personalclaw.sdk.channel import AppConfig
 from personalclaw.sdk.cli import DoctorLine
 
-from mail_inbox_runtime.settings import CRED_MAIL_PASSWORD, MailInboxSettings
+from mail_inbox_runtime.outbound import draft_reason
+from mail_inbox_runtime.settings import (
+    CRED_MAIL_PASSWORD,
+    CRED_SMTP_PASSWORD,
+    MailInboxSettings,
+)
 
 
 def probe() -> list[DoctorLine]:
@@ -55,7 +60,30 @@ def probe() -> list[DoctorLine]:
         )
 
     lines.extend(_bound_address_lines(settings))
+    lines.extend(_outbound_lines(settings, creds))
     return lines
+
+
+def _outbound_lines(settings: MailInboxSettings, creds: dict) -> list[DoctorLine]:
+    """The reply posture. "Drafting, not sending" is the DEFAULT and therefore the state a
+    user is most likely to mistake for a broken send — so it is reported with the exact
+    reason, from the same :func:`draft_reason` the send path calls (one decision, one
+    answer, no chance of the doctor and the runtime disagreeing)."""
+    reason = draft_reason(
+        send_enabled=settings.send_enabled,
+        smtp_ready=settings.smtp_ready,
+        has_credential=bool(creds.get(CRED_SMTP_PASSWORD)),
+    )
+    if reason:
+        return [DoctorLine("replies", "info", f"DRAFT only — {reason}")]
+    return [
+        DoctorLine(
+            "replies",
+            "warn",
+            f"SENDING LIVE via {settings.smtp_host}:{settings.smtp_port} "
+            f"({settings.smtp_security}) as {settings.smtp_login} — replies leave this machine",
+        )
+    ]
 
 
 def _bound_address_lines(settings: MailInboxSettings) -> list[DoctorLine]:

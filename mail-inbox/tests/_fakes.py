@@ -1,4 +1,4 @@
-"""Test doubles: a fake ImapClient and an RFC822 message builder.
+"""Test doubles: a fake ImapClient, a fake SmtpSender, and an RFC822 message builder.
 
 Named ``_fakes`` (leading underscore, not ``test_*``) so pytest doesn't collect it and
 the boundary lint still skips it — it imports no core, only stdlib.
@@ -34,6 +34,24 @@ class FakeImapClient:
         self.closed = True
 
 
+class FakeSmtpSender:
+    """An in-memory SMTP sender: captures the composed ``EmailMessage`` instead of putting
+    it on a socket. Implements the narrow ``SmtpSender`` protocol (``send``), so a test
+    injects it via ``provider._sender_factory``.
+
+    ``sent`` staying EMPTY is the assertion that matters for draft-by-default: no message
+    left the machine. ``error`` makes the real transport-failure path testable."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.sent: list[EmailMessage] = []
+        self.error = error
+
+    def send(self, msg: EmailMessage) -> None:
+        if self.error is not None:
+            raise self.error
+        self.sent.append(msg)
+
+
 def build_message(
     *,
     from_addr: str = "sender@example.com",
@@ -43,6 +61,7 @@ def build_message(
     plain: str | None = "plain body",
     html: str | None = None,
     in_reply_to: str = "",
+    references: str = "",
     date: str = "Mon, 09 Aug 2026 10:00:00 +0000",
     attachments: list[tuple[str, str, bytes]] | None = None,
 ) -> bytes:
@@ -55,6 +74,8 @@ def build_message(
         msg["Message-ID"] = message_id
     if in_reply_to:
         msg["In-Reply-To"] = in_reply_to
+    if references:
+        msg["References"] = references
     if date:
         msg["Date"] = date
 

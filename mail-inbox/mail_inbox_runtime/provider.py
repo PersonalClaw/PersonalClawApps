@@ -1,7 +1,7 @@
-"""MailInboxProvider — a MessageSourceProvider that polls an IMAP mailbox.
+"""MailInboxProvider — a MessageSourceProvider that polls an IMAP mailbox and answers
+over SMTP, **drafting by default**.
 
-This is the whole inbound story (send_reply/SMTP is EIAT-3). On each ``poll`` the
-provider:
+On each ``poll`` the provider:
 
 1. reads the latest app settings + the IMAP password from the SDK credential store
    (NEVER from app.json/ProviderSettings — EIAT guardrail);
@@ -28,6 +28,16 @@ provider:
 
 Fencing therefore happens exactly ONCE and only at prompt-composition time — never in
 ``mime.py``, never for unbound mail.
+
+**Outbound (EIAT-3, C3, guardrail 4).** Polling also REMEMBERS how to answer each
+surfaced message (``outbound.remember_target``), because ``send_reply``'s signature —
+``(channel_id, text, thread_ts)`` — carries no recipient and one can never be inferred
+from a channel id. ``send_reply`` then composes a properly threaded reply
+(``In-Reply-To`` + ``References``) and **drafts it**: sending happens only when the user
+has explicitly turned ``send_enabled`` on AND the platform's live-writes posture permits
+it. See :mod:`mail_inbox_runtime.outbound` for the four independent draft conditions;
+in every one of them nothing is put on a socket. ``supports_dry_run`` advertises that
+observe mode, and :meth:`MailInboxProvider.reply` honours an explicit request for it.
 
 The gateway's app loader keeps this app's dir on sys.path only while it execs THIS
 module, so pin it back (mirrors telegram-channel/transport.py) to keep the sibling
@@ -63,7 +73,24 @@ from mail_inbox_runtime.addresses import (
 )
 from mail_inbox_runtime.imap_client import ImapClient, ImapError, Imap4Client
 from mail_inbox_runtime.mime import extract_body
-from mail_inbox_runtime.settings import CRED_MAIL_PASSWORD, MailInboxSettings, reload_settings
+from mail_inbox_runtime.outbound import (
+    NO_TARGET,
+    SEND_FAILED,
+    ReplyOutcome,
+    ReplyTarget,
+    compose_reply,
+    draft_reason,
+    lookup_target,
+    remember_target,
+    save_draft,
+)
+from mail_inbox_runtime.settings import (
+    CRED_MAIL_PASSWORD,
+    CRED_SMTP_PASSWORD,
+    MailInboxSettings,
+    reload_settings,
+)
+from mail_inbox_runtime.smtp_client import SmtpError, SmtpSender, SmtplibSender
 
 logger = logging.getLogger(__name__)
 
@@ -106,10 +133,24 @@ class MailInboxProvider(MessageSourceProvider):
         # the password in the credential store — so nothing is taken from here.
         self._posture_logged = False
         self._client_factory = None  # test seam: inject a fake ImapClient factory
+        self._sender_factory = None  # test seam: inject a fake SmtpSender factory
 
     @property
     def source_name(self) -> str:
         return SOURCE_NAME
+
+    @property
+    def supports_dry_run(self) -> bool:
+        """This provider's outbound path has a REAL observe mode, so it may be dry-run.
+
+        Composition and delivery are separate steps here (see
+        :mod:`mail_inbox_runtime.outbound`): a dry run composes the whole reply, threading
+        headers included, writes it to the drafts dir, and opens no SMTP connection at all.
+        The preview is therefore both meaningful and safe — the two properties core's
+        ``ActionProvider.supports_dry_run`` requires before a dry run may be dispatched.
+        :meth:`reply` honours ``dry_run=True``; ``send_reply`` leaves the posture to the
+        settings + the platform flag."""
+        return True
 
     # ── credentials (SDK credential store ONLY) ──
     @staticmethod
@@ -120,6 +161,19 @@ class MailInboxProvider(MessageSourceProvider):
             return AppConfig.load().load_credentials().get(CRED_MAIL_PASSWORD, "")
         except Exception:
             logger.debug("mail-inbox: credential load failed", exc_info=True)
+            return ""
+
+    @staticmethod
+    def _resolve_smtp_password() -> str:
+        """The SMTP password, by its OWN credential-store key.
+
+        No fallback to the IMAP key: an unset outbound credential must fail closed (the
+        reply is drafted, and the doctor says why) rather than authenticate a send with a
+        secret the user only ever handed over for reading mail."""
+        try:
+            return AppConfig.load().load_credentials().get(CRED_SMTP_PASSWORD, "")
+        except Exception:
+            logger.debug("mail-inbox: SMTP credential load failed", exc_info=True)
             return ""
 
     # ── Message-ID dedup belt (persisted, bounded) ──
@@ -193,6 +247,27 @@ class MailInboxProvider(MessageSourceProvider):
         except Exception:
             logger.debug("mail-inbox: SEL log failed", exc_info=True)
 
+    @staticmethod
+    def _log_reply(operation: str, outcome: str, resources: str, reason: str) -> None:
+        """Audit one outbound decision — drafted, sent, refused or failed.
+
+        Every outcome is logged, not only the sends: "my reply never went out" and "my
+        reply went out to the wrong person" are both answerable from this trail. The reply
+        TEXT is never logged (it is the user's content), and no credential can reach here —
+        ``reason`` is one of the fixed strings in ``outbound``, or an SMTP error already
+        scrubbed by ``smtp_client``."""
+        try:
+            sel().log_api_access(
+                caller=_APP,
+                operation=operation,
+                outcome=outcome,
+                source="channel",
+                resources=resources,
+                error=reason,
+            )
+        except Exception:
+            logger.debug("mail-inbox: SEL log failed", exc_info=True)
+
     def _log_posture_once(self, settings: MailInboxSettings) -> None:
         if self._posture_logged:
             return
@@ -215,6 +290,20 @@ class MailInboxProvider(MessageSourceProvider):
             return self._client_factory(settings, password)
         return Imap4Client(
             settings.host, settings.port, settings.username, password, use_ssl=settings.use_ssl
+        )
+
+    def _make_sender(self, settings: MailInboxSettings, password: str) -> SmtpSender:
+        """The real SMTP sender, or the injected test fake. Constructed ONLY on the send
+        path — a drafted reply never builds one, so a dry run cannot open a socket even by
+        accident."""
+        if self._sender_factory is not None:
+            return self._sender_factory(settings, password)
+        return SmtplibSender(
+            settings.smtp_host,
+            settings.smtp_port,
+            settings.smtp_login,
+            password,
+            security=settings.smtp_security,
         )
 
     @staticmethod
@@ -324,7 +413,43 @@ class MailInboxProvider(MessageSourceProvider):
 
         if bound is not None:
             self._log_prompt_bound(bound, from_addr, uid)
-        return self._to_incoming(msg, settings, from_addr, uid, message_id, bound)
+        incoming = self._to_incoming(msg, settings, from_addr, uid, message_id, bound)
+        self._remember_reply_target(msg, incoming, from_addr, message_id)
+        return incoming
+
+    @staticmethod
+    def _remember_reply_target(
+        msg: "email.message.EmailMessage",
+        incoming: IncomingMessage,
+        from_addr: str,
+        message_id: str,
+    ) -> None:
+        """Persist how to answer this message — recorded at POLL time on purpose.
+
+        ``send_reply(channel_id, text, thread_ts)`` carries no recipient and no thread
+        headers, and by the time it is called the mail is long gone from memory. Everything
+        a threaded reply needs (whom, under what ``Message-ID``, with what ``References``)
+        exists only here, so it is captured now or not at all. A message with no
+        ``Message-ID`` is skipped rather than stored under a guessed key: a reply must
+        thread under a real id or not claim to be a reply."""
+        if not message_id or not from_addr:
+            return
+        # The parent's chain, then (belt) its own In-Reply-To if the chain omitted it —
+        # ``outbound.reference_chain`` appends the parent's Message-ID on top of this.
+        refs = [r for r in str(msg.get("References", "")).split() if r]
+        in_reply_to = str(msg.get("In-Reply-To", "")).strip()
+        if in_reply_to and in_reply_to not in refs:
+            refs.append(in_reply_to)
+        remember_target(
+            ReplyTarget(
+                channel_id=incoming.channel_id,
+                message_id=message_id,
+                to_addr=from_addr,
+                subject=str(msg.get("Subject", "")).strip(),
+                references=refs,
+                ts=incoming.timestamp,
+            )
+        )
 
     @staticmethod
     def _to_incoming(
@@ -385,11 +510,83 @@ class MailInboxProvider(MessageSourceProvider):
                 pass
         return time.time()
 
-    # ── outbound / reactions / history: inbound-only for EIAT-2 ──
+    # ── outbound (C3, guardrail 4) ──
     async def send_reply(self, channel_id: str, text: str, thread_ts: str | None = None) -> bool:
-        # SMTP send_reply (draft-by-default) is EIAT-3. Inbound-only here: no send.
-        return False
+        """The ABC's outbound hook. Returns whether the reply was actually DELIVERED.
 
+        In draft mode — the default — that is ``False``, and it is the correct, successful
+        outcome rather than an error: the composed reply is on disk under the app's drafts
+        dir and the reason is in the log and the SEL trail. Callers wanting the full picture
+        (drafted vs refused vs failed, and the draft path) use :meth:`reply`; narrowing an
+        outcome to a bool must not turn "we deliberately did not send" into "delivered"."""
+        outcome = await self.reply(channel_id, text, thread_ts)
+        return outcome.sent
+
+    async def reply(
+        self,
+        channel_id: str,
+        text: str,
+        thread_ts: str | None = None,
+        *,
+        dry_run: bool = False,
+    ) -> ReplyOutcome:
+        """Compose a threaded reply and send it ONLY if every gate allows it.
+
+        Order is load-bearing: the message is composed FIRST, so the draft that draft-mode
+        produces is the same message a send would have put on the wire — and an unknown
+        recipient is refused before composition, because a reply with a guessed ``To`` is
+        worse than no reply at all."""
+        settings = reload_settings()
+
+        target = lookup_target(channel_id, thread_ts)
+        if target is None:
+            logger.warning(
+                "mail-inbox: cannot reply on %r (thread %r) — %s",
+                channel_id,
+                thread_ts or "-",
+                NO_TARGET,
+            )
+            self._log_reply("mail_reply_refused", "rejected", f"channel={channel_id}", NO_TARGET)
+            return ReplyOutcome(reason=NO_TARGET)
+
+        # Compose unconditionally. This is what makes draft-by-default provable: draft mode
+        # produces a real message, not an absence of one.
+        msg = compose_reply(
+            target, text, from_addr=target.channel_id or settings.receiving_address
+        )
+        password = self._resolve_smtp_password()
+        reason = draft_reason(
+            send_enabled=settings.send_enabled,
+            smtp_ready=settings.smtp_ready,
+            has_credential=bool(password),
+            dry_run=dry_run,
+        )
+        resources = f"to={target.to_addr} in-reply-to={target.message_id}"
+
+        if reason:
+            path = save_draft(msg)
+            logger.info(
+                "mail-inbox: reply DRAFTED, not sent (%s) — %s", reason, path or "<unwritten>"
+            )
+            self._log_reply("mail_reply_drafted", "allowed", resources, reason)
+            return ReplyOutcome(drafted=True, reason=reason, draft_path=path, message=msg)
+
+        try:
+            sender = self._make_sender(settings, password)
+            await asyncio.to_thread(sender.send, msg)
+        except SmtpError as exc:
+            # Keep the composed reply rather than losing it to a transport failure.
+            path = save_draft(msg)
+            logger.warning("mail-inbox: %s — kept as draft %s", exc, path or "<unwritten>")
+            self._log_reply("mail_reply_send_failed", "failed", resources, str(exc))
+            return ReplyOutcome(
+                drafted=True, reason=f"{SEND_FAILED}: {exc}", draft_path=path, message=msg
+            )
+
+        self._log_reply("mail_reply_sent", "allowed", resources, "")
+        return ReplyOutcome(sent=True, message=msg)
+
+    # ── reactions / history: not a mail concept ──
     async def add_reaction(self, channel_id: str, ts: str, emoji: str) -> bool:
         return False
 
