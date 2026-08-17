@@ -5,8 +5,9 @@ items. Compose it with your ordinary Gmail/Outlook filters to turn any email-emi
 service (alerts, receipts, calendar invites, form submissions) into something the agent
 can see — with **zero per-vendor integration**.
 
-This bundle is the **inbound** half (IMAP, checkpointing, allowlist, MIME extraction,
-prompt-bound addresses). Sending replies over SMTP ships separately.
+It also **replies** over SMTP — but only as a **draft** until you say otherwise. Sending
+mail is irreversible and leaves your machine, so it is off by default. See
+[Replies](#replies-draft-by-default).
 
 ## What it does
 
@@ -26,8 +27,12 @@ prompt-bound addresses). Sending replies over SMTP ships separately.
   followed by the mail wrapped in an `<untrusted_content source="mail:<address>">` fence,
   so the instruction is yours and the mail stays data. Each bound address has its own
   sender allowlist that **narrows** the app-wide one.
+- **Replies, drafted by default.** A reply is composed as a properly threaded message
+  (`In-Reply-To` + `References`) and written to disk as a real `.eml`. Nothing is sent
+  until you turn sending on — see [Replies](#replies-draft-by-default).
 - **Credentials never touch app config.** The IMAP password lives only in the shared
-  credential store under the app's own key (`MAIL_INBOX_PASSWORD`). Host, folder, and
+  credential store under the app's own key (`MAIL_INBOX_PASSWORD`), and the SMTP password
+  under its own separate key (`MAIL_INBOX_SMTP_PASSWORD`). Host, folder, and
   the allowlist are non-secret settings persisted in the app's own store.
 
 ## Setup
@@ -40,8 +45,14 @@ Run `personalclaw setup` after installing; the app's setup step prompts for:
 - **Allowed senders** — comma-separated globs, e.g.
   `alerts@*.example.com, calendar-notification@google.com`.
 
-`personalclaw doctor` reports the connection, whether the password is set, and the
-allowlist posture (including a warning when it is empty and therefore surfacing nothing).
+- **SMTP for replies** (optional) — host / port / TLS mode / username, plus an SMTP
+  password stored under its own credential key. Configuring it does **not** start sending;
+  see below.
+
+`personalclaw doctor` reports the connection, whether the password is set, the allowlist
+posture (including a warning when it is empty and therefore surfacing nothing), and the
+reply posture — `DRAFT only` with the exact reason, or a **warning** when replies are
+going out live.
 
 ### Gmail example
 
@@ -114,8 +125,48 @@ injected text stays inside the fence as data.
    stored prompt against the fenced mail; a mail to the same address from any other
    sender does nothing at all.
 
-Nothing in this table is a secret, so nothing here is masked: the only credential this app
-has is the IMAP password, and it lives in the credential store, never in app config.
+Nothing in this table is a secret, so nothing here is masked: this app's credentials are
+the IMAP and SMTP passwords, and both live in the credential store, never in app config.
+
+## Replies (draft-by-default)
+
+A sent email cannot be recalled, and it is visible to someone who is not you. So this app
+**composes replies and does not send them**. That is the default, not a setup step you
+forgot.
+
+What happens on a reply:
+
+1. The reply is **composed** — `To:` the original sender, `Subject: Re: …` (no stacked
+   `Re: Re:`), `In-Reply-To:` the original `Message-ID`, and a `References:` chain that
+   extends the original's, which is what makes a real mail client thread it under the
+   original conversation. The `From:` is the address the mail arrived at, so a reply to a
+   prompt-bound address keeps that address's identity instead of exposing the mailbox
+   login behind it.
+2. It is **written to disk** at `~/.personalclaw/apps/mail-inbox/data/drafts/*.eml` — a
+   real RFC822 file you can open in any mail client, edit, and send yourself.
+3. It is **sent** only if *every* one of these holds: `send_enabled` is on, the SMTP
+   settings are complete, an SMTP password is in the credential store, the caller did not
+   ask for a dry run, and the platform's `PERSONALCLAW_DISABLE_LIVE_WRITES` guard is not
+   set. Otherwise it stays a draft and the reason is recorded — in the log, in the
+   security event log, and in `personalclaw doctor`.
+
+In every draft case **no SMTP connection is opened and no sender object is even
+constructed**, so a dry run cannot put a byte on the wire.
+
+To turn sending on: **Apps → Mail Inbox → Configure → Send Replies**. Do it deliberately.
+
+Every outcome is audited as a security event — `mail_reply_drafted`, `mail_reply_sent`,
+`mail_reply_send_failed`, `mail_reply_refused` — recording the recipient and the
+`In-Reply-To`, never the reply text and never a credential.
+
+**Replies are fail-closed on the recipient.** `send_reply(channel_id, text, thread_ts)`
+carries no address, so the app records how to answer each message while polling it. If a
+reply names a channel or thread it has no record of, it is **refused** — nothing is
+composed and nothing is sent. Answering the wrong person is worse than not answering.
+
+TLS is verified, not attempted: in `starttls` mode a failed upgrade **aborts** the send
+rather than continuing in the clear, so an app password is never put on a plaintext
+socket. SMTP error text is scrubbed of the password before it reaches a log.
 
 ## Security
 
@@ -135,5 +186,8 @@ python -m pytest mail-inbox -q
 ```
 
 Tests run against core installed from the repo with no live mail server: the IMAP client
-is injected as an in-memory fake, and the sender-trust / security-log surfaces are the
-real core seams writing into an isolated tmp home.
+and the SMTP sender are both injected as in-memory fakes, and the sender-trust /
+security-log surfaces are the real core seams writing into an isolated tmp home. **No test
+sends real mail** — the outbound tests assert on the captured `EmailMessage` and on the
+`.eml` written to a tmp home, and `sender.sent == []` is how "nothing left the machine" is
+proved.

@@ -2,7 +2,7 @@
   "name": "mail-inbox",
   "version": "0.1.0",
   "displayName": "Mail Inbox",
-  "description": "IMAP mail as an inbox source. Polls a mailbox, surfaces messages from a fail-closed sender allowlist as inbox items, and extracts multipart/HTML/attachment text. Purpose-specific addresses can each carry a stored prompt, so mail to them runs it against the fenced mail body. Credentials live in the credential store, never in app config.",
+  "description": "IMAP mail as an inbox source. Polls a mailbox, surfaces messages from a fail-closed sender allowlist as inbox items, and extracts multipart/HTML/attachment text. Purpose-specific addresses can each carry a stored prompt, so mail to them runs it against the fenced mail body. Replies are composed as threaded drafts and are NOT sent until you turn sending on. Credentials live in the credential store, never in app config.",
   "icon": "Mail",
   "author": "PersonalClaw",
   "license": "MIT",
@@ -26,7 +26,8 @@
     "implementation": "mail_inbox_runtime.provider:create_provider",
     "capabilities": [
       "poll",
-      "attachments"
+      "attachments",
+      "send"
     ],
     "settingsSchema": {
       "type": "object",
@@ -88,6 +89,51 @@
           "x-meta": {
             "label": "Allowed Senders",
             "help": "Glob patterns of From addresses permitted to trigger (e.g. alerts@*.example.com). EMPTY means fail-closed — nothing is surfaced at all."
+          }
+        },
+        "send_enabled": {
+          "type": "boolean",
+          "default": false,
+          "x-meta": {
+            "label": "Send Replies (off = draft only)",
+            "help": "OFF by default. While off, every reply is composed as a real threaded draft under the app's data dir (drafts/*.eml) and NOTHING is sent — no SMTP connection is even opened. Turn this on only when you want this app to send mail as you: a sent email is irreversible and leaves your machine. Sending also needs the SMTP settings below and an SMTP password in the credential store, and it is still suppressed while the platform's live-writes guard (PERSONALCLAW_DISABLE_LIVE_WRITES) is set."
+          }
+        },
+        "smtp_host": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "SMTP Host",
+            "help": "Outbound SMTP server for replies (e.g. smtp.gmail.com). Blank means replies can only ever be drafted."
+          }
+        },
+        "smtp_port": {
+          "type": "integer",
+          "default": 587,
+          "x-meta": {
+            "label": "SMTP Port",
+            "help": "587 for STARTTLS (the default), 465 for implicit TLS."
+          }
+        },
+        "smtp_security": {
+          "type": "string",
+          "enum": [
+            "starttls",
+            "ssl",
+            "plain"
+          ],
+          "default": "starttls",
+          "x-meta": {
+            "label": "SMTP TLS Mode",
+            "help": "starttls (587) upgrades the connection and ABORTS the send if the upgrade fails — it never falls back to plaintext. ssl (465) is implicit TLS. plain is unencrypted and only sane for a relay on localhost. An unrecognized value falls back to starttls."
+          }
+        },
+        "smtp_username": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "SMTP Username",
+            "help": "SMTP login. Blank reuses the IMAP username (same account). The SMTP PASSWORD is never reused that way — it has its own credential-store key, set via 'personalclaw setup'."
           }
         },
         "bound_addresses": {
