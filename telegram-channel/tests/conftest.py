@@ -28,6 +28,20 @@ def _isolate_home(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _live_writes_baseline(monkeypatch):
+    """Pin the live-writes kill switch OFF as the suite-wide baseline.
+
+    ``transport.send()`` returns a typed :class:`SendRefused` (falsy, not a bool) while
+    ``PERSONALCLAW_DISABLE_LIVE_WRITES`` is set, and core's channel conformance kit
+    asserts ``send()`` returns a ``bool``. Both are correct in their own frame, so the
+    guard state has to be an EXPLICIT precondition rather than whatever the ambient
+    environment happens to carry: a developer (or a CI job) exporting the var would
+    otherwise turn the conformance clause red for a reason unrelated to the change
+    being tested. Tests that want the guard ON set it themselves with monkeypatch."""
+    monkeypatch.delenv("PERSONALCLAW_DISABLE_LIVE_WRITES", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _reset_settings_cache():
     """Drop the module-global settings cache around every test (it's a deliberate
     process singleton, refreshed on write — reset it so one test's activation mode
