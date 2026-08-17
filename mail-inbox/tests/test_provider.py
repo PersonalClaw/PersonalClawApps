@@ -165,7 +165,11 @@ def test_create_provider_returns_provider():
     assert create_provider().source_name == "mail"
 
 
-def test_send_reply_is_disabled_for_eiat2():
+def test_send_reply_refuses_when_there_is_nothing_to_reply_to():
+    """The outbound path exists now (EIAT-3) but stays fail-closed: with no polled message
+    there is no recipient, and one is never invented from a channel id. Threading, the
+    draft-by-default posture and the dry-run/live-writes rails live in
+    ``test_outbound.py``."""
     p = create_provider()
     assert asyncio.run(p.send_reply("c", "hi")) is False
     assert asyncio.run(p.add_reaction("c", "1", "x")) is False
