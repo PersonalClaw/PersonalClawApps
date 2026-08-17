@@ -51,6 +51,22 @@ exactly like any other app. (Or `POST /api/apps {"source": ".../apps/telegram-ch
 | `bot_token` | Bot Token | Telegram Bot API token from @BotFather (`123456:ABC-...`). Stored as a secret. |
 | `dm_activation` | DM Activation | `always` (answer every paired DM), `mention` (only when @-mentioned), or `off`. |
 
+## The live-writes kill switch
+
+Sending a Telegram message is a live, outward, un-sendable write, so this transport
+honors the platform's process-wide `PERSONALCLAW_DISABLE_LIVE_WRITES` switch — the same
+one core applies to non-GET egress and local-model deletion.
+
+With the switch set, `send()` transmits nothing and returns a **typed refusal**
+(`SendRefused`) instead. It is falsy, so every existing "did it send?" caller keeps
+reading "not delivered" unchanged, but a caller that cares can tell a suppressed write
+from a failed one with `isinstance(result, SendRefused)` — the two demand opposite
+responses, and a bare `False` would conflate them.
+
+Parsing follows the platform's fail-safe rule exactly: an **absent** variable allows
+writes (the switch is opt-in), an explicit `0`/`false`/`no`/`off` turns the guard off,
+and **any other present value — including a typo — turns it on**.
+
 ## Telegram bot setup
 
 1. Open a chat with [@BotFather](https://t.me/BotFather) and send `/newbot`.

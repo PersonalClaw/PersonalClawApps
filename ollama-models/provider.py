@@ -71,6 +71,91 @@ _MAX_HISTORY = 50
 # the total streaming duration.
 _DEFAULT_TIMEOUT = 60.0
 
+# ── Native structured output (AUTONOMY-GUARDRAILS §2.4) ────────────────────
+#
+# Ollama enforces a JSON Schema server-side via a top-level ``format`` field on
+# ``/api/chat``: pass a schema OBJECT and the sampler is constrained to emit a
+# conforming document; pass the string ``"json"`` for unschema'd JSON mode. That is
+# native enforcement — the parser IS the generator — as opposed to asking a model in
+# prose for JSON and repairing whatever comes back.
+#
+# The graded capability this provider advertises (see OLLAMA_CAPABILITY) is core's
+# ``StructuredOutput`` enum. It is not re-exported through ``personalclaw.sdk.*``
+# today, and an app may import core ONLY via the SDK facade (lint-enforced), so the
+# enum is reached through the descriptor the facade DOES hand us — the field's own
+# default. That yields the identical enum object core compares against, so
+# ``cap.structured_output != StructuredOutput.NONE`` holds by identity, with no
+# stringly-typed stand-in and no boundary violation.
+StructuredOutput = type(ProviderCapability.__dataclass_fields__["structured_output"].default)
+
+#: Ollama's own wire spelling of the constraint, and the build-option key a caller uses
+#: to request one. ``format`` is the wire field; ``output_type`` is the platform's name
+#: for the request (``one_shot_completion(output_type=…)``), accepted so the seam is
+#: spelled the same on both sides of the bridge.
+_FORMAT_FIELD = "format"
+_OUTPUT_TYPE_KEY = "output_type"
+
+#: The unschema'd JSON mode ollama accepts in place of a schema object.
+_JSON_MODE = "json"
+
+
+def native_format(requested: object) -> object | None:
+    """Normalize a requested output shape into ollama's native ``format`` value.
+
+    Returns the value to put on the wire, or ``None`` when the request carries no
+    usable constraint (the caller then sends no ``format`` at all and the universal
+    parse-with-retry path in core stays in charge — the correct, safe fallback).
+
+    Accepted:
+
+    * a mapping — treated as a JSON Schema and passed through verbatim, because a
+      caller that already built a schema knows more about its shape than this
+      function does;
+    * the ``dict`` / ``list`` TYPES — what ``one_shot_completion(output_type=…)``
+      actually passes — mapped to the minimal schema that says "a JSON object" /
+      "a JSON array". Minimal is deliberate: it is the strongest claim that is
+      TRUE about ``output_type=dict``, and inventing properties would constrain
+      the model to a schema the caller never asked for;
+    * ``"json"`` — ollama's unschema'd JSON mode.
+
+    Everything else (a Pydantic class, a stray sentinel, ``None``) returns ``None``.
+    Rejecting here rather than forwarding matters: an unserializable value put on the
+    wire fails inside the JSON encoder, which surfaces as an opaque ``TypeError``
+    from the HTTP client rather than "that constraint is not supported".
+    """
+    if requested is None:
+        return None
+    if isinstance(requested, dict):
+        return requested if requested else None
+    if isinstance(requested, str):
+        return _JSON_MODE if requested.strip().lower() == _JSON_MODE else None
+    if requested is dict:
+        return {"type": "object"}
+    if requested is list:
+        return {"type": "array"}
+    logger.debug("Ollama: unsupported structured-output request %r — sending no format", requested)
+    return None
+
+
+def resolve_output_format(options: dict[str, object]) -> object | None:
+    """POP the structured-output keys out of ``options`` and return the wire value.
+
+    Popping, not reading, is the point. Every other key in ``extra_options`` is
+    ``setdefault``-ed straight onto the request body, so a ``format`` left in there
+    would reach the wire UNNORMALIZED — which is how a Python type ends up in the JSON
+    encoder and dies as an opaque ``TypeError`` instead of being converted or refused.
+
+    ``format`` (ollama's own spelling) wins over ``output_type`` when both are present:
+    an explicit wire-level value is a deliberate override, not a duplicate. Both are
+    consumed either way, so a rejected value can't fall through to the passthrough.
+    """
+    raw = [options.pop(key, None) for key in (_FORMAT_FIELD, _OUTPUT_TYPE_KEY)]
+    for value in raw:
+        resolved = native_format(value)
+        if resolved is not None:
+            return resolved
+    return None
+
 
 def _is_tools_unsupported_error(status_code: int, body: str) -> bool:
     """Heuristic: does this 4xx mean the model can't accept a ``tools`` schema?
@@ -240,6 +325,11 @@ class OllamaProvider(ModelProvider):
         self._timeout = timeout
         self._extra_options: dict[str, object] = dict(extra_options or {})
         self._embedding_model = str(self._extra_options.pop("embedding_model", model))
+        # Native structured output (§2.4): resolved ONCE here and held apart from
+        # ``_extra_options`` so the generic passthrough can never put an unnormalized
+        # constraint on the wire. ``None`` means "no constraint" — the request goes out
+        # exactly as it does today and core's parse-with-targeted-retry stays in charge.
+        self._output_format: object | None = resolve_output_format(self._extra_options)
         self._client: Any = httpx.AsyncClient(base_url=self._endpoint, timeout=timeout)
         self._history: list[dict[str, Any]] = []
         self._last_context_pct: float = 0.0
@@ -375,6 +465,10 @@ class OllamaProvider(ModelProvider):
         # and other top-level fields to flow through unchanged.
         for key, value in self._extra_options.items():
             body.setdefault(key, value)
+        # Native json-schema enforcement, server-side (§2.4). Set last so it is the
+        # normalized value that reaches the wire, never a raw passthrough.
+        if self._output_format is not None:
+            body[_FORMAT_FIELD] = self._output_format
 
         assistant_text = ""
         # Self-gating inline <think> splitter (see openai.py stream()).
@@ -467,6 +561,9 @@ class OllamaProvider(ModelProvider):
         # Allow ``options`` (temperature / num_ctx / etc.) to flow through.
         for key, value in self._extra_options.items():
             body.setdefault(key, value)
+        # Native json-schema enforcement, server-side (§2.4) — see stream().
+        if self._output_format is not None:
+            body[_FORMAT_FIELD] = self._output_format
 
         input_tokens = 0
         output_tokens = 0
@@ -622,7 +719,17 @@ OLLAMA_CAPABILITY = ProviderCapability(
     # model for a vision role is a user choice the model itself will no-op on.
     supports_vision=True,
     max_context_tokens=0,  # model-dependent
-    notes="Local Ollama server via httpx; tool use degrades per model, vision model-dependent.",
+    # NATIVE json-schema enforcement (§2.4). Ollama's /api/chat takes a top-level
+    # ``format`` schema and constrains the sampler server-side, so this is the top
+    # grade — not JSON_MODE, which would understate it, and not the NONE default,
+    # which is what left core's graded descriptor with no provider to dispatch on.
+    # Model-independent: the constraint is applied by the ollama runtime, not by the
+    # model's own instruction-following, so it holds on a 1B model too.
+    structured_output=StructuredOutput.JSON_SCHEMA,
+    notes=(
+        "Local Ollama server via httpx; tool use degrades per model, vision "
+        "model-dependent; native json-schema output via the `format` field."
+    ),
 )
 
 
@@ -674,6 +781,20 @@ def _factory(
     _emb_model = kwargs.get("embedding_model")
     if _emb_model:
         options["embedding_model"] = str(_emb_model)
+
+    # A requested output CONTRACT arrives as a build kwarg, on the same channel
+    # ``model``/``embedding_model`` ride: the platform decides the contract at the CALL
+    # (``one_shot_completion(output_type=…)``) while the provider is constructed per
+    # call, so there is nowhere else for it to enter. Forwarded into ``options`` where
+    # the constructor normalizes it into ollama's native ``format`` field. A build kwarg
+    # WINS over the entry's own option — a per-call contract is more specific than a
+    # standing default the user pinned on the provider entry — so the entry's keys are
+    # cleared first rather than left to race the precedence rule inside the normalizer.
+    _requested = {k: kwargs[k] for k in (_FORMAT_FIELD, _OUTPUT_TYPE_KEY) if kwargs.get(k)}
+    if _requested:
+        options.pop(_FORMAT_FIELD, None)
+        options.pop(_OUTPUT_TYPE_KEY, None)
+        options.update(_requested)
 
     logger.debug("Ollama factory: model=%r endpoint=%r", model, endpoint)
     return OllamaProvider(
