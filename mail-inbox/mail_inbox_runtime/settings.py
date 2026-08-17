@@ -21,6 +21,15 @@ the row shape and the fail-closed per-address rule. It is declared in ``app.json
 schema, which is what makes it editable from the platform's generated app-settings page
 (core's config PUT rejects any key the schema does not declare) and what puts the write
 path and this read path on the SAME file (``data/config.json``).
+
+**Outbound (EIAT-3, contract C3)** follows the same split: SMTP host/port/TLS-mode/login
+are non-secret and live here; the SMTP **password** is a second secret under its own
+credential key ``MAIL_INBOX_SMTP_PASSWORD``. It is deliberately NOT the IMAP key — the
+runtime never silently reuses one credential for the other transport. (The setup step may
+COPY the IMAP password into it when the user says so; that is an explicit, visible choice
+rather than a hidden fallback.) ``send_enabled`` defaults to **False**: guardrail 4 means a
+fully configured mailbox with a working SMTP password still only ever composes drafts until
+the user turns sending on.
 """
 
 from __future__ import annotations
@@ -38,6 +47,11 @@ from mail_inbox_runtime.addresses import (
     # app-wide list and a bound row's can never disagree about what a pattern means.
     normalize_senders as _coerce_senders,
 )
+from mail_inbox_runtime.smtp_client import (
+    DEFAULT_SMTP_PORT,
+    SMTP_STARTTLS,
+    VALID_SMTP_SECURITY,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,16 +61,29 @@ _APP = "mail-inbox"
 #: step writes it and the runtime reads it back by name (never in ProviderSettings).
 CRED_MAIL_PASSWORD = "MAIL_INBOX_PASSWORD"
 
+#: The credential-store key for the SMTP (outbound) password. A SEPARATE secret: the
+#: runtime never falls back to :data:`CRED_MAIL_PASSWORD`, so an unset outbound credential
+#: fails closed (the reply is drafted) instead of quietly authenticating with the inbound
+#: one.
+CRED_SMTP_PASSWORD = "MAIL_INBOX_SMTP_PASSWORD"
+
 _DEFAULT_PORT = 993
 _DEFAULT_FOLDER = "INBOX"
 
 
-def _coerce_port(value: object) -> int:
+def _coerce_port(value: object, default: int = _DEFAULT_PORT) -> int:
     try:
         port = int(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
-        return _DEFAULT_PORT
-    return port if 1 <= port <= 65535 else _DEFAULT_PORT
+        return default
+    return port if 1 <= port <= 65535 else default
+
+
+def _coerce_security(value: object) -> str:
+    """An unknown TLS mode falls back to STARTTLS, never to ``plain``: a typo must not
+    silently put an app password on the wire in the clear."""
+    mode = str(value or "").strip().lower()
+    return mode if mode in VALID_SMTP_SECURITY else SMTP_STARTTLS
 
 
 @dataclass
@@ -72,11 +99,32 @@ class MailInboxSettings:
     allow_senders: list[str] = field(default_factory=list)
     #: Prompt-bound receiving addresses (C4). Coerced at load; see ``addresses.py``.
     bound_addresses: list[BoundAddress] = field(default_factory=list)
+    # ── outbound (C3) ──
+    #: Guardrail 4: **draft-by-default**. False means a reply is composed and written to
+    #: the drafts dir and nothing is sent. Turning this on is the user's explicit opt-in to
+    #: an irreversible, outward-facing action.
+    send_enabled: bool = False
+    smtp_host: str = ""
+    smtp_port: int = DEFAULT_SMTP_PORT
+    smtp_security: str = SMTP_STARTTLS
+    smtp_username: str = ""
 
     @property
     def receiving_address(self) -> str:
         """The address mail arrives at (the inbox channel id). Falls back to the login."""
         return self.address or self.username
+
+    @property
+    def smtp_login(self) -> str:
+        """The SMTP login. Defaults to the IMAP username (the same account), which is a
+        non-secret convenience — the PASSWORD never falls back that way."""
+        return self.smtp_username or self.username
+
+    @property
+    def smtp_ready(self) -> bool:
+        """True once the outbound transport is fully specified. Says nothing about whether
+        sending is ALLOWED — that is :attr:`send_enabled` plus the platform posture."""
+        return bool(self.smtp_host and self.smtp_login)
 
     @property
     def configured(self) -> bool:
@@ -97,6 +145,13 @@ class MailInboxSettings:
             folder=str(d.get("folder", _DEFAULT_FOLDER)).strip() or _DEFAULT_FOLDER,
             allow_senders=_coerce_senders(d.get("allow_senders", [])),
             bound_addresses=load_bound_addresses(d.get(_ADDRESSES_KEY, [])),
+            # Guardrail 4: the DEFAULT is False, and an absent/unparseable value keeps it
+            # False — the safe side for an irreversible outbound action.
+            send_enabled=d.get("send_enabled", False) is True,
+            smtp_host=str(d.get("smtp_host", "")).strip(),
+            smtp_port=_coerce_port(d.get("smtp_port", DEFAULT_SMTP_PORT), DEFAULT_SMTP_PORT),
+            smtp_security=_coerce_security(d.get("smtp_security", SMTP_STARTTLS)),
+            smtp_username=str(d.get("smtp_username", "")).strip(),
         )
 
 
