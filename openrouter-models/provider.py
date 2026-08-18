@@ -48,6 +48,7 @@ from personalclaw.sdk.model import (
     ConnectionResult,
     ModelCatalog,
     ModelInfo,
+    PromptCache,
     get_default_registry,
     register_branded_app,
 )
@@ -127,6 +128,14 @@ SPEC = BrandedProviderSpec(
     # return [] when discovery fails, so a missing/bad key yields an honestly EMPTY
     # picker rather than fabricated model ids the user cannot actually call.
     fallback_models=(),
+    # AUTOMATIC - "Most providers automatically enable prompt caching" (OpenRouter
+    # prompt-caching docs): the OpenAI, Grok, DeepSeek, Moonshot, Z.AI and Gemini-implicit
+    # routes all cache with "no additional configuration". The routes that DO need a
+    # breakpoint (Anthropic, Gemini-explicit, Qwen) want `cache_control` on OpenAI-shaped
+    # content, which this app cannot emit - it rides core's OpenAIProvider. AUTOMATIC
+    # therefore describes what a user actually gets: caching where upstream does it, no
+    # marker to place here.
+    prompt_cache=PromptCache.AUTOMATIC,
     notes="OpenRouter — one key for hundreds of models across providers "
           "(OpenAI-compatible). Bring your own OpenRouter API key.",
 )

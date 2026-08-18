@@ -12,7 +12,12 @@ Bring your own API key (config ``api_key`` or the ``MISTRAL_API_KEY`` environmen
 
 from __future__ import annotations
 
-from personalclaw.sdk.model import BrandedProviderSpec, Capability, register_branded_app
+from personalclaw.sdk.model import (
+    BrandedProviderSpec,
+    Capability,
+    PromptCache,
+    register_branded_app,
+)
 
 SPEC = BrandedProviderSpec(
     type="mistral",
@@ -24,6 +29,11 @@ SPEC = BrandedProviderSpec(
         # No hardcoded fallback (de-hardcode directive 2026-07-06): this is an
         # OpenAI-compatible provider — models come from live /v1/models discovery.
         fallback_models=(),
+    # NONE - no prompt-caching documentation exists for the Mistral API
+    # (docs.mistral.ai/capabilities/prompt_caching/ -> HTTP 404, checked 2026-08-18), so
+    # nothing substantiates AUTOMATIC. Unverified beats mis-declared: NONE promises
+    # nothing, whereas a wrong AUTOMATIC silently promises reads that never arrive.
+    prompt_cache=PromptCache.NONE,
     notes="Mistral AI models via its OpenAI-compatible endpoint. Bring your own Mistral API key.",
 )
 
