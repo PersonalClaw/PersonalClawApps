@@ -10,13 +10,15 @@ installs through the same scanner-gated lifecycle as any third-party app.
 
 ## What's here
 
-45 apps across the capability types:
+46 apps across the capability types:
 
-- **Model providers** (21) — branded APIs (`anthropic-models`, `openai-models`,
+- **Model providers** (22) — branded APIs (`anthropic-models`, `openai-models`,
   `bedrock-models`, `google-models`, `deepseek-models`, `groq-models`,
   `mistral-models`, `together-models`, `alibaba-models`, `openrouter-models`,
   `meta-muse-spark`), generic endpoints (`anthropic-compatible`,
-  `openai-compatible`, `vllm-models`, `ollama-models`), and local inference
+  `openai-compatible`, `vllm-models`, `ollama-models`), subscription sign-in
+  (`claude-subscription` — rides the Claude Code CLI's own login, no API key),
+  and local inference
   (`faster-whisper` STT, `piper-tts` TTS, `sentence-transformers` embeddings,
   `diarization-onnx` / `diarization-pyannote`), plus `fal-image` image generation.
 - **Search providers** (7) — `duckduckgo-search` (keyless default),

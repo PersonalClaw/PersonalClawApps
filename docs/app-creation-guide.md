@@ -217,7 +217,7 @@ boundary is lint-enforced):
 
 | Type | SDK contract | What it plugs into | Reference app |
 |---|---|---|---|
-| `model` | `personalclaw.sdk.model` (chat LLMs), `sdk.stt`, `sdk.tts`, `sdk.diarization`, `sdk.embedding`, `sdk.image`, `sdk.local_model` (download/manage local models) | Settings → Models; bound per use-case (chat/background/embedding/stt/tts/…) | `anthropic-models` (branded API), `openai-compatible` (generic endpoint), `faster-whisper` (local STT), `sentence-transformers` (local embeddings) |
+| `model` | `personalclaw.sdk.model` (chat LLMs), `sdk.stt`, `sdk.tts`, `sdk.diarization`, `sdk.embedding`, `sdk.image`, `sdk.local_model` (download/manage local models) | Settings → Models; bound per use-case (chat/background/embedding/stt/tts/…) | `anthropic-models` (branded API), `openai-compatible` (generic endpoint), `claude-subscription` (rides a CLI's subscription sign-in, no API key), `faster-whisper` (local STT), `sentence-transformers` (local embeddings) |
 | `search` | `personalclaw.sdk.search` `SearchProvider` | Settings → Search; the `web_search` tool | `brave-search`, `duckduckgo-search` (keyless) |
 | `agent` | `personalclaw.sdk.acp` (ACP agent bundles) | the Agents list | `claude-code-agent`, `codex-agent` |
 | `tool` | `personalclaw.sdk.tool` (+ `sdk.mcp`) | the agent tool layer | `mcp-tools`, `web-tools` |
@@ -228,6 +228,17 @@ boundary is lint-enforced):
 Thin branded model apps can use `personalclaw.sdk.provider_helpers`
 (`register_branded_app`) — a few lines wrapping a protocol client core already
 ships (Anthropic Messages, OpenAI-compatible Chat Completions).
+
+A vendor that bills by **subscription** has no API key to configure: the user
+already signed that vendor's own CLI in, and the token sits in a store the CLI
+owns. Declare a `SubscriptionSource` (its paths, the key walk to the token, the
+expiry stamp, and your own login sentence) and name it in the spec's
+`credential_source` with an empty `api_key_env`. Core then reads that store
+**read-only** as one fixed hop of the credential order — below an explicit
+credential or configured key, above the env — and derives the extensions-list
+availability probe from the same declaration, so a not-signed-in CLI greys your
+app out with your own hint instead of failing at the wire. Never write, refresh
+or repair another tool's credential store. Reference app: `claude-subscription`.
 
 An app doesn't have to contribute a provider at all: `growth`, `minutes`, and
 `demo-dashboard` are pure backend+UI apps.
