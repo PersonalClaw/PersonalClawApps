@@ -42,6 +42,7 @@ from slack_runtime.delivery import SlackDelivery
 from slack_runtime.events import SeenCache, init_socket_mode
 from slack_runtime.interactions import init as init_interactions
 from slack_runtime.runtime import SlackRuntime
+from slack_runtime.writes import SendRefused, live_writes_disabled
 
 logger = logging.getLogger(__name__)
 
@@ -139,9 +140,30 @@ class SlackTransport(ChannelTransportProvider):
             except Exception:
                 logger.debug("SlackTransport: socket close timed out", exc_info=True)
 
-    async def send(self, message: OutboundMessage) -> bool:
+    async def send(self, message: OutboundMessage) -> bool | SendRefused:
+        """Transmit one outbound message. ``True`` delivered, ``False`` failed, or a
+        :class:`SendRefused` when the platform's live-writes kill switch is on.
+
+        The refusal is checked AFTER the token gate on purpose: an unconfigured
+        transport could not have written anything, so reporting "refused" there would
+        claim the guard suppressed a write that was never possible. Only a transport
+        that WOULD have transmitted reports a refusal.
+        """
         if not self._bot_token:
             return False
+        # DISABLE_LIVE_WRITES (§1.4). A chat.postMessage is a live, outward,
+        # instantly-human-visible write — the same class core refuses for non-GET egress
+        # and model deletion. Typed refusal, never a silent no-op: a test (or an
+        # operator) asserting a send must be able to see that the guard, not the
+        # network, stopped it. Checked BEFORE the client is resolved so a suppressed
+        # send opens no connection at all.
+        if live_writes_disabled():
+            # ``self.name`` rather than a new module constant: this bundle already has
+            # exactly one source of truth for the channel's name, and a second spelling
+            # of "slack" is a drift seam for no gain.
+            refusal = SendRefused(channel=self.name, target=message.channel_id)
+            logger.warning("SlackTransport.send refused: %s", refusal)
+            return refusal
         try:
             client = self._runtime.slack if self._runtime and self._runtime.slack else RealSlackClient(self._bot_token)
             await client.post_message(

@@ -97,6 +97,26 @@ Secrets are **not** settings: the IMAP/SMTP passwords live in the shared credent
 under this app's own `EMAIL_IMAP_PASS` / `EMAIL_SMTP_PASS` keys. A blank
 `EMAIL_SMTP_PASS` reuses the IMAP one (one app password usually covers both).
 
+## The live-writes kill switch
+
+Handing a message to an SMTP relay is the least reversible write this app makes —
+once the server accepts it there is no recall, no edit and no delete — so this
+transport honors the platform's process-wide `PERSONALCLAW_DISABLE_LIVE_WRITES`
+switch, the same one core applies to non-GET egress and local-model deletion.
+(This is the platform guard, checked after this app's own SMTP configuration gate: an
+unconfigured mailbox reports a plain `False` because it could not have written anything,
+and only a transport that WOULD have transmitted reports a refusal.)
+
+With the switch set, `send()` transmits nothing and returns a **typed refusal**
+(`SendRefused`) instead. It is falsy, so every existing "did it send?" caller keeps
+reading "not delivered" unchanged, but a caller that cares can tell a suppressed write
+from a failed one with `isinstance(result, SendRefused)` — the two demand opposite
+responses, and a bare `False` would conflate them.
+
+Parsing follows the platform's fail-safe rule exactly: an **absent** variable allows
+writes (the switch is opt-in), an explicit `0`/`false`/`no`/`off` turns the guard off,
+and **any other present value — including a typo — turns it on**.
+
 ## Trust and pairing
 
 Who may talk is owned by the **core sender-trust seam** (`channel_trust`, provider

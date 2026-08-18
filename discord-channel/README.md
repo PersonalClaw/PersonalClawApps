@@ -72,6 +72,23 @@ exactly like any other app. (Or `POST /api/apps {"source": ".../apps/discord-cha
 | `application_id` | Application ID | The application's public ID. Used to build the bot invite URL. Not a secret. |
 | `dm_activation` | DM Activation | `always` (answer every paired DM), `mention` (only when @-mentioned), or `off`. A DM posture only — it never gags a tracked server channel. |
 
+## The live-writes kill switch
+
+Posting a Discord message is a live, outward write everyone in the channel sees
+immediately, so this transport honors the platform's process-wide
+`PERSONALCLAW_DISABLE_LIVE_WRITES` switch — the same one core applies to non-GET
+egress and local-model deletion.
+
+With the switch set, `send()` transmits nothing and returns a **typed refusal**
+(`SendRefused`) instead. It is falsy, so every existing "did it send?" caller keeps
+reading "not delivered" unchanged, but a caller that cares can tell a suppressed write
+from a failed one with `isinstance(result, SendRefused)` — the two demand opposite
+responses, and a bare `False` would conflate them.
+
+Parsing follows the platform's fail-safe rule exactly: an **absent** variable allows
+writes (the switch is opt-in), an explicit `0`/`false`/`no`/`off` turns the guard off,
+and **any other present value — including a typo — turns it on**.
+
 ## Discord bot setup
 
 1. Go to <https://discord.com/developers/applications> → **New Application**, name it.
