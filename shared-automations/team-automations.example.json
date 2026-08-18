@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "triggers": [
+    {
+      "id": "team-morning-brief",
+      "name": "Team morning brief",
+      "kind": "clock",
+      "enabled": true,
+      "author": "",
+      "spec": {"kind": "cron", "expr": "30 8 * * 1-5"},
+      "workflow": {"provider": "run-workflow", "config": {"workflow": "morning-brief"}},
+      "capabilities": {"providers": ["run-workflow"]}
+    },
+    {
+      "id": "team-triage-agent",
+      "name": "Team inbox triage",
+      "kind": "clock",
+      "enabled": true,
+      "author": "",
+      "spec": {"kind": "interval", "interval_secs": 3600},
+      "workflow": {"provider": "invoke-agent", "config": {"prompt": "Triage anything new in the shared inbox."}},
+      "capabilities": {"providers": ["invoke-agent"]}
+    },
+    {
+      "id": "team-standup-prompt",
+      "name": "Standup notes prompt",
+      "kind": "clock",
+      "enabled": true,
+      "author": "",
+      "spec": {"kind": "cron", "expr": "0 9 * * 1-5"},
+      "workflow": {"provider": "run-prompt", "config": {"message": "Draft my standup from yesterday's commits."}},
+      "capabilities": {"providers": ["run-prompt"]}
+    },
+    {
+      "id": "team-weekly-task",
+      "name": "File the weekly ops task",
+      "kind": "clock",
+      "enabled": true,
+      "author": "",
+      "spec": {"kind": "cron", "expr": "0 17 * * 5"},
+      "workflow": {"provider": "create-task", "config": {"title": "Weekly ops sweep"}},
+      "capabilities": {"providers": ["create-task"]}
+    },
+    {
+      "id": "team-brief-followup",
+      "name": "Notify after the morning brief",
+      "kind": "run_completed",
+      "enabled": true,
+      "author": "",
+      "spec": {"source_trigger": "team-morning-brief"},
+      "workflow": {"provider": "notify", "config": {"message": "The team morning brief finished."}},
+      "capabilities": {"providers": ["notify"]}
+    },
+    {
+      "id": "alice-nightly-report",
+      "name": "Alice's nightly report",
+      "kind": "clock",
+      "enabled": true,
+      "author": "alice",
+      "spec": {"kind": "cron", "expr": "0 2 * * *"},
+      "workflow": {"provider": "run-workflow", "config": {"workflow": "nightly-report"}},
+      "capabilities": {"providers": ["run-workflow"]}
+    },
+    {
+      "id": "alice-standup-prompt",
+      "name": "Alice's standup prompt",
+      "kind": "clock",
+      "enabled": true,
+      "author": "alice",
+      "spec": {"kind": "interval", "interval_secs": 900},
+      "workflow": {"provider": "run-prompt", "config": {"message": "Draft Alice's standup."}},
+      "capabilities": {"providers": ["run-prompt"]}
+    }
+  ]
+}
