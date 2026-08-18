@@ -1,7 +1,7 @@
 # CI — first-party app bundles. Verifies every app against the platform contract
 # WITHOUT installing vendor SDKs (the apps stub them; a test needing a real SDK
 # fails loudly here, which is correct). Jobs per CI-RELEASE-ENGINEERING §"apps repo":
-# manifest-validate · tests · boundary · dco (PR-only).
+# manifest-validate · tests · boundary · live-writes-posture · dco (PR-only).
 name: CI
 
 on:
@@ -158,6 +158,21 @@ jobs:
               sys.exit(1)
           print("OK: all app imports go through personalclaw.sdk.*")
           PY
+
+  live-writes-posture:
+    # Every channel app's send() must honor the platform's DISABLE_LIVE_WRITES kill
+    # switch (AUTONOMY-GUARDRAILS §1.4). Core cannot enforce this — the transport owns
+    # its own wire call — so it is enforced here. Pure-stdlib AST lint, no core install:
+    # the script is a committed file (not an inline heredoc) so a contributor runs the
+    # EXACT same check locally that CI runs.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Every channel send() honors DISABLE_LIVE_WRITES
+        run: python .github/scripts/check_live_writes_posture.py
 
   dco:
     # Every commit in a PR must carry a Signed-off-by trailer (DCO — plan 37),

@@ -69,6 +69,7 @@ from discord_runtime.settings import (
     get_settings,
     reload_settings,
 )
+from discord_runtime.writes import SendRefused, live_writes_disabled
 
 logger = logging.getLogger(__name__)
 
@@ -305,9 +306,27 @@ class DiscordTransport(ChannelTransportProvider):
 
     # ── outbound / health ──
 
-    async def send(self, message: OutboundMessage) -> bool:
+    async def send(self, message: OutboundMessage) -> bool | SendRefused:
+        """Transmit one outbound message. ``True`` delivered, ``False`` failed, or a
+        :class:`SendRefused` when the platform's live-writes kill switch is on.
+
+        The refusal is checked AFTER the token gate on purpose: an unconfigured
+        transport could not have written anything, so reporting "refused" there would
+        claim the guard suppressed a write that was never possible. Only a transport
+        that WOULD have transmitted reports a refusal.
+        """
         if not self._token:
             return False
+        # DISABLE_LIVE_WRITES (§1.4). A Discord message is a live, outward,
+        # instantly-human-visible write — the same class core refuses for non-GET egress
+        # and model deletion. Typed refusal, never a silent no-op: a test (or an
+        # operator) asserting a send must be able to see that the guard, not the
+        # network, stopped it. Checked BEFORE the API client is built so a suppressed
+        # send opens no connection at all.
+        if live_writes_disabled():
+            refusal = SendRefused(channel=PROVIDER, target=message.channel_id)
+            logger.warning("DiscordTransport.send refused: %s", refusal)
+            return refusal
         api = self._api or HTTPDiscordAPI(self._token)
         try:
             for part in split_message(message.text):
