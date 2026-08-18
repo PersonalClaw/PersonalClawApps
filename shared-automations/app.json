@@ -1,0 +1,39 @@
+{
+  "name": "shared-automations",
+  "version": "0.1.0",
+  "displayName": "Shared Automations",
+  "description": "Serve trigger rows from a shared automations file — a synced folder, an NFS share, a checked-out team repo. Everyone pointed at the file sees the same automations on their Automations page, and each machine arms and fires ONLY the rows attributed to its own owner: everybody else's render read-only and structurally cannot arm. No server and no credentials; the file holds trigger definitions only, and your harness does all the firing under all of its own gates.",
+  "icon": "CalendarSync",
+  "author": "PersonalClaw",
+  "license": "MIT",
+  "tags": [
+    "automation",
+    "triggers",
+    "team",
+    "bundled"
+  ],
+  "permissions": {
+    "storage": true
+  },
+  "provider": {
+    "type": "trigger",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "rows",
+      "write-back"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Shared automations file",
+            "help": "Absolute path to the shared JSON file holding the team's trigger rows (e.g. ~/synced/team/automations.json). Supports ~ and $VARS. Leave empty to configure later — the store serves no rows until it is set."
+          }
+        }
+      }
+    }
+  }
+}
