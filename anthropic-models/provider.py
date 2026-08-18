@@ -20,6 +20,7 @@ from personalclaw.sdk.model import (
     ModelCatalog,
     ModelInfo,
     ModelProvider,
+    PromptCache,
     ProviderCapability,
     ProviderEntry,
     ProviderResolutionError,
@@ -41,6 +42,11 @@ ANTHROPIC_CAPABILITY = ProviderCapability(
     supports_embeddings=False,
     supports_vision=True,
     max_context_tokens=0,  # model-dependent
+    # EXPLICIT - this app's provider IS core's AnthropicProvider, which declares EXPLICIT
+    # (llm/anthropic.py) and translates the neutral marker into `cache_control` on the
+    # hinted content block. Mirrored here so the declarative capability matches the
+    # instance the factory actually returns.
+    prompt_cache=PromptCache.EXPLICIT,
     notes="Anthropic Messages API via the anthropic SDK; no embeddings.",
 )
 

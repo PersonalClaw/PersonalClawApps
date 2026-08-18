@@ -28,6 +28,7 @@ from personalclaw.sdk.model import (
     ModelInfo,
     ModelProvider,
     OpenAIProvider,
+    PromptCache,
     ProviderCapability,
     ProviderEntry,
     ProviderResolutionError,
@@ -114,6 +115,11 @@ VLLM_CAPABILITY = ProviderCapability(
     supports_embeddings=True,
     supports_vision=True,
     max_context_tokens=0,  # model-dependent
+    # NONE - vLLM's automatic prefix caching is a SERVER-side flag the operator turns on
+    # for the deployment; an app cannot know whether a given endpoint has it enabled, and
+    # there is no per-request marker to place either way. Same rule as the capabilities
+    # above: declare only what the deployment is known to support.
+    prompt_cache=PromptCache.NONE,
     notes=(
         "vLLM OpenAI-compatible server; capabilities are model-dependent — "
         "entries should declare only what the deployment supports."

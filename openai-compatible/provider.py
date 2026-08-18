@@ -14,7 +14,12 @@ core and is exposed via ``personalclaw.sdk.model``.
 
 from __future__ import annotations
 
-from personalclaw.sdk.model import BrandedProviderSpec, Capability, register_branded_app
+from personalclaw.sdk.model import (
+    BrandedProviderSpec,
+    Capability,
+    PromptCache,
+    register_branded_app,
+)
 
 SPEC = BrandedProviderSpec(
     type="openai_compatible",
@@ -27,6 +32,12 @@ SPEC = BrandedProviderSpec(
         Capability.EMBEDDING, Capability.VISION,
     }),
     fallback_models=(),  # unknown endpoint → discovery via /v1/models, no curated list
+    # NONE - this app is the BRING-YOUR-OWN-ENDPOINT shell: default_base_url="" above
+    # means the user supplies the host, so whether the upstream caches is unknowable at
+    # declaration time. Pointed at api.openai.com it caches; pointed at a local
+    # llama.cpp or a bare proxy it does not. A substantiated AUTOMATIC belongs on the
+    # vendor-specific apps (openai-models, deepseek-models, ...), not on the shell.
+    prompt_cache=PromptCache.NONE,
     notes="Any OpenAI-compatible endpoint; capabilities are endpoint/model-dependent.",
 )
 

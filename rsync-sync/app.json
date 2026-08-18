@@ -1,0 +1,84 @@
+{
+  "name": "rsync-sync",
+  "version": "0.1.0",
+  "displayName": "Rsync Sync",
+  "description": "Sync PersonalClaw state between your machines with rsync over ssh, to any host you can already log into — a home server, a NAS, a VPS. No object store, no credentials beyond your existing ssh key. Shards are encrypted end-to-end by default, and secrets are excluded upstream so they never reach the host.",
+  "icon": "Server",
+  "author": "PersonalClaw",
+  "tags": [
+    "sync",
+    "bundled"
+  ],
+  "provider": {
+    "type": "sync",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "sync"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "SSH host",
+            "help": "The ssh destination, optionally with a user — e.g. nas.local or backup@nas.local. Leave empty to rsync to a local or mounted path instead (then only the path below is used). Only letters, digits, dot, dash and underscore are accepted."
+          }
+        },
+        "path": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Sync root path",
+            "help": "Absolute path to the sync root ON THE TARGET (e.g. /srv/personalclaw-sync), or a local absolute path when no host is set. Supports ~ and $VARS for local paths. Leave empty to configure later — the transport stays idle until set."
+          }
+        },
+        "port": {
+          "type": "integer",
+          "default": 22,
+          "x-meta": {
+            "label": "SSH port",
+            "help": "Port for the ssh connection. Ignored when no host is set.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        },
+        "ssh_key": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "SSH identity file",
+            "help": "Optional path to a private key to use for this host. Leave empty to let ssh pick from your agent and ~/.ssh/config. The key itself is never read by PersonalClaw — only handed to ssh by path.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        },
+        "staging_dir": {
+          "type": "string",
+          "default": "~/.personalclaw/sync/rsync-sync",
+          "x-meta": {
+            "label": "Local working directory",
+            "help": "Where the local mirror and staging trees live on this machine. The mirror is what makes pulls incremental — rsync only transfers what changed.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        },
+        "timeout_secs": {
+          "type": "integer",
+          "default": 300,
+          "x-meta": {
+            "label": "Command timeout",
+            "help": "Maximum seconds any single rsync invocation may run before it is killed and the cycle reports a retryable failure. Prevents a hung transfer from wedging the sync job.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

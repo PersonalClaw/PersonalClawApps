@@ -32,6 +32,7 @@ from personalclaw.sdk.model import (
     Capability,
     MediaCatalog,
     MediaModel,
+    PromptCache,
     register_branded_app,
     register_media_catalog,
 )
@@ -71,6 +72,12 @@ SPEC = BrandedProviderSpec(
         Capability.EMBEDDING,
     }),
     fallback_models=(),
+    # NONE - Qwen DOES cache, but only behind an EXPLICIT per-message breakpoint
+    # (OpenRouter's provider matrix: "Alibaba prompt caching requires explicit cache
+    # breakpoints", cache_control: {"type": "ephemeral"}). This app rides core's
+    # OpenAIProvider, which places no marker, so EXPLICIT here would mark a message that
+    # nothing translates. NONE is the honest posture until a Qwen-specific adapter exists.
+    prompt_cache=PromptCache.NONE,
     notes="Alibaba Model Studio (DashScope) — Qwen chat + embedding. Select your regional endpoint.",
 )
 

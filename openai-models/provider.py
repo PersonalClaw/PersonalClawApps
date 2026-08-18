@@ -24,6 +24,7 @@ from personalclaw.sdk.model import (
     ModelInfo,
     ModelProvider,
     OpenAIProvider,
+    PromptCache,
     ProviderCapability,
     ProviderEntry,
     ProviderResolutionError,
@@ -48,6 +49,11 @@ OPENAI_CAPABILITY = ProviderCapability(
     supports_embeddings=True,
     supports_vision=True,
     max_context_tokens=0,  # model-dependent
+    # AUTOMATIC - OpenAI caches a stable prompt PREFIX server-side with no per-request
+    # marker and no opt-in, which is precisely what AUTOMATIC means; the plan's C4 assigns
+    # the same value to core's OpenAI adapter. Nothing for the loop to place, so the
+    # posture is purely declarative (AUTOMATIC and NONE are wire-identical by design).
+    prompt_cache=PromptCache.AUTOMATIC,
     notes="OpenAI Chat Completions + Embeddings via the openai SDK.",
 )
 

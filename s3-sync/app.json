@@ -1,0 +1,89 @@
+{
+  "name": "s3-sync",
+  "version": "0.1.0",
+  "displayName": "S3 Sync",
+  "description": "Sync PersonalClaw state between your machines through an S3-compatible object store you own — AWS S3, a self-hosted MinIO, a NAS gateway, or any store that speaks the S3 API. Requests are signed with AWS Signature V4 and travel through PersonalClaw's guarded egress chokepoint, pinned to the one endpoint you configure. Shards are encrypted end-to-end by default (the store never sees plaintext), and secrets are excluded upstream so they never reach it.",
+  "icon": "Database",
+  "author": "PersonalClaw",
+  "tags": [
+    "sync",
+    "bundled"
+  ],
+  "permissions": {
+    "network": true
+  },
+  "provider": {
+    "type": "sync",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "sync"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Endpoint URL",
+            "help": "The S3 API endpoint, scheme included — e.g. https://s3.us-east-1.amazonaws.com for AWS, or http://nas.local:9000 for a self-hosted MinIO. This single host is the ONLY host the transport may reach: egress is pinned to it. Leave empty to configure later — the transport stays idle until set."
+          }
+        },
+        "bucket": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Bucket",
+            "help": "The bucket that holds the sync root. Create it yourself, keep it private, and point every machine at the same one."
+          }
+        },
+        "prefix": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Key prefix",
+            "help": "Optional path inside the bucket to confine the sync root to (e.g. personalclaw/). Leave empty to use the bucket root."
+          }
+        },
+        "region": {
+          "type": "string",
+          "default": "us-east-1",
+          "x-meta": {
+            "label": "Region",
+            "help": "The region used when signing requests. Must match the bucket's region for AWS S3; any value works for MinIO (use us-east-1 unless it is configured otherwise)."
+          }
+        },
+        "access_key_id": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Access key ID",
+            "help": "Access key for a least-privilege identity scoped to THIS bucket and prefix only. Leave empty to fall back to the PERSONALCLAW_S3_ACCESS_KEY_ID environment variable. Deliberately NOT the ambient AWS_ACCESS_KEY_ID / instance-role chain — this transport never borrows whatever credentials happen to be in your shell.",
+            "sensitive": true
+          }
+        },
+        "secret_access_key": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Secret access key",
+            "help": "Secret for the access key above. Leave empty to fall back to the PERSONALCLAW_S3_SECRET_ACCESS_KEY environment variable. Stored by the credential store, never echoed back by the settings API.",
+            "sensitive": true
+          }
+        },
+        "session_token": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Session token",
+            "help": "Only for temporary (STS) credentials. Leave empty for a long-lived access key. Falls back to PERSONALCLAW_S3_SESSION_TOKEN.",
+            "sensitive": true,
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

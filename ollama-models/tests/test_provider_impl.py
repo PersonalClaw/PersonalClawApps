@@ -535,3 +535,37 @@ async def test_ollama_shutdown_closes_client(fake_httpx: types.ModuleType) -> No
 
     assert provider._client.closed is True
     assert provider._history == []
+
+
+class TestTheDeclaredOptionNameReachesTheClient:
+    """``timeout_secs`` is the name app.json declares and Settings writes.
+
+    The entry factory — the path a chat turn is built through — read only ``timeout``,
+    an undocumented name nothing writes, so the app shipped a declared knob with **no
+    reader on its main path**. Measured before the fix: a plan-mode turn died on
+    ``httpx.ReadTimeout`` after exactly 61 s with ``timeout_secs="1800"`` in the home.
+    """
+
+    def _built_timeout(self, fake_httpx, **options):
+        """Build through the registry factory and report the timeout httpx received."""
+        import provider as prov
+
+        entry = prov.ProviderEntry(
+            name="ollama-local", type="ollama", model="llama3.1:8b", options=options
+        )
+        prov._factory(entry=entry)
+        return _FakeAsyncClient.constructed[-1]["timeout"]
+
+    def test_timeout_secs_from_the_settings_ui_reaches_httpx(self, fake_httpx) -> None:
+        assert self._built_timeout(fake_httpx, timeout_secs="1800") == 1800.0
+
+    def test_the_undocumented_alias_still_works(self, fake_httpx) -> None:
+        assert self._built_timeout(fake_httpx, timeout=45) == 45.0
+
+    def test_an_explicit_timeout_wins_over_the_declared_one(self, fake_httpx) -> None:
+        assert self._built_timeout(fake_httpx, timeout=45, timeout_secs="1800") == 45.0
+
+    def test_neither_present_falls_back_to_the_default(self, fake_httpx) -> None:
+        import provider as prov
+
+        assert self._built_timeout(fake_httpx) == prov._DEFAULT_TIMEOUT

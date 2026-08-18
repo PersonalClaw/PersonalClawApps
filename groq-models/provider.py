@@ -12,7 +12,12 @@ Bring your own API key (config ``api_key`` or the ``GROQ_API_KEY`` environment v
 
 from __future__ import annotations
 
-from personalclaw.sdk.model import BrandedProviderSpec, Capability, register_branded_app
+from personalclaw.sdk.model import (
+    BrandedProviderSpec,
+    Capability,
+    PromptCache,
+    register_branded_app,
+)
 
 SPEC = BrandedProviderSpec(
     type="groq",
@@ -24,6 +29,13 @@ SPEC = BrandedProviderSpec(
         # No hardcoded fallback (de-hardcode directive 2026-07-06): this is an
         # OpenAI-compatible provider — models come from live /v1/models discovery.
         fallback_models=(),
+    # NONE - Groq's caching IS automatic and cannot be disabled, but Groq's own docs scope
+    # it to a handful of models ("openai/gpt-oss-20b", "-120b", "-safeguard-20b"; the
+    # OpenRouter matrix says Kimi K2). This app pins default_model="" and resolves the
+    # model from live /v1/models discovery, so the served model is unknown at declaration
+    # time and a provider-wide AUTOMATIC would promise hits most selections never get.
+    # Revisit if the posture contract ever grows a per-model axis.
+    prompt_cache=PromptCache.NONE,
     notes="Groq LPU inference (OpenAI-compatible), very low latency. Bring your own Groq API key.",
 )
 

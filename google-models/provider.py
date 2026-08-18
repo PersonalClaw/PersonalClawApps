@@ -42,7 +42,12 @@ from personalclaw.sdk.image import (
     ImageGenProvider,
     ImageResult,
 )
-from personalclaw.sdk.model import BrandedProviderSpec, Capability, register_branded_app
+from personalclaw.sdk.model import (
+    BrandedProviderSpec,
+    Capability,
+    PromptCache,
+    register_branded_app,
+)
 from personalclaw.sdk.video import (
     VideoGenError,
     VideoGenModel,
@@ -76,6 +81,11 @@ SPEC = BrandedProviderSpec(
         Capability.VISION, Capability.EMBEDDING,
     }),
     fallback_models=(),
+    # AUTOMATIC - "Implicit caching is enabled by default for all Gemini 2.5 and newer
+    # models" (Gemini API caching docs): no setup, no per-request marker, cost savings
+    # passed on when a request hits. Gemini's explicit cache is a separate cache-OBJECT
+    # API rather than a content marker, so it is outside this contract entirely.
+    prompt_cache=PromptCache.AUTOMATIC,
     notes="Google Gemini — chat, embedding, image gen, and video gen. Bring your own Gemini API key.",
 )
 

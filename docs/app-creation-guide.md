@@ -21,6 +21,88 @@ my-app/
 └── test_provider.py   # your tests
 ```
 
+## Quickstart: minutes to first run
+
+Prerequisites: PersonalClaw installed (`pip install personalclaw`), `pytest` available, and
+a gateway running (`personalclaw gateway`).
+
+**1 — see what you can build.** The type table is derived from the running build's provider
+registry, so it is always the truth about this version:
+
+```bash
+personalclaw app new --list-types
+```
+
+**2 — generate an app.** Pick a type from that table (`tool` is the simplest):
+
+```bash
+personalclaw app new my-tool --type tool
+```
+
+You get a complete, installable app: `app.json` validated against core's own manifest
+parser, a provider stub implementing that type's SDK contract with real signatures,
+`app_cli.py` (the `setup`/`doctor` seams), a passing `test_provider.py`, a `README.md`, and
+an MIT `LICENSE`. No `permissions` block — add only what your provider actually uses, since
+the Store shows declared permissions as the install-consent surface.
+
+**3 — run its tests.** They pass as generated, with no network, no credentials and no
+gateway:
+
+```bash
+python -m pytest my-tool -q
+```
+
+**4 — point a shell at your gateway.** `personalclaw token` prints one line: a dashboard URL
+with the token in the query string. Split it into the two pieces the next step needs:
+
+```bash
+TOKEN_URL="$(personalclaw token)"
+export PERSONALCLAW_URL="${TOKEN_URL%%\?*}"
+export PERSONALCLAW_TOKEN="${TOKEN_URL#*token=}"
+```
+
+`personalclaw token` finds the gateway by port, and it resolves that port from `--port`, then
+`PERSONALCLAW_PORT`, then `dashboard.url` in your config — never from the running process. So if
+you started the gateway on some other port, pass the same one (`personalclaw token --port 8123`).
+Skip that and `token` prints an error where the URL should be, both `export`s store the error
+text, and step 5 dies inside curl (`curl: (3) bad range in URL`) rather than telling you about
+the port.
+
+The gateway takes the owner token as a `?token=` **query parameter**. An
+`Authorization: Bearer` header is only accepted for app-scoped narrowing tokens, so using
+one here answers `{"error": "Token required"}`.
+
+**5 — install it from that local path and enable it.**
+
+```bash
+curl -sS -X POST "$PERSONALCLAW_URL/api/apps?token=$PERSONALCLAW_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d "{\"source\": \"$PWD/my-tool\", \"confirm\": true}"
+curl -sS -X POST "$PERSONALCLAW_URL/api/apps/my-tool/enable?token=$PERSONALCLAW_TOKEN"
+```
+
+Prefer clicking? **Store → Add source → local path**, point it at `my-tool`, then install
+and enable. Same install path and same supply-chain scan gate — there is only one.
+
+**6 — confirm it is live.**
+
+```bash
+curl -sS "$PERSONALCLAW_URL/api/apps/my-tool?token=$PERSONALCLAW_TOKEN"
+```
+
+In the response, the `installed` block reports `"enabled": true` and `manifest.provider.type`
+is the type you scaffolded — your provider is registered. `personalclaw doctor` now prints a
+`my-tool` section, and the line under it comes from your `app_cli.py`.
+
+That is first run. **Measured: 6.0-7.2 s of wall clock across steps 1-6** for a genuine first
+run, out of an empty directory against a freshly-homed gateway, to an enabled app whose provider
+is registered — and 2.2-2.7 s on repeats once Python's imports are warm. The unit is seconds
+either way. Filling in the stub is the rest of this guide.
+
+Prefer to fork a repo instead of generating? `personalclaw app new --from-template` fetches
+[`personalclaw/app-template`](https://github.com/personalclaw/app-template) — the same
+`--type tool` output, plus CI and a clone-to-installed README.
+
 ## The manifest (`app.json`)
 
 The full field set, as parsed by the platform (`personalclaw/apps/manifest.py`).
@@ -217,7 +299,7 @@ boundary is lint-enforced):
 
 | Type | SDK contract | What it plugs into | Reference app |
 |---|---|---|---|
-| `model` | `personalclaw.sdk.model` (chat LLMs), `sdk.stt`, `sdk.tts`, `sdk.diarization`, `sdk.embedding`, `sdk.image`, `sdk.local_model` (download/manage local models) | Settings → Models; bound per use-case (chat/background/embedding/stt/tts/…) | `anthropic-models` (branded API), `openai-compatible` (generic endpoint), `faster-whisper` (local STT), `sentence-transformers` (local embeddings) |
+| `model` | `personalclaw.sdk.model` (chat LLMs), `sdk.stt`, `sdk.tts`, `sdk.diarization`, `sdk.embedding`, `sdk.image`, `sdk.local_model` (download/manage local models) | Settings → Models; bound per use-case (chat/background/embedding/stt/tts/…) | `anthropic-models` (branded API), `openai-compatible` (generic endpoint), `claude-subscription` (rides a CLI's subscription sign-in, no API key), `faster-whisper` (local STT), `sentence-transformers` (local embeddings) |
 | `search` | `personalclaw.sdk.search` `SearchProvider` | Settings → Search; the `web_search` tool | `brave-search`, `duckduckgo-search` (keyless) |
 | `agent` | `personalclaw.sdk.acp` (ACP agent bundles) | the Agents list | `claude-code-agent`, `codex-agent` |
 | `tool` | `personalclaw.sdk.tool` (+ `sdk.mcp`) | the agent tool layer | `mcp-tools`, `web-tools` |
@@ -228,6 +310,17 @@ boundary is lint-enforced):
 Thin branded model apps can use `personalclaw.sdk.provider_helpers`
 (`register_branded_app`) — a few lines wrapping a protocol client core already
 ships (Anthropic Messages, OpenAI-compatible Chat Completions).
+
+A vendor that bills by **subscription** has no API key to configure: the user
+already signed that vendor's own CLI in, and the token sits in a store the CLI
+owns. Declare a `SubscriptionSource` (its paths, the key walk to the token, the
+expiry stamp, and your own login sentence) and name it in the spec's
+`credential_source` with an empty `api_key_env`. Core then reads that store
+**read-only** as one fixed hop of the credential order — below an explicit
+credential or configured key, above the env — and derives the extensions-list
+availability probe from the same declaration, so a not-signed-in CLI greys your
+app out with your own hint instead of failing at the wire. Never write, refresh
+or repair another tool's credential store. Reference app: `claude-subscription`.
 
 An app doesn't have to contribute a provider at all: `growth`, `minutes`, and
 `demo-dashboard` are pure backend+UI apps.

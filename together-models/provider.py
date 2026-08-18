@@ -12,7 +12,12 @@ Bring your own API key (config ``api_key`` or the ``TOGETHER_API_KEY`` environme
 
 from __future__ import annotations
 
-from personalclaw.sdk.model import BrandedProviderSpec, Capability, register_branded_app
+from personalclaw.sdk.model import (
+    BrandedProviderSpec,
+    Capability,
+    PromptCache,
+    register_branded_app,
+)
 
 SPEC = BrandedProviderSpec(
     type="together",
@@ -24,6 +29,10 @@ SPEC = BrandedProviderSpec(
         # No hardcoded fallback (de-hardcode directive 2026-07-06): this is an
         # OpenAI-compatible provider — models come from live /v1/models discovery.
         fallback_models=(),
+    # NONE - no prompt-caching documentation exists for Together's serverless inference
+    # (docs.together.ai/docs/prompt-caching -> HTTP 404, checked 2026-08-18). Nothing
+    # substantiates AUTOMATIC, so NONE - the posture that promises nothing.
+    prompt_cache=PromptCache.NONE,
     notes="Together AI serverless inference (OpenAI-compatible). Bring your own Together API key.",
 )
 

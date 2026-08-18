@@ -10,13 +10,15 @@ installs through the same scanner-gated lifecycle as any third-party app.
 
 ## What's here
 
-45 apps across the capability types:
+47 apps across the capability types:
 
-- **Model providers** (21) — branded APIs (`anthropic-models`, `openai-models`,
+- **Model providers** (22) — branded APIs (`anthropic-models`, `openai-models`,
   `bedrock-models`, `google-models`, `deepseek-models`, `groq-models`,
   `mistral-models`, `together-models`, `alibaba-models`, `openrouter-models`,
   `meta-muse-spark`), generic endpoints (`anthropic-compatible`,
-  `openai-compatible`, `vllm-models`, `ollama-models`), and local inference
+  `openai-compatible`, `vllm-models`, `ollama-models`), subscription sign-in
+  (`claude-subscription` — rides the Claude Code CLI's own login, no API key),
+  and local inference
   (`faster-whisper` STT, `piper-tts` TTS, `sentence-transformers` embeddings,
   `diarization-onnx` / `diarization-pyannote`), plus `fal-image` image generation.
 - **Search providers** (7) — `duckduckgo-search` (keyless default),
@@ -24,8 +26,8 @@ installs through the same scanner-gated lifecycle as any third-party app.
   `searxng-search`, `wikipedia-search`.
 - **Channels** (4) — `slack-channel` (see [docs/SLACK_SETUP.md](docs/SLACK_SETUP.md)),
   `discord-channel`, `telegram-channel`, `email-channel`.
-- **Agents** (3) — `claude-code-agent`, `codex-agent`, `kiro-cli-agent`
-  (ACP bundles).
+- **Agents** (4) — `claude-code-agent`, `codex-agent`, `gemini-cli-agent`,
+  `kiro-cli-agent` (ACP bundles).
 - **Tools** (3) — `mcp-tools`, `openai-tools`, `web-tools`.
 - **Sync** (2) — `dir-sync`, `git-sync`.
 - **Backend + UI apps** (2) — `growth` (growth/brag-doc tracker), `minutes`

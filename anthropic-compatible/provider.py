@@ -12,7 +12,12 @@ is exposed via ``personalclaw.sdk.model``.
 
 from __future__ import annotations
 
-from personalclaw.sdk.model import BrandedProviderSpec, Capability, register_branded_app
+from personalclaw.sdk.model import (
+    BrandedProviderSpec,
+    Capability,
+    PromptCache,
+    register_branded_app,
+)
 
 SPEC = BrandedProviderSpec(
     type="anthropic_compatible",
@@ -25,6 +30,12 @@ SPEC = BrandedProviderSpec(
         Capability.CHAT, Capability.CODE_TOOLS, Capability.STREAMING, Capability.VISION,
     }),
     fallback_models=(),            # no models endpoint; picker uses the configured model
+    # EXPLICIT - protocol="anthropic" builds core's AnthropicProvider, which already
+    # declares EXPLICIT (llm/anthropic.py) and translates the neutral marker into
+    # `cache_control` on the hinted content block. The runtime posture is EXPLICIT whatever
+    # this spec says, so any other value would make ProviderCapability contradict the
+    # provider it describes - the one failure mode worse than declaring nothing.
+    prompt_cache=PromptCache.EXPLICIT,
     notes="Any Anthropic-compatible (Messages API) endpoint; no models-list endpoint.",
 )
 

@@ -66,3 +66,17 @@ def _reset_sel_singleton():
     yield
     cls._instance = None
     cls._initialized = False
+
+
+@pytest.fixture(autouse=True)
+def _live_writes_baseline(monkeypatch):
+    """Pin the live-writes kill switch OFF as the suite-wide baseline.
+
+    ``transport.send()`` returns a typed :class:`SendRefused` (falsy, not a bool) while
+    ``PERSONALCLAW_DISABLE_LIVE_WRITES`` is set, and core's channel conformance kit
+    asserts ``send()`` returns a ``bool``. Both are correct in their own frame, so the
+    guard state has to be an EXPLICIT precondition rather than whatever the ambient
+    environment happens to carry: a developer (or a CI job) exporting the var would
+    otherwise turn the conformance clause red for a reason unrelated to the change
+    being tested. Tests that want the guard ON set it themselves with monkeypatch."""
+    monkeypatch.delenv("PERSONALCLAW_DISABLE_LIVE_WRITES", raising=False)
