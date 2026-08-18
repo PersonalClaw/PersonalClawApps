@@ -1,0 +1,58 @@
+{
+  "name": "claude-subscription",
+  "version": "0.1.0",
+  "displayName": "Claude (Subscription)",
+  "description": "Claude models over your existing Claude Code sign-in — no API key. Reads the CLI's own credential store read-only.",
+  "icon": "Sparkles",
+  "author": "PersonalClaw",
+  "license": "MIT",
+  "tags": [
+    "model",
+    "llm",
+    "subscription"
+  ],
+  "dependencies": {
+    "pythonDependencies": [
+      "anthropic>=0.20"
+    ]
+  },
+  "permissions": {
+    "network": true
+  },
+  "provider": {
+    "type": "model",
+    "providerType": "claude_subscription",
+    "implementation": "provider:create_provider",
+    "multiInstance": true,
+    "capabilities": [
+      "chat",
+      "code_tools",
+      "streaming",
+      "vision"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "default_model": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Default Model",
+            "help": "Claude model id. Empty = the newest model from the app's built-in list your subscription can call."
+          }
+        },
+        "endpoint": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Base URL",
+            "help": "Optional Anthropic-compatible base URL. Empty uses the official Anthropic host.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
