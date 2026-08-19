@@ -10,7 +10,7 @@ installs through the same scanner-gated lifecycle as any third-party app.
 
 ## What's here
 
-46 apps across the capability types:
+47 apps across the capability types:
 
 - **Model providers** (22) — branded APIs (`anthropic-models`, `openai-models`,
   `bedrock-models`, `google-models`, `deepseek-models`, `groq-models`,
@@ -26,8 +26,8 @@ installs through the same scanner-gated lifecycle as any third-party app.
   `searxng-search`, `wikipedia-search`.
 - **Channels** (4) — `slack-channel` (see [docs/SLACK_SETUP.md](docs/SLACK_SETUP.md)),
   `discord-channel`, `telegram-channel`, `email-channel`.
-- **Agents** (3) — `claude-code-agent`, `codex-agent`, `kiro-cli-agent`
-  (ACP bundles).
+- **Agents** (4) — `claude-code-agent`, `codex-agent`, `gemini-cli-agent`,
+  `kiro-cli-agent` (ACP bundles).
 - **Tools** (3) — `mcp-tools`, `openai-tools`, `web-tools`.
 - **Sync** (2) — `dir-sync`, `git-sync`.
 - **Backend + UI apps** (2) — `growth` (growth/brag-doc tracker), `minutes`
