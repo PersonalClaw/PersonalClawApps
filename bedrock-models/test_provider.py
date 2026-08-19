@@ -563,3 +563,271 @@ def test_translate_messages_never_emits_empty_text_blocks() -> None:
                 for tb in b["toolResult"]["content"]:
                     if "text" in tb:
                         assert tb["text"].strip(), f"empty toolResult text leaked: {m}"
+
+
+# ── Prompt caching: the Converse cachePoint translation (PCS-8) ───────────────
+#
+# Core places a NEUTRAL `_cache_hint` marker on exactly one message and never learns
+# Converse's syntax; this app turns that marker into a `cachePoint` content block. These
+# tests pin the translation at the payload level, which is the substitute for the live
+# multi-turn Bedrock drive the atom's validation clause asks for (see the plan's
+# execution log: no usable Bedrock credentials in this environment).
+
+_CACHE_POINT = {"cachePoint": {"type": "default"}}
+
+
+def _blocks_with_cache_point(payload: object) -> int:
+    """How many cachePoint blocks appear anywhere inside ``payload``."""
+    if isinstance(payload, dict):
+        return sum(
+            (1 if key == "cachePoint" else 0) + _blocks_with_cache_point(value)
+            for key, value in payload.items()
+        )
+    if isinstance(payload, list):
+        return sum(_blocks_with_cache_point(item) for item in payload)
+    return 0
+
+
+def test_unhinted_messages_emit_no_cache_point() -> None:
+    """The byte-identity floor: with no marker present, the translation is exactly what
+    it was before PCS-8 — an undeclared turn must not silently start paying for writes."""
+    from provider import _translate_messages
+
+    system, out = _translate_messages(
+        [
+            {"role": "system", "content": "stable head"},
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+        ]
+    )
+    assert system == [{"text": "stable head"}]
+    assert out == [
+        {"role": "user", "content": [{"text": "hello"}]},
+        {"role": "assistant", "content": [{"text": "hi"}]},
+    ]
+    assert _blocks_with_cache_point(system) + _blocks_with_cache_point(out) == 0
+
+
+def test_hinted_message_gets_a_cache_point_and_only_that_message() -> None:
+    """The checkpoint follows the hinted message's blocks — and nothing else's."""
+    from personalclaw.sdk.model import CACHE_HINT_KEY
+    from provider import _translate_messages
+
+    _system, out = _translate_messages(
+        [
+            {"role": "user", "content": "first", CACHE_HINT_KEY: {"generation": 0}},
+            {"role": "assistant", "content": "second"},
+        ]
+    )
+    assert out[0]["content"] == [{"text": "first"}, _CACHE_POINT]
+    assert out[1]["content"] == [{"text": "second"}]
+    assert _blocks_with_cache_point(out) == 1
+
+
+def test_the_checkpoint_is_last_not_first() -> None:
+    """Everything BEFORE a cachePoint is cached, so a checkpoint that led the block list
+    would cache nothing at all."""
+    from personalclaw.sdk.model import CACHE_HINT_KEY
+    from provider import _translate_messages
+
+    _system, out = _translate_messages(
+        [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}],
+                CACHE_HINT_KEY: {"generation": 3},
+            }
+        ]
+    )
+    blocks = out[0]["content"]
+    assert blocks[-1] == _CACHE_POINT
+    assert "cachePoint" not in blocks[0]
+    assert blocks[:-1] == [{"text": "a"}, {"text": "b"}]
+
+
+def test_hinted_system_message_puts_the_checkpoint_at_the_end_of_system() -> None:
+    """Converse serves ``system`` ahead of ``messages[0]``, so a checkpoint there caches
+    the whole stable head."""
+    from personalclaw.sdk.model import CACHE_HINT_KEY
+    from provider import _translate_messages
+
+    system, out = _translate_messages(
+        [
+            {"role": "system", "content": "stable head", CACHE_HINT_KEY: {"generation": 0}},
+            {"role": "user", "content": "go"},
+        ]
+    )
+    assert system == [{"text": "stable head"}, _CACHE_POINT]
+    assert _blocks_with_cache_point(out) == 0
+
+
+def test_hinted_assistant_tool_calls_message_marks_its_last_block() -> None:
+    from personalclaw.sdk.model import CACHE_HINT_KEY
+    from provider import _translate_messages
+
+    _system, out = _translate_messages(
+        [
+            {"role": "user", "content": "go"},
+            {
+                "role": "assistant",
+                "content": "calling",
+                "tool_calls": [{"id": "t1", "function": {"name": "ls", "arguments": "{}"}}],
+                CACHE_HINT_KEY: {"generation": 0},
+            },
+            {"role": "tool", "tool_call_id": "t1", "content": "out"},
+        ]
+    )
+    assistant = next(m for m in out if m["role"] == "assistant")
+    assert assistant["content"][-1] == _CACHE_POINT
+    assert "toolUse" in assistant["content"][-2]
+
+
+@pytest.mark.parametrize("content", ["", None])
+def test_a_hint_on_an_empty_span_is_a_no_op(content) -> None:
+    """No block to follow ⇒ no checkpoint. Marking an empty system span would charge a
+    cache write for nothing."""
+    from personalclaw.sdk.model import CACHE_HINT_KEY
+    from provider import _translate_messages
+
+    system, _out = _translate_messages(
+        [{"role": "system", "content": content, CACHE_HINT_KEY: {"generation": 0}}]
+    )
+    assert system == []
+
+
+def test_a_hint_on_a_tool_result_is_a_no_op_and_keeps_the_group_contiguous() -> None:
+    """Core never hints a tool result. If one ever arrived, degrading to "no checkpoint"
+    costs a cache hit; splitting the merged toolResult turn would cost the request."""
+    from personalclaw.sdk.model import CACHE_HINT_KEY
+    from provider import _translate_messages
+
+    _system, out = _translate_messages(
+        [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "t1", "function": {"name": "ls", "arguments": "{}"}},
+                    {"id": "t2", "function": {"name": "cat", "arguments": "{}"}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "t1", "content": "a", CACHE_HINT_KEY: {"generation": 0}},
+            {"role": "tool", "tool_call_id": "t2", "content": "b"},
+        ]
+    )
+    results = [m for m in out if m["role"] == "user"]
+    assert len(results) == 1, "the two tool results must stay in ONE contiguous user turn"
+    assert all("toolResult" in b for b in results[0]["content"])
+    assert _blocks_with_cache_point(out) == 0
+
+
+def test_the_volatile_turn_note_is_relocated_to_the_tail_not_hoisted_into_system() -> None:
+    """Converse serves ``system`` first, so a note whose content changes every turn must
+    not sit in the cacheable head — otherwise the prefix differs every turn and no
+    checkpoint is ever read. The note moves POSITION, never existence."""
+    from provider import _translate_messages
+
+    system, out = _translate_messages(
+        [
+            {"role": "system", "content": "stable head"},
+            {"role": "user", "content": "go"},
+            {"role": "system", "content": "turn 7 note", "_volatile": True},
+        ]
+    )
+    assert system == [{"text": "stable head"}], "the volatile note must NOT be in system"
+    assert out[-1] == {"role": "user", "content": [{"text": "turn 7 note"}]}
+    # Still reaches the model exactly once — relocated, not dropped.
+    assert sum(1 for m in out for b in m["content"] if b.get("text") == "turn 7 note") == 1
+
+
+def test_multiple_volatile_notes_ship_once_each_in_order() -> None:
+    from provider import _translate_messages
+
+    _system, out = _translate_messages(
+        [
+            {"role": "user", "content": "go"},
+            {"role": "system", "content": "note A", "_volatile": True},
+            {"role": "system", "content": "note B", "_volatile": True},
+        ]
+    )
+    assert [b["text"] for m in out[-2:] for b in m["content"]] == ["note A", "note B"]
+
+
+# ── Posture declaration + cache-usage reporting ──────────────────────────────
+
+
+def test_bedrock_declares_explicit_on_both_the_capability_and_the_instance() -> None:
+    """The declarative twin and the instance the factory returns must agree: a capability
+    promising cache reads while the provider places no marker is worse than NONE."""
+    from personalclaw.sdk.model import PromptCache
+    from provider import BEDROCK_CAPABILITY, BedrockProvider
+
+    assert BEDROCK_CAPABILITY.prompt_cache is PromptCache.EXPLICIT
+    assert BedrockProvider.prompt_cache is PromptCache.EXPLICIT
+    assert BedrockProvider(model="m").prompt_cache is PromptCache.EXPLICIT
+
+
+def test_read_cache_usage_maps_converse_fields_and_tolerates_junk() -> None:
+    from provider import _read_cache_usage
+
+    assert _read_cache_usage(
+        {"inputTokens": 9, "cacheReadInputTokens": 1234, "cacheWriteInputTokens": 56}
+    ) == (56, 1234)
+    assert _read_cache_usage({}) == (0, 0)  # an uncached turn omits the keys
+    assert _read_cache_usage({"cacheReadInputTokens": None}) == (0, 0)
+    assert _read_cache_usage({"cacheReadInputTokens": "nope"}) == (0, 0)
+    assert _read_cache_usage({"cacheReadInputTokens": -5}) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_complete_sends_the_cache_point_on_the_wire_and_reports_cache_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end at the payload level: a marked multi-turn history reaches Converse
+    carrying exactly one ``cachePoint``, and the terminal event reports the cache read
+    Converse returned. This is what a live Bedrock-Anthropic drive would show, asserted
+    against the request the provider actually built."""
+    from personalclaw.sdk.model import CACHE_HINT_KEY
+    from provider import BedrockProvider
+
+    events: list[dict[str, Any]] = [
+        _text_event("second turn"),
+        {
+            "metadata": {
+                "usage": {
+                    "inputTokens": 12,
+                    "outputTokens": 3,
+                    "cacheReadInputTokens": 4096,
+                    "cacheWriteInputTokens": 0,
+                }
+            }
+        },
+    ]
+    client = _install_fake_boto3(monkeypatch, events)
+    provider = BedrockProvider(model="anthropic.claude-sonnet-4-v1:0")
+    await provider.start()
+
+    # A second turn: stable head + a completed first exchange, marker on the trailing
+    # stable message, plus the per-turn volatile note core appends every turn.
+    messages = [
+        {"role": "system", "content": "stable assembled context"},
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "first answer"},
+        {"role": "user", "content": "second question", CACHE_HINT_KEY: {"generation": 0}},
+        {"role": "system", "content": "turn 2 note", "_volatile": True},
+    ]
+    seen = [ev async for ev in provider.complete(messages)]
+
+    request = client.last_request
+    assert request is not None
+    assert _blocks_with_cache_point(request) == 1, "exactly one checkpoint per request"
+    assert request["messages"][-2]["content"][-1] == _CACHE_POINT
+    # The volatile note rides at the tail, AFTER the checkpoint, so it is outside the
+    # cached span — and the system head stayed stable.
+    assert request["system"] == [{"text": "stable assembled context"}]
+    assert request["messages"][-1] == {"role": "user", "content": [{"text": "turn 2 note"}]}
+
+    done = [e for e in seen if e.kind == EVENT_COMPLETE]
+    assert len(done) == 1
+    assert done[0].cache_read_tokens == 4096
+    assert done[0].cache_creation_tokens == 0

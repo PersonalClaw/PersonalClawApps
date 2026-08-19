@@ -36,7 +36,7 @@ from personalclaw.sdk.model import (
     LLMEvent,
     ModelProvider,
 )
-from personalclaw.sdk.model import Capability, ProviderCapability
+from personalclaw.sdk.model import CACHE_HINT_KEY, Capability, PromptCache, ProviderCapability
 from personalclaw.sdk.model import (
     ConnectionResult,
     ModelCatalog,
@@ -77,6 +77,37 @@ _DEFAULT_CONTEXT_WINDOW = 200_000
 # argument"). The sibling Anthropic provider always sends a default (4096), so
 # mirror that here: a generous cap large enough for substantial file writes.
 _DEFAULT_MAX_TOKENS = 8192
+
+# ── Prompt caching (PCS-8): Bedrock's OWN wire form ───────────────────────────
+#
+# THIS APP IS THE ONLY PLACE ``cachePoint`` MAY BE NAMED. Core emits the NEUTRAL
+# ``CACHE_HINT_KEY`` marker on exactly one message (``personalclaw/llm/prompt_cache.py``)
+# and deliberately never learns Converse's syntax — core's own rails sweep
+# (``tests/test_prompt_cache_wire_translation.py``) FAILS the build if ``cachePoint``
+# appears in any core module outside the Anthropic adapter. The translation therefore
+# lives here, beside the client that speaks the wire.
+#
+# Shape per the Converse API reference ("Using cachePoint", Amazon Bedrock User Guide):
+# a cache checkpoint is a CONTENT BLOCK appended to a message's ``content`` array (and,
+# equivalently, to the ``system`` block list) — everything BEFORE the block is cached.
+# ``"default"`` is the only checkpoint type Converse defines.
+_CACHE_POINT_BLOCK: dict[str, dict[str, str]] = {"cachePoint": {"type": "default"}}
+
+# Converse reports caching in ``metadata.usage`` under these two keys; they map onto
+# ``LLMEvent.cache_read_tokens`` / ``.cache_creation_tokens``, the fields the cost +
+# savings surfaces already read for Anthropic. Without them an EXPLICIT posture is
+# unobservable: the marker would ship and nothing would ever report a hit.
+_CACHE_READ_KEY = "cacheReadInputTokens"
+_CACHE_WRITE_KEY = "cacheWriteInputTokens"
+
+# The neutral tag core's native loop stamps on its per-turn VOLATILE note (a
+# ``role: "system"`` message whose content changes EVERY turn —
+# ``agents/native/runtime.py:621``). Re-declared here rather than imported because it is
+# private to core's marker module; core's own Anthropic adapter re-declares it the same
+# way (``llm/anthropic.py``'s ``_VOLATILE_MESSAGE_KEY``). Converse serves ``system``
+# ahead of ``messages[0]``, so hoisting that note into the system block list would make
+# the cacheable prefix differ on every turn and no checkpoint could ever be read.
+_VOLATILE_MESSAGE_KEY = "_volatile"
 
 # Sentinel pushed onto the bridge queue when the worker thread finishes.
 _STREAM_DONE = object()
@@ -242,10 +273,31 @@ def _translate_messages(
     ``name_map`` (real→Bedrock-safe tool name) is applied to historical
     ``toolUse`` blocks so a replayed assistant turn names tools exactly as the
     toolConfig does (Bedrock rejects a toolUse whose name is not in the config).
+
+    Prompt caching (PCS-8) — this is where the neutral marker becomes Converse syntax:
+
+    * a message carrying :data:`CACHE_HINT_KEY` is the trailing boundary of the
+      cacheable span, and Converse marks a boundary with a ``cachePoint`` CONTENT
+      BLOCK, so the checkpoint is appended AFTER that message's blocks. A hinted
+      ``system`` message puts the checkpoint at the end of the ``system`` block list
+      (Converse serves ``system`` first, so that caches the whole stable head).
+    * a hint on an ABSENT or EMPTY span is a NO-OP — there is no block to follow.
+    * a hint on a ``role: "tool"`` message is likewise a NO-OP. Core never places one
+      there (``mark_cacheable_prefix`` skips tool results when picking the boundary),
+      and a checkpoint wedged into a merged toolResult turn would split the group
+      Converse requires to stay contiguous. Degrading to "no checkpoint" costs a cache
+      hit; splitting the group would cost the whole request.
+    * the per-turn VOLATILE note is relocated to the TAIL rather than hoisted into
+      ``system`` (see :data:`_VOLATILE_MESSAGE_KEY`) — Converse serves ``system``
+      ahead of ``messages[0]``, so a note that changes every turn would make the
+      cacheable prefix differ on every turn and no checkpoint could ever be read.
+      The note moves POSITION, never existence: it still reaches the model, just late.
+      Multiple notes ship once each, in order.
     """
     name_map = name_map or {}
     system_blocks: list[dict] = []
     out: list[dict] = []
+    volatile_notes: list[object] = []
 
     # Converse rejects the whole request when ANY text block is empty OR
     # whitespace-only ("text content blocks must contain non-whitespace text") —
@@ -258,10 +310,17 @@ def _translate_messages(
     for msg in messages:
         role = msg.get("role")
         content = msg.get("content")
+        hinted = CACHE_HINT_KEY in msg
 
         if role == "system":
+            if msg.get(_VOLATILE_MESSAGE_KEY):
+                if content:
+                    volatile_notes.append(content)
+                continue
             if content:
                 system_blocks.append({"text": str(content)})
+                if hinted:
+                    system_blocks.append(dict(_CACHE_POINT_BLOCK))
             continue
 
         if role == "tool":
@@ -305,6 +364,8 @@ def _translate_messages(
                         }
                     }
                 )
+            if hinted:
+                blocks.append(dict(_CACHE_POINT_BLOCK))
             out.append({"role": "assistant", "content": blocks})
             continue
 
@@ -315,8 +376,38 @@ def _translate_messages(
             out.append({"role": role, "content": _content_blocks_to_converse(content)})
         else:
             out.append({"role": role, "content": [_text(content)]})
+        if hinted:
+            out[-1]["content"].append(dict(_CACHE_POINT_BLOCK))
+
+    # The relocated volatile notes ride at the TAIL, after every stable turn —
+    # Converse has no trailing-system concept, so each is carried as a user turn.
+    for note in volatile_notes:
+        out.append({"role": "user", "content": [_text(note)]})
 
     return system_blocks, _repair_tool_pairs(out)
+
+
+def _read_cache_usage(usage: dict) -> tuple[int, int]:
+    """``(cache_creation_tokens, cache_read_tokens)`` from a Converse ``metadata.usage``.
+
+    Converse reports cache WRITES and READS in their own fields and EXCLUDES both from
+    ``inputTokens`` once caching engages (Bedrock User Guide: "the ``inputTokens`` field
+    represents only the non-cached input tokens"), so these two keys are the ONLY place a
+    hit is observable. Producer for :class:`LLMEvent`'s ``cache_creation_tokens`` /
+    ``cache_read_tokens`` — the same fields core's Anthropic adapter fills, so the cost
+    and savings surfaces need no Bedrock-specific reader.
+
+    An uncached turn simply omits the keys; missing or non-numeric values read as 0
+    rather than raising, because a usage-parsing failure must never fail the turn.
+    """
+
+    def _int(key: str) -> int:
+        try:
+            return max(0, int(usage.get(key, 0) or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    return _int(_CACHE_WRITE_KEY), _int(_CACHE_READ_KEY)
 
 
 def _content_blocks_to_converse(blocks: list) -> list[dict]:
@@ -481,6 +572,14 @@ class BedrockProvider(ModelProvider):
     # by translating the loop's OpenAI-shaped messages/tools into Converse.
     supports_tools: bool = True
 
+    # Converse needs a per-request cache CHECKPOINT — it does not cache a prefix on its
+    # own — so this provider is EXPLICIT: core's native loop places the neutral marker
+    # and :func:`_translate_messages` turns it into a ``cachePoint`` block. The attr the
+    # loop reads is on the INSTANCE (``ModelProvider.prompt_cache``); BEDROCK_CAPABILITY
+    # carries the same value as the declarative twin. Both must agree — a capability
+    # promising cache reads while the instance places no marker is worse than NONE.
+    prompt_cache: PromptCache = PromptCache.EXPLICIT
+
     def __init__(
         self,
         *,
@@ -612,6 +711,8 @@ class BedrockProvider(ModelProvider):
         assistant_text = ""
         input_tokens = 0
         output_tokens = 0
+        cache_creation_tokens = 0
+        cache_read_tokens = 0
         error: Exception | None = None
         try:
             while True:
@@ -625,6 +726,7 @@ class BedrockProvider(ModelProvider):
                 elif kind == "usage":
                     input_tokens = int(payload.get("inputTokens", input_tokens) or input_tokens)
                     output_tokens = int(payload.get("outputTokens", output_tokens) or output_tokens)
+                    cache_creation_tokens, cache_read_tokens = _read_cache_usage(payload)
                 elif kind == "error":
                     error = payload
         finally:
@@ -644,6 +746,8 @@ class BedrockProvider(ModelProvider):
             kind=EVENT_COMPLETE,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            cache_creation_tokens=cache_creation_tokens,
+            cache_read_tokens=cache_read_tokens,
             context_usage_pct=self._last_context_pct,
         )
 
@@ -755,6 +859,8 @@ class BedrockProvider(ModelProvider):
         emitted_tool_calls: set[int] = set()
         input_tokens = 0
         output_tokens = 0
+        cache_creation_tokens = 0
+        cache_read_tokens = 0
         error: Exception | None = None
         try:
             while True:
@@ -791,6 +897,7 @@ class BedrockProvider(ModelProvider):
                 elif kind == "usage":
                     input_tokens = int(payload.get("inputTokens", input_tokens) or input_tokens)
                     output_tokens = int(payload.get("outputTokens", output_tokens) or output_tokens)
+                    cache_creation_tokens, cache_read_tokens = _read_cache_usage(payload)
                 elif kind == "error":
                     error = payload
         finally:
@@ -820,6 +927,8 @@ class BedrockProvider(ModelProvider):
             kind=EVENT_COMPLETE,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            cache_creation_tokens=cache_creation_tokens,
+            cache_read_tokens=cache_read_tokens,
             context_usage_pct=context_pct,
             cost_usd=0.0,
         )
@@ -853,6 +962,10 @@ BEDROCK_CAPABILITY = ProviderCapability(
     supports_embeddings=False,
     supports_vision=True,
     max_context_tokens=0,  # model-dependent
+    # EXPLICIT: Converse needs a per-request ``cachePoint`` checkpoint — it caches no
+    # prefix on its own. Declarative twin of BedrockProvider.prompt_cache; the two must
+    # agree (see the class attr for why a mismatch is worse than declaring NONE).
+    prompt_cache=PromptCache.EXPLICIT,
     notes=(
         "Amazon Bedrock Converse via boto3; AWS credential chain. The native-loop "
         "complete() path supports multi-message + tools + image content blocks (vision "

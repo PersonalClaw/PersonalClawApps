@@ -174,6 +174,21 @@ jobs:
       - name: Every channel send() honors DISABLE_LIVE_WRITES
         run: python .github/scripts/check_live_writes_posture.py
 
+  prompt-cache-posture:
+    # Cross-app rail (PCS-8): every model-provider app must declare a `prompt_cache`
+    # posture explicitly, with the evidence beside it, and an EXPLICIT posture must
+    # actually translate the neutral marker. A cross-app sweep can't live in one app's
+    # test_*.py (the tests job runs pytest PER bundle), so it rides here alongside the
+    # other two cross-app sweeps. Pure stdlib — no core install needed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Check prompt-cache posture declarations
+        run: python .github/scripts/check_prompt_cache_posture.py
+
   dco:
     # Every commit in a PR must carry a Signed-off-by trailer (DCO — plan 37),
     # same provenance rule as core. Pure-git check, PR-only.

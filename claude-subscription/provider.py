@@ -36,6 +36,7 @@ from personalclaw.sdk.model import (
     BrandedProviderSpec,
     Capability,
     ModelProvider,
+    PromptCache,
     ProviderEntry,
     register_branded_app,
 )
@@ -113,6 +114,14 @@ SPEC = BrandedProviderSpec(
     ),
     fallback_models=_CURATED_MODELS,
     credential_source=CREDENTIAL_SOURCE,
+    # Prompt-cache posture (PCS-8). `protocol="anthropic"` means this app is served by
+    # core's own `AnthropicProvider`, which declares EXPLICIT (llm/anthropic.py) and
+    # translates the neutral marker into `cache_control` on the hinted block. The runtime
+    # posture is EXPLICIT whatever this spec says, so any other value would make
+    # ProviderCapability contradict the provider it describes — the same reasoning
+    # `anthropic-compatible` records, and for the same reason.
+    prompt_cache=PromptCache.EXPLICIT,
+
     notes=(
         "Claude models over an existing Claude Code subscription sign-in; the CLI's own "
         "credential store is read read-only and no API key is used."

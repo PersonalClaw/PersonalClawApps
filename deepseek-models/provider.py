@@ -12,7 +12,12 @@ Bring your own API key (config ``api_key`` or the ``DEEPSEEK_API_KEY`` environme
 
 from __future__ import annotations
 
-from personalclaw.sdk.model import BrandedProviderSpec, Capability, register_branded_app
+from personalclaw.sdk.model import (
+    BrandedProviderSpec,
+    Capability,
+    PromptCache,
+    register_branded_app,
+)
 
 SPEC = BrandedProviderSpec(
     type="deepseek",
@@ -24,6 +29,11 @@ SPEC = BrandedProviderSpec(
         # No hardcoded fallback (de-hardcode directive 2026-07-06): this is an
         # OpenAI-compatible provider — models come from live /v1/models discovery.
         fallback_models=(),
+    # AUTOMATIC - DeepSeek's disk context caching is "enabled by default for all users,
+    # allowing them to benefit without needing to modify their code" (DeepSeek API docs,
+    # KV-cache guide), and hits are reported as `prompt_cache_hit_tokens` in `usage`. The
+    # vendor caches the stable prefix on its own; there is no marker for the loop to place.
+    prompt_cache=PromptCache.AUTOMATIC,
     notes="DeepSeek chat + reasoner models (OpenAI-compatible). Bring your own DeepSeek API key.",
 )
 
