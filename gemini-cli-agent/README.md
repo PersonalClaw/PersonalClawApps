@@ -47,6 +47,13 @@ From the App Store, add the `apps/` directory as a **local source**, then instal
 **Gemini CLI** — the install runs through the security scanner and lifecycle exactly
 like any other app. (Or `POST /api/apps {"source": ".../apps/gemini-cli-agent"}`.)
 
+## Capability boundary
+
+This bundle registers the provider; it does not change what Gemini CLI can do over ACP. Where ACP
+providers sit relative to PersonalClaw's native runtime — at parity, host-compensated, or blocked by
+a protocol or CLI constraint — is documented in [the ACP parity statement](https://github.com/PersonalClaw/PersonalClaw/blob/main/docs/agents/acp-parity.md). Gemini's own
+column there is marked unverified until the binary has been driven on a measuring host.
+
 ## License
 
 MIT — see `LICENSE`.
