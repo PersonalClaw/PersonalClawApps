@@ -31,6 +31,12 @@ any other app. (Or `POST /api/apps {"source": ".../apps/kiro-cli-agent"}`.)
 | `model` | Default Model | Optional model the agent defaults to. Empty uses the kiro CLI's own default. |
 | `acp_bin` | CLI Path | Optional absolute path to the kiro-cli binary. Empty auto-resolves via PATH. Equivalent to the KIRO_CLI_BIN env var. |
 
+## Capability boundary
+
+kiro-cli speaks the baseline ACP shape, which means several host features are supplied by
+PersonalClaw and a few are unavailable. [The ACP parity statement](https://github.com/PersonalClaw/PersonalClaw/blob/main/docs/agents/acp-parity.md) states which is which per
+provider, with the CLI version each verdict was measured against.
+
 ## License
 
 MIT — see `LICENSE`.

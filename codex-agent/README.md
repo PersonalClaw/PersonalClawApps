@@ -35,6 +35,13 @@ any other app. (Or `POST /api/apps {"source": ".../apps/codex-agent"}`.)
 
 The Codex CLI manages its own configuration and login. Every tool call routes through PersonalClaw's host approval gate.
 
+## Capability boundary
+
+ACP providers are not at native parity, and the differences are documented rather than implied.
+See [the ACP parity statement](https://github.com/PersonalClaw/PersonalClaw/blob/main/docs/agents/acp-parity.md) for what is at parity, what PersonalClaw compensates for on
+codex's behalf, and what is a protocol or CLI constraint — each with the verified version it was
+measured against.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).
