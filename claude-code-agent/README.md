@@ -36,6 +36,14 @@ any other app. (Or `POST /api/apps {"source": ".../apps/claude-code-agent"}`.)
 
 Claude Code self-authenticates with your existing `claude` login — PersonalClaw stores no API key. The spawned agent is hardened (isolated session; tool calls route through PersonalClaw's approval gate).
 
+## Capability boundary
+
+Running an agent over ACP is **not** the same as PersonalClaw's native runtime: some host
+features are supplied by PersonalClaw on the CLI's behalf, and a few cannot work at all until the
+CLI or the ACP protocol grows a surface for them. What is at parity, what is host-compensated and
+what is a constraint is written down per provider — with the CLI and adapter versions each verdict
+was measured against — in [the ACP parity statement](https://github.com/PersonalClaw/PersonalClaw/blob/main/docs/agents/acp-parity.md).
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).
