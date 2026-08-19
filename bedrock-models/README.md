@@ -33,6 +33,23 @@ any other app. (Or `POST /api/apps {"source": ".../apps/bedrock-models"}`.)
 | `profile` | AWS Profile | Optional named profile from ~/.aws. Empty uses the default credential chain (env / SSO / instance role). |
 | `system_prompt` | System Prompt | Optional system prompt prepended to every turn. |
 
+## Prompt caching
+
+Bedrock's Converse API needs an explicit cache **checkpoint** — it does not cache a prompt
+prefix on its own — so this app declares the `explicit` posture and does the translation
+itself: PersonalClaw marks one message as the end of the stable prompt prefix, and this app
+turns that mark into Converse's `cachePoint` content block. PersonalClaw's core never learns
+Bedrock's syntax.
+
+What you get from the second turn of a conversation onward: the stable part of the prompt is
+read from Bedrock's cache instead of re-processed, which is both cheaper and faster. Bedrock
+reports it as `cacheReadInputTokens`, which this app surfaces as the turn's cache-read token
+count, so savings show up in the usual usage view rather than needing a Bedrock-specific one.
+
+Turn it off globally with **Settings → Agent → Prompt Caching**; there is nothing to
+configure per-model. Caching is best-effort on Bedrock's side and needs a prompt long enough
+to be worth caching, so short turns may report no reads at all — that is normal.
+
 ## Authentication
 
 Uses your ambient AWS credential chain (environment variables, `~/.aws` profile, SSO). PersonalClaw stores no AWS key for this provider — configure the region/profile in the provider settings.

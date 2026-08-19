@@ -21,6 +21,7 @@ from personalclaw.sdk.model import (
     ModelInfo,
     ModelProvider,
     OpenAIProvider,
+    PromptCache,
     ProviderCapability,
     ProviderEntry,
     ProviderResolutionError,
@@ -43,6 +44,9 @@ META_CAPABILITY = ProviderCapability(
     supports_embeddings=False,
     supports_vision=True,
     max_context_tokens=1_048_576,
+    # NONE - no published prompt-caching behaviour for this endpoint that the app can
+    # cite, so nothing substantiates AUTOMATIC. NONE is the honest default.
+    prompt_cache=PromptCache.NONE,
     notes="Meta Muse Spark via the Meta AI API (OpenAI-compatible); 1M context.",
 )
 

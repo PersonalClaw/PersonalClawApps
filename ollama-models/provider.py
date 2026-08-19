@@ -41,7 +41,7 @@ from personalclaw.sdk.model import (  # noqa: F401  (base)
     LLMEvent,
     ModelProvider,
 )
-from personalclaw.sdk.model import Capability, ProviderCapability
+from personalclaw.sdk.model import Capability, PromptCache, ProviderCapability
 from personalclaw.sdk.model import (  # noqa: F401  (catalog)
     ConnectionResult,
     ModelInfo,
@@ -726,6 +726,10 @@ OLLAMA_CAPABILITY = ProviderCapability(
     # Model-independent: the constraint is applied by the ollama runtime, not by the
     # model's own instruction-following, so it holds on a 1B model too.
     structured_output=StructuredOutput.JSON_SCHEMA,
+    # NONE - Ollama exposes no per-request cache marker, and any prefix reuse is a
+    # property of the local runtime's KV cache rather than a documented, app-verifiable
+    # server-side prompt cache the user can rely on. Nothing substantiates AUTOMATIC.
+    prompt_cache=PromptCache.NONE,
     notes=(
         "Local Ollama server via httpx; tool use degrades per model, vision "
         "model-dependent; native json-schema output via the `format` field."
