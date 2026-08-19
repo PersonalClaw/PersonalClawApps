@@ -71,6 +71,31 @@ _MAX_HISTORY = 50
 # the total streaming duration.
 _DEFAULT_TIMEOUT = 60.0
 
+
+def _timeout_or_default(raw: object) -> float:
+    """A configured timeout, accepting the STRING the config actually stores.
+
+    Settings persists provider options as strings — a real dev home carries
+    ``"timeout_secs": "120"`` — so the previous ``isinstance(raw, (int, float))``
+    test was False for every value a user had ever typed, and every configured
+    timeout was silently replaced by :data:`_DEFAULT_TIMEOUT`. Measured: a chat
+    turn against a local 12B reasoning model died on ``httpx.ReadTimeout`` at
+    ~60 s with ``timeout_secs`` set to 900.
+
+    Garbage still falls back to the default rather than raising — a malformed
+    option must not make the provider unbuildable — and a non-positive value is
+    treated as garbage, since a 0 s timeout would fail every request.
+    """
+    if isinstance(raw, bool) or raw is None:  # bool is an int subclass; not a timeout
+        return _DEFAULT_TIMEOUT
+    try:
+        value = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return _DEFAULT_TIMEOUT
+    if value != value or value <= 0:  # NaN or non-positive
+        return _DEFAULT_TIMEOUT
+    return value
+
 # ── Native structured output (AUTONOMY-GUARDRAILS §2.4) ────────────────────
 #
 # Ollama enforces a JSON Schema server-side via a top-level ``format`` field on
@@ -770,8 +795,17 @@ def _factory(
     options = dict(entry.options or {})
     endpoint_value = options.pop("endpoint", None)
     endpoint = str(endpoint_value) if endpoint_value is not None else _DEFAULT_ENDPOINT
-    timeout_value = options.pop("timeout", None)
-    timeout = float(timeout_value) if isinstance(timeout_value, (int, float)) else _DEFAULT_TIMEOUT
+    # The DECLARED option name is ``timeout_secs`` (app.json's schema and the README's
+    # option table), and that is what Settings writes into ``entry.options``. This path
+    # read only ``timeout`` — a name the app documents nowhere and the UI never writes —
+    # so the app shipped a knob with no reader on its main path: a chat turn always used
+    # the 60s default no matter what the user set. Measured before the fix: a plan-mode
+    # turn died on httpx.ReadTimeout after exactly 61s with timeout_secs="1800".
+    # ``timeout`` stays accepted as an undocumented programmatic alias, and wins when
+    # both are present because it is the more specific, per-call spelling.
+    _explicit = options.pop("timeout", None)
+    _declared = options.pop("timeout_secs", None)
+    timeout = _timeout_or_default(_explicit if _explicit is not None else _declared)
 
     # A ``model`` kwarg (threaded by ``registry.build(name, model=…)``) overrides the
     # entry's pinned model — a per-use-case caller (e.g. one_shot_completion's
@@ -819,8 +853,7 @@ def create_provider(config: dict | None = None) -> "OllamaProvider":
     """
     cfg = dict(config or {})
     endpoint = str(cfg.get("endpoint") or _DEFAULT_ENDPOINT)
-    timeout_value = cfg.get("timeout_secs")
-    timeout = float(timeout_value) if isinstance(timeout_value, (int, float)) else _DEFAULT_TIMEOUT
+    timeout = _timeout_or_default(cfg.get("timeout_secs"))
     extra: dict[str, object] = {}
     if cfg.get("embedding_model"):
         extra["embedding_model"] = cfg["embedding_model"]
