@@ -1,7 +1,8 @@
 # CI — first-party app bundles. Verifies every app against the platform contract
 # WITHOUT installing vendor SDKs (the apps stub them; a test needing a real SDK
 # fails loudly here, which is correct). Jobs per CI-RELEASE-ENGINEERING §"apps repo":
-# manifest-validate · tests · boundary · live-writes-posture · dco (PR-only).
+# manifest-validate · tests · quality-declarations · boundary · live-writes-posture ·
+# prompt-cache-posture · dco (PR-only).
 name: CI
 
 on:
@@ -114,6 +115,104 @@ jobs:
             fi
           done
           exit $rc
+
+  quality-declarations:
+    # A `quality` block in app.json — {tested, designSystem, a11y} — is what the Store
+    # renders as a badge row, so for a FIRST-PARTY app it is a promise, not decoration.
+    # This job holds it to account (APP-PLATFORM-EVOLUTION T2.1): core's verifier
+    # re-checks every CLAIM against the bundle's own evidence — the tests actually pass,
+    # token-lint is clean, the axe report exists, matches this version and is empty —
+    # and exits 1 on any claim the bundle cannot back. An axis left absent, or declared
+    # honestly false ("legacy"/"n/a"), claims nothing and is never punished.
+    #
+    # The check IS core's module, invoked verbatim — deliberately not a second
+    # implementation here. Re-deriving the token-lint patterns or the pass rules in this
+    # repo would mint exactly the declared-vs-actual drift the job exists to catch, one
+    # layer down. `needs: [tests]` so a declaring app whose own suite is red can never
+    # reach a green quality job.
+    needs: [tests]
+    runs-on: ubuntu-latest
+    env:
+      # Same reason as the `tests` job: the verifier RUNS each declaring bundle's
+      # pytest, so it needs the posture those tests are written against.
+      PERSONALCLAW_SKIP_APP_BACKENDS: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install core + pytest
+        # Mirrors manifest-validate/tests: a uv-managed venv (the runner's /usr is
+        # PEP-668 externally-managed, so `--system` is refused), exported on PATH/env so
+        # later steps' `python` and `uv pip` resolve to it. pytest is required, not
+        # optional: verifying `tested: true` means running the bundle's tests for real.
+        run: |
+          uv venv --python 3.12 .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+          uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC" pytest pytest-asyncio
+      - name: "Census the claims, install what a `tested` claim needs"
+        # Two things, one manifest read.
+        # (1) The census is PRINTED so a green run stays legible: "no app claimed
+        #     anything" and "claims were checked and held" are different facts, and a
+        #     guard whose log cannot tell them apart is how a guard rots unnoticed.
+        # (2) The deps matter because the verifier really runs the bundle's pytest — an
+        #     HONEST `tested: true` on an app that needs its SDK (slack-channel →
+        #     slack-sdk) would otherwise red as a lie. Scoped to DECLARING bundles only:
+        #     the reason `tests` installs per bundle is to keep torch out of every job.
+        run: |
+          deps=$(python - <<'PY'
+          import json, pathlib, sys
+          axes = {"tested": 0, "designSystem": 0, "a11y": 0}
+          claiming, deps = [], []
+          apps = sorted(pathlib.Path(".").glob("*/app.json"))
+          for mf in apps:
+              try:
+                  d = json.loads(mf.read_text(encoding="utf-8"))
+              except (OSError, ValueError) as exc:
+                  # NOT swallowed: said out loud, and the red is still raised — by
+                  # manifest-validate, and again by the verifier's own `manifest`
+                  # violation. This census must not be the thing that reports it.
+                  print(f"{mf}: unreadable ({exc}) — skipped for census", file=sys.stderr)
+                  continue
+              q = d.get("quality")
+              if not isinstance(q, dict):
+                  continue
+              # The three VERIFIABLE values, mirroring QualityDeclaration.claims():
+              # `true` / `"v2"` is a claim; anything else (absent, false, "legacy",
+              # "n/a") claims nothing and is not counted or punished.
+              claimed = []
+              if q.get("tested") is True:
+                  claimed.append("tested")
+                  deps += (d.get("dependencies") or {}).get("pythonDependencies") or []
+              if q.get("designSystem") == "v2":
+                  claimed.append("designSystem")
+              if q.get("a11y") is True:
+                  claimed.append("a11y")
+              for a in claimed:
+                  axes[a] += 1
+              if claimed:
+                  claiming.append(f"{mf.parent.name}({'+'.join(claimed)})")
+          print(
+              f"quality claims over {len(apps)} app(s): tested={axes['tested']} "
+              f"designSystem={axes['designSystem']} a11y={axes['a11y']} — declared by: "
+              f"{', '.join(claiming) or '(none)'}",
+              file=sys.stderr,
+          )
+          print(" ".join(sorted(set(deps))))
+          PY
+          )
+          if [ -n "$deps" ]; then
+            echo "installing declaring bundles' deps: $deps"
+            uv pip install $deps
+          else
+            echo "no bundle claims quality.tested — no deps to install"
+          fi
+      - name: Every declared claim is backed by the bundle's evidence
+        # Exit 1 on a dishonest claim AND on a tree with no */app.json at all (a
+        # checker that silently checked nothing is the failure mode this guards).
+        run: python -m personalclaw.apps.quality .
 
   boundary:
     # SDK-only import lint from the apps side: an installed app may import core ONLY
