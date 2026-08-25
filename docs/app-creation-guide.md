@@ -286,6 +286,40 @@ marketplace-managed dependencies.
 `installMode: "client"` (or an OS mismatch) makes the Store show the copy-paste
 `clientInstall` one-liner instead of installing on the server.
 
+### Quality declaration (optional — and CI-enforced here)
+
+```json
+"quality": {
+  "tested": true,                  // the bundle ships tests AND they pass
+  "designSystem": "v2",            // "v2" | "legacy" | "n/a"
+  "a11y": true                     // an axe scan of this version found nothing
+}
+```
+
+The Store renders this as a badge row, so in this repo it is a promise, not
+decoration: the `quality-declarations` CI job runs core's verifier
+(`python -m personalclaw.apps.quality .`) and **exits 1 on a claim the bundle
+cannot back**. What each claim must show:
+
+| Claim | Evidence CI checks |
+|---|---|
+| `tested: true` | at least one `test_*.py` (root or `tests/`) **and** `python -m pytest <bundle>` passes |
+| `designSystem: "v2"` | every `*.ts`/`*.tsx` in the bundle passes token-lint — the same rule the host frontend is held to (`node_modules`/`dist`, `*.test.tsx` and `*.config.ts` are excluded) |
+| `a11y: true` | the bundle ships `a11y/axe-report.json` — `{"appVersion", "tool", "violations": []}` — whose `appVersion` equals the manifest's and whose `violations` is empty |
+
+Three things worth knowing before you declare:
+
+- **Absent is not a claim, and an honest miss is never punished.** Omit an axis,
+  or declare `false` / `"legacy"` / `"n/a"`, and CI asks nothing of it. Only
+  `true` / `"v2"` is a claim.
+- **A claim with nothing to check is a violation, not a free pass** —
+  `designSystem: "v2"` with no frontend source, or `a11y: true` with no report,
+  would badge a check that never ran. A backend-only app declares `"n/a"`.
+- **CI verifies the axe report; it cannot produce one.** There is no browser and
+  no host SPA build in this repo, so `a11y: true` means your own harness
+  committed the artifact for *this* version — last release's clean scan cannot
+  launder this one.
+
 Note: legacy manifest fields `agents`, `skills`, `sops` (and the old
 `backend.hooks`/`backend.routes`) were **stripped** — they parse into the
 forward-compat `extra` bag but have no runtime consumer. Don't use them. The
