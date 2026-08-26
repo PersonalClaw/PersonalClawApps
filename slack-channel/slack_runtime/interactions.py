@@ -847,7 +847,7 @@ async def _route_action_to_session(
 
 async def _import_thread_to_session(slack: Any, ds: Any, channel: str, thread_ts: str) -> Any:
     """Fetch a Slack thread, redact messages, and import into a new dashboard session."""
-    from personalclaw.sdk.channel import _save_session_to_history
+    from personalclaw.sdk.channel import save_session_to_history
 
     # Idempotency: return existing session if already linked
     existing = ds.get_linked_session(thread_ts)
@@ -876,7 +876,7 @@ async def _import_thread_to_session(slack: Any, ds: Any, channel: str, thread_ts
         text_content, _ = redact_credentials(text_content)
         session.append(role, text_content, f"msg msg-{'a' if is_bot else 'u'}")
     ds.link_channel(session.key, thread_ts, channel)
-    _save_session_to_history(ds, session)
+    save_session_to_history(ds, session)
     ds.push_sessions_update()
     return session
 
