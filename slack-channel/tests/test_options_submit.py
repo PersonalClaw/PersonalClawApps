@@ -296,7 +296,7 @@ class TestImportThreadToSession:
         ds.get_or_create_session = MagicMock(return_value=session)
         ds._self_bot_id = "B1"
 
-        with patch("personalclaw.sdk.channel._save_session_to_history"):
+        with patch("personalclaw.sdk.channel.save_session_to_history"):
             result = await interactions._import_thread_to_session(slack, ds, "C1", "100.0")
 
         assert result is session
@@ -335,7 +335,7 @@ class TestImportThreadToSession:
         ds.get_or_create_session = MagicMock(return_value=session)
         ds._self_bot_id = ""
 
-        with patch("personalclaw.sdk.channel._save_session_to_history"):
+        with patch("personalclaw.sdk.channel.save_session_to_history"):
             await interactions._import_thread_to_session(slack, ds, "C1", "100.0")
 
         assert session.append.call_count == 1
@@ -355,7 +355,7 @@ class TestImportThreadToSession:
         ds.get_or_create_session = MagicMock(return_value=session)
         ds._self_bot_id = ""
 
-        with patch("personalclaw.sdk.channel._save_session_to_history"):
+        with patch("personalclaw.sdk.channel.save_session_to_history"):
             await interactions._import_thread_to_session(slack, ds, "C1", "100.0")
 
         # Text should have been passed through redaction (we can't easily check

@@ -6,7 +6,7 @@ isolated tmp home (conftest sets ``PERSONALCLAW_HOME``), so the pairing / allowl
 fencing behaviour is the exact contract core enforces — not a re-implementation. IMAP and
 SMTP are injected fakes (``_client_factory`` / ``_sender_factory``); nothing here opens a
 socket or sleeps on wall-clock. Routing into a session is faked (a stand-in dashboard
-state + a patched ``_run_chat``) so the test observes what text reaches the session.
+state + a patched ``run_chat``) so the test observes what text reaches the session.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ def _configure(**overrides) -> None:
 
 @pytest.fixture
 def wired(monkeypatch, tmp_path):
-    """A configured transport with fake IMAP/SMTP, a fake state, and ``_run_chat`` captured."""
+    """A configured transport with fake IMAP/SMTP, a fake state, and ``run_chat`` captured."""
     _configure()
     captured: dict = {}
 
@@ -58,7 +58,7 @@ def wired(monkeypatch, tmp_path):
         captured["session"] = session
         captured["text"] = text
 
-    monkeypatch.setattr("personalclaw.sdk.channel._run_chat", fake_run_chat)
+    monkeypatch.setattr("personalclaw.sdk.channel.run_chat", fake_run_chat)
 
     imap = FakeImapServer()
     smtp = FakeSmtpServer()

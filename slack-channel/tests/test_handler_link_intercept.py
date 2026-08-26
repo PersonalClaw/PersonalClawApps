@@ -169,7 +169,7 @@ class TestLinkedThreadIntercept:
         with (
             patch.object(handler, "_dashboard_state", ds),
             patch.object(handler, "is_allowed_user", return_value=True),
-            patch("personalclaw.sdk.channel._run_chat", new_callable=AsyncMock) as mock_run_chat,
+            patch("personalclaw.sdk.channel.run_chat", new_callable=AsyncMock) as mock_run_chat,
         ):
             await handler.handle_message(
                 slack, MagicMock(), "C1", "hello", "t1", "msg1", "U1",
@@ -181,7 +181,7 @@ class TestLinkedThreadIntercept:
 
     @pytest.mark.asyncio
     async def test_redact_for_ui_original_for_llm(self):
-        """Verify redacted text goes to UI (session.append) but original goes to LLM (_run_chat)."""
+        """Verify redacted text goes to UI (session.append) but original goes to LLM (run_chat)."""
         from slack_runtime import handler
 
         slack = _make_slack()
@@ -198,7 +198,7 @@ class TestLinkedThreadIntercept:
         with (
             patch.object(handler, "_dashboard_state", ds),
             patch.object(handler, "is_allowed_user", return_value=True),
-            patch("personalclaw.sdk.channel._run_chat", new_callable=AsyncMock) as mock_run_chat,
+            patch("personalclaw.sdk.channel.run_chat", new_callable=AsyncMock) as mock_run_chat,
             patch.object(handler, "redact_exfiltration_urls", return_value=("[REDACTED-URL]", True)),
             patch.object(handler, "redact_credentials", return_value=("[REDACTED]", True)),
         ):
@@ -228,7 +228,7 @@ class TestLinkedThreadIntercept:
         with (
             patch.object(handler, "_dashboard_state", ds),
             patch.object(handler, "is_allowed_user", return_value=True),
-            patch("personalclaw.sdk.channel._run_chat", new_callable=AsyncMock) as mock_run_chat,
+            patch("personalclaw.sdk.channel.run_chat", new_callable=AsyncMock) as mock_run_chat,
         ):
             await handler.handle_message(
                 slack, MagicMock(), "C1", "hello", "t1", "msg1", "U1",
