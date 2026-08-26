@@ -1,0 +1,36 @@
+{
+  "name": "menu-bar-companion",
+  "version": "0.1.0",
+  "displayName": "Menu Bar Companion",
+  "description": "A macOS menu-bar companion for a PersonalClaw you already run. It lives in the status bar on YOUR Mac (not on the server), shows the loops running right now, the tool approvals waiting on you with one-click Approve/Deny, and deep-links a loop that needs your input straight into the dashboard. A badge counts what is actually blocked on you. It holds ONE /api/ws connection and treats every frame as nothing but a doorbell — it re-reads state over HTTP and never renders anything out of a socket payload. Native notifications can be muted from its Settings menu. Your gateway URL and token are stored locally in a 0600 file on your own machine, or supplied by environment variable and never persisted.",
+  "icon": "PanelTop",
+  "author": "PersonalClaw",
+  "license": "MIT",
+  "tags": [
+    "companion",
+    "macos",
+    "approvals",
+    "ambient"
+  ],
+  "permissions": {
+    "api": [
+      "/api/loops",
+      "/api/approvals",
+      "/api/ws"
+    ],
+    "events": [
+      "approval",
+      "approval_resolved"
+    ]
+  },
+  "platform": {
+    "os": [
+      "darwin"
+    ],
+    "installMode": "client",
+    "clientInstall": {
+      "shell": "set -e; DEST=\"$HOME/Library/Application Support/PersonalClaw Companion/src\"; git clone --depth 1 --filter=blob:none --sparse https://github.com/PersonalClaw/PersonalClawApps \"$DEST\"; git -C \"$DEST\" sparse-checkout set menu-bar-companion; python3 -m pip install --user rumps",
+      "postInstall": "python3 \"$HOME/Library/Application Support/PersonalClaw Companion/src/menu-bar-companion/run.py\" --check"
+    }
+  }
+}
