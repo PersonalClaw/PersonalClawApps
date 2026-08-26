@@ -12,6 +12,10 @@
     "approvals",
     "ambient"
   ],
+  "quality": {
+    "tested": true,
+    "designSystem": "n/a"
+  },
   "permissions": {
     "api": [
       "/api/loops",
