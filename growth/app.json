@@ -168,6 +168,9 @@
       "order": 30
     }
   },
+  "uiCapabilities": [
+    "shell-primitives"
+  ],
   "permissions": {
     "api": [
       "/api/apps/growth",
@@ -182,6 +185,11 @@
     "network": false,
     "agent": true,
     "cron": true
+  },
+  "quality": {
+    "tested": true,
+    "designSystem": "v2",
+    "a11y": false
   },
   "crons": [
     {

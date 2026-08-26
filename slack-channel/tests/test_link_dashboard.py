@@ -153,7 +153,7 @@ async def test_link_dashboard_creates_session_and_imports(link_orch: MagicMock, 
         "response_url": "",
     }
 
-    with patch("personalclaw.sdk.channel._save_session_to_history"):
+    with patch("personalclaw.sdk.channel.save_session_to_history"):
         await interactions.dispatch(payload)
 
     ds = link_orch.dashboard_state
@@ -244,7 +244,7 @@ async def test_link_dashboard_skips_link_command_messages(link_orch: MagicMock) 
         "actions": [{"action_id": "pc_link_dashboard", "value": ""}],
         "response_url": "",
     }
-    with patch("personalclaw.sdk.channel._save_session_to_history"):
+    with patch("personalclaw.sdk.channel.save_session_to_history"):
         await interactions.dispatch(payload)
 
     session = link_orch.dashboard_state.get_or_create_session.return_value

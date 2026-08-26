@@ -4,7 +4,7 @@ Trust is exercised against the REAL core seam (``channel_trust``) writing into t
 isolated tmp home (conftest sets ``PERSONALCLAW_HOME``), so the DM-pairing /
 guild-tracked-only / fencing behaviour is the exact contract core enforces — not a
 re-implementation. Routing into a session is faked (a stand-in dashboard state + a
-patched ``_run_chat``) so the test observes what text reaches the session.
+patched ``run_chat``) so the test observes what text reaches the session.
 
 The Discord-specific tests here are the two traps the wire protocol introduces:
 ``is_dm`` derived from the ABSENCE of ``guild_id``, and dropping the bot's OWN
@@ -95,7 +95,7 @@ def _msg(text="hi", channel_id="500", guild_id=None, author_id="42",
 
 @pytest.fixture
 def transport_with_capture(monkeypatch):
-    """A transport wired to a fake state + delivery, with _run_chat captured."""
+    """A transport wired to a fake state + delivery, with run_chat captured."""
     captured: dict = {}
 
     async def fake_run_chat(state, session, text, *a, **k):
@@ -103,7 +103,7 @@ def transport_with_capture(monkeypatch):
         captured["session"] = session
         captured["text"] = text
 
-    monkeypatch.setattr("personalclaw.sdk.channel._run_chat", fake_run_chat)
+    monkeypatch.setattr("personalclaw.sdk.channel.run_chat", fake_run_chat)
 
     t = DiscordTransport({"bot_token": "TEST"})
     state = FakeState()
