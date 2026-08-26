@@ -15,6 +15,11 @@
  * Core reads (projects/tasks/knowledge) + agent-run go through the app SDK from the browser.
  */
 import { createAppApi, createAgentTask, type AppContext } from '@personalclaw/app-sdk'
+// The HOST's own design-system primitives, by identity — the same `Button`/`Surface` a
+// native page renders, resolved at runtime from window.__personalclaw_modules. Gated on
+// `uiCapabilities: ["shell-primitives"]` in app.json: drop that declaration and this bare
+// specifier is left unrewritten by the bundle loader and fails to resolve.
+import { Button, Surface } from '@personalclaw/app-sdk/ui'
 import * as React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
@@ -71,12 +76,14 @@ function App({ ctx }: { ctx: AppContext }) {
   if (err) return <Notice tone="error">{err}</Notice>
 
   return (
-    <div style={{ maxWidth: 'var(--content-width, 940px)', margin: '0 auto', padding: 24 }}>
+    // `AppFrame` already centres the app's content region and clamps it to
+    // `var(--content-width)`. Clamping again here nested two content widths (and the local
+    // 940px fallback disagreed with the host's 820px), so the app contributes padding only.
+    <div style={{ padding: 'var(--spacing-2xl)' }}>
       <Header title="Growth Tracker" subtitle="Turn your real work into evidenced growth — mine your chats, projects, tasks and notes into artifacts." />
-      <div style={{ display: 'flex', gap: 6, margin: '14px 0', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 'var(--spacing-s)', margin: 'var(--spacing-m) 0', flexWrap: 'wrap' }}>
         {TABS.map((t) => (
-          <button key={t} onClick={() => setTab(t)} data-testid={`tab-${t}`}
-            style={{ ...tabStyle, ...(tab === t ? tabActive : {}) }}>{TAB_LABEL[t]}</button>
+          <Button variant={tab === t ? 'primary' : 'ghost'} size="sm" ariaPressed={tab === t} key={t} onClick={() => setTab(t)}>{TAB_LABEL[t]}</Button>
         ))}
       </div>
 
@@ -97,17 +104,17 @@ function Overview({ readiness, areas, artifacts, onJump }: {
   if (!readiness) return <Notice>Loading…</Notice>
   const recent = artifacts.slice(0, 5)
   return (
-    <div style={{ display: 'grid', gap: 18 }}>
-      <div style={{ display: 'flex', gap: 18, alignItems: 'stretch', flexWrap: 'wrap' }}>
+    <div style={{ display: 'grid', gap: 'var(--spacing-l)' }}>
+      <div style={{ display: 'flex', gap: 'var(--spacing-l)', alignItems: 'stretch', flexWrap: 'wrap' }}>
         <Ring pct={readiness.overall_pct} />
-        <div style={{ flex: 1, minWidth: 280, display: 'grid', gap: 6 }}>
+        <div style={{ flex: 1, minWidth: '17.5rem', display: 'grid', gap: 'var(--spacing-s)' }}>
           {readiness.dimensions.map((d) => (
-            <div key={d.dimension} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ flex: 1, fontSize: 13 }}>{d.dimension}</span>
-              <span style={{ fontSize: 11, opacity: 0.6 }}>{d.actual}/{d.threshold}</span>
-              <span style={{ padding: '0 8px', height: 22, display: 'inline-flex', alignItems: 'center', borderRadius: 'var(--radius-pill, 9999px)', fontSize: '0.72rem', color: STATUS_COLOR[d.status] || 'var(--color-on-surface-low)', background: `color-mix(in srgb, ${STATUS_COLOR[d.status] || 'var(--color-surface-high)'} 16%, transparent)` }}>{d.status}</span>
-              <div style={{ width: 70, height: 5, borderRadius: 3, background: 'var(--color-surface-high)' }}>
-                <div style={{ width: `${d.pct}%`, height: '100%', borderRadius: 3, background: 'var(--color-primary)' }} />
+            <div key={d.dimension} style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-s)' }}>
+              <span style={{ flex: 1, fontSize: '0.8125rem' }}>{d.dimension}</span>
+              <span style={{ fontSize: '0.75rem', opacity: 0.6 }}>{d.actual}/{d.threshold}</span>
+              <span style={{ padding: '0 var(--spacing-s)', height: '1.375rem', display: 'inline-flex', alignItems: 'center', borderRadius: 'var(--radius-pill)', fontSize: '0.72rem', color: STATUS_COLOR[d.status] || 'var(--color-on-surface-low)', background: `color-mix(in srgb, ${STATUS_COLOR[d.status] || 'var(--color-surface-high)'} 16%, transparent)` }}>{d.status}</span>
+              <div style={{ width: '4.375rem', height: '0.3125rem', borderRadius: 'var(--radius-xs)', background: 'var(--color-surface-high)' }}>
+                <div style={{ width: `${d.pct}%`, height: '100%', borderRadius: 'var(--radius-xs)', background: 'var(--color-primary)' }} />
               </div>
             </div>
           ))}
@@ -120,12 +127,12 @@ function Overview({ readiness, areas, artifacts, onJump }: {
 
       {areas.length > 0 && (
         <Section title="Growth areas">
-          <div style={{ display: 'grid', gap: 8 }}>
+          <div style={{ display: 'grid', gap: 'var(--spacing-s)' }}>
             {areas.map((a) => (
-              <div key={a.id} style={{ ...cardStyle, cursor: 'default', display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ flex: 1, fontWeight: 600, fontSize: 13.5 }}>{a.name}{a.dimension ? <span style={{ opacity: 0.5, fontWeight: 400 }}> · {a.dimension}</span> : null}</span>
-                <span style={{ fontSize: 11.5, opacity: 0.7 }}>{a.artifact_count} artifact{a.artifact_count === 1 ? '' : 's'}</span>
-              </div>
+              <Card key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-s)' }}>
+                <span style={{ flex: 1, fontWeight: 600, fontSize: '0.8125rem' }}>{a.name}{a.dimension ? <span style={{ opacity: 0.5, fontWeight: 400 }}> · {a.dimension}</span> : null}</span>
+                <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>{a.artifact_count} artifact{a.artifact_count === 1 ? '' : 's'}</span>
+              </Card>
             ))}
           </div>
         </Section>
@@ -143,37 +150,37 @@ function Overview({ readiness, areas, artifacts, onJump }: {
 function Ring({ pct }: { pct: number }) {
   const r = 42, circ = 2 * Math.PI * r
   return (
-    <div style={{ ...cardStyle, cursor: 'default', width: 150, display: 'grid', placeItems: 'center', gap: 4 }}>
+    <Card style={{ width: '9.375rem', display: 'grid', placeItems: 'center', gap: 'var(--spacing-xs)' }}>
       <svg width="110" height="110" viewBox="0 0 110 110">
         <circle cx="55" cy="55" r={r} fill="none" stroke="var(--color-surface-high)" strokeWidth="10" />
         <circle cx="55" cy="55" r={r} fill="none" stroke="var(--color-primary)" strokeWidth="10" strokeLinecap="round"
           strokeDasharray={circ} strokeDashoffset={circ * (1 - pct / 100)} transform="rotate(-90 55 55)" />
         <text x="55" y="55" textAnchor="middle" dominantBaseline="central" fontSize="22" fill="var(--color-on-surface)" fontWeight="600">{pct}%</text>
       </svg>
-      <span style={{ fontSize: 11.5, opacity: 0.7, textAlign: 'center' }}>dimensions covered</span>
-    </div>
+      <span style={{ fontSize: '0.75rem', opacity: 0.7, textAlign: 'center' }}>dimensions covered</span>
+    </Card>
   )
 }
 
 function ArtifactRow({ a, onClick, onEdit, onDelete }: { a: Artifact; onClick?: () => void; onEdit?: () => void; onDelete?: () => void }) {
   return (
-    <div style={{ ...cardStyle, cursor: onClick ? 'pointer' : 'default' }} onClick={onClick} data-testid="artifact">
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <span style={{ flex: 1, fontWeight: 600, fontSize: 14 }}>{a.title}</span>
-        {a.sourced && <span style={{ fontSize: 11, color: 'var(--color-success)' }}>✓ sourced</span>}
-        {onEdit && <button onClick={(e) => { e.stopPropagation(); onEdit() }} style={linkBtn} data-testid="artifact-edit">edit</button>}
-        {onDelete && <button onClick={(e) => { e.stopPropagation(); onDelete() }} style={linkBtn} data-testid="artifact-delete">delete</button>}
+    <Card style={{ cursor: onClick ? 'pointer' : 'default' }} onClick={onClick} testId="artifact">
+      <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
+        <span style={{ flex: 1, fontWeight: 600, fontSize: '0.9375rem' }}>{a.title}</span>
+        {a.sourced && <span style={{ fontSize: '0.75rem', color: 'var(--color-success)' }}>✓ sourced</span>}
+        {onEdit && <Button variant="ghost" size="xs" onClick={(e) => { e.stopPropagation(); onEdit() }}>edit</Button>}
+        {onDelete && <Button variant="ghost" size="xs" onClick={(e) => { e.stopPropagation(); onDelete() }}>delete</Button>}
       </div>
-      <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>{a.date} · {a.dimensions.join(', ') || 'unclassified'}</div>
+      <div style={{ fontSize: '0.75rem', opacity: 0.7, marginTop: 'var(--spacing-xs)' }}>{a.date} · {a.dimensions.join(', ') || 'unclassified'}</div>
       {a.evidence.length > 0 && (
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+        <div style={{ display: 'flex', gap: 'var(--spacing-s)', flexWrap: 'wrap', marginTop: 'var(--spacing-s)' }}>
           {a.evidence.map((e, i) => (
-            <span key={i} style={{ fontSize: 10.5, padding: '2px 7px', borderRadius: 999, background: 'var(--color-surface-high)', opacity: 0.9 }}
+            <span key={i} style={{ fontSize: '0.75rem', padding: 'var(--spacing-xs) var(--spacing-s)', borderRadius: 'var(--radius-pill)', background: 'var(--color-surface-high)', opacity: 0.9 }}
               title={e.ref}>{(KIND_META[e.kind]?.glyph || '🔗')} {e.label || e.ref}</span>
           ))}
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -186,8 +193,8 @@ function Artifacts({ api, agent, artifacts, areas, onChanged }: {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <p style={{ fontSize: 12.5, opacity: 0.6, margin: 0 }}>Evidenced pieces of growth. Compose from a PClaw source or freeform.</p>
-        {!composing && !editing && <button onClick={() => setComposing(true)} style={primaryBtn} data-testid="new-artifact">New artifact</button>}
+        <p style={{ fontSize: '0.8125rem', opacity: 0.6, margin: 0 }}>Evidenced pieces of growth. Compose from a PClaw source or freeform.</p>
+        {!composing && !editing && <Button variant="primary" size="md" onClick={() => setComposing(true)}>New artifact</Button>}
       </div>
       {composing && <ArtifactComposer api={api} agent={agent} areas={areas} onDone={() => { setComposing(false); onChanged() }} onCancel={() => setComposing(false)} />}
       {editing && <ArtifactComposer api={api} agent={agent} areas={areas} editTarget={editing}
@@ -253,17 +260,17 @@ function ArtifactComposer({ api, agent, areas, onDone, onCancel, seed, editTarge
   }
 
   return (
-    <div style={{ ...cardStyle, cursor: 'default', marginTop: 12, display: 'grid', gap: 8 }}>
+    <Card style={{ marginTop: 'var(--spacing-m)', display: 'grid', gap: 'var(--spacing-s)' }}>
       <input value={title} aria-label="Artifact title" onChange={(e) => setTitle(e.target.value)} placeholder="What did you accomplish?" style={inputStyle} data-testid="composer-title" />
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <button onClick={() => setPicking(true)} style={smallBtn} data-testid="pick-evidence">+ Link evidence</button>
+      <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center', flexWrap: 'wrap' }}>
+        <Button variant="secondary" size="sm" onClick={() => setPicking(true)}>+ Link evidence</Button>
         {evidence.map((e, i) => (
-          <span key={i} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: 'var(--color-surface-high)', display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+          <span key={i} style={{ fontSize: '0.75rem', padding: 'var(--spacing-xs) var(--spacing-s)', borderRadius: 'var(--radius-pill)', background: 'var(--color-surface-high)', display: 'inline-flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
             {(KIND_META[e.kind]?.glyph || '🔗')} {e.label || e.ref}
-            <button onClick={() => setEvidence(evidence.filter((_, j) => j !== i))} style={{ ...linkBtn, fontSize: 11 }} aria-label="Remove evidence">×</button>
+            <Button variant="ghost" size="xs" onClick={() => setEvidence(evidence.filter((_, j) => j !== i))} ariaLabel="Remove evidence">×</Button>
           </span>
         ))}
-        {evidence.length > 0 && <button onClick={draftFromEvidence} disabled={!!busy} style={smallBtn} data-testid="draft-from-evidence">✨ Draft from evidence</button>}
+        {evidence.length > 0 && <Button variant="secondary" size="sm" onClick={draftFromEvidence} disabled={!!busy}>✨ Draft from evidence</Button>}
       </div>
       <textarea value={situation} aria-label="Situation" onChange={(e) => setSituation(e.target.value)} placeholder="Situation — the context" rows={2} style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
       <textarea value={behavior} aria-label="Behavior" onChange={(e) => setBehavior(e.target.value)} placeholder="Behavior — what you did" rows={2} style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
@@ -274,13 +281,14 @@ function ArtifactComposer({ api, agent, areas, onDone, onCancel, seed, editTarge
           {areas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
       )}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <button onClick={save} disabled={!!busy || !title.trim()} style={primaryBtn} data-testid="composer-save">{busy || (editTarget ? 'Update artifact' : 'Save artifact')}</button>
-        <button onClick={onCancel} style={linkBtn}>Cancel</button>
+      <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
+        <Button variant="primary" size="md" onClick={save} disabled={!!busy || !title.trim()}
+          disabledReason={busy ? 'Saving…' : 'Give the artifact a title first'}>{busy || (editTarget ? 'Update artifact' : 'Save artifact')}</Button>
+        <Button variant="ghost" size="xs" onClick={onCancel}>Cancel</Button>
       </div>
       {err && <Notice tone="error">{err}</Notice>}
       {picking && <EvidencePicker api={api} onPick={(e) => { setEvidence([...evidence, e]); setPicking(false) }} onClose={() => setPicking(false)} />}
-    </div>
+    </Card>
   )
 }
 
@@ -312,32 +320,33 @@ function EvidencePicker({ api, onPick, onClose }: {
   }, [kind])
 
   return (
-    <div style={{ ...cardStyle, cursor: 'default', background: 'var(--color-surface-high)', display: 'grid', gap: 8 }}>
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-        <span style={{ fontSize: 12, opacity: 0.7 }}>Link evidence from:</span>
+    <Card style={{ background: 'var(--color-surface-high)', display: 'grid', gap: 'var(--spacing-s)' }}>
+      <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
+        <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>Link evidence from:</span>
         {(['project', 'task', 'knowledge', 'external'] as const).map((k) => (
-          <button key={k} onClick={() => setKind(k)} style={{ ...smallBtn, ...(kind === k ? tabActive : {}) }}>{KIND_META[k]?.label || k}</button>
+          <Button variant={kind === k ? 'primary' : 'ghost'} size="sm" ariaPressed={kind === k} key={k} onClick={() => setKind(k)}>{KIND_META[k]?.label || k}</Button>
         ))}
         <span style={{ flex: 1 }} />
-        <button onClick={onClose} style={linkBtn}>close</button>
+        <Button variant="ghost" size="xs" onClick={onClose}>close</Button>
       </div>
       {kind === 'external' ? (
-        <div style={{ display: 'flex', gap: 6 }}>
-          <input value={ext} aria-label="External URL or reference" onChange={(e) => setExt(e.target.value)} placeholder="https://… or PR #123 / doc ref" style={inputStyle} />
-          <button onClick={() => { if (ext.trim()) onPick({ kind: 'external', ref: ext.trim(), label: ext.trim().slice(0, 40) }) }} style={primaryBtn}>Add</button>
+        <div style={{ display: 'flex', gap: 'var(--spacing-s)' }}>
+          <input value={ext} aria-label="External URL or reference" onChange={(e) => setExt(e.target.value)} placeholder="https://… or a PR / doc reference" style={inputStyle} />
+          <Button variant="primary" size="md" onClick={() => { if (ext.trim()) onPick({ kind: 'external', ref: ext.trim(), label: ext.trim().slice(0, 40) }) }}>Add</Button>
         </div>
-      ) : loading ? <div style={{ fontSize: 12, opacity: 0.6 }}>Loading {kind}s…</div>
-        : rows.length === 0 ? <div style={{ fontSize: 12, opacity: 0.6 }}>No {kind}s found.</div>
+      ) : loading ? <div style={{ fontSize: '0.75rem', opacity: 0.6 }}>Loading {kind}s…</div>
+        : rows.length === 0 ? <div style={{ fontSize: '0.75rem', opacity: 0.6 }}>No {kind}s found.</div>
           : (
-            <div style={{ display: 'grid', gap: 4, maxHeight: 220, overflow: 'auto' }}>
+            <div style={{ display: 'grid', gap: 'var(--spacing-xs)', maxHeight: '13.75rem', overflow: 'auto' }}>
               {rows.map((e, i) => (
-                <button key={i} onClick={() => onPick(e)} style={{ ...cardStyle, cursor: 'pointer', padding: 8, textAlign: 'left', fontSize: 12.5 }} data-testid="evidence-option">
+                <Card key={i} onClick={() => onPick(e)} testId="evidence-option"
+                  style={{ padding: 'var(--spacing-s)', fontSize: '0.8125rem' }}>
                   {(KIND_META[e.kind]?.glyph || '🔗')} {e.label}
-                </button>
+                </Card>
               ))}
             </div>
           )}
-    </div>
+    </Card>
   )
 }
 
@@ -388,7 +397,7 @@ function Sources({ api, agent, artifacts, onChanged, onGoArtifacts }: {
   if (seed) {
     return (
       <div>
-        <button onClick={() => setSeed(null)} style={{ ...linkBtn, marginBottom: 8 }}>← Back to sources</button>
+        <Button variant="ghost" size="xs" onClick={() => setSeed(null)}>← Back to sources</Button>
         <ArtifactComposer api={api} agent={agent} areas={[]} seed={seed}
           onDone={() => { setSeed(null); onChanged(); onGoArtifacts() }} onCancel={() => setSeed(null)} />
       </div>
@@ -398,22 +407,22 @@ function Sources({ api, agent, artifacts, onChanged, onGoArtifacts }: {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <p style={{ fontSize: 12.5, opacity: 0.6, margin: 0 }}>Your real PClaw work — completed projects + tasks — as candidate artifacts. Draft one, or dismiss.</p>
-        <button onClick={mine} style={smallBtn} data-testid="refresh-sources">Refresh</button>
+        <p style={{ fontSize: '0.8125rem', opacity: 0.6, margin: 0 }}>Your real PClaw work — completed projects + tasks — as candidate artifacts. Draft one, or dismiss.</p>
+        <Button variant="secondary" size="sm" onClick={mine}>Refresh</Button>
       </div>
       {err && <Notice tone="error">{err}</Notice>}
       <Section title={candidates === null ? 'Mining your work…' : `Candidates (${visible.length})`}>
         {candidates === null ? <Notice>Reading your projects + tasks…</Notice>
           : visible.length === 0 ? <Notice>Nothing new to surface. Completed projects + tasks appear here as you do the work.</Notice>
             : visible.map((c) => (
-              <div key={`${c.kind}:${c.ref}`} style={cardStyle} data-testid="source-candidate">
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <span style={{ flex: 1, fontWeight: 600, fontSize: 13.5 }}>{(KIND_META[c.kind]?.glyph || '🔗')} {c.title}</span>
-                  <button onClick={() => setSeed({ title: c.title, evidence: [{ kind: c.kind, ref: c.ref, label: c.title }], sourceText: c.text })} style={primaryBtn} data-testid="draft-candidate">Draft artifact</button>
-                  <button onClick={() => dismiss(`${c.kind}:${c.ref}`)} style={linkBtn} data-testid="dismiss-candidate">dismiss</button>
+              <Card key={`${c.kind}:${c.ref}`} testId="source-candidate">
+                <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
+                  <span style={{ flex: 1, fontWeight: 600, fontSize: '0.8125rem' }}>{(KIND_META[c.kind]?.glyph || '🔗')} {c.title}</span>
+                  <Button variant="primary" size="md" onClick={() => setSeed({ title: c.title, evidence: [{ kind: c.kind, ref: c.ref, label: c.title }], sourceText: c.text })}>Draft artifact</Button>
+                  <Button variant="ghost" size="xs" onClick={() => dismiss(`${c.kind}:${c.ref}`)}>dismiss</Button>
                 </div>
-                <div style={{ fontSize: 12, opacity: 0.6, marginTop: 2 }}>{c.subtitle}</div>
-              </div>
+                <div style={{ fontSize: '0.75rem', opacity: 0.6, marginTop: 'var(--spacing-xs)' }}>{c.subtitle}</div>
+              </Card>
             ))}
       </Section>
     </div>
@@ -454,15 +463,16 @@ function Areas({ api, areas, artifacts, readiness, onChanged }: {
   return (
     <div>
       <Section title="Define a growth area">
-        <div style={{ display: 'grid', gap: 8 }}>
+        <div style={{ display: 'grid', gap: 'var(--spacing-s)' }}>
           <input value={name} aria-label="Growth area name" onChange={(e) => setName(e.target.value)} placeholder="e.g. Cross-team influence" style={inputStyle} data-testid="area-name" />
           <input value={target} aria-label="Target" onChange={(e) => setTarget(e.target.value)} placeholder="Target — what does success look like?" style={inputStyle} />
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 'var(--spacing-s)' }}>
             <select value={dimension} aria-label="Rubric dimension" onChange={(e) => setDimension(e.target.value)} style={selectStyle}>
               <option value="">Any dimension</option>
               {dims.map((d) => <option key={d} value={d}>{d}</option>)}
             </select>
-            <button onClick={add} disabled={!name.trim()} style={primaryBtn} data-testid="area-add">Add area</button>
+            <Button variant="primary" size="md" onClick={add} disabled={!name.trim()}
+              disabledReason="Name the growth area first">Add area</Button>
           </div>
         </div>
       </Section>
@@ -472,11 +482,11 @@ function Areas({ api, areas, artifacts, readiness, onChanged }: {
             const linked = artifacts.filter((x) => x.area_id === a.id)
             if (editingId === a.id) {
               return (
-                <div key={a.id} style={{ ...cardStyle, cursor: 'default' }} data-testid="area-editing">
-                  <div style={{ display: 'grid', gap: 8 }}>
+                <Card key={a.id} testId="area-editing">
+                  <div style={{ display: 'grid', gap: 'var(--spacing-s)' }}>
                     <input value={editName} aria-label="Area name" onChange={(e) => setEditName(e.target.value)} style={inputStyle} />
                     <input value={editTarget} aria-label="Target" onChange={(e) => setEditTarget(e.target.value)} placeholder="Target" style={inputStyle} />
-                    <div style={{ display: 'flex', gap: 8 }}>
+                    <div style={{ display: 'flex', gap: 'var(--spacing-s)' }}>
                       <select value={editDimension} aria-label="Dimension" onChange={(e) => setEditDimension(e.target.value)} style={selectStyle}>
                         <option value="">Any dimension</option>
                         {dims.map((d) => <option key={d} value={d}>{d}</option>)}
@@ -487,27 +497,28 @@ function Areas({ api, areas, artifacts, readiness, onChanged }: {
                         <option value="paused">Paused</option>
                       </select>
                     </div>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button onClick={saveEdit} disabled={!editName.trim()} style={primaryBtn} data-testid="area-save-edit">Save</button>
-                      <button onClick={() => setEditingId(null)} style={linkBtn}>Cancel</button>
+                    <div style={{ display: 'flex', gap: 'var(--spacing-s)' }}>
+                      <Button variant="primary" size="md" onClick={saveEdit} disabled={!editName.trim()}
+                        disabledReason="The name cannot be empty">Save</Button>
+                      <Button variant="ghost" size="xs" onClick={() => setEditingId(null)}>Cancel</Button>
                     </div>
                   </div>
-                </div>
+                </Card>
               )
             }
             return (
-              <div key={a.id} style={cardStyle} data-testid="area">
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <span style={{ flex: 1, fontWeight: 600, fontSize: 14 }}>{a.name}{a.dimension ? <span style={{ opacity: 0.5, fontWeight: 400, fontSize: 12 }}> · {a.dimension}</span> : null}</span>
-                  <span style={{ fontSize: 11.5, opacity: 0.7 }}>{linked.length} artifact{linked.length === 1 ? '' : 's'}</span>
-                  <button onClick={() => startEdit(a)} style={linkBtn} data-testid="area-edit">edit</button>
-                  <button onClick={() => api.del(`${A}/areas/${a.id}`).then(onChanged)} style={linkBtn} data-testid="area-delete">delete</button>
+              <Card key={a.id} testId="area">
+                <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
+                  <span style={{ flex: 1, fontWeight: 600, fontSize: '0.9375rem' }}>{a.name}{a.dimension ? <span style={{ opacity: 0.5, fontWeight: 400, fontSize: '0.75rem' }}> · {a.dimension}</span> : null}</span>
+                  <span style={{ fontSize: '0.75rem', opacity: 0.7 }}>{linked.length} artifact{linked.length === 1 ? '' : 's'}</span>
+                  <Button variant="ghost" size="xs" onClick={() => startEdit(a)}>edit</Button>
+                  <Button variant="ghost" size="xs" onClick={() => api.del(`${A}/areas/${a.id}`).then(onChanged)}>delete</Button>
                 </div>
-                {a.target && <div style={{ fontSize: 12.5, opacity: 0.75, marginTop: 3 }}>🎯 {a.target}</div>}
-                {a.status && a.status !== 'active' && <div style={{ fontSize: 11, opacity: 0.6, marginTop: 2 }}>Status: {a.status}</div>}
-                {linked.length === 0 && <div style={{ fontSize: 12, opacity: 0.55, marginTop: 4, fontStyle: 'italic' }}>No evidence yet — link an artifact to show progress.</div>}
-                {linked.map((x) => <div key={x.id} style={{ fontSize: 12, opacity: 0.8, marginTop: 3 }}>• {x.title}</div>)}
-              </div>
+                {a.target && <div style={{ fontSize: '0.8125rem', opacity: 0.75, marginTop: 'var(--spacing-xs)' }}>🎯 {a.target}</div>}
+                {a.status && a.status !== 'active' && <div style={{ fontSize: '0.75rem', opacity: 0.6, marginTop: 'var(--spacing-xs)' }}>Status: {a.status}</div>}
+                {linked.length === 0 && <div style={{ fontSize: '0.75rem', opacity: 0.55, marginTop: 'var(--spacing-xs)', fontStyle: 'italic' }}>No evidence yet — link an artifact to show progress.</div>}
+                {linked.map((x) => <div key={x.id} style={{ fontSize: '0.75rem', opacity: 0.8, marginTop: 'var(--spacing-xs)' }}>• {x.title}</div>)}
+              </Card>
             )
           })}
       </Section>
@@ -563,25 +574,25 @@ function DigestTab({ api, agent, digests, artifacts, areas, onChanged }: {
   return (
     <div>
       <Section title="Generate a digest">
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 'var(--spacing-s)' }}>
           <input value={period} aria-label="Digest period" onChange={(e) => setPeriod(e.target.value)} placeholder="Period e.g. 2026-Q3" style={inputStyle} data-testid="digest-period" />
-          <button onClick={generate} disabled={busy} style={primaryBtn} data-testid="digest-generate">{busy ? (status || 'Generating…') : 'Generate'}</button>
+          <Button variant="primary" size="md" onClick={generate} disabled={busy}>{busy ? (status || 'Generating…') : 'Generate'}</Button>
         </div>
-        <p style={{ fontSize: 12, opacity: 0.6, marginTop: 4 }}>{status && !busy ? status : 'Summarizes your evidenced artifacts into a shareable accomplishment doc that cites its sources.'}</p>
+        <p style={{ fontSize: '0.75rem', opacity: 0.6, marginTop: 'var(--spacing-xs)' }}>{status && !busy ? status : 'Summarizes your evidenced artifacts into a shareable accomplishment doc that cites its sources.'}</p>
       </Section>
       <Section title={`Digests (${digests.length})`}>
         {digests.length === 0 ? <Notice>No digests yet. Pick a period and generate one.</Notice>
           : digests.map((d) => (
-            <div key={d.id} style={cardStyle} data-testid="digest">
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <span style={{ flex: 1, fontWeight: 600, fontSize: 14 }}>{d.period || '—'}</span>
-                <span style={{ fontSize: 11, opacity: 0.6 }}>{(d.created_at || '').slice(0, 10)}</span>
-                <button onClick={() => copy(d.content_md)} style={linkBtn}>copy</button>
-                <button onClick={() => toKnowledge(d)} style={linkBtn} data-testid="digest-export">export → Knowledge</button>
-                <button onClick={() => api.del(`${A}/digests/${d.id}`).then(onChanged)} style={linkBtn} data-testid="digest-delete">delete</button>
+            <Card key={d.id} testId="digest">
+              <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
+                <span style={{ flex: 1, fontWeight: 600, fontSize: '0.9375rem' }}>{d.period || '—'}</span>
+                <span style={{ fontSize: '0.75rem', opacity: 0.6 }}>{(d.created_at || '').slice(0, 10)}</span>
+                <Button variant="ghost" size="xs" onClick={() => copy(d.content_md)}>copy</Button>
+                <Button variant="ghost" size="xs" onClick={() => toKnowledge(d)}>export → Knowledge</Button>
+                <Button variant="ghost" size="xs" onClick={() => api.del(`${A}/digests/${d.id}`).then(onChanged)}>delete</Button>
               </div>
-              <div style={{ marginTop: 8, padding: 12, borderRadius: 'var(--radius-sm, 8px)', background: 'var(--color-surface-high)', whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.5 }}>{d.content_md}</div>
-            </div>))}
+              <div style={{ marginTop: 'var(--spacing-s)', padding: 'var(--spacing-m)', borderRadius: 'var(--radius-sm)', background: 'var(--color-surface-high)', whiteSpace: 'pre-wrap', fontSize: '0.8125rem', lineHeight: 1.5 }}>{d.content_md}</div>
+            </Card>))}
       </Section>
     </div>
   )
@@ -623,41 +634,41 @@ function Settings({ api, onChanged }: { api: ReturnType<typeof createAppApi>; on
   return (
     <div>
       <Section title="Growth rubric (scoring lens)">
-        <p style={{ fontSize: 12, opacity: 0.6, margin: '0 0 10px' }}>{isOverride ? 'Using your custom rubric.' : 'Using the built-in default.'} Dimensions + keyword requirements drive classification + readiness scoring — they don't limit what you can log.</p>
+        <p style={{ fontSize: '0.75rem', opacity: 0.6, margin: '0 0 var(--spacing-s)' }}>{isOverride ? 'Using your custom rubric.' : 'Using the built-in default.'} Dimensions + keyword requirements drive classification + readiness scoring — they don't limit what you can log.</p>
         <label style={labelText}>Label</label>
-        <input value={rubric.label} aria-label="Rubric label" onChange={(e) => setRubric((r) => r && ({ ...r, label: e.target.value }))} style={{ ...inputStyle, width: '100%', marginBottom: 12 }} data-testid="rubric-label" />
+        <input value={rubric.label} aria-label="Rubric label" onChange={(e) => setRubric((r) => r && ({ ...r, label: e.target.value }))} style={{ ...inputStyle, width: '100%', marginBottom: 'var(--spacing-m)' }} data-testid="rubric-label" />
         <label style={labelText}>Dimensions</label>
-        <div style={{ display: 'grid', gap: 6, marginBottom: 12 }}>
+        <div style={{ display: 'grid', gap: 'var(--spacing-s)', marginBottom: 'var(--spacing-m)' }}>
           {rubric.dimensions.map((d, i) => (
-            <div key={i} style={{ display: 'flex', gap: 6 }}>
+            <div key={i} style={{ display: 'flex', gap: 'var(--spacing-s)' }}>
               <input value={d} aria-label={`Dimension ${i + 1}`} onChange={(e) => setDim(i, e.target.value)} style={{ ...inputStyle, flex: 1 }} />
-              <button onClick={() => rmDim(i)} style={smallBtn} aria-label="Remove dimension">×</button>
+              <Button variant="secondary" size="sm" onClick={() => rmDim(i)} ariaLabel="Remove dimension">×</Button>
             </div>
           ))}
-          <button onClick={addDim} style={smallBtn} data-testid="add-dim">+ Add dimension</button>
+          <Button variant="secondary" size="sm" onClick={addDim}>+ Add dimension</Button>
         </div>
         <label style={labelText}>Requirements</label>
-        <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
+        <div style={{ display: 'grid', gap: 'var(--spacing-s)', marginBottom: 'var(--spacing-m)' }}>
           {rubric.requirements.map((q, i) => (
-            <div key={i} style={{ ...cardStyle, marginBottom: 0, display: 'grid', gap: 6 }}>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <input value={q.code} aria-label="Requirement code" onChange={(e) => setReq(i, { code: e.target.value })} placeholder="code" style={{ ...inputStyle, width: 80 }} />
+            <Card key={i} style={{ marginBottom: 0, display: 'grid', gap: 'var(--spacing-s)' }}>
+              <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
+                <input value={q.code} aria-label="Requirement code" onChange={(e) => setReq(i, { code: e.target.value })} placeholder="code" style={{ ...inputStyle, width: '5rem' }} />
                 <select value={q.dim} aria-label="Requirement dimension" onChange={(e) => setReq(i, { dim: e.target.value })} style={{ ...selectStyle, flex: 1 }}>
                   {rubric.dimensions.map((d) => <option key={d} value={d}>{d}</option>)}
                 </select>
-                <span style={{ fontSize: 12, opacity: 0.6 }}>threshold</span>
-                <input type="number" min={1} aria-label="Requirement threshold" value={q.threshold} onChange={(e) => setReq(i, { threshold: Math.max(1, Number(e.target.value) || 1) })} style={{ ...inputStyle, width: 60 }} />
-                <button onClick={() => rmReq(i)} style={smallBtn} aria-label="Remove requirement">×</button>
+                <span style={{ fontSize: '0.75rem', opacity: 0.6 }}>threshold</span>
+                <input type="number" min={1} aria-label="Requirement threshold" value={q.threshold} onChange={(e) => setReq(i, { threshold: Math.max(1, Number(e.target.value) || 1) })} style={{ ...inputStyle, width: '3.75rem' }} />
+                <Button variant="secondary" size="sm" onClick={() => rmReq(i)} ariaLabel="Remove requirement">×</Button>
               </div>
               <input value={q.short || ''} aria-label="Requirement short label" onChange={(e) => setReq(i, { short: e.target.value })} placeholder="short label" style={inputStyle} />
               <KeywordsInput value={q.keywords || []} onChange={(kw) => setReq(i, { keywords: kw })} />
-            </div>
+            </Card>
           ))}
-          <button onClick={addReq} style={smallBtn} data-testid="add-req">+ Add requirement</button>
+          <Button variant="secondary" size="sm" onClick={addReq}>+ Add requirement</Button>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={saveRubric} style={primaryBtn} data-testid="save-rubric">Save rubric</button>
-          <button onClick={resetRubric} style={linkBtn} data-testid="reset-rubric">Reset to default</button>
+        <div style={{ display: 'flex', gap: 'var(--spacing-s)' }}>
+          <Button variant="primary" size="md" onClick={saveRubric}>Save rubric</Button>
+          <Button variant="ghost" size="xs" onClick={resetRubric}>Reset to default</Button>
         </div>
       </Section>
       {msg && <Notice>{msg}</Notice>}
@@ -665,31 +676,75 @@ function Settings({ api, onChanged }: { api: ReturnType<typeof createAppApi>; on
   )
 }
 
-// ── style helpers — matched to the mainUI component spec (design/tokens.css + ui primitives):
-// cards → radius-lg + surface-container; inputs → radius-md; buttons/tabs/chips → radius-pill;
-// weight via fontVariationSettings "wght" (btn 470 / section 600 / active-tab 550); hover swaps
-// primary→primary-emphasis + surface-high→highest; semantic tints via color-mix (no -container tokens).
-const cardStyle: React.CSSProperties = { display: 'block', width: '100%', padding: 16, borderRadius: 'var(--radius-lg, 16px)', border: '1px solid color-mix(in srgb, var(--color-outline-variant) 40%, transparent)', background: 'var(--color-surface-container)', color: 'inherit', marginBottom: 8 }
-const inputStyle: React.CSSProperties = { flex: 1, padding: '8px 12px', borderRadius: 'var(--radius-md, 12px)', border: 'none', background: 'var(--color-surface-high)', color: 'var(--color-on-surface)', fontSize: '0.9375rem', outline: 'none' }
-const selectStyle: React.CSSProperties = { ...inputStyle, appearance: 'none', paddingRight: 30 }
-const primaryBtn: React.CSSProperties = { padding: '0 20px', height: 40, borderRadius: 'var(--radius-pill, 9999px)', border: 'none', background: 'var(--color-primary)', color: 'var(--color-on-primary)', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: '0.9375rem', fontVariationSettings: '"wght" 470', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, transition: 'background-color .1s cubic-bezier(0.2,0,0,1)' }
-const linkBtn: React.CSSProperties = { background: 'none', border: 'none', color: 'var(--color-primary)', cursor: 'pointer', fontSize: '0.8125rem' }
-const smallBtn: React.CSSProperties = { padding: '0 12px', height: 32, borderRadius: 'var(--radius-pill, 9999px)', border: 'none', background: 'var(--color-surface-high)', color: 'var(--color-on-surface)', cursor: 'pointer', fontSize: '0.8125rem', width: 'fit-content', display: 'inline-flex', alignItems: 'center', gap: 6, transition: 'background-color .15s' }
-const tabStyle: React.CSSProperties = { padding: '0 12px', height: 32, borderRadius: 'var(--radius-pill, 9999px)', border: 'none', background: 'transparent', color: 'var(--color-on-surface-low)', cursor: 'pointer', fontSize: '0.8125rem', transition: 'color .15s, background-color .15s' }
-const tabActive: React.CSSProperties = { background: 'var(--color-primary)', color: 'var(--color-on-primary)', fontVariationSettings: '"wght" 550' }
-const labelText: React.CSSProperties = { fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-on-surface-low)', marginBottom: 4, display: 'block' }
+// ── style helpers ────────────────────────────────────────────────────────────────────────
+// What used to live here was a hand COPY of the host component spec ("cards → radius-lg +
+// surface-container; buttons → radius-pill; weight via fontVariationSettings 470/600/550").
+// A copy drifts by construction, which is why every button now renders through the host's
+// own `Button` and every card through its own `Surface` (imported by identity above), and
+// why type sizes come from the `data-type` role layer in tokens.css rather than a local
+// fontSize/weight pair. What is left here is only what the host does NOT own: the app's
+// form-control chrome and its own layout.
+const inputStyle: React.CSSProperties = { flex: 1, padding: 'var(--spacing-s) var(--spacing-m)', borderRadius: 'var(--radius-md)', border: 'none', background: 'var(--color-surface-high)', color: 'var(--color-on-surface)', fontSize: '0.9375rem', outline: 'none' }
+const selectStyle: React.CSSProperties = { ...inputStyle, appearance: 'none', paddingRight: '1.875rem' }
+const labelText: React.CSSProperties = { fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-on-surface-low)', marginBottom: 'var(--spacing-xs)', display: 'block' }
 
+/** A card whose surface chrome is the HOST's `Surface` (tone step + neumorphic ground +
+ *  token radius), never a re-declaration of its token values.
+ *
+ *  Two things `Surface` does not do, which is why there is a wrapper at all: it takes no
+ *  `style` (so the app's per-card layout goes on an inner box) and it forwards no unknown
+ *  props (so `data-testid` lands on that inner box). Its own `onClick` puts a handler on a
+ *  `<div>`, which is not keyboard-reachable — a clickable card renders a real `<button>`. */
+function Card({ children, style, onClick, testId, tone }: {
+  children: React.ReactNode
+  style?: React.CSSProperties
+  onClick?: () => void
+  testId?: string
+  tone?: 'surface' | 'low' | 'container' | 'high'
+}) {
+  const inner: React.CSSProperties = { padding: 'var(--spacing-l)', width: '100%', textAlign: 'left', ...style }
+  return (
+    <div style={{ marginBottom: 'var(--spacing-s)' }}>
+      <Surface tone={tone ?? 'container'} radius="lg">
+        {onClick
+          ? (
+            <button type="button" onClick={onClick} data-testid={testId}
+              style={{ ...inner, background: 'none', border: 'none', color: 'inherit', font: 'inherit', cursor: 'pointer' }}>
+              {children}
+            </button>
+          )
+          : <div style={inner} data-testid={testId}>{children}</div>}
+      </Surface>
+    </div>
+  )
+}
+
+/** The screen's own heading. `AppFrame` already renders the page `<h1>` (`PageTitle`, which
+ *  is `title-l`), so this is an `<h2>` — an app page that draws its own `<h1>` gives the
+ *  document two of them. Sizes come from the `data-type` role layer, not a copied
+ *  font-size/weight pair. */
 function Header({ title, subtitle }: { title: string; subtitle?: string }) {
-  return <div><h1 style={{ fontSize: '1.25rem', lineHeight: '1.5rem', fontVariationSettings: '"wght" 470', margin: 0, color: 'var(--color-on-surface)' }}>{title}</h1>{subtitle && <p style={{ color: 'var(--color-on-surface-low)', margin: '6px 0 0', fontSize: '0.8125rem' }}>{subtitle}</p>}</div>
+  return <div><h2 data-type="title-l" style={{ margin: 0, color: 'var(--color-on-surface)' }}>{title}</h2>{subtitle && <p data-type="body-s" style={{ color: 'var(--color-on-surface-low)', margin: 'var(--spacing-s) 0 0' }}>{subtitle}</p>}</div>
 }
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return <section style={{ margin: '24px 0' }}><h3 style={{ fontSize: '0.9375rem', fontVariationSettings: '"wght" 600', margin: '0 0 8px', color: 'var(--color-on-surface)' }}>{title}</h3>{children}</section>
+  return <section style={{ margin: 'var(--spacing-2xl) 0' }}><h3 data-type="label-m" style={{ margin: '0 0 var(--spacing-s)', color: 'var(--color-on-surface)' }}>{title}</h3>{children}</section>
 }
 function Notice({ children, tone }: { children: React.ReactNode; tone?: 'error' }) {
-  return <div style={{ padding: 12, borderRadius: 'var(--radius-md, 12px)', fontSize: '0.8125rem', border: '1px solid var(--color-outline-variant)', background: 'var(--color-surface-high)', color: tone === 'error' ? 'var(--color-danger)' : 'var(--color-on-surface-low)' }}>{children}</div>
+  return <div style={{ padding: 'var(--spacing-m)', borderRadius: 'var(--radius-md)', fontSize: '0.8125rem', border: '1px solid var(--color-outline-variant)', background: 'var(--color-surface-high)', color: tone === 'error' ? 'var(--color-danger)' : 'var(--color-on-surface-low)' }}>{children}</div>
 }
+/** An action embedded in a SENTENCE ("… Mine your work or add an artifact."). Deliberately
+ *  NOT the host `Button`: every exposed variant is a standalone control with its own height
+ *  and horizontal padding, which inserts visible gaps mid-sentence and detaches the trailing
+ *  period — measured in the browser when this was a `variant="ghost" size="xs"` Button. The
+ *  primitive set reaches apps through `@personalclaw/app-sdk/ui` has no inline text-link
+ *  affordance, so this stays a bare underlined button that inherits the run of text. */
 function Link({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
-  return <button onClick={onClick} style={{ ...linkBtn, fontSize: 'inherit', padding: 0, textDecoration: 'underline' }}>{children}</button>
+  return (
+    <button type="button" onClick={onClick}
+      style={{ background: 'none', border: 'none', padding: 0, font: 'inherit', color: 'var(--color-primary)', cursor: 'pointer', textDecoration: 'underline' }}>
+      {children}
+    </button>
+  )
 }
 
 export function mount(el: HTMLElement, ctx: AppContext): () => void {
