@@ -11,7 +11,7 @@ calls once at boot with a :class:`GatewayServices` handle. The loop:
    group tracked-only, and non-owner-content fencing all happen there, so this
    transport can't forget them;
 4. routes an allowed message to a channel-linked dashboard session and drives one
-   turn via core ``_run_chat`` — core then mirrors the reply back out through the
+   turn via core ``run_chat`` — core then mirrors the reply back out through the
    :class:`TelegramDelivery` this transport registers at boot (the outbound half of
    the seam). ``callback_query`` updates (inline-keyboard button presses) resolve a
    pending approval in the delivery.
@@ -286,14 +286,14 @@ class TelegramTransport(ChannelTransportProvider):
     async def _route_to_session(self, cm: ChannelMessage, text: str) -> None:
         """Link a dashboard session to this chat and drive one turn via core.
 
-        Core's ``_run_chat`` mirrors the reply back out through our registered
+        Core's ``run_chat`` mirrors the reply back out through our registered
         TelegramDelivery for a channel-linked session, so this transport never
         renders outbound itself — the seam does."""
         state = getattr(self._services, "dashboard_state", None)
         if state is None:
             logger.warning("telegram: no dashboard state — cannot route message")
             return
-        from personalclaw.sdk.channel import _run_chat
+        from personalclaw.sdk.channel import run_chat
 
         thread_key = cm.channel_id  # one session per Telegram chat
         session = state.get_linked_session(thread_key)
@@ -307,7 +307,7 @@ class TelegramTransport(ChannelTransportProvider):
         if getattr(session, "running", False):
             session.queue_append(text)
             return
-        task = asyncio.ensure_future(_run_chat(state, session, text))
+        task = asyncio.ensure_future(run_chat(state, session, text))
         session.task = task
         tasks = getattr(state, "_background_tasks", None)
         if tasks is not None:

@@ -4,7 +4,7 @@ Trust is exercised against the REAL core seam (``channel_trust``) writing into t
 isolated tmp home (conftest sets ``PERSONALCLAW_HOME``), so the DM-pairing /
 group-tracked-only / fencing behaviour is the exact contract core enforces — not a
 re-implementation. Routing into a session is faked (a stand-in dashboard state +
-a patched ``_run_chat``) so the test observes what text reaches the session."""
+a patched ``run_chat``) so the test observes what text reaches the session."""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ def _msg(text="hi", chat_id="500", chat_type="private", from_id="42", first="Ada
 
 @pytest.fixture
 def transport_with_capture(monkeypatch):
-    """A transport wired to a fake state + delivery, with _run_chat captured."""
+    """A transport wired to a fake state + delivery, with run_chat captured."""
     captured: dict = {}
 
     async def fake_run_chat(state, session, text, *a, **k):
@@ -85,7 +85,7 @@ def transport_with_capture(monkeypatch):
         captured["session"] = session
         captured["text"] = text
 
-    monkeypatch.setattr("personalclaw.sdk.channel._run_chat", fake_run_chat)
+    monkeypatch.setattr("personalclaw.sdk.channel.run_chat", fake_run_chat)
 
     t = TelegramTransport({"bot_token": "TEST"})
     state = FakeState()

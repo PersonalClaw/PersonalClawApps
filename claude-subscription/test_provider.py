@@ -158,8 +158,12 @@ def test_source_declaration_is_valid_and_registered():
 
 
 def test_spec_registered_for_core_to_read():
+    # Both reads are core-internal on purpose: this asserts what CORE sees after the app
+    # registers its spec, so it reads core's registry where core keeps it. The accessor
+    # lives in ``llm.branded_specs`` and is deliberately not an SDK export — no app needs
+    # it, only core does, and a public SDK export with no consumer is an inert surface.
+    from personalclaw.llm.branded_specs import spec_credential_source
     from personalclaw.llm.registry import get_default_registry
-    from personalclaw.sdk.provider_helpers import spec_credential_source
 
     reg = get_default_registry()
     assert reg.capability_of("claude_subscription").type == "claude_subscription"

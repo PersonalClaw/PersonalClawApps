@@ -1677,8 +1677,8 @@ async def handle_message(
                 _linked_session.append("user", _safe_text, "msg msg-u")
                 _dashboard_state.broadcast_ws("chat_message", {"session": _linked_session_name, "role": "user", "content": _safe_text, "cls": "msg msg-u"})  # type: ignore[attr-defined]
                 if not _linked_session.running:
-                    from personalclaw.sdk.channel import _run_chat
-                    _chat_task = asyncio.create_task(_run_chat(_dashboard_state, _linked_session, text))  # type: ignore[arg-type]
+                    from personalclaw.sdk.channel import run_chat
+                    _chat_task = asyncio.create_task(run_chat(_dashboard_state, _linked_session, text))  # type: ignore[arg-type]
                     _linked_session.task = _chat_task
                     _dashboard_state._background_tasks.add(_chat_task)  # type: ignore[attr-defined]
                     _chat_task.add_done_callback(_dashboard_state._background_tasks.discard)  # type: ignore[attr-defined]
