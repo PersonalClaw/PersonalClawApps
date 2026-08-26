@@ -17,8 +17,20 @@
  *   Templates — customizable generation templates.
  *
  * Core (knowledge / lexicon / projects / tasks / agent-run) is reached via the app SDK in the browser.
+ *
+ * Chrome (APE-6): buttons and cards are the HOST's `Button`/`Surface`, imported by identity from
+ * `@personalclaw/app-sdk/ui`. This bundle used to carry a COPY of the host component spec — its own
+ * comment said "matched to the mainUI component spec" — which drifts by construction. Spacing and
+ * radius are `var(--spacing-*)`/`var(--radius-*)`, so the user's space-scale and radius-density
+ * sliders reach this page; type sizes come from the `data-type` role layer, not copied
+ * font-size/weight pairs.
  */
 import { createAppApi, createAgentTask, type AppContext } from '@personalclaw/app-sdk'
+// The HOST's own design-system primitives, by identity — the same `Button`/`Surface` a native page
+// renders, resolved at runtime from window.__personalclaw_modules. Gated on
+// `uiCapabilities: ["shell-primitives"]` in app.json: drop that declaration and this bare specifier
+// is left unrewritten by the bundle loader and fails to resolve (the page does not mount at all).
+import { Button, Surface } from '@personalclaw/app-sdk/ui'
 import * as React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
@@ -66,20 +78,25 @@ function App({ ctx }: { ctx: AppContext }) {
   if (openId) return <MeetingWorkspace api={api} agent={agent} id={openId} onBack={() => { setOpenId(null); load() }} />
 
   return (
-    <div style={{ maxWidth: 'var(--content-width, 940px)', margin: '0 auto', padding: 24 }}>
+    // `AppFrame` already centres the app's content region and clamps it to
+    // `var(--content-width)`. Clamping again here nested two content widths (and the local
+    // 940px fallback disagreed with the host's 820px), so the app contributes padding only.
+    <div style={{ padding: 'var(--spacing-2xl)' }}>
       <Header title="Minutes" subtitle="Tie recordings, videos, notes and docs into one meeting — watch it cohesively, generate minutes, consolidate actions, and turn them into tasks." />
-      <div style={{ display: 'flex', gap: 6, margin: '14px 0' }}>
+      <div style={{ display: 'flex', gap: 'var(--spacing-s)', margin: 'var(--spacing-m) 0', flexWrap: 'wrap' }}>
         {(['meetings', 'templates'] as const).map((v) => (
-          <button key={v} onClick={() => setView(v)} data-testid={`tab-${v}`} style={{ ...tabStyle, ...(view === v ? tabActive : {}) }}>
+          // `ariaPressed` — a view toggle that stays chosen must announce WHICH one is current,
+          // or a screen-reader user hears two identically-named buttons.
+          <Button key={v} variant={view === v ? 'primary' : 'ghost'} size="sm" ariaPressed={view === v} onClick={() => setView(v)}>
             {v[0].toUpperCase() + v.slice(1)}
-          </button>
+          </Button>
         ))}
       </div>
       {view === 'templates' ? <Templates api={api} /> : (
         <>
           <NewMeeting api={api} onCreated={(m) => { setOpenId(m.id); load() }} />
           {meetings.length === 0 ? <Notice>No meetings yet. Create one, then attach recordings, videos, notes or docs.</Notice>
-            : <div style={{ display: 'grid', gap: 10, marginTop: 16 }}>{meetings.map((m) => <MeetingCard key={m.id} m={m} onOpen={() => setOpenId(m.id)} />)}</div>}
+            : <div style={{ display: 'grid', gap: 'var(--spacing-m)', marginTop: 'var(--spacing-l)' }}>{meetings.map((m) => <MeetingCard key={m.id} m={m} onOpen={() => setOpenId(m.id)} />)}</div>}
         </>
       )}
     </div>
@@ -89,16 +106,16 @@ function App({ ctx }: { ctx: AppContext }) {
 function MeetingCard({ m, onOpen }: { m: Meeting; onOpen: () => void }) {
   const mediaKinds = [...new Set(Object.values(m.member_roles))]
   return (
-    <button onClick={onOpen} style={cardStyle} data-testid="meeting-card">
-      <div style={{ fontWeight: 600, fontSize: 15 }}>{m.title}</div>
-      <div style={{ opacity: 0.65, fontSize: 12.5, marginTop: 3, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+    <Card onClick={onOpen} testId="meeting-card">
+      <div data-type="title-m">{m.title}</div>
+      <div data-type="caption" style={{ opacity: 0.65, marginTop: 'var(--spacing-xs)', display: 'flex', gap: 'var(--spacing-m)', flexWrap: 'wrap' }}>
         <span>{m.date}</span>
         <span>{m.member_ids.length} member{m.member_ids.length === 1 ? '' : 's'}{mediaKinds.length ? ` · ${mediaKinds.map((k) => ROLE_ICON[k] || '•').join('')}` : ''}</span>
         {m.participants.length > 0 && <span>👥 {m.participants.map((p) => p.name).join(', ')}</span>}
         {m.output_count > 0 && <span>📄 {m.output_count} output{m.output_count === 1 ? '' : 's'}</span>}
         {m.open_action_count > 0 && <span style={{ color: 'var(--color-warning)' }}>✅ {m.open_action_count} open</span>}
       </div>
-    </button>
+    </Card>
   )
 }
 
@@ -112,10 +129,14 @@ function NewMeeting({ api, onCreated }: { api: ReturnType<typeof createAppApi>; 
     finally { setBusy(false) }
   }
   return (
-    <div style={{ display: 'flex', gap: 8 }}>
+    <div style={{ display: 'flex', gap: 'var(--spacing-s)' }}>
       <input value={title} aria-label="New meeting title" onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') create() }}
         placeholder="New meeting title…" style={inputStyle} data-testid="new-meeting-title" />
-      <button onClick={create} disabled={busy || !title.trim()} style={primaryBtn} data-testid="new-meeting-create">New meeting</button>
+      {/* `disabledReason` keeps the submit REACHABLE while unavailable (aria-disabled, still
+          focusable) and states why — a native `disabled` drops it out of the tab order, so a
+          keyboard user tabs past the action with no way to learn what is missing. */}
+      <Button variant="primary" size="md" onClick={create} disabled={busy || !title.trim()}
+        disabledReason={busy ? 'Creating…' : 'Give the meeting a title first'}>New meeting</Button>
     </div>
   )
 }
@@ -138,12 +159,12 @@ function MeetingWorkspace({ api, agent, id, onBack }: {
   }, [id])
   useEffect(() => { reload() }, [reload])
 
-  if (err) return <div style={{ padding: 24 }}><BackBtn onBack={onBack} /><Notice tone="error">{err}</Notice></div>
+  if (err) return <div style={{ padding: 'var(--spacing-2xl)' }}><BackBtn onBack={onBack} /><Notice tone="error">{err}</Notice></div>
   if (!meeting) return <Notice>Loading…</Notice>
   const recordings = meeting.member_ids.filter((mi) => ['recording', 'video'].includes(meeting.member_roles[mi] || ''))
 
   return (
-    <div style={{ maxWidth: 'var(--content-width, 940px)', margin: '0 auto', padding: 24 }}>
+    <div style={{ padding: 'var(--spacing-2xl)' }}>
       <BackBtn onBack={onBack} />
       <Header title={meeting.title} subtitle={`${meeting.date} · ${meeting.member_ids.length} members · ${meeting.participants.length} participants`} />
 
@@ -182,22 +203,24 @@ function Members({ api, meeting, onChanged }: { api: ReturnType<typeof createApp
   const add = (kid: string, r: string) => { if (kid.trim()) api.post(`${M}/meetings/${meeting.id}/members`, { item_id: kid.trim(), role: r }).then(() => { setItemId(''); setBrowse(false); onChanged() }) }
   return (
     <Section title="Members">
-      <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 'var(--spacing-s)', marginBottom: 'var(--spacing-s)', flexWrap: 'wrap' }}>
         <input value={itemId} aria-label="Knowledge item id" onChange={(e) => setItemId(e.target.value)} placeholder="Knowledge item id…" style={inputStyle} data-testid="member-item-id" />
         <select value={role} aria-label="Member role" onChange={(e) => setRole(e.target.value)} style={selectStyle}>
           {['recording', 'video', 'notes', 'document', 'slides', 'link'].map((r) => <option key={r} value={r}>{r}</option>)}
         </select>
-        <button onClick={() => add(itemId, role)} style={primaryBtn} data-testid="member-add">Attach</button>
-        <button onClick={() => setBrowse(!browse)} style={smallBtn} data-testid="member-browse">Browse knowledge</button>
+        <Button variant="primary" size="md" onClick={() => add(itemId, role)}>Attach</Button>
+        {/* `ariaExpanded`: this button FOLDS the browser panel below, so its state is part of
+            its meaning — "pressed" would say "is the current selection", which it is not. */}
+        <Button variant="secondary" size="sm" ariaExpanded={browse} onClick={() => setBrowse(!browse)}>Browse knowledge</Button>
       </div>
       {browse && <KnowledgeBrowser api={api} onPick={(kid, ktype) => add(kid, roleForKnowledgeType(ktype) ?? role)} />}
       {meeting.member_ids.length === 0 ? <Notice>No members. Attach recordings, videos, notes or docs by Knowledge id (or Browse).</Notice>
-        : <div style={{ display: 'grid', gap: 4 }}>{meeting.member_ids.map((mi) => (
-          <div key={mi} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5 }}>
+        : <div style={{ display: 'grid', gap: 'var(--spacing-xs)' }}>{meeting.member_ids.map((mi) => (
+          <div key={mi} data-type="body-s" style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
             <span>{ROLE_ICON[meeting.member_roles[mi] || ''] || '•'}</span>
-            <code style={{ fontSize: 11, opacity: 0.7 }}>{mi.slice(0, 20)}</code>
+            <code data-type="caption" style={{ opacity: 0.7 }}>{mi.slice(0, 20)}</code>
             <span style={{ opacity: 0.6 }}>{meeting.member_roles[mi] || ''}</span>
-            <button onClick={() => api.del(`${M}/meetings/${meeting.id}/members/${mi}`).then(onChanged)} style={linkBtn}>remove</button>
+            <Button variant="ghost" size="xs" onClick={() => api.del(`${M}/meetings/${meeting.id}/members/${mi}`).then(onChanged)}>remove</Button>
           </div>))}</div>}
     </Section>
   )
@@ -210,15 +233,15 @@ function KnowledgeBrowser({ api, onPick }: { api: ReturnType<typeof createAppApi
       .then((d) => setRows((d.items || []).map((k) => ({ id: k.id, title: k.title, type: k.item_type || k.type || '' }))))
       .catch(() => setRows([]))
   }, [])
-  if (rows === null) return <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 8 }}>Loading knowledge…</div>
+  if (rows === null) return <div data-type="caption" style={{ opacity: 0.6, marginBottom: 'var(--spacing-s)' }}>Loading knowledge…</div>
   return (
-    <div style={{ ...cardStyle, cursor: 'default', maxHeight: 220, overflow: 'auto', marginBottom: 8 }}>
-      {rows.length === 0 ? <div style={{ fontSize: 12, opacity: 0.6 }}>No items.</div>
+    <Card style={{ maxHeight: '13.75rem', overflow: 'auto' }}>
+      {rows.length === 0 ? <div data-type="caption" style={{ opacity: 0.6 }}>No items.</div>
         : rows.map((k) => (
-          <button key={k.id} onClick={() => onPick(k.id, k.type)} style={{ ...cardStyle, cursor: 'pointer', padding: 8, fontSize: 12.5, marginBottom: 4 }} data-testid="kb-option">
-            {ROLE_ICON[roleForKnowledgeType(k.type) || ''] || '•'} {k.title} <span style={{ opacity: 0.5 }}>· {k.type}</span>
-          </button>))}
-    </div>
+          <Card key={k.id} tone="high" onClick={() => onPick(k.id, k.type)} testId="kb-option" style={{ padding: 'var(--spacing-s)' }}>
+            <span data-type="body-s">{ROLE_ICON[roleForKnowledgeType(k.type) || ''] || '•'} {k.title} <span style={{ opacity: 0.5 }}>· {k.type}</span></span>
+          </Card>))}
+    </Card>
   )
 }
 
@@ -230,22 +253,22 @@ function Participants({ api, meeting, onChanged }: { api: ReturnType<typeof crea
   const add = () => { if (name.trim()) api.post(`${M}/meetings/${meeting.id}/participants`, { name: name.trim() }).then(() => { setName(''); onChanged() }) }
   return (
     <Section title="Participants">
-      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+      <div style={{ display: 'flex', gap: 'var(--spacing-s)', marginBottom: 'var(--spacing-s)' }}>
         <input value={name} aria-label="Participant name" list="mtg-roster" onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add() }} placeholder="Add a person…" style={inputStyle} data-testid="participant-name" />
         <datalist id="mtg-roster">{roster.map((n) => <option key={n} value={n} />)}</datalist>
-        <button onClick={add} style={primaryBtn} data-testid="participant-add">Add</button>
+        <Button variant="primary" size="md" onClick={add}>Add</Button>
       </div>
       {meeting.participants.length === 0 ? <Notice>Tag the people in this meeting; map them to transcript speakers below.</Notice>
-        : <div style={{ display: 'grid', gap: 6 }}>{meeting.participants.map((p) => (
-          <div key={p.id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }} data-testid="participant">
-            <span style={{ fontWeight: 600 }}>{p.name}</span>
+        : <div style={{ display: 'grid', gap: 'var(--spacing-xs)' }}>{meeting.participants.map((p) => (
+          <div key={p.id} data-type="body-s" style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }} data-testid="participant">
+            <span data-type="label-s">{p.name}</span>
             <input aria-label={`Speaker label for ${p.name}`} defaultValue={p.speaker_label} placeholder="SPEAKER_00"
               onBlur={(e) => { if (e.target.value !== p.speaker_label) api.patch(`${M}/meetings/${meeting.id}/participants/${p.id}`, { speaker_label: e.target.value }).then(onChanged) }}
-              style={{ ...inputStyle, width: 120, fontSize: 12 }} data-testid="participant-speaker" />
+              style={{ ...inputStyle, width: '7.5rem', fontSize: '0.75rem' }} data-testid="participant-speaker" />
             <input aria-label={`Role for ${p.name}`} defaultValue={p.role} placeholder="role"
               onBlur={(e) => { if (e.target.value !== p.role) api.patch(`${M}/meetings/${meeting.id}/participants/${p.id}`, { role: e.target.value }).then(onChanged) }}
-              style={{ ...inputStyle, width: 100, fontSize: 12 }} />
-            <button onClick={() => api.del(`${M}/meetings/${meeting.id}/participants/${p.id}`).then(onChanged)} style={linkBtn} data-testid="participant-delete">remove</button>
+              style={{ ...inputStyle, width: '6.25rem', fontSize: '0.75rem' }} />
+            <Button variant="ghost" size="xs" onClick={() => api.del(`${M}/meetings/${meeting.id}/participants/${p.id}`).then(onChanged)}>remove</Button>
           </div>))}</div>}
     </Section>
   )
@@ -287,36 +310,38 @@ function MediaTimeline({ api, itemId, meeting, onChanged }: {
   const mediaUrl = `/api/knowledge/items/${itemId}/file`
 
   return (
-    <div style={{ ...cardStyle, cursor: 'default' }} data-testid="media-timeline">
-      <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 6 }}>{isVideo ? '🎬 Video' : '🎙️ Recording'} · <code>{itemId.slice(0, 18)}</code></div>
+    <Card testId="media-timeline">
+      <div data-type="caption" style={{ opacity: 0.6, marginBottom: 'var(--spacing-xs)' }}>{isVideo ? '🎬 Video' : '🎙️ Recording'} · <code>{itemId.slice(0, 18)}</code></div>
       {isVideo
-        ? <video ref={mediaRef as React.RefObject<HTMLVideoElement>} src={mediaUrl} controls style={{ width: '100%', maxHeight: 320, borderRadius: 'var(--radius-sm, 8px)', background: 'var(--color-surface-high)' }} onTimeUpdate={(e) => setCurTime((e.target as HTMLVideoElement).currentTime)} />
+        ? <video ref={mediaRef as React.RefObject<HTMLVideoElement>} src={mediaUrl} controls style={{ width: '100%', maxHeight: '20rem', borderRadius: 'var(--radius-sm)', background: 'var(--color-surface-high)' }} onTimeUpdate={(e) => setCurTime((e.target as HTMLVideoElement).currentTime)} />
         : <audio ref={mediaRef as React.RefObject<HTMLAudioElement>} src={mediaUrl} controls style={{ width: '100%' }} onTimeUpdate={(e) => setCurTime((e.target as HTMLAudioElement).currentTime)} />}
 
       {labels.length > 0 && (
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0 4px' }}>
+        <div style={{ display: 'flex', gap: 'var(--spacing-xs)', flexWrap: 'wrap', margin: 'var(--spacing-s) 0 var(--spacing-xs)' }}>
           {labels.map((lab, i) => (
-            <span key={lab} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: SPEAKER_COLORS[i % SPEAKER_COLORS.length], color: 'var(--color-on-primary)' }}>
+            <span key={lab} data-type="caption" style={{ padding: 'var(--spacing-xs) var(--spacing-s)', borderRadius: 'var(--radius-pill)', background: SPEAKER_COLORS[i % SPEAKER_COLORS.length], color: 'var(--color-on-primary)' }}>
               {nameFor[lab] || lab}
             </span>))}
         </div>
       )}
 
-      <div style={{ fontSize: 13, whiteSpace: 'pre-wrap', maxHeight: 300, overflow: 'auto', marginTop: 6 }} data-testid="transcript">
+      <div data-type="body-s" style={{ whiteSpace: 'pre-wrap', maxHeight: '18.75rem', overflow: 'auto', marginTop: 'var(--spacing-xs)' }} data-testid="transcript">
         {segments && segments.length
           ? segments.map((s, i) => {
             const active = curTime >= s.start && curTime < s.end
             return (
-              <div key={i} onClick={() => seek(s.start)} data-testid="transcript-line"
-                style={{ cursor: 'pointer', padding: '2px 6px', borderRadius: 6, background: active ? 'color-mix(in srgb, var(--color-primary) 14%, transparent)' : 'transparent' }}>
-                <span style={{ fontSize: 10.5, opacity: 0.5, marginRight: 6 }}>{fmtTime(s.start)}</span>
+              // A real <button>, not a clickable <div>: seeking to a transcript line is an
+              // ACTION, and a div with onClick is unreachable by keyboard entirely.
+              <button key={i} type="button" onClick={() => seek(s.start)} data-testid="transcript-line"
+                style={{ display: 'block', width: '100%', textAlign: 'left', font: 'inherit', color: 'inherit', border: 'none', cursor: 'pointer', padding: 'var(--spacing-xs)', borderRadius: 'var(--radius-xs)', background: active ? 'color-mix(in srgb, var(--color-primary) 14%, transparent)' : 'transparent' }}>
+                <span data-type="caption" style={{ opacity: 0.5, marginRight: 'var(--spacing-xs)' }}>{fmtTime(s.start)}</span>
                 {s.speaker && <b style={{ color: SPEAKER_COLORS[labels.indexOf(s.speaker) % SPEAKER_COLORS.length] }}>{nameFor[s.speaker] || s.speaker}: </b>}
                 {s.text}
-              </div>)
+              </button>)
           })
           : <div>{flat.slice(0, 4000) || 'No transcript yet (still processing, or no STT model bound).'}</div>}
       </div>
-    </div>
+    </Card>
   )
 }
 
@@ -367,11 +392,11 @@ function Outputs({ api, agent, meeting, templates, outputs, extractions, onChang
 
   return (
     <Section title={`Outputs (${outputs.length})`}>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+      <div style={{ display: 'flex', gap: 'var(--spacing-s)', marginBottom: 'var(--spacing-s)' }}>
         <select value={tpl} aria-label="Template" onChange={(e) => setTpl(e.target.value)} style={selectStyle} data-testid="template-select">
           {templates.map((t) => <option key={t.id} value={t.id}>{t.name}{t.builtin ? '' : ' (custom)'}</option>)}
         </select>
-        <button onClick={generate} disabled={!!status} style={primaryBtn} data-testid="generate">{status || 'Generate'}</button>
+        <Button variant="primary" size="md" onClick={generate} disabled={!!status} disabledReason={status || undefined}>{status || 'Generate'}</Button>
       </div>
       {err && <Notice tone="error">{err}</Notice>}
       {outputs.length === 0 ? <Notice>No outputs yet. Generate minutes/summaries from a template — you can make several with different templates.</Notice>
@@ -421,20 +446,23 @@ function OutputCard({ api, meeting, output, onChanged }: { api: ReturnType<typeo
   const save = async () => { setBusy('save'); try { await api.patch(`${M}/meetings/${meeting.id}/outputs/${output.id}`, { content_md: draft }); setEditing(false); onChanged() } finally { setBusy('') } }
   const exportKB = async () => { setBusy('exp'); try { await api.post('/api/knowledge/items', { type: 'note', title: `Minutes — ${output.template_name} (${meeting.title})`, content: formatMinutes(output.content_md) }) } catch { /* non-fatal */ } finally { setBusy('') } }
   return (
-    <div style={cardStyle} data-testid="output">
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <span style={{ flex: 1, fontWeight: 600, fontSize: 13.5 }}>{output.title || output.template_name}{output.edited ? ' · edited' : ''}</span>
-        {!editing && <button onClick={() => { setDraft(output.content_md); setEditing(true) }} style={linkBtn} data-testid="output-edit">edit</button>}
-        <button onClick={exportKB} disabled={!!busy} style={linkBtn} data-testid="output-export">{busy === 'exp' ? 'exporting…' : 'export → Knowledge'}</button>
-        <button onClick={() => api.del(`${M}/meetings/${meeting.id}/outputs/${output.id}`).then(onChanged)} style={linkBtn} data-testid="output-delete">delete</button>
+    <Card testId="output">
+      <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
+        <span data-type="label-s" style={{ flex: 1 }}>{output.title || output.template_name}{output.edited ? ' · edited' : ''}</span>
+        {!editing && <Button variant="ghost" size="xs" onClick={() => { setDraft(output.content_md); setEditing(true) }}>edit</Button>}
+        <Button variant="ghost" size="xs" onClick={exportKB} disabled={!!busy} disabledReason={busy ? 'A save or export is already running' : undefined}>{busy === 'exp' ? 'exporting…' : 'export → Knowledge'}</Button>
+        <Button variant="ghost" size="xs" onClick={() => api.del(`${M}/meetings/${meeting.id}/outputs/${output.id}`).then(onChanged)}>delete</Button>
       </div>
       {editing
-        ? <div style={{ marginTop: 6 }}>
-          <textarea value={draft} aria-label="Edit output" onChange={(e) => setDraft(e.target.value)} rows={12} style={{ ...inputStyle, width: '100%', resize: 'vertical', fontFamily: 'inherit', fontSize: 13 }} data-testid="output-editor" />
-          <div style={{ display: 'flex', gap: 8, marginTop: 6 }}><button onClick={save} disabled={busy === 'save'} style={primaryBtn} data-testid="output-save">{busy === 'save' ? 'Saving…' : 'Save'}</button><button onClick={() => setEditing(false)} style={linkBtn}>Cancel</button></div>
+        ? <div style={{ marginTop: 'var(--spacing-xs)' }}>
+          <textarea value={draft} aria-label="Edit output" onChange={(e) => setDraft(e.target.value)} rows={12} style={{ ...inputStyle, width: '100%', resize: 'vertical', fontFamily: 'inherit', fontSize: '0.8125rem' }} data-testid="output-editor" />
+          <div style={{ display: 'flex', gap: 'var(--spacing-s)', marginTop: 'var(--spacing-xs)' }}>
+            <Button variant="primary" size="md" onClick={save} disabled={busy === 'save'} disabledReason={busy === 'save' ? 'Saving…' : undefined}>{busy === 'save' ? 'Saving…' : 'Save'}</Button>
+            <Button variant="ghost" size="xs" onClick={() => setEditing(false)}>Cancel</Button>
+          </div>
         </div>
-        : <pre style={{ whiteSpace: 'pre-wrap', fontSize: 13, margin: '6px 0', maxHeight: 360, overflow: 'auto', fontFamily: 'inherit' }}>{formatMinutes(output.content_md).slice(0, 6000)}</pre>}
-    </div>
+        : <pre data-type="body-s" style={{ whiteSpace: 'pre-wrap', margin: 'var(--spacing-xs) 0', maxHeight: '22.5rem', overflow: 'auto', fontFamily: 'inherit' }}>{formatMinutes(output.content_md).slice(0, 6000)}</pre>}
+    </Card>
   )
 }
 
@@ -477,23 +505,25 @@ function Extractions({ api, agent, meeting, extractions, onChanged }: {
 
   return (
     <Section title="Consolidated: dates · actions · follow-ups · decisions">
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-        <button onClick={extract} disabled={!!status} style={primaryBtn} data-testid="extract">{status || 'Extract from meeting'}</button>
+      <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center', marginBottom: 'var(--spacing-s)' }}>
+        <Button variant="primary" size="md" onClick={extract} disabled={!!status} disabledReason={status || undefined}>{status || 'Extract from meeting'}</Button>
         {grouped.action.filter((a) => !a.task_id).length > 0 && <ActionsToTasks api={api} meeting={meeting} actions={grouped.action.filter((a) => !a.task_id)} onChanged={onChanged} />}
       </div>
       {extractions.length === 0 ? <Notice>Nothing extracted yet. Run extraction to pull out dates, action items, follow-ups and decisions.</Notice>
         : (['action', 'date', 'followup', 'decision'] as const).map((kind) => grouped[kind]?.length ? (
-          <div key={kind} style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 12.5, opacity: 0.7, marginBottom: 4 }}>{EXT_META[kind].glyph} {EXT_META[kind].label}</div>
+          <div key={kind} style={{ marginBottom: 'var(--spacing-m)' }}>
+            <div data-type="caption" style={{ opacity: 0.7, marginBottom: 'var(--spacing-xs)' }}>{EXT_META[kind].glyph} {EXT_META[kind].label}</div>
             {grouped[kind].map((e) => (
-              <div key={e.id} style={{ ...cardStyle, cursor: 'default', padding: 8, display: 'flex', gap: 8, alignItems: 'center' }} data-testid={`ext-${kind}`}>
+              <Card key={e.id} testId={`ext-${kind}`} style={{ padding: 'var(--spacing-s)', display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
                 {kind === 'action' && <input type="checkbox" checked={e.done} onChange={(ev) => api.patch(`${M}/meetings/${meeting.id}/extractions/${e.id}`, { done: ev.target.checked }).then(onChanged)} aria-label="Done" />}
-                <span style={{ flex: 1, fontSize: 13, textDecoration: e.done ? 'line-through' : 'none', opacity: e.done ? 0.6 : 1 }}>
+                <span data-type="body-s" style={{ flex: 1, textDecoration: e.done ? 'line-through' : 'none', opacity: e.done ? 0.6 : 1 }}>
                   {e.text}{e.assignee ? <span style={{ opacity: 0.6 }}> — {e.assignee}</span> : null}{e.due ? <span style={{ opacity: 0.6 }}> · {e.due}</span> : null}
                 </span>
-                {e.task_id && <span style={{ fontSize: 11, color: 'var(--color-success)' }} data-testid="ext-task">✓ task</span>}
-                <button onClick={() => api.del(`${M}/meetings/${meeting.id}/extractions/${e.id}`).then(onChanged)} style={linkBtn}>×</button>
-              </div>))}
+                {e.task_id && <span data-type="caption" style={{ color: 'var(--color-success)' }} data-testid="ext-task">✓ task</span>}
+                {/* `×` alone is not an accessible name — the glyph is decorative, so the button
+                    needs one stated. */}
+                <Button variant="ghost" size="xs" ariaLabel={`Remove “${e.text.slice(0, 40)}”`} onClick={() => api.del(`${M}/meetings/${meeting.id}/extractions/${e.id}`).then(onChanged)}>×</Button>
+              </Card>))}
           </div>) : null)}
     </Section>
   )
@@ -536,20 +566,28 @@ function ActionsToTasks({ api, meeting, actions, onChanged }: {
     } catch (e) { setMsg(String((e as Error).message || e)); setBusy(false) }
   }
 
-  if (!open) return <button onClick={() => setOpen(true)} style={smallBtn} data-testid="to-tasks">→ Create {actions.length} task{actions.length === 1 ? '' : 's'}</button>
+  // No `ariaExpanded` here, deliberately: this button is REPLACED by the panel rather than
+  // staying beside it, so it has no expanded state to report — `aria-expanded="false"` that can
+  // never become true promises a disclosure the markup does not have.
+  if (!open) return <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>→ Create {actions.length} task{actions.length === 1 ? '' : 's'}</Button>
   return (
-    <div style={{ ...cardStyle, cursor: 'default', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: 0 }}>
-      <span style={{ fontSize: 12.5 }}>Under project:</span>
-      <select value={projectId} aria-label="Project" onChange={(e) => setProjectId(e.target.value)} style={selectStyle} disabled={!!newProject.trim()}>
-        <option value="">Personal (default)</option>
-        {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-      </select>
-      <span style={{ fontSize: 12, opacity: 0.5 }}>or new:</span>
-      <input value={newProject} aria-label="New project name" onChange={(e) => setNewProject(e.target.value)} placeholder="New project name" style={{ ...inputStyle, width: 160 }} />
-      <button onClick={run} disabled={busy} style={primaryBtn} data-testid="to-tasks-run">{busy ? (msg || 'Creating…') : 'Create tasks'}</button>
-      <button onClick={() => setOpen(false)} style={linkBtn}>cancel</button>
-      {msg && !busy && <span style={{ fontSize: 12, opacity: 0.7 }}>{msg}</span>}
-    </div>
+    // `Surface` directly rather than `Card`: this is an inline panel sitting in a centred flex
+    // row beside the Extract button, not a card in a stack, so it must not carry `Card`'s
+    // bottom margin (which would shift it off that row's baseline).
+    <Surface tone="container" radius="lg">
+      <div style={{ padding: 'var(--spacing-l)', display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center', flexWrap: 'wrap' }}>
+        <span data-type="caption">Under project:</span>
+        <select value={projectId} aria-label="Project" onChange={(e) => setProjectId(e.target.value)} style={selectStyle} disabled={!!newProject.trim()}>
+          <option value="">Personal (default)</option>
+          {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+        <span data-type="caption" style={{ opacity: 0.5 }}>or new:</span>
+        <input value={newProject} aria-label="New project name" onChange={(e) => setNewProject(e.target.value)} placeholder="New project name" style={{ ...inputStyle, width: '10rem' }} />
+        <Button variant="primary" size="md" onClick={run} disabled={busy} disabledReason={busy ? (msg || 'Creating…') : undefined}>{busy ? (msg || 'Creating…') : 'Create tasks'}</Button>
+        <Button variant="ghost" size="xs" onClick={() => setOpen(false)}>cancel</Button>
+        {msg && !busy && <span data-type="caption" style={{ opacity: 0.7 }}>{msg}</span>}
+      </div>
+    </Surface>
   )
 }
 
@@ -564,20 +602,20 @@ function Templates({ api }: { api: ReturnType<typeof createAppApi> }) {
   if (creating || editing) return <TemplateEditor api={api} template={editing} onDone={() => { setCreating(false); setEditing(null); reload() }} onCancel={() => { setCreating(false); setEditing(null) }} />
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
-        <p style={{ fontSize: 13, opacity: 0.6, margin: 0 }}>Templates drive output generation. Built-ins fork a custom copy when edited.</p>
-        <button onClick={() => setCreating(true)} style={primaryBtn} data-testid="template-new">New template</button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'var(--spacing-xs)' }}>
+        <p data-type="body-s" style={{ opacity: 0.6, margin: 0 }}>Templates drive output generation. Built-ins fork a custom copy when edited.</p>
+        <Button variant="primary" size="md" onClick={() => setCreating(true)}>New template</Button>
       </div>
-      <div style={{ display: 'grid', gap: 10, marginTop: 16 }}>
+      <div style={{ display: 'grid', gap: 'var(--spacing-m)', marginTop: 'var(--spacing-l)' }}>
         {templates.map((t) => (
-          <div key={t.id} style={{ ...cardStyle, cursor: 'default' }} data-testid="template-card">
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <span style={{ flex: 1, fontWeight: 600 }}>{t.name}<span style={{ fontSize: 11, opacity: 0.6, fontWeight: 400 }}>{t.builtin ? ' · built-in' : ' · custom'}</span></span>
-              <button onClick={() => setEditing(t)} style={linkBtn} data-testid="template-edit">{t.builtin ? 'fork & edit' : 'edit'}</button>
-              {!t.builtin && <button onClick={() => api.del(`${M}/templates/${t.id}`).then(reload)} style={linkBtn} data-testid="template-delete">delete</button>}
+          <Card key={t.id} testId="template-card">
+            <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
+              <span data-type="label-m" style={{ flex: 1 }}>{t.name}<span data-type="caption" style={{ opacity: 0.6 }}>{t.builtin ? ' · built-in' : ' · custom'}</span></span>
+              <Button variant="ghost" size="xs" onClick={() => setEditing(t)}>{t.builtin ? 'fork & edit' : 'edit'}</Button>
+              {!t.builtin && <Button variant="ghost" size="xs" onClick={() => api.del(`${M}/templates/${t.id}`).then(reload)}>delete</Button>}
             </div>
-            {t.description && <div style={{ fontSize: 13, opacity: 0.7, marginTop: 2 }}>{t.description}</div>}
-          </div>))}
+            {t.description && <div data-type="body-s" style={{ opacity: 0.7, marginTop: 'var(--spacing-xs)' }}>{t.description}</div>}
+          </Card>))}
       </div>
     </div>
   )
@@ -600,15 +638,18 @@ function TemplateEditor({ api, template, onDone, onCancel }: { api: ReturnType<t
   }
   return (
     <div>
-      <button onClick={onCancel} style={{ ...linkBtn, marginBottom: 8, fontSize: 13 }}>← Templates</button>
+      <div style={{ marginBottom: 'var(--spacing-s)' }}>
+        <Button variant="ghost" size="sm" onClick={onCancel}>← Templates</Button>
+      </div>
       <Header title={template ? (template.builtin ? `Fork “${template.name}”` : `Edit “${template.name}”`) : 'New template'} />
-      <div style={{ display: 'grid', gap: 10 }}>
+      <div style={{ display: 'grid', gap: 'var(--spacing-m)' }}>
         <input value={name} aria-label="Template name" onChange={(e) => setName(e.target.value)} placeholder="Template name" style={inputStyle} data-testid="template-name" />
         <input value={description} aria-label="Template description" onChange={(e) => setDescription(e.target.value)} placeholder="Short description" style={inputStyle} data-testid="template-desc" />
         <textarea value={prompt} aria-label="Template prompt" onChange={(e) => setPrompt(e.target.value)} placeholder="The generation prompt — how the model should summarize the meeting corpus." rows={6} style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} data-testid="template-prompt" />
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={save} disabled={busy || !name.trim() || !prompt.trim()} style={primaryBtn} data-testid="template-save">{busy ? 'Saving…' : 'Save template'}</button>
-          <button onClick={onCancel} style={linkBtn}>Cancel</button>
+        <div style={{ display: 'flex', gap: 'var(--spacing-s)' }}>
+          <Button variant="primary" size="md" onClick={save} disabled={busy || !name.trim() || !prompt.trim()}
+            disabledReason={busy ? 'Saving…' : 'A name and a prompt are both required'}>{busy ? 'Saving…' : 'Save template'}</Button>
+          <Button variant="ghost" size="xs" onClick={onCancel}>Cancel</Button>
         </div>
         {err && <Notice tone="error">{err}</Notice>}
       </div>
@@ -616,30 +657,55 @@ function TemplateEditor({ api, template, onDone, onCancel }: { api: ReturnType<t
   )
 }
 
-// ── style helpers — matched to the mainUI component spec (design/tokens.css + ui primitives):
-// cards → radius-lg + surface-container; inputs → radius-md + surface-high; buttons/tabs/chips →
-// radius-pill; weight via fontVariationSettings "wght" (btn 470 / section 600 / active-tab 550);
-// hover swaps primary→primary-emphasis; semantic tints via color-mix (no -container tokens).
-const cardStyle: React.CSSProperties = { display: 'block', textAlign: 'left', width: '100%', padding: 16, borderRadius: 'var(--radius-lg, 16px)', border: '1px solid color-mix(in srgb, var(--color-outline-variant) 40%, transparent)', background: 'var(--color-surface-container)', color: 'inherit', cursor: 'pointer', marginBottom: 8 }
-const inputStyle: React.CSSProperties = { flex: 1, padding: '8px 12px', borderRadius: 'var(--radius-md, 12px)', border: 'none', background: 'var(--color-surface-high)', color: 'var(--color-on-surface)', fontSize: '0.9375rem', outline: 'none' }
-const selectStyle: React.CSSProperties = { ...inputStyle, appearance: 'none', paddingRight: 30 }
-const primaryBtn: React.CSSProperties = { padding: '0 20px', height: 40, borderRadius: 'var(--radius-pill, 9999px)', border: 'none', background: 'var(--color-primary)', color: 'var(--color-on-primary)', cursor: 'pointer', whiteSpace: 'nowrap', fontSize: '0.9375rem', fontVariationSettings: '"wght" 470', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, transition: 'background-color .1s cubic-bezier(0.2,0,0,1)' }
-const linkBtn: React.CSSProperties = { background: 'none', border: 'none', color: 'var(--color-primary)', cursor: 'pointer', fontSize: '0.8125rem', padding: 0 }
-const smallBtn: React.CSSProperties = { padding: '0 12px', height: 32, borderRadius: 'var(--radius-pill, 9999px)', border: 'none', background: 'var(--color-surface-high)', color: 'var(--color-on-surface)', cursor: 'pointer', fontSize: '0.8125rem', width: 'fit-content', display: 'inline-flex', alignItems: 'center', gap: 6, transition: 'background-color .15s' }
-const tabStyle: React.CSSProperties = { padding: '0 12px', height: 32, borderRadius: 'var(--radius-pill, 9999px)', border: 'none', background: 'transparent', color: 'var(--color-on-surface-low)', cursor: 'pointer', fontSize: '0.8125rem', transition: 'color .15s, background-color .15s' }
-const tabActive: React.CSSProperties = { background: 'var(--color-primary)', color: 'var(--color-on-primary)', fontVariationSettings: '"wght" 550' }
+// ── local chrome — everything the host does NOT expose as a primitive ──────────────────
+// The buttons and cards this file used to declare locally are gone: they were a COPY of the
+// host component spec and drifted from it by construction. What is left is the shapes the
+// SDK's `shell-primitives` surface does not cover (form fields), built out of tokens only.
+const inputStyle: React.CSSProperties = { flex: 1, padding: 'var(--spacing-s) var(--spacing-m)', borderRadius: 'var(--radius-md)', border: 'none', background: 'var(--color-surface-high)', color: 'var(--color-on-surface)', fontSize: '0.9375rem', outline: 'none' }
+const selectStyle: React.CSSProperties = { ...inputStyle, appearance: 'none', paddingRight: '1.875rem' }
 
+/** A card, on the HOST's `Surface`. Wrapped rather than used raw because `Surface` takes no
+ *  `style` (so the app's per-card padding/layout goes on an inner box) and forwards no unknown
+ *  props (so `data-testid` lands on that inner box). Its own `onClick` puts a handler on a
+ *  `<div>`, which is not keyboard-reachable — a clickable card renders a real `<button>`. */
+function Card({ children, style, onClick, testId, tone }: {
+  children: React.ReactNode
+  style?: React.CSSProperties
+  onClick?: () => void
+  testId?: string
+  tone?: 'surface' | 'low' | 'container' | 'high'
+}) {
+  const inner: React.CSSProperties = { padding: 'var(--spacing-l)', width: '100%', textAlign: 'left', ...style }
+  return (
+    <div style={{ marginBottom: 'var(--spacing-s)' }}>
+      <Surface tone={tone ?? 'container'} radius="lg">
+        {onClick
+          ? (
+            <button type="button" onClick={onClick} data-testid={testId}
+              style={{ ...inner, background: 'none', border: 'none', color: 'inherit', font: 'inherit', cursor: 'pointer' }}>
+              {children}
+            </button>
+          )
+          : <div style={inner} data-testid={testId}>{children}</div>}
+      </Surface>
+    </div>
+  )
+}
+
+/** The screen's own heading. `AppFrame` renders the page `<h1>` (`PageTitle`, which is
+ *  `title-l`), so this is an `<h2>` — an app page that draws its own `<h1>` gives the document
+ *  two of them. Sizes come from the `data-type` role layer, not a copied font-size/weight pair. */
 function Header({ title, subtitle }: { title: string; subtitle?: string }) {
-  return <div style={{ marginBottom: 12 }}><h1 style={{ fontSize: '1.25rem', lineHeight: '1.5rem', fontVariationSettings: '"wght" 470', margin: 0, color: 'var(--color-on-surface)' }}>{title}</h1>{subtitle && <p style={{ color: 'var(--color-on-surface-low)', margin: '6px 0 0', fontSize: '0.8125rem' }}>{subtitle}</p>}</div>
+  return <div><h2 data-type="title-l" style={{ margin: 0, color: 'var(--color-on-surface)' }}>{title}</h2>{subtitle && <p data-type="body-s" style={{ color: 'var(--color-on-surface-low)', margin: 'var(--spacing-s) 0 0' }}>{subtitle}</p>}</div>
 }
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return <section style={{ margin: '24px 0' }}><h3 style={{ fontSize: '0.9375rem', fontVariationSettings: '"wght" 600', margin: '0 0 8px', color: 'var(--color-on-surface)' }}>{title}</h3>{children}</section>
+  return <section style={{ margin: 'var(--spacing-2xl) 0' }}><h3 data-type="label-m" style={{ margin: '0 0 var(--spacing-s)', color: 'var(--color-on-surface)' }}>{title}</h3>{children}</section>
 }
 function Notice({ children, tone }: { children: React.ReactNode; tone?: 'error' }) {
-  return <div style={{ padding: 12, borderRadius: 'var(--radius-md, 12px)', fontSize: '0.8125rem', border: '1px solid var(--color-outline-variant)', background: 'var(--color-surface-high)', color: tone === 'error' ? 'var(--color-danger)' : 'var(--color-on-surface-low)' }}>{children}</div>
+  return <div style={{ padding: 'var(--spacing-m)', borderRadius: 'var(--radius-md)', fontSize: '0.8125rem', border: '1px solid var(--color-outline-variant)', background: 'var(--color-surface-high)', color: tone === 'error' ? 'var(--color-danger)' : 'var(--color-on-surface-low)' }}>{children}</div>
 }
 function BackBtn({ onBack }: { onBack: () => void }) {
-  return <button onClick={onBack} style={{ ...linkBtn, marginBottom: 8, fontSize: 13 }}>← All meetings</button>
+  return <div style={{ marginBottom: 'var(--spacing-s)' }}><Button variant="ghost" size="sm" onClick={onBack}>← All meetings</Button></div>
 }
 
 export function mount(el: HTMLElement, ctx: AppContext): () => void {

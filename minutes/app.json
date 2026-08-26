@@ -214,6 +214,9 @@
       "order": 20
     }
   },
+  "uiCapabilities": [
+    "shell-primitives"
+  ],
   "permissions": {
     "api": [
       "/api/knowledge",
@@ -230,6 +233,11 @@
     "storage": true,
     "network": false,
     "agent": true
+  },
+  "quality": {
+    "tested": true,
+    "designSystem": "v2",
+    "a11y": false
   },
   "setup": {
     "onInstall": "bash setup.sh",
