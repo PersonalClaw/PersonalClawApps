@@ -250,6 +250,7 @@ class SlackDelivery:
         import re
 
         from slack_runtime.handler import (
+            _approval_brief_line,
             _build_approval_blocks,
             _pending_approvals,
             _PendingApproval,
@@ -276,6 +277,12 @@ class SlackDelivery:
         title_safe, _ = redact_exfiltration_urls(event.title)
         title_safe, _ = redact_credentials(title_safe)
         fallback = f"🔐 [{source}] Approve: {title_safe}?"
+        # The notification preview is the FIRST thing the owner reads, and often the only
+        # thing (a lock screen shows no blocks). Same composed line as the block, so the
+        # push and the prompt can never say different things about the blast radius.
+        brief_line = _approval_brief_line(event)
+        if brief_line:
+            fallback += f" — {brief_line}"
         approval_ts = await self._client.post_blocks(channel, blocks, fallback, thread_ts)
 
         pending = _PendingApproval(
