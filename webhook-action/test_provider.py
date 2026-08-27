@@ -49,7 +49,9 @@ def test_webhook_blocks_imds(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", _fake_dns({"metadata.example": ["169.254.169.254"]}))
     r = _run(WebhookActionProvider().execute({"url": "http://metadata.example/latest"}, _ctx()))
     assert r.success is False
-    assert "non-public" in (r.error or "").lower()
+    # Core >= the metadata-rebind fix refuses link-local/metadata resolutions on a
+    # dedicated path with a specific message, before the generic non-public deny.
+    assert "metadata" in (r.error or "").lower() or "link-local" in (r.error or "").lower()
 
 
 def test_webhook_delivers_to_public(monkeypatch):
