@@ -665,6 +665,253 @@ class TestToolApproval:
         assert len(text) <= _SLACK_SECTION_TEXT_LIMIT + 10  # allow for ```
 
 
+class TestApprovalBriefLine:
+    """The core-composed approval brief, rendered on the Slack decision surface.
+
+    Core stamps ``event.tool_meta["approval_brief"]`` —
+    ``{"tool", "risk", "blastRadius"?, "blastRadiusLine"?}`` — before calling
+    ``request_approval``. These tests own the RENDER: that the owner is told what the
+    call can TOUCH before being asked to authorize it, that silence is kept when
+    nothing was established, and that a ``False`` facet is never turned into an
+    all-clear. The wording is product copy, so it is asserted as whole strings.
+    """
+
+    @staticmethod
+    def _event(brief, request_id="req-brief"):
+        """A permission-request event carrying ``brief`` (pass ``None`` for no brief)."""
+        return LLMEvent(
+            kind="permission_request",
+            request_id=request_id,
+            title="bash",
+            options=[],
+            tool_input='{"command": "rm -rf build"}',
+            tool_meta={} if brief is None else {"approval_brief": brief},
+        )
+
+    @staticmethod
+    def _context_lines(blocks):
+        return [e["text"] for b in blocks if b["type"] == "context" for e in b["elements"]]
+
+    #: The block shape of an approval prompt that shows NO blast-radius line. Named once
+    #: so every "renders nothing" leg asserts the same absence.
+    _NO_BRIEF_SHAPE = ["section", "section", "actions", "context"]
+
+    def test_consequence_facets_render_as_a_can_line(self):
+        """An established consequence is stated, with the EFFECTIVE risk beside it."""
+        from slack_runtime.handler import _build_approval_blocks
+
+        blocks = _build_approval_blocks(
+            self._event(
+                {
+                    "tool": "bash",
+                    "risk": "destructive",
+                    "blastRadius": {
+                        "writes": True,
+                        "network": False,
+                        "shell": True,
+                        "readOnly": False,
+                    },
+                    "blastRadiusLine": "writes files, runs a command",
+                },
+            ),
+        )
+        assert "Can: writes files, runs a command · Risk: destructive" in self._context_lines(
+            blocks,
+        )
+
+    def test_no_brief_renders_no_blast_radius_line(self):
+        """VACUITY TWIN. A core that stamps no brief must prompt exactly as before.
+
+        Without this leg the whole suite would pass on a renderer that hard-codes a
+        line, because every other test supplies one.
+        """
+        from slack_runtime.handler import _build_approval_blocks
+
+        blocks = _build_approval_blocks(self._event(None))
+        assert [b["type"] for b in blocks] == self._NO_BRIEF_SHAPE
+        assert not any("Can:" in t or "Risk:" in t for t in self._context_lines(blocks))
+
+    def test_absent_blast_radius_renders_no_line(self):
+        """A brief with NO ``blastRadius`` is C2's unknown — and stays silent.
+
+        "Nothing was established" reads to a person as "nothing happens", which is the
+        opposite of what an unrecognized tool means. The risk alone does not license a
+        line either: a line's whole job is to name the blast radius.
+        """
+        from slack_runtime.handler import _build_approval_blocks
+
+        blocks = _build_approval_blocks(
+            self._event({"tool": "frobnicate_xyzzy", "risk": "caution"}),
+        )
+        assert [b["type"] for b in blocks] == self._NO_BRIEF_SHAPE
+        assert not any("Risk:" in t for t in self._context_lines(blocks))
+
+    def test_false_facets_never_become_an_all_clear(self):
+        """Only ESTABLISHED facets are named; a ``False`` is never rendered as a negative."""
+        from slack_runtime.handler import _build_approval_blocks
+
+        blocks = _build_approval_blocks(
+            self._event(
+                {
+                    "tool": "http_fetch",
+                    "risk": "caution",
+                    "blastRadius": {
+                        "writes": False,
+                        "network": True,
+                        "shell": False,
+                        "readOnly": False,
+                    },
+                    "blastRadiusLine": "uses the network",
+                },
+            ),
+        )
+        line = next(t for t in self._context_lines(blocks) if "Can:" in t)
+        assert line == "Can: uses the network · Risk: caution"
+        for absent in ("writes files", "runs a command", "reads only", "no network", "no shell"):
+            assert absent not in line.lower()
+
+    def test_pure_read_claim_is_not_framed_as_a_capability(self):
+        """"Reads only" describes what a call does NOT do, so it is stated, not offered."""
+        from slack_runtime.handler import _build_approval_blocks
+
+        blocks = _build_approval_blocks(
+            self._event(
+                {
+                    "tool": "read_file",
+                    "risk": "safe",
+                    "blastRadius": {
+                        "writes": False,
+                        "network": False,
+                        "shell": False,
+                        "readOnly": True,
+                    },
+                    "blastRadiusLine": "reads only",
+                },
+            ),
+        )
+        lines = self._context_lines(blocks)
+        assert "Reads only · Risk: safe" in lines
+        assert not any("Can:" in t for t in lines)
+
+    def test_a_facet_core_adds_later_reads_as_a_consequence(self):
+        """FORWARD COMPAT. An unknown facet key is a consequence, never a reassurance.
+
+        The frame is decided by excluding the one read claim rather than by listing the
+        consequences, so a fifth facet cannot arrive and quietly read as an all-clear
+        while this repo waits to be updated.
+        """
+        from slack_runtime.handler import _build_approval_blocks
+
+        blocks = _build_approval_blocks(
+            self._event(
+                {
+                    "tool": "email_send",
+                    "risk": "destructive",
+                    "blastRadius": {
+                        "writes": False,
+                        "network": False,
+                        "shell": False,
+                        "readOnly": False,
+                        "sendsOnYourBehalf": True,
+                    },
+                    "blastRadiusLine": "sends on your behalf",
+                },
+            ),
+        )
+        assert "Can: sends on your behalf · Risk: destructive" in self._context_lines(blocks)
+
+    def test_missing_risk_is_omitted_not_guessed(self):
+        """No risk on the brief → no risk in the copy. A default would be an invention."""
+        from slack_runtime.handler import _build_approval_blocks
+
+        blocks = _build_approval_blocks(
+            self._event(
+                {
+                    "tool": "bash",
+                    "blastRadius": {
+                        "writes": False,
+                        "network": False,
+                        "shell": True,
+                        "readOnly": False,
+                    },
+                    "blastRadiusLine": "runs a command",
+                },
+            ),
+        )
+        assert "Can: runs a command" in self._context_lines(blocks)
+        assert not any("Risk:" in t for t in self._context_lines(blocks))
+
+    def test_line_precedes_the_decision_buttons(self):
+        """The reason to press a button must be met BEFORE the buttons, not after."""
+        from slack_runtime.handler import _build_approval_blocks
+
+        blocks = _build_approval_blocks(
+            self._event(
+                {
+                    "tool": "bash",
+                    "risk": "destructive",
+                    "blastRadius": {
+                        "writes": False,
+                        "network": False,
+                        "shell": True,
+                        "readOnly": False,
+                    },
+                    "blastRadiusLine": "runs a command",
+                },
+            ),
+        )
+        brief_idx = next(
+            i
+            for i, b in enumerate(blocks)
+            if b["type"] == "context" and "Can:" in b["elements"][0]["text"]
+        )
+        assert brief_idx < [b["type"] for b in blocks].index("actions")
+
+    def test_both_decisions_stay_offered_in_dm_and_in_a_group_channel(self):
+        """The brief informs the prompt; it must not reshape it.
+
+        Rejecting is as much a decision as approving, so the line is shown for both and
+        neither button moves. Trust stays DM-only exactly as before.
+        """
+        from slack_runtime.handler import (
+            _ACTION_APPROVE,
+            _ACTION_REJECT,
+            _ACTION_TRUST,
+            _build_approval_blocks,
+        )
+
+        brief = {
+            "tool": "bash",
+            "risk": "destructive",
+            "blastRadius": {
+                "writes": False,
+                "network": False,
+                "shell": True,
+                "readOnly": False,
+            },
+            "blastRadiusLine": "runs a command",
+        }
+        for is_dm, expected in ((True, [_ACTION_APPROVE, _ACTION_TRUST, _ACTION_REJECT]),
+                                (False, [_ACTION_APPROVE, _ACTION_REJECT])):
+            blocks = _build_approval_blocks(self._event(brief), is_dm=is_dm)
+            actions = next(b for b in blocks if b["type"] == "actions")
+            assert [e["action_id"] for e in actions["elements"]] == expected
+            assert any("Can: runs a command" in t for t in self._context_lines(blocks))
+
+    def test_malformed_brief_renders_nothing_rather_than_raising(self):
+        """A brief this renderer cannot read is silence, never a traceback.
+
+        ``request_approval`` is called inside the gateway's ``except Exception: fall
+        back to the dashboard``, so a raise here would look like "channel approval
+        stopped working" with no error the owner ever sees.
+        """
+        from slack_runtime.handler import _build_approval_blocks
+
+        for junk in ("not-a-dict", 42, [], {"blastRadiusLine": None}, {"blastRadiusLine": ""}):
+            blocks = _build_approval_blocks(self._event(junk))
+            assert [b["type"] for b in blocks] == self._NO_BRIEF_SHAPE, junk
+
+
 class TestAllowedUsers:
     """Tests for allowed-user authorization in handle_interaction."""
 
