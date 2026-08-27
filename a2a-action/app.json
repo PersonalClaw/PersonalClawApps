@@ -1,0 +1,73 @@
+{
+  "name": "a2a-action",
+  "version": "0.1.0",
+  "displayName": "A2A Agent Call",
+  "description": "Hand one task to an external A2A agent when a trigger fires. Reaches only hosts the operator has allow-listed under Settings › Security › Network egress.",
+  "icon": "Share2",
+  "author": "PersonalClaw",
+  "tags": [
+    "action"
+  ],
+  "permissions": {
+    "network": true
+  },
+  "provider": {
+    "type": "action",
+    "entity": "a2a",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "execute"
+    ],
+    "autonomy": {
+      "floor": "one_tap",
+      "ceiling": "one_tap"
+    },
+    "settingsSchema": {
+      "type": "object",
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "x-meta": {
+            "label": "Agent URL",
+            "help": "The external agent's A2A tasks endpoint. The host must be listed in Settings › Security › Network egress — egress is deny-by-default, so an unlisted host is refused before any connection is made."
+          }
+        },
+        "skill": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Skill",
+            "help": "The skill id to invoke on the remote agent, as it appears on that agent's card. Leave blank to let the remote agent choose."
+          }
+        },
+        "text": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Message",
+            "help": "The text sent to the agent. Supports $EVENT, $CONTEXT and any key from the trigger payload. Leave blank to send the event name and context."
+          }
+        },
+        "inputs": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Inputs (JSON)",
+            "help": "Optional JSON object of structured inputs for the skill, e.g. {\"since\": \"7d\"}."
+          }
+        },
+        "headers": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Headers (JSON)",
+            "help": "Optional JSON object of extra request headers, e.g. {\"Authorization\": \"Bearer …\"} if the remote agent requires a bearer token."
+          }
+        }
+      }
+    }
+  }
+}
