@@ -2922,6 +2922,61 @@ async def handle_interaction(channel: str, msg_ts: str, action_id: str, user_id:
     return action_id
 
 
+#: The key the CORE stamps its approval brief onto ``event.tool_meta`` under — the value
+#: of ``personalclaw.approval_brief.APPROVAL_BRIEF_META_KEY``. Read as a literal because
+#: the brief is ADDITIVE meta the SDK does not export: a core that composes none simply
+#: leaves the key absent, and this channel then prompts exactly as it did before.
+_APPROVAL_BRIEF_META_KEY = "approval_brief"
+
+#: The one facet that is NOT a consequence: ``readOnly`` claims what a call does not do,
+#: so it must never be framed as something the call "can" do. Named as the EXCEPTION
+#: rather than listing the consequences, so a facet core adds later is framed as a
+#: consequence automatically instead of silently reading as a reassurance.
+_READ_CLAIM_FACET = "readOnly"
+
+
+def _approval_brief_line(event: LLMEvent) -> str:
+    """One line saying what this call can TOUCH, or ``""`` to show no such line.
+
+    Slack is the surface with no room, so the core-composed brief collapses to a single
+    line next to the effective risk; the dashboard stays the rich surface (per-facet
+    cards carrying each facet's ``detail`` sentence). Nothing is re-derived here — every
+    word comes from ``event.tool_meta``, so a hint added to the core gate reaches Slack
+    without a change in this repo, and this renderer cannot drift into a second
+    vocabulary.
+
+    Two rules, both from the ``ChannelDelivery.request_approval`` contract:
+
+    * an ABSENT blast radius renders NO line. "Nothing was established" reads to a
+      person as "nothing happens", which is the opposite of what an unrecognized tool
+      means. Silence is the honest render, and the caller must not fill it.
+    * only ESTABLISHED facets are ever named. ``blastRadiusLine`` already contains
+      exactly the ``True`` ones, so a ``False`` can never be painted as an all-clear
+      ("no network") — absence of evidence never becomes evidence of absence.
+
+    The returned text is plain (no mrkdwn, no emoji) so the approval block and the
+    notification fallback can render the same string without diverging.
+    """
+    meta = getattr(event, "tool_meta", None)
+    if not isinstance(meta, dict):
+        return ""
+    brief = meta.get(_APPROVAL_BRIEF_META_KEY)
+    if not isinstance(brief, dict):
+        return ""
+    facets = str(brief.get("blastRadiusLine") or "")
+    if not facets:
+        return ""
+    radius = brief.get("blastRadius")
+    consequence = isinstance(radius, dict) and any(
+        v for k, v in radius.items() if k != _READ_CLAIM_FACET
+    )
+    line = f"Can: {facets}" if consequence else f"{facets[:1].upper()}{facets[1:]}"
+    risk = str(brief.get("risk") or "")
+    if risk:
+        line += f" · Risk: {risk}"
+    return line
+
+
 def _build_approval_blocks(event: LLMEvent, is_dm: bool = True, source: str = "") -> list[dict]:
     """Build Block Kit blocks for tool approval prompt.
 
@@ -3006,6 +3061,14 @@ def _build_approval_blocks(event: LLMEvent, is_dm: bool = True, source: str = ""
                 "type": "section",
                 "text": {"type": "mrkdwn", "text": f"```{detail}```"},
             },
+        )
+
+    # The blast radius goes ABOVE the buttons: it is the reason to press one, so a
+    # reader must meet it before the decision, not after it.
+    brief_line = _approval_brief_line(event)
+    if brief_line:
+        blocks.append(
+            {"type": "context", "elements": [{"type": "mrkdwn", "text": brief_line}]},
         )
 
     blocks.append({"type": "actions", "elements": buttons})
