@@ -58,7 +58,7 @@ def _configure(
     """Write a fully configured mailbox + outbound transport. ``send_enabled=None`` OMITS
     the key entirely, which is how a real fresh install looks — the state the shipped
     default has to cover."""
-    from personalclaw.config.loader import save_credential
+    from personalclaw.sdk.channel import save_credential
     from personalclaw.sdk.settings import ProviderSettings
 
     cfg = {
