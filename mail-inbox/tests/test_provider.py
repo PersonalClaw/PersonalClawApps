@@ -34,7 +34,7 @@ def _configure(allow_senders=("*@example.com",), *, password="secret"):
         },
     )
     if password is not None:
-        from personalclaw.config.loader import save_credential
+        from personalclaw.sdk.channel import save_credential
 
         save_credential(CRED_MAIL_PASSWORD, password)
 
