@@ -1,0 +1,37 @@
+{
+  "name": "browser-connector",
+  "version": "0.1.0",
+  "displayName": "Browser Connector",
+  "description": "Attach your own everyday browser to a PersonalClaw you already run, so a browse task with target 'user_browser' can act inside a session you are already logged into. The connector is a browser extension that pairs with the gateway using the SAME device-session machinery your phone does, then announces — over loopback only — the CDP page-target endpoint your browser exposes, which is exactly what the gateway's connector seam consumes. It speaks a deliberately narrow, closed contract: navigate, read-outline, click, type, close, and nothing else. It opens no listening surface of its own: every call is an outbound loopback request, and the extension's host permissions are loopback-only by manifest, so it literally cannot reach anywhere else. It never reads, stores, or types into a password field. The per-task grant, the task-named tab group, and close-to-kill land next; this bundle establishes the connection and the contract.",
+  "icon": "AppWindow",
+  "author": "PersonalClaw",
+  "license": "MIT",
+  "tags": [
+    "companion",
+    "browse",
+    "automation",
+    "extension"
+  ],
+  "quality": {
+    "tested": true,
+    "designSystem": "n/a"
+  },
+  "permissions": {
+    "api": [
+      "/api/devices/pair/complete",
+      "/api/browse/connector"
+    ]
+  },
+  "platform": {
+    "os": [
+      "macos",
+      "linux",
+      "windows"
+    ],
+    "installMode": "client",
+    "clientInstall": {
+      "shell": "set -e; DEST=\"$HOME/.personalclaw/apps/browser-connector\"; git clone --depth 1 --filter=blob:none --sparse https://github.com/PersonalClaw/PersonalClawApps \"$DEST\"; git -C \"$DEST\" sparse-checkout set browser-connector; echo \"Unpacked extension: $DEST/browser-connector/extension\"",
+      "postInstall": "echo 'Load the unpacked extension at ~/.personalclaw/apps/browser-connector/browser-connector/extension in your browser (developer mode), start the browser with a loopback --remote-debugging-port, then pair it from Settings -> Devices.'"
+    }
+  }
+}
