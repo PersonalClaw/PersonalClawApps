@@ -1,0 +1,38 @@
+{
+  "name": "voice-clone-tts",
+  "version": "0.1.0",
+  "displayName": "Voice Clone TTS",
+  "description": "Cloning-capable text-to-speech beside Piper: zero-shot voice cloning from a short reference clip, run as an isolated sidecar (torch-heavy diffusion engine). Declares supports_cloning so a clone-kind voice profile routes here instead of being refused.",
+  "icon": "AudioLines",
+  "author": "PersonalClaw",
+  "tags": [
+    "model",
+    "tts"
+  ],
+  "provider": {
+    "type": "model",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "tts"
+    ],
+    "execution": "sidecar",
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "device": {
+          "type": "string",
+          "default": "cpu",
+          "enum": [
+            "cpu",
+            "cuda",
+            "mps"
+          ],
+          "x-meta": {
+            "label": "Compute Device",
+            "help": "Hardware acceleration for the diffusion cloning engine (mps on Apple silicon, cuda on NVIDIA)."
+          }
+        }
+      }
+    }
+  }
+}
