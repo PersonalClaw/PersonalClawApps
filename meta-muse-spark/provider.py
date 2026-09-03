@@ -21,6 +21,7 @@ from personalclaw.sdk.model import (
     ModelInfo,
     ModelProvider,
     OpenAIProvider,
+    openai_compatible_list_models,
     PromptCache,
     ProviderCapability,
     ProviderEntry,
@@ -116,9 +117,36 @@ def create_provider(config: dict[str, Any]) -> "OpenAIProvider":
     )
 
 
-def create_catalog() -> ModelCatalog:
-    """Return the static Meta model catalog."""
-    return ModelCatalog(models=list(_MODELS))
+def create_catalog(options: dict[str, Any] | None = None, *, model: str = "") -> "MuseSparkCatalog":
+    """Catalog factory (registry contract) — build discovery from entry options."""
+    del model
+    opts = options or {}
+    return MuseSparkCatalog(api_key=str(opts.get("api_key") or ""))
+
+
+class MuseSparkCatalog(ModelCatalog):
+    """Static catalog (Meta currently offers one model) + a connectivity probe.
+
+    ``list_models`` never touches the network — it runs on hot Settings GETs.
+    ``test_connection`` probes ``GET {base}/models`` through the ``net.fetch``
+    egress chokepoint, like every other outbound discovery call.
+    """
+
+    def __init__(self, api_key: str = "") -> None:
+        self._api_key = api_key or os.environ.get("META_MODEL_API_KEY", "")
+
+    async def list_models(self) -> list[ModelInfo]:
+        return list(_MODELS)
+
+    async def test_connection(self) -> ConnectionResult:
+        if not self._api_key:
+            return ConnectionResult(ok=False, detail="No API key configured")
+        live = await openai_compatible_list_models(
+            META_BASE_URL, self._api_key, default_base=META_BASE_URL
+        )
+        if not live:
+            return ConnectionResult(ok=False, detail="No models returned (check key)")
+        return ConnectionResult(ok=True, model_count=len(live))
 
 
 # Register on import.
@@ -128,30 +156,3 @@ except ProviderResolutionError:
     pass
 
 get_default_registry().register_catalog("meta_muse_spark", create_catalog)
-
-
-def test_connection(config: dict[str, Any]) -> ConnectionResult:
-    """Test connectivity to the Meta AI API."""
-    api_key = config.get("api_key", "") or os.environ.get("META_MODEL_API_KEY", "")
-    if not api_key:
-        return ConnectionResult(ok=False, status="error", message="No API key configured")
-    try:
-        import httpx
-        resp = httpx.get(
-            f"{META_BASE_URL}/models",
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=15,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            models = data.get("data", [])
-            return ConnectionResult(
-                ok=True, status="connected",
-                message=f"Connected — {len(models)} model(s) available",
-            )
-        return ConnectionResult(
-            ok=False, status="error",
-            message=f"API returned {resp.status_code}: {resp.text[:100]}",
-        )
-    except Exception as exc:
-        return ConnectionResult(ok=False, status="error", message=str(exc)[:200])

@@ -55,9 +55,13 @@ jobs:
                   assert AppManifest.from_dict(m.to_dict()).to_dict() == m.to_dict()
               except Exception as e:  # noqa: BLE001
                   bad.append(f"{mf}: {type(e).__name__}: {e}")
+              # every published bundle ships its own LICENSE — a bundle is
+              # installed standalone, so the repo-root file does not travel with it
+              if not (mf.parent / "LICENSE").exists():
+                  bad.append(f"{mf.parent}: missing LICENSE (copy the repo-root MIT file)")
           if bad:
               print("\n".join(bad)); sys.exit(1)
-          print(f"OK: {len(list(pathlib.Path('.').glob('*/app.json')))} manifests valid")
+          print(f"OK: {len(list(pathlib.Path('.').glob('*/app.json')))} manifests valid + licensed")
           PY
 
   tests:

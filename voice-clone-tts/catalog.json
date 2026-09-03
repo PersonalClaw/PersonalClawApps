@@ -1,0 +1,48 @@
+[
+  {
+    "name": "omnivoice-zeroshot",
+    "label": "OmniVoice (zero-shot clone) — candidate, pending MI-2c spike",
+    "size_mb": 1800,
+    "capabilities": [
+      "tts"
+    ],
+    "runtime": "torch",
+    "runtime_contract": "torch>=2.1",
+    "source": "k2-fsa/OmniVoice",
+    "license": "Apache-2.0",
+    "status": "active",
+    "gated": false,
+    "matrix": {
+      "supports_cloning": true,
+      "supports_voice_design": false,
+      "languages": [
+        "en",
+        "zh"
+      ]
+    }
+  },
+  {
+    "name": "cosyvoice3",
+    "label": "CosyVoice 3 (zero-shot clone) — candidate, pending MI-2c spike",
+    "size_mb": 2400,
+    "capabilities": [
+      "tts"
+    ],
+    "runtime": "torch",
+    "runtime_contract": "torch>=2.1",
+    "source": "FunAudioLLM/CosyVoice",
+    "license": "Apache-2.0",
+    "status": "active",
+    "gated": false,
+    "matrix": {
+      "supports_cloning": true,
+      "supports_voice_design": false,
+      "languages": [
+        "en",
+        "zh",
+        "ja",
+        "ko"
+      ]
+    }
+  }
+]

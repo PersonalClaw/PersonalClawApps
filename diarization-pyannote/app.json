@@ -28,10 +28,10 @@
         "hf_token": {
           "type": "string",
           "default": "",
-          "x-sensitive": true,
           "x-meta": {
             "label": "HuggingFace Token",
-            "help": "Required. Accept the pyannote/speaker-diarization-3.1 license on HuggingFace, then paste a read token."
+            "help": "Required. Accept the pyannote/speaker-diarization-3.1 license on HuggingFace, then paste a read token.",
+            "sensitive": true
           }
         }
       }

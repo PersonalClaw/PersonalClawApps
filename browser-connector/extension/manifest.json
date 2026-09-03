@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "PersonalClaw Browser Connector",
+  "version": "0.1.0",
+  "description": "Attach this browser to your PersonalClaw gateway as the user_browser target. Talks to the gateway over loopback only; opens no listening surface of its own.",
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "ws://127.0.0.1/*",
+    "ws://localhost/*"
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "browser-connector@personalclaw",
+      "strict_min_version": "121.0"
+    }
+  }
+}

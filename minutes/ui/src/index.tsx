@@ -108,7 +108,7 @@ function MeetingCard({ m, onOpen }: { m: Meeting; onOpen: () => void }) {
   return (
     <Card onClick={onOpen} testId="meeting-card">
       <div data-type="title-m">{m.title}</div>
-      <div data-type="caption" style={{ opacity: 0.65, marginTop: 'var(--spacing-xs)', display: 'flex', gap: 'var(--spacing-m)', flexWrap: 'wrap' }}>
+      <div data-type="caption" style={{ color: 'var(--color-on-surface-low)', marginTop: 'var(--spacing-xs)', display: 'flex', gap: 'var(--spacing-m)', flexWrap: 'wrap' }}>
         <span>{m.date}</span>
         <span>{m.member_ids.length} member{m.member_ids.length === 1 ? '' : 's'}{mediaKinds.length ? ` · ${mediaKinds.map((k) => ROLE_ICON[k] || '•').join('')}` : ''}</span>
         {m.participants.length > 0 && <span>👥 {m.participants.map((p) => p.name).join(', ')}</span>}
@@ -218,8 +218,8 @@ function Members({ api, meeting, onChanged }: { api: ReturnType<typeof createApp
         : <div style={{ display: 'grid', gap: 'var(--spacing-xs)' }}>{meeting.member_ids.map((mi) => (
           <div key={mi} data-type="body-s" style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
             <span>{ROLE_ICON[meeting.member_roles[mi] || ''] || '•'}</span>
-            <code data-type="caption" style={{ opacity: 0.7 }}>{mi.slice(0, 20)}</code>
-            <span style={{ opacity: 0.6 }}>{meeting.member_roles[mi] || ''}</span>
+            <code data-type="caption" style={{ color: 'var(--color-on-surface-var)' }}>{mi.slice(0, 20)}</code>
+            <span style={{ color: 'var(--color-on-surface-low)' }}>{meeting.member_roles[mi] || ''}</span>
             <Button variant="ghost" size="xs" onClick={() => api.del(`${M}/meetings/${meeting.id}/members/${mi}`).then(onChanged)}>remove</Button>
           </div>))}</div>}
     </Section>
@@ -233,13 +233,13 @@ function KnowledgeBrowser({ api, onPick }: { api: ReturnType<typeof createAppApi
       .then((d) => setRows((d.items || []).map((k) => ({ id: k.id, title: k.title, type: k.item_type || k.type || '' }))))
       .catch(() => setRows([]))
   }, [])
-  if (rows === null) return <div data-type="caption" style={{ opacity: 0.6, marginBottom: 'var(--spacing-s)' }}>Loading knowledge…</div>
+  if (rows === null) return <div data-type="caption" style={{ color: 'var(--color-on-surface-low)', marginBottom: 'var(--spacing-s)' }}>Loading knowledge…</div>
   return (
     <Card style={{ maxHeight: '13.75rem', overflow: 'auto' }}>
-      {rows.length === 0 ? <div data-type="caption" style={{ opacity: 0.6 }}>No items.</div>
+      {rows.length === 0 ? <div data-type="caption" style={{ color: 'var(--color-on-surface-low)' }}>No items.</div>
         : rows.map((k) => (
           <Card key={k.id} tone="high" onClick={() => onPick(k.id, k.type)} testId="kb-option" style={{ padding: 'var(--spacing-s)' }}>
-            <span data-type="body-s">{ROLE_ICON[roleForKnowledgeType(k.type) || ''] || '•'} {k.title} <span style={{ opacity: 0.5 }}>· {k.type}</span></span>
+            <span data-type="body-s">{ROLE_ICON[roleForKnowledgeType(k.type) || ''] || '•'} {k.title} <span style={{ color: 'var(--color-on-surface-low)' }}>· {k.type}</span></span>
           </Card>))}
     </Card>
   )
@@ -311,7 +311,7 @@ function MediaTimeline({ api, itemId, meeting, onChanged }: {
 
   return (
     <Card testId="media-timeline">
-      <div data-type="caption" style={{ opacity: 0.6, marginBottom: 'var(--spacing-xs)' }}>{isVideo ? '🎬 Video' : '🎙️ Recording'} · <code>{itemId.slice(0, 18)}</code></div>
+      <div data-type="caption" style={{ color: 'var(--color-on-surface-low)', marginBottom: 'var(--spacing-xs)' }}>{isVideo ? '🎬 Video' : '🎙️ Recording'} · <code>{itemId.slice(0, 18)}</code></div>
       {isVideo
         ? <video ref={mediaRef as React.RefObject<HTMLVideoElement>} src={mediaUrl} controls style={{ width: '100%', maxHeight: '20rem', borderRadius: 'var(--radius-sm)', background: 'var(--color-surface-high)' }} onTimeUpdate={(e) => setCurTime((e.target as HTMLVideoElement).currentTime)} />
         : <audio ref={mediaRef as React.RefObject<HTMLAudioElement>} src={mediaUrl} controls style={{ width: '100%' }} onTimeUpdate={(e) => setCurTime((e.target as HTMLAudioElement).currentTime)} />}
@@ -334,7 +334,7 @@ function MediaTimeline({ api, itemId, meeting, onChanged }: {
               // ACTION, and a div with onClick is unreachable by keyboard entirely.
               <button key={i} type="button" onClick={() => seek(s.start)} data-testid="transcript-line"
                 style={{ display: 'block', width: '100%', textAlign: 'left', font: 'inherit', color: 'inherit', border: 'none', cursor: 'pointer', padding: 'var(--spacing-xs)', borderRadius: 'var(--radius-xs)', background: active ? 'color-mix(in srgb, var(--color-primary) 14%, transparent)' : 'transparent' }}>
-                <span data-type="caption" style={{ opacity: 0.5, marginRight: 'var(--spacing-xs)' }}>{fmtTime(s.start)}</span>
+                <span data-type="caption" style={{ color: 'var(--color-on-surface-low)', marginRight: 'var(--spacing-xs)' }}>{fmtTime(s.start)}</span>
                 {s.speaker && <b style={{ color: SPEAKER_COLORS[labels.indexOf(s.speaker) % SPEAKER_COLORS.length] }}>{nameFor[s.speaker] || s.speaker}: </b>}
                 {s.text}
               </button>)
@@ -512,12 +512,12 @@ function Extractions({ api, agent, meeting, extractions, onChanged }: {
       {extractions.length === 0 ? <Notice>Nothing extracted yet. Run extraction to pull out dates, action items, follow-ups and decisions.</Notice>
         : (['action', 'date', 'followup', 'decision'] as const).map((kind) => grouped[kind]?.length ? (
           <div key={kind} style={{ marginBottom: 'var(--spacing-m)' }}>
-            <div data-type="caption" style={{ opacity: 0.7, marginBottom: 'var(--spacing-xs)' }}>{EXT_META[kind].glyph} {EXT_META[kind].label}</div>
+            <div data-type="caption" style={{ color: 'var(--color-on-surface-var)', marginBottom: 'var(--spacing-xs)' }}>{EXT_META[kind].glyph} {EXT_META[kind].label}</div>
             {grouped[kind].map((e) => (
               <Card key={e.id} testId={`ext-${kind}`} style={{ padding: 'var(--spacing-s)', display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
                 {kind === 'action' && <input type="checkbox" checked={e.done} onChange={(ev) => api.patch(`${M}/meetings/${meeting.id}/extractions/${e.id}`, { done: ev.target.checked }).then(onChanged)} aria-label="Done" />}
                 <span data-type="body-s" style={{ flex: 1, textDecoration: e.done ? 'line-through' : 'none', opacity: e.done ? 0.6 : 1 }}>
-                  {e.text}{e.assignee ? <span style={{ opacity: 0.6 }}> — {e.assignee}</span> : null}{e.due ? <span style={{ opacity: 0.6 }}> · {e.due}</span> : null}
+                  {e.text}{e.assignee ? <span style={{ color: 'var(--color-on-surface-low)' }}> — {e.assignee}</span> : null}{e.due ? <span style={{ color: 'var(--color-on-surface-low)' }}> · {e.due}</span> : null}
                 </span>
                 {e.task_id && <span data-type="caption" style={{ color: 'var(--color-success)' }} data-testid="ext-task">✓ task</span>}
                 {/* `×` alone is not an accessible name — the glyph is decorative, so the button
@@ -581,11 +581,11 @@ function ActionsToTasks({ api, meeting, actions, onChanged }: {
           <option value="">Personal (default)</option>
           {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
-        <span data-type="caption" style={{ opacity: 0.5 }}>or new:</span>
+        <span data-type="caption" style={{ color: 'var(--color-on-surface-low)' }}>or new:</span>
         <input value={newProject} aria-label="New project name" onChange={(e) => setNewProject(e.target.value)} placeholder="New project name" style={{ ...inputStyle, width: '10rem' }} />
         <Button variant="primary" size="md" onClick={run} disabled={busy} disabledReason={busy ? (msg || 'Creating…') : undefined}>{busy ? (msg || 'Creating…') : 'Create tasks'}</Button>
         <Button variant="ghost" size="xs" onClick={() => setOpen(false)}>cancel</Button>
-        {msg && !busy && <span data-type="caption" style={{ opacity: 0.7 }}>{msg}</span>}
+        {msg && !busy && <span data-type="caption" style={{ color: 'var(--color-on-surface-var)' }}>{msg}</span>}
       </div>
     </Surface>
   )
@@ -603,18 +603,18 @@ function Templates({ api }: { api: ReturnType<typeof createAppApi> }) {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 'var(--spacing-xs)' }}>
-        <p data-type="body-s" style={{ opacity: 0.6, margin: 0 }}>Templates drive output generation. Built-ins fork a custom copy when edited.</p>
+        <p data-type="body-s" style={{ color: 'var(--color-on-surface-low)', margin: 0 }}>Templates drive output generation. Built-ins fork a custom copy when edited.</p>
         <Button variant="primary" size="md" onClick={() => setCreating(true)}>New template</Button>
       </div>
       <div style={{ display: 'grid', gap: 'var(--spacing-m)', marginTop: 'var(--spacing-l)' }}>
         {templates.map((t) => (
           <Card key={t.id} testId="template-card">
             <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
-              <span data-type="label-m" style={{ flex: 1 }}>{t.name}<span data-type="caption" style={{ opacity: 0.6 }}>{t.builtin ? ' · built-in' : ' · custom'}</span></span>
+              <span data-type="label-m" style={{ flex: 1 }}>{t.name}<span data-type="caption" style={{ color: 'var(--color-on-surface-low)' }}>{t.builtin ? ' · built-in' : ' · custom'}</span></span>
               <Button variant="ghost" size="xs" onClick={() => setEditing(t)}>{t.builtin ? 'fork & edit' : 'edit'}</Button>
               {!t.builtin && <Button variant="ghost" size="xs" onClick={() => api.del(`${M}/templates/${t.id}`).then(reload)}>delete</Button>}
             </div>
-            {t.description && <div data-type="body-s" style={{ opacity: 0.7, marginTop: 'var(--spacing-xs)' }}>{t.description}</div>}
+            {t.description && <div data-type="body-s" style={{ color: 'var(--color-on-surface-var)', marginTop: 'var(--spacing-xs)' }}>{t.description}</div>}
           </Card>))}
       </div>
     </div>

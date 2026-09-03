@@ -1,0 +1,74 @@
+{
+  "name": "lima-sandbox",
+  "version": "0.1.0",
+  "displayName": "Lima Sandbox",
+  "description": "The isolated (virtual-machine) execution-isolation tier, backed by Lima (Linux virtual machines on macOS and Linux). Runs an agent-influenced command inside a Lima instance through `limactl shell` instead of on the host, so the virtual machine — not a host path filter — is the boundary. Registers as a `sandbox` provider through the SandboxProvider seam: a cached availability probe greys the tier out with a reason when the instance is stopped, and host paths are translated to their in-guest mount location so a run opened \"inside the sandbox\" resolves the same working directory.",
+  "icon": "Box",
+  "author": "PersonalClaw",
+  "tags": [
+    "sandbox",
+    "isolation",
+    "vm",
+    "lima"
+  ],
+  "provider": {
+    "type": "sandbox",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "isolated"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "instance": {
+          "type": "string",
+          "default": "personalclaw",
+          "x-meta": {
+            "label": "Lima instance name",
+            "help": "The limactl instance a run executes inside (limactl start <name>). Both the availability probe and every launch target this instance."
+          }
+        },
+        "cpus": {
+          "type": "integer",
+          "default": 2,
+          "x-meta": {
+            "label": "vCPUs",
+            "help": "Advisory record of the instance's CPU allocation, surfaced in the degradation dialog. Lima itself owns the running instance's real limits."
+          }
+        },
+        "memory": {
+          "type": "string",
+          "default": "4GiB",
+          "x-meta": {
+            "label": "Memory",
+            "help": "Advisory record of the instance's memory allocation (e.g. 4GiB)."
+          }
+        },
+        "disk": {
+          "type": "string",
+          "default": "20GiB",
+          "x-meta": {
+            "label": "Disk",
+            "help": "Advisory record of the instance's disk allocation (e.g. 20GiB)."
+          }
+        },
+        "template": {
+          "type": "string",
+          "default": "default",
+          "x-meta": {
+            "label": "Lima template",
+            "help": "The Lima template the instance was created from (default, ubuntu, fedora, ...). Recorded for the degradation dialog; creating the instance stays a user step."
+          }
+        },
+        "probe_ttl_secs": {
+          "type": "integer",
+          "default": 30,
+          "x-meta": {
+            "label": "Availability probe TTL (seconds)",
+            "help": "How long a probe of the instance's Running/Stopped state is cached. Stopping the instance greys the tier out within one TTL."
+          }
+        }
+      }
+    }
+  }
+}
