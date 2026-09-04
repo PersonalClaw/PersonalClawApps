@@ -130,7 +130,7 @@ function Overview({ readiness, areas, artifacts, onJump }: {
           <div style={{ display: 'grid', gap: 'var(--spacing-s)' }}>
             {areas.map((a) => (
               <Card key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-s)' }}>
-                <span style={{ flex: 1, fontWeight: 600, fontSize: '0.8125rem' }}>{a.name}{a.dimension ? <span style={{ color: 'var(--color-on-surface-low)', fontWeight: 400 }}> · {a.dimension}</span> : null}</span>
+                <span data-type="body-s" style={{ flex: 1, fontVariationSettings: '"wght" 600' }}>{a.name}{a.dimension ? <span style={{ color: 'var(--color-on-surface-low)', fontVariationSettings: '"wght" 400' }}> · {a.dimension}</span> : null}</span>
                 <span data-type="caption" style={{ color: 'var(--color-on-surface-var)' }}>{a.artifact_count} artifact{a.artifact_count === 1 ? '' : 's'}</span>
               </Card>
             ))}
@@ -166,7 +166,7 @@ function ArtifactRow({ a, onClick, onEdit, onDelete }: { a: Artifact; onClick?: 
   return (
     <Card style={{ cursor: onClick ? 'pointer' : 'default' }} onClick={onClick} testId="artifact">
       <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
-        <span style={{ flex: 1, fontWeight: 600, fontSize: '0.9375rem' }}>{a.title}</span>
+        <span data-type="body-m" style={{ flex: 1, fontVariationSettings: '"wght" 600' }}>{a.title}</span>
         {a.sourced && <span data-type="caption" style={{ color: 'var(--color-success)' }}>✓ sourced</span>}
         {onEdit && <Button variant="ghost" size="xs" onClick={(e) => { e.stopPropagation(); onEdit() }}>edit</Button>}
         {onDelete && <Button variant="ghost" size="xs" onClick={(e) => { e.stopPropagation(); onDelete() }}>delete</Button>}
@@ -175,7 +175,7 @@ function ArtifactRow({ a, onClick, onEdit, onDelete }: { a: Artifact; onClick?: 
       {a.evidence.length > 0 && (
         <div style={{ display: 'flex', gap: 'var(--spacing-s)', flexWrap: 'wrap', marginTop: 'var(--spacing-s)' }}>
           {a.evidence.map((e, i) => (
-            <span key={i} data-type="caption" style={{ padding: 'var(--spacing-xs) var(--spacing-s)', borderRadius: 'var(--radius-pill)', background: 'var(--color-surface-high)', opacity: 0.9 }}
+            <span key={i} data-type="caption" style={{ padding: 'var(--spacing-xs) var(--spacing-s)', borderRadius: 'var(--radius-pill)', background: 'var(--color-surface-high)' }}
               title={e.ref}>{(KIND_META[e.kind]?.glyph || '🔗')} {e.label || e.ref}</span>
           ))}
         </div>
@@ -261,7 +261,7 @@ function ArtifactComposer({ api, agent, areas, onDone, onCancel, seed, editTarge
 
   return (
     <Card style={{ marginTop: 'var(--spacing-m)', display: 'grid', gap: 'var(--spacing-s)' }}>
-      <input value={title} aria-label="Artifact title" onChange={(e) => setTitle(e.target.value)} placeholder="What did you accomplish?" style={inputStyle} data-testid="composer-title" />
+      <input value={title} aria-label="Artifact title" onChange={(e) => setTitle(e.target.value)} placeholder="What did you accomplish?" data-type="body-m" style={inputStyle} data-testid="composer-title" />
       <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center', flexWrap: 'wrap' }}>
         <Button variant="secondary" size="sm" onClick={() => setPicking(true)}>+ Link evidence</Button>
         {evidence.map((e, i) => (
@@ -272,9 +272,9 @@ function ArtifactComposer({ api, agent, areas, onDone, onCancel, seed, editTarge
         ))}
         {evidence.length > 0 && <Button variant="secondary" size="sm" onClick={draftFromEvidence} disabled={!!busy}>✨ Draft from evidence</Button>}
       </div>
-      <textarea value={situation} aria-label="Situation" onChange={(e) => setSituation(e.target.value)} placeholder="Situation — the context" rows={2} style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
-      <textarea value={behavior} aria-label="Behavior" onChange={(e) => setBehavior(e.target.value)} placeholder="Behavior — what you did" rows={2} style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
-      <textarea value={impact} aria-label="Impact" onChange={(e) => setImpact(e.target.value)} placeholder="Impact — the outcome" rows={2} style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
+      <textarea value={situation} aria-label="Situation" onChange={(e) => setSituation(e.target.value)} placeholder="Situation — the context" rows={2} data-type="body-m" style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
+      <textarea value={behavior} aria-label="Behavior" onChange={(e) => setBehavior(e.target.value)} placeholder="Behavior — what you did" rows={2} data-type="body-m" style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
+      <textarea value={impact} aria-label="Impact" onChange={(e) => setImpact(e.target.value)} placeholder="Impact — the outcome" rows={2} data-type="body-m" style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
       {areas.length > 0 && (
         <select value={areaId} aria-label="Growth area" onChange={(e) => setAreaId(e.target.value)} style={selectStyle}>
           <option value="">No growth area</option>
@@ -331,7 +331,7 @@ function EvidencePicker({ api, onPick, onClose }: {
       </div>
       {kind === 'external' ? (
         <div style={{ display: 'flex', gap: 'var(--spacing-s)' }}>
-          <input value={ext} aria-label="External URL or reference" onChange={(e) => setExt(e.target.value)} placeholder="https://… or a PR / doc reference" style={inputStyle} />
+          <input value={ext} aria-label="External URL or reference" onChange={(e) => setExt(e.target.value)} placeholder="https://… or a PR / doc reference" data-type="body-m" style={inputStyle} />
           <Button variant="primary" size="md" onClick={() => { if (ext.trim()) onPick({ kind: 'external', ref: ext.trim(), label: ext.trim().slice(0, 40) }) }}>Add</Button>
         </div>
       ) : loading ? <div data-type="caption" style={{ color: 'var(--color-on-surface-low)' }}>Loading {kind}s…</div>
@@ -417,7 +417,7 @@ function Sources({ api, agent, artifacts, onChanged, onGoArtifacts }: {
             : visible.map((c) => (
               <Card key={`${c.kind}:${c.ref}`} testId="source-candidate">
                 <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
-                  <span style={{ flex: 1, fontWeight: 600, fontSize: '0.8125rem' }}>{(KIND_META[c.kind]?.glyph || '🔗')} {c.title}</span>
+                  <span data-type="body-s" style={{ flex: 1, fontVariationSettings: '"wght" 600' }}>{(KIND_META[c.kind]?.glyph || '🔗')} {c.title}</span>
                   <Button variant="primary" size="md" onClick={() => setSeed({ title: c.title, evidence: [{ kind: c.kind, ref: c.ref, label: c.title }], sourceText: c.text })}>Draft artifact</Button>
                   <Button variant="ghost" size="xs" onClick={() => dismiss(`${c.kind}:${c.ref}`)}>dismiss</Button>
                 </div>
@@ -464,8 +464,8 @@ function Areas({ api, areas, artifacts, readiness, onChanged }: {
     <div>
       <Section title="Define a growth area">
         <div style={{ display: 'grid', gap: 'var(--spacing-s)' }}>
-          <input value={name} aria-label="Growth area name" onChange={(e) => setName(e.target.value)} placeholder="e.g. Cross-team influence" style={inputStyle} data-testid="area-name" />
-          <input value={target} aria-label="Target" onChange={(e) => setTarget(e.target.value)} placeholder="Target — what does success look like?" style={inputStyle} />
+          <input value={name} aria-label="Growth area name" onChange={(e) => setName(e.target.value)} placeholder="e.g. Cross-team influence" data-type="body-m" style={inputStyle} data-testid="area-name" />
+          <input value={target} aria-label="Target" onChange={(e) => setTarget(e.target.value)} placeholder="Target — what does success look like?" data-type="body-m" style={inputStyle} />
           <div style={{ display: 'flex', gap: 'var(--spacing-s)' }}>
             <select value={dimension} aria-label="Rubric dimension" onChange={(e) => setDimension(e.target.value)} style={selectStyle}>
               <option value="">Any dimension</option>
@@ -484,8 +484,8 @@ function Areas({ api, areas, artifacts, readiness, onChanged }: {
               return (
                 <Card key={a.id} testId="area-editing">
                   <div style={{ display: 'grid', gap: 'var(--spacing-s)' }}>
-                    <input value={editName} aria-label="Area name" onChange={(e) => setEditName(e.target.value)} style={inputStyle} />
-                    <input value={editTarget} aria-label="Target" onChange={(e) => setEditTarget(e.target.value)} placeholder="Target" style={inputStyle} />
+                    <input value={editName} aria-label="Area name" onChange={(e) => setEditName(e.target.value)} data-type="body-m" style={inputStyle} />
+                    <input value={editTarget} aria-label="Target" onChange={(e) => setEditTarget(e.target.value)} placeholder="Target" data-type="body-m" style={inputStyle} />
                     <div style={{ display: 'flex', gap: 'var(--spacing-s)' }}>
                       <select value={editDimension} aria-label="Dimension" onChange={(e) => setEditDimension(e.target.value)} style={selectStyle}>
                         <option value="">Any dimension</option>
@@ -509,7 +509,7 @@ function Areas({ api, areas, artifacts, readiness, onChanged }: {
             return (
               <Card key={a.id} testId="area">
                 <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
-                  <span style={{ flex: 1, fontWeight: 600, fontSize: '0.9375rem' }}>{a.name}{a.dimension ? <span style={{ color: 'var(--color-on-surface-low)', fontWeight: 400, fontSize: '0.75rem' }}> · {a.dimension}</span> : null}</span>
+                  <span data-type="body-m" style={{ flex: 1, fontVariationSettings: '"wght" 600' }}>{a.name}{a.dimension ? <span data-type="caption" style={{ color: 'var(--color-on-surface-low)' }}> · {a.dimension}</span> : null}</span>
                   <span data-type="caption" style={{ color: 'var(--color-on-surface-var)' }}>{linked.length} artifact{linked.length === 1 ? '' : 's'}</span>
                   <Button variant="ghost" size="xs" onClick={() => startEdit(a)}>edit</Button>
                   <Button variant="ghost" size="xs" onClick={() => api.del(`${A}/areas/${a.id}`).then(onChanged)}>delete</Button>
@@ -575,7 +575,7 @@ function DigestTab({ api, agent, digests, artifacts, areas, onChanged }: {
     <div>
       <Section title="Generate a digest">
         <div style={{ display: 'flex', gap: 'var(--spacing-s)' }}>
-          <input value={period} aria-label="Digest period" onChange={(e) => setPeriod(e.target.value)} placeholder="Period e.g. 2026-Q3" style={inputStyle} data-testid="digest-period" />
+          <input value={period} aria-label="Digest period" onChange={(e) => setPeriod(e.target.value)} placeholder="Period e.g. 2026-Q3" data-type="body-m" style={inputStyle} data-testid="digest-period" />
           <Button variant="primary" size="md" onClick={generate} disabled={busy}>{busy ? (status || 'Generating…') : 'Generate'}</Button>
         </div>
         <p data-type="caption" style={{ color: 'var(--color-on-surface-low)', marginTop: 'var(--spacing-xs)' }}>{status && !busy ? status : 'Summarizes your evidenced artifacts into a shareable accomplishment doc that cites its sources.'}</p>
@@ -585,13 +585,13 @@ function DigestTab({ api, agent, digests, artifacts, areas, onChanged }: {
           : digests.map((d) => (
             <Card key={d.id} testId="digest">
               <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
-                <span style={{ flex: 1, fontWeight: 600, fontSize: '0.9375rem' }}>{d.period || '—'}</span>
+                <span data-type="body-m" style={{ flex: 1, fontVariationSettings: '"wght" 600' }}>{d.period || '—'}</span>
                 <span data-type="caption" style={{ color: 'var(--color-on-surface-low)' }}>{(d.created_at || '').slice(0, 10)}</span>
                 <Button variant="ghost" size="xs" onClick={() => copy(d.content_md)}>copy</Button>
                 <Button variant="ghost" size="xs" onClick={() => toKnowledge(d)}>export → Knowledge</Button>
                 <Button variant="ghost" size="xs" onClick={() => api.del(`${A}/digests/${d.id}`).then(onChanged)}>delete</Button>
               </div>
-              <div style={{ marginTop: 'var(--spacing-s)', padding: 'var(--spacing-m)', borderRadius: 'var(--radius-sm)', background: 'var(--color-surface-high)', whiteSpace: 'pre-wrap', fontSize: '0.8125rem', lineHeight: 1.5 }}>{d.content_md}</div>
+              <div style={{ marginTop: 'var(--spacing-s)', padding: 'var(--spacing-m)', borderRadius: 'var(--radius-sm)', background: 'var(--color-surface-high)', whiteSpace: 'pre-wrap' }} data-type="body-s">{d.content_md}</div>
             </Card>))}
       </Section>
     </div>
@@ -608,7 +608,7 @@ function KeywordsInput({ value, onChange }: { value: string[]; onChange: (v: str
     <input value={text} aria-label="Requirement keywords, comma-separated"
       onChange={(e) => { setText(e.target.value); onChange(e.target.value.split(',').map((s) => s.trim()).filter(Boolean)) }}
       onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-      placeholder="keywords, comma-separated" style={inputStyle} />
+      placeholder="keywords, comma-separated" data-type="body-m" style={inputStyle} />
   )
 }
 
@@ -636,12 +636,12 @@ function Settings({ api, onChanged }: { api: ReturnType<typeof createAppApi>; on
       <Section title="Growth rubric (scoring lens)">
         <p data-type="caption" style={{ color: 'var(--color-on-surface-low)', margin: '0 0 var(--spacing-s)' }}>{isOverride ? 'Using your custom rubric.' : 'Using the built-in default.'} Dimensions + keyword requirements drive classification + readiness scoring — they don't limit what you can log.</p>
         <label data-type="caption" style={labelText}>Label</label>
-        <input value={rubric.label} aria-label="Rubric label" onChange={(e) => setRubric((r) => r && ({ ...r, label: e.target.value }))} style={{ ...inputStyle, width: '100%', marginBottom: 'var(--spacing-m)' }} data-testid="rubric-label" />
+        <input value={rubric.label} aria-label="Rubric label" onChange={(e) => setRubric((r) => r && ({ ...r, label: e.target.value }))} data-type="body-m" style={{ ...inputStyle, width: '100%', marginBottom: 'var(--spacing-m)' }} data-testid="rubric-label" />
         <label data-type="caption" style={labelText}>Dimensions</label>
         <div style={{ display: 'grid', gap: 'var(--spacing-s)', marginBottom: 'var(--spacing-m)' }}>
           {rubric.dimensions.map((d, i) => (
             <div key={i} style={{ display: 'flex', gap: 'var(--spacing-s)' }}>
-              <input value={d} aria-label={`Dimension ${i + 1}`} onChange={(e) => setDim(i, e.target.value)} style={{ ...inputStyle, flex: 1 }} />
+              <input value={d} aria-label={`Dimension ${i + 1}`} onChange={(e) => setDim(i, e.target.value)} data-type="body-m" style={{ ...inputStyle, flex: 1 }} />
               <Button variant="secondary" size="sm" onClick={() => rmDim(i)} ariaLabel="Remove dimension">×</Button>
             </div>
           ))}
@@ -652,15 +652,15 @@ function Settings({ api, onChanged }: { api: ReturnType<typeof createAppApi>; on
           {rubric.requirements.map((q, i) => (
             <Card key={i} style={{ marginBottom: 0, display: 'grid', gap: 'var(--spacing-s)' }}>
               <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
-                <input value={q.code} aria-label="Requirement code" onChange={(e) => setReq(i, { code: e.target.value })} placeholder="code" style={{ ...inputStyle, width: '5rem' }} />
+                <input value={q.code} aria-label="Requirement code" onChange={(e) => setReq(i, { code: e.target.value })} placeholder="code" data-type="body-m" style={{ ...inputStyle, width: '5rem' }} />
                 <select value={q.dim} aria-label="Requirement dimension" onChange={(e) => setReq(i, { dim: e.target.value })} style={{ ...selectStyle, flex: 1 }}>
                   {rubric.dimensions.map((d) => <option key={d} value={d}>{d}</option>)}
                 </select>
                 <span data-type="caption" style={{ color: 'var(--color-on-surface-low)' }}>threshold</span>
-                <input type="number" min={1} aria-label="Requirement threshold" value={q.threshold} onChange={(e) => setReq(i, { threshold: Math.max(1, Number(e.target.value) || 1) })} style={{ ...inputStyle, width: '3.75rem' }} />
+                <input type="number" min={1} aria-label="Requirement threshold" value={q.threshold} onChange={(e) => setReq(i, { threshold: Math.max(1, Number(e.target.value) || 1) })} data-type="body-m" style={{ ...inputStyle, width: '3.75rem' }} />
                 <Button variant="secondary" size="sm" onClick={() => rmReq(i)} ariaLabel="Remove requirement">×</Button>
               </div>
-              <input value={q.short || ''} aria-label="Requirement short label" onChange={(e) => setReq(i, { short: e.target.value })} placeholder="short label" style={inputStyle} />
+              <input value={q.short || ''} aria-label="Requirement short label" onChange={(e) => setReq(i, { short: e.target.value })} placeholder="short label" data-type="body-m" style={inputStyle} />
               <KeywordsInput value={q.keywords || []} onChange={(kw) => setReq(i, { keywords: kw })} />
             </Card>
           ))}
@@ -684,7 +684,7 @@ function Settings({ api, onChanged }: { api: ReturnType<typeof createAppApi>; on
 // why type sizes come from the `data-type` role layer in tokens.css rather than a local
 // fontSize/weight pair. What is left here is only what the host does NOT own: the app's
 // form-control chrome and its own layout.
-const inputStyle: React.CSSProperties = { flex: 1, padding: 'var(--spacing-s) var(--spacing-m)', borderRadius: 'var(--radius-md)', border: 'none', background: 'var(--color-surface-high)', color: 'var(--color-on-surface)', fontSize: '0.9375rem', outline: 'none' }
+const inputStyle: React.CSSProperties = { flex: 1, padding: 'var(--spacing-s) var(--spacing-m)', borderRadius: 'var(--radius-md)', border: 'none', background: 'var(--color-surface-high)', color: 'var(--color-on-surface)', outline: 'none' }
 const selectStyle: React.CSSProperties = { ...inputStyle, appearance: 'none', paddingRight: '1.875rem' }
 // Typography comes from the host caption role (weight carries the label tier —
 // no hand-rolled uppercase/tracking); this keeps only layout and ink.
