@@ -104,6 +104,18 @@ def test_probe_reprobes_after_ttl(monkeypatch):
     assert len(calls) == 2  # ttl 0 → every call re-probes
 
 
+def test_first_probe_runs_on_freshly_booted_host(monkeypatch):
+    # time.monotonic() is host uptime on Linux; on a fresh CI runner it is smaller than
+    # the TTL, and a numeric never-probed sentinel would make the first status() call
+    # skip the probe and answer "not probed yet". The sentinel must be None.
+    p = LimaSandboxProvider(instance="pc-test", probe_ttl=1000.0)
+    calls = _running(monkeypatch, p, "Running")
+    monkeypatch.setattr("provider.time.monotonic", lambda: 12.0)
+    ok, reason = p.status()
+    assert ok is True
+    assert len(calls) == 1  # the probe actually ran
+
+
 def test_running_instance_degrades_to_stopped(monkeypatch):
     p = LimaSandboxProvider(instance="pc-test", probe_ttl=1000.0)
     monkeypatch.setattr("provider.shutil.which", lambda name: "/usr/bin/limactl")

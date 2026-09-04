@@ -34,6 +34,7 @@ import asyncio
 import os
 import shutil
 import subprocess
+import time
 from typing import Any
 
 from personalclaw.sdk.sandbox import SandboxHandle, SandboxProvider, SandboxSpec
@@ -131,8 +132,10 @@ class LimaSandboxProvider(SandboxProvider):
         # configured. Stored as prefixes the translation helpers rewrite between.
         self._host_home = os.path.expanduser("~")
         self._guest_home = guest_home or self._host_home
-        # Cached probe state: (last-probe monotonic time, available, human reason).
-        self._probe_at = 0.0
+        # Cached probe state: (last-probe monotonic time, available, human reason). The
+        # sentinel is None — not 0.0 — because time.monotonic() is small on a freshly booted
+        # host, and a numeric sentinel would let the first status() call skip the probe.
+        self._probe_at: float | None = None
         self._available = False
         self._reason = "not probed yet"
 
@@ -179,10 +182,8 @@ class LimaSandboxProvider(SandboxProvider):
         """Cached ``(available, reason)``. Re-probes at most once per ``probe_ttl`` seconds
         (``force=True`` re-probes now). This is what makes a stopped instance grey out within
         one TTL rather than on every spawn."""
-        import time
-
         now = time.monotonic()
-        if force or (now - self._probe_at) >= self._probe_ttl:
+        if force or self._probe_at is None or (now - self._probe_at) >= self._probe_ttl:
             self._available, self._reason = self._probe()
             self._probe_at = now
         return self._available, self._reason
