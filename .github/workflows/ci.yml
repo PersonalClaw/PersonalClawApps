@@ -57,8 +57,18 @@ jobs:
                   bad.append(f"{mf}: {type(e).__name__}: {e}")
               # every published bundle ships its own LICENSE — a bundle is
               # installed standalone, so the repo-root file does not travel with it
-              if not (mf.parent / "LICENSE").exists():
+              lic = mf.parent / "LICENSE"
+              if not lic.exists():
                   bad.append(f"{mf.parent}: missing LICENSE (copy the repo-root MIT file)")
+                  continue
+              # a manifest that DECLARES a license must agree with the file it ships —
+              # a declared MIT-0 over an MIT file tells installers the wrong terms.
+              # Only known first-lines are mapped; an unrecognized file is not guessed at.
+              declared = json.loads(mf.read_text()).get("license")
+              first = lic.read_text().splitlines()[0].strip() if lic.read_text().strip() else ""
+              actual = {"MIT License": "MIT", "MIT No Attribution": "MIT-0"}.get(first)
+              if declared and actual and declared != actual:
+                  bad.append(f"{mf}: declares license {declared} but LICENSE file is {actual}")
           if bad:
               print("\n".join(bad)); sys.exit(1)
           print(f"OK: {len(list(pathlib.Path('.').glob('*/app.json')))} manifests valid + licensed")
