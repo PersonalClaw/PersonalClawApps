@@ -5,7 +5,7 @@
   "description": "Turn your real work \u2014 chat sessions, projects you ran, tasks you closed, and notes \u2014 into evidenced growth artifacts. Track growth areas, score against a customizable rubric, and generate a shareable accomplishment doc that cites its evidence.",
   "icon": "TrendingUp",
   "author": "PersonalClaw",
-  "license": "MIT-0",
+  "license": "MIT",
   "tags": [
     "career",
     "worklog",
