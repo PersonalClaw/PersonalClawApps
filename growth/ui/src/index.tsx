@@ -110,9 +110,9 @@ function Overview({ readiness, areas, artifacts, onJump }: {
         <div style={{ flex: 1, minWidth: '17.5rem', display: 'grid', gap: 'var(--spacing-s)' }}>
           {readiness.dimensions.map((d) => (
             <div key={d.dimension} style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-s)' }}>
-              <span style={{ flex: 1, fontSize: '0.8125rem' }}>{d.dimension}</span>
-              <span style={{ fontSize: '0.75rem', color: 'var(--color-on-surface-low)' }}>{d.actual}/{d.threshold}</span>
-              <span style={{ padding: '0 var(--spacing-s)', height: '1.375rem', display: 'inline-flex', alignItems: 'center', borderRadius: 'var(--radius-pill)', fontSize: '0.72rem', color: STATUS_COLOR[d.status] || 'var(--color-on-surface-low)', background: `color-mix(in srgb, ${STATUS_COLOR[d.status] || 'var(--color-surface-high)'} 16%, transparent)` }}>{d.status}</span>
+              <span data-type="body-s" style={{ flex: 1}}>{d.dimension}</span>
+              <span data-type="caption" style={{ color: 'var(--color-on-surface-low)' }}>{d.actual}/{d.threshold}</span>
+              <span data-type="caption" style={{ padding: '0 var(--spacing-s)', height: '1.375rem', display: 'inline-flex', alignItems: 'center', borderRadius: 'var(--radius-pill)', color: STATUS_COLOR[d.status] || 'var(--color-on-surface-low)', background: `color-mix(in srgb, ${STATUS_COLOR[d.status] || 'var(--color-surface-high)'} 16%, transparent)` }}>{d.status}</span>
               <div style={{ width: '4.375rem', height: '0.3125rem', borderRadius: 'var(--radius-xs)', background: 'var(--color-surface-high)' }}>
                 <div style={{ width: `${d.pct}%`, height: '100%', borderRadius: 'var(--radius-xs)', background: 'var(--color-primary)' }} />
               </div>
@@ -131,7 +131,7 @@ function Overview({ readiness, areas, artifacts, onJump }: {
             {areas.map((a) => (
               <Card key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-s)' }}>
                 <span style={{ flex: 1, fontWeight: 600, fontSize: '0.8125rem' }}>{a.name}{a.dimension ? <span style={{ color: 'var(--color-on-surface-low)', fontWeight: 400 }}> · {a.dimension}</span> : null}</span>
-                <span style={{ fontSize: '0.75rem', color: 'var(--color-on-surface-var)' }}>{a.artifact_count} artifact{a.artifact_count === 1 ? '' : 's'}</span>
+                <span data-type="caption" style={{ color: 'var(--color-on-surface-var)' }}>{a.artifact_count} artifact{a.artifact_count === 1 ? '' : 's'}</span>
               </Card>
             ))}
           </div>
@@ -157,7 +157,7 @@ function Ring({ pct }: { pct: number }) {
           strokeDasharray={circ} strokeDashoffset={circ * (1 - pct / 100)} transform="rotate(-90 55 55)" />
         <text x="55" y="55" textAnchor="middle" dominantBaseline="central" fontSize="22" fill="var(--color-on-surface)" fontWeight="600">{pct}%</text>
       </svg>
-      <span style={{ fontSize: '0.75rem', color: 'var(--color-on-surface-var)', textAlign: 'center' }}>dimensions covered</span>
+      <span data-type="caption" style={{ color: 'var(--color-on-surface-var)', textAlign: 'center' }}>dimensions covered</span>
     </Card>
   )
 }
@@ -167,15 +167,15 @@ function ArtifactRow({ a, onClick, onEdit, onDelete }: { a: Artifact; onClick?: 
     <Card style={{ cursor: onClick ? 'pointer' : 'default' }} onClick={onClick} testId="artifact">
       <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
         <span style={{ flex: 1, fontWeight: 600, fontSize: '0.9375rem' }}>{a.title}</span>
-        {a.sourced && <span style={{ fontSize: '0.75rem', color: 'var(--color-success)' }}>✓ sourced</span>}
+        {a.sourced && <span data-type="caption" style={{ color: 'var(--color-success)' }}>✓ sourced</span>}
         {onEdit && <Button variant="ghost" size="xs" onClick={(e) => { e.stopPropagation(); onEdit() }}>edit</Button>}
         {onDelete && <Button variant="ghost" size="xs" onClick={(e) => { e.stopPropagation(); onDelete() }}>delete</Button>}
       </div>
-      <div style={{ fontSize: '0.75rem', color: 'var(--color-on-surface-var)', marginTop: 'var(--spacing-xs)' }}>{a.date} · {a.dimensions.join(', ') || 'unclassified'}</div>
+      <div data-type="caption" style={{ color: 'var(--color-on-surface-var)', marginTop: 'var(--spacing-xs)' }}>{a.date} · {a.dimensions.join(', ') || 'unclassified'}</div>
       {a.evidence.length > 0 && (
         <div style={{ display: 'flex', gap: 'var(--spacing-s)', flexWrap: 'wrap', marginTop: 'var(--spacing-s)' }}>
           {a.evidence.map((e, i) => (
-            <span key={i} style={{ fontSize: '0.75rem', padding: 'var(--spacing-xs) var(--spacing-s)', borderRadius: 'var(--radius-pill)', background: 'var(--color-surface-high)', opacity: 0.9 }}
+            <span key={i} data-type="caption" style={{ padding: 'var(--spacing-xs) var(--spacing-s)', borderRadius: 'var(--radius-pill)', background: 'var(--color-surface-high)', opacity: 0.9 }}
               title={e.ref}>{(KIND_META[e.kind]?.glyph || '🔗')} {e.label || e.ref}</span>
           ))}
         </div>
@@ -193,7 +193,7 @@ function Artifacts({ api, agent, artifacts, areas, onChanged }: {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <p style={{ fontSize: '0.8125rem', color: 'var(--color-on-surface-low)', margin: 0 }}>Evidenced pieces of growth. Compose from a PClaw source or freeform.</p>
+        <p data-type="body-s" style={{ color: 'var(--color-on-surface-low)', margin: 0 }}>Evidenced pieces of growth. Compose from a PClaw source or freeform.</p>
         {!composing && !editing && <Button variant="primary" size="md" onClick={() => setComposing(true)}>New artifact</Button>}
       </div>
       {composing && <ArtifactComposer api={api} agent={agent} areas={areas} onDone={() => { setComposing(false); onChanged() }} onCancel={() => setComposing(false)} />}
@@ -265,7 +265,7 @@ function ArtifactComposer({ api, agent, areas, onDone, onCancel, seed, editTarge
       <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center', flexWrap: 'wrap' }}>
         <Button variant="secondary" size="sm" onClick={() => setPicking(true)}>+ Link evidence</Button>
         {evidence.map((e, i) => (
-          <span key={i} style={{ fontSize: '0.75rem', padding: 'var(--spacing-xs) var(--spacing-s)', borderRadius: 'var(--radius-pill)', background: 'var(--color-surface-high)', display: 'inline-flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
+          <span key={i} data-type="caption" style={{ padding: 'var(--spacing-xs) var(--spacing-s)', borderRadius: 'var(--radius-pill)', background: 'var(--color-surface-high)', display: 'inline-flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
             {(KIND_META[e.kind]?.glyph || '🔗')} {e.label || e.ref}
             <Button variant="ghost" size="xs" onClick={() => setEvidence(evidence.filter((_, j) => j !== i))} ariaLabel="Remove evidence">×</Button>
           </span>
@@ -322,7 +322,7 @@ function EvidencePicker({ api, onPick, onClose }: {
   return (
     <Card style={{ background: 'var(--color-surface-high)', display: 'grid', gap: 'var(--spacing-s)' }}>
       <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
-        <span style={{ fontSize: '0.75rem', color: 'var(--color-on-surface-var)' }}>Link evidence from:</span>
+        <span data-type="caption" style={{ color: 'var(--color-on-surface-var)' }}>Link evidence from:</span>
         {(['project', 'task', 'knowledge', 'external'] as const).map((k) => (
           <Button variant={kind === k ? 'primary' : 'ghost'} size="sm" ariaPressed={kind === k} key={k} onClick={() => setKind(k)}>{KIND_META[k]?.label || k}</Button>
         ))}
@@ -334,13 +334,13 @@ function EvidencePicker({ api, onPick, onClose }: {
           <input value={ext} aria-label="External URL or reference" onChange={(e) => setExt(e.target.value)} placeholder="https://… or a PR / doc reference" style={inputStyle} />
           <Button variant="primary" size="md" onClick={() => { if (ext.trim()) onPick({ kind: 'external', ref: ext.trim(), label: ext.trim().slice(0, 40) }) }}>Add</Button>
         </div>
-      ) : loading ? <div style={{ fontSize: '0.75rem', color: 'var(--color-on-surface-low)' }}>Loading {kind}s…</div>
-        : rows.length === 0 ? <div style={{ fontSize: '0.75rem', color: 'var(--color-on-surface-low)' }}>No {kind}s found.</div>
+      ) : loading ? <div data-type="caption" style={{ color: 'var(--color-on-surface-low)' }}>Loading {kind}s…</div>
+        : rows.length === 0 ? <div data-type="caption" style={{ color: 'var(--color-on-surface-low)' }}>No {kind}s found.</div>
           : (
             <div style={{ display: 'grid', gap: 'var(--spacing-xs)', maxHeight: '13.75rem', overflow: 'auto' }}>
               {rows.map((e, i) => (
                 <Card key={i} onClick={() => onPick(e)} testId="evidence-option"
-                  style={{ padding: 'var(--spacing-s)', fontSize: '0.8125rem' }}>
+                  data-type="body-s" style={{ padding: 'var(--spacing-s)'}}>
                   {(KIND_META[e.kind]?.glyph || '🔗')} {e.label}
                 </Card>
               ))}
@@ -407,7 +407,7 @@ function Sources({ api, agent, artifacts, onChanged, onGoArtifacts }: {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <p style={{ fontSize: '0.8125rem', color: 'var(--color-on-surface-low)', margin: 0 }}>Your real PClaw work — completed projects + tasks — as candidate artifacts. Draft one, or dismiss.</p>
+        <p data-type="body-s" style={{ color: 'var(--color-on-surface-low)', margin: 0 }}>Your real PClaw work — completed projects + tasks — as candidate artifacts. Draft one, or dismiss.</p>
         <Button variant="secondary" size="sm" onClick={mine}>Refresh</Button>
       </div>
       {err && <Notice tone="error">{err}</Notice>}
@@ -421,7 +421,7 @@ function Sources({ api, agent, artifacts, onChanged, onGoArtifacts }: {
                   <Button variant="primary" size="md" onClick={() => setSeed({ title: c.title, evidence: [{ kind: c.kind, ref: c.ref, label: c.title }], sourceText: c.text })}>Draft artifact</Button>
                   <Button variant="ghost" size="xs" onClick={() => dismiss(`${c.kind}:${c.ref}`)}>dismiss</Button>
                 </div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--color-on-surface-low)', marginTop: 'var(--spacing-xs)' }}>{c.subtitle}</div>
+                <div data-type="caption" style={{ color: 'var(--color-on-surface-low)', marginTop: 'var(--spacing-xs)' }}>{c.subtitle}</div>
               </Card>
             ))}
       </Section>
@@ -510,14 +510,14 @@ function Areas({ api, areas, artifacts, readiness, onChanged }: {
               <Card key={a.id} testId="area">
                 <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
                   <span style={{ flex: 1, fontWeight: 600, fontSize: '0.9375rem' }}>{a.name}{a.dimension ? <span style={{ color: 'var(--color-on-surface-low)', fontWeight: 400, fontSize: '0.75rem' }}> · {a.dimension}</span> : null}</span>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--color-on-surface-var)' }}>{linked.length} artifact{linked.length === 1 ? '' : 's'}</span>
+                  <span data-type="caption" style={{ color: 'var(--color-on-surface-var)' }}>{linked.length} artifact{linked.length === 1 ? '' : 's'}</span>
                   <Button variant="ghost" size="xs" onClick={() => startEdit(a)}>edit</Button>
                   <Button variant="ghost" size="xs" onClick={() => api.del(`${A}/areas/${a.id}`).then(onChanged)}>delete</Button>
                 </div>
-                {a.target && <div style={{ fontSize: '0.8125rem', color: 'var(--color-on-surface-var)', marginTop: 'var(--spacing-xs)' }}>🎯 {a.target}</div>}
-                {a.status && a.status !== 'active' && <div style={{ fontSize: '0.75rem', color: 'var(--color-on-surface-low)', marginTop: 'var(--spacing-xs)' }}>Status: {a.status}</div>}
-                {linked.length === 0 && <div style={{ fontSize: '0.75rem', color: 'var(--color-on-surface-low)', marginTop: 'var(--spacing-xs)', fontStyle: 'italic' }}>No evidence yet — link an artifact to show progress.</div>}
-                {linked.map((x) => <div key={x.id} style={{ fontSize: '0.75rem', color: 'var(--color-on-surface-var)', marginTop: 'var(--spacing-xs)' }}>• {x.title}</div>)}
+                {a.target && <div data-type="body-s" style={{ color: 'var(--color-on-surface-var)', marginTop: 'var(--spacing-xs)' }}>🎯 {a.target}</div>}
+                {a.status && a.status !== 'active' && <div data-type="caption" style={{ color: 'var(--color-on-surface-low)', marginTop: 'var(--spacing-xs)' }}>Status: {a.status}</div>}
+                {linked.length === 0 && <div data-type="caption" style={{ color: 'var(--color-on-surface-low)', marginTop: 'var(--spacing-xs)', fontStyle: 'italic' }}>No evidence yet — link an artifact to show progress.</div>}
+                {linked.map((x) => <div key={x.id} data-type="caption" style={{ color: 'var(--color-on-surface-var)', marginTop: 'var(--spacing-xs)' }}>• {x.title}</div>)}
               </Card>
             )
           })}
@@ -578,7 +578,7 @@ function DigestTab({ api, agent, digests, artifacts, areas, onChanged }: {
           <input value={period} aria-label="Digest period" onChange={(e) => setPeriod(e.target.value)} placeholder="Period e.g. 2026-Q3" style={inputStyle} data-testid="digest-period" />
           <Button variant="primary" size="md" onClick={generate} disabled={busy}>{busy ? (status || 'Generating…') : 'Generate'}</Button>
         </div>
-        <p style={{ fontSize: '0.75rem', color: 'var(--color-on-surface-low)', marginTop: 'var(--spacing-xs)' }}>{status && !busy ? status : 'Summarizes your evidenced artifacts into a shareable accomplishment doc that cites its sources.'}</p>
+        <p data-type="caption" style={{ color: 'var(--color-on-surface-low)', marginTop: 'var(--spacing-xs)' }}>{status && !busy ? status : 'Summarizes your evidenced artifacts into a shareable accomplishment doc that cites its sources.'}</p>
       </Section>
       <Section title={`Digests (${digests.length})`}>
         {digests.length === 0 ? <Notice>No digests yet. Pick a period and generate one.</Notice>
@@ -586,7 +586,7 @@ function DigestTab({ api, agent, digests, artifacts, areas, onChanged }: {
             <Card key={d.id} testId="digest">
               <div style={{ display: 'flex', gap: 'var(--spacing-s)', alignItems: 'center' }}>
                 <span style={{ flex: 1, fontWeight: 600, fontSize: '0.9375rem' }}>{d.period || '—'}</span>
-                <span style={{ fontSize: '0.75rem', color: 'var(--color-on-surface-low)' }}>{(d.created_at || '').slice(0, 10)}</span>
+                <span data-type="caption" style={{ color: 'var(--color-on-surface-low)' }}>{(d.created_at || '').slice(0, 10)}</span>
                 <Button variant="ghost" size="xs" onClick={() => copy(d.content_md)}>copy</Button>
                 <Button variant="ghost" size="xs" onClick={() => toKnowledge(d)}>export → Knowledge</Button>
                 <Button variant="ghost" size="xs" onClick={() => api.del(`${A}/digests/${d.id}`).then(onChanged)}>delete</Button>
@@ -634,7 +634,7 @@ function Settings({ api, onChanged }: { api: ReturnType<typeof createAppApi>; on
   return (
     <div>
       <Section title="Growth rubric (scoring lens)">
-        <p style={{ fontSize: '0.75rem', color: 'var(--color-on-surface-low)', margin: '0 0 var(--spacing-s)' }}>{isOverride ? 'Using your custom rubric.' : 'Using the built-in default.'} Dimensions + keyword requirements drive classification + readiness scoring — they don't limit what you can log.</p>
+        <p data-type="caption" style={{ color: 'var(--color-on-surface-low)', margin: '0 0 var(--spacing-s)' }}>{isOverride ? 'Using your custom rubric.' : 'Using the built-in default.'} Dimensions + keyword requirements drive classification + readiness scoring — they don't limit what you can log.</p>
         <label style={labelText}>Label</label>
         <input value={rubric.label} aria-label="Rubric label" onChange={(e) => setRubric((r) => r && ({ ...r, label: e.target.value }))} style={{ ...inputStyle, width: '100%', marginBottom: 'var(--spacing-m)' }} data-testid="rubric-label" />
         <label style={labelText}>Dimensions</label>
@@ -656,7 +656,7 @@ function Settings({ api, onChanged }: { api: ReturnType<typeof createAppApi>; on
                 <select value={q.dim} aria-label="Requirement dimension" onChange={(e) => setReq(i, { dim: e.target.value })} style={{ ...selectStyle, flex: 1 }}>
                   {rubric.dimensions.map((d) => <option key={d} value={d}>{d}</option>)}
                 </select>
-                <span style={{ fontSize: '0.75rem', color: 'var(--color-on-surface-low)' }}>threshold</span>
+                <span data-type="caption" style={{ color: 'var(--color-on-surface-low)' }}>threshold</span>
                 <input type="number" min={1} aria-label="Requirement threshold" value={q.threshold} onChange={(e) => setReq(i, { threshold: Math.max(1, Number(e.target.value) || 1) })} style={{ ...inputStyle, width: '3.75rem' }} />
                 <Button variant="secondary" size="sm" onClick={() => rmReq(i)} ariaLabel="Remove requirement">×</Button>
               </div>
@@ -730,7 +730,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return <section style={{ margin: 'var(--spacing-2xl) 0' }}><h3 data-type="label-m" style={{ margin: '0 0 var(--spacing-s)', color: 'var(--color-on-surface)' }}>{title}</h3>{children}</section>
 }
 function Notice({ children, tone }: { children: React.ReactNode; tone?: 'error' }) {
-  return <div style={{ padding: 'var(--spacing-m)', borderRadius: 'var(--radius-md)', fontSize: '0.8125rem', border: '1px solid var(--color-outline-variant)', background: 'var(--color-surface-high)', color: tone === 'error' ? 'var(--color-danger)' : 'var(--color-on-surface-low)' }}>{children}</div>
+  return <div data-type="body-s" style={{ padding: 'var(--spacing-m)', borderRadius: 'var(--radius-md)', border: '1px solid var(--color-outline-variant)', background: 'var(--color-surface-high)', color: tone === 'error' ? 'var(--color-danger)' : 'var(--color-on-surface-low)' }}>{children}</div>
 }
 /** An action embedded in a SENTENCE ("… Mine your work or add an artifact."). Deliberately
  *  NOT the host `Button`: every exposed variant is a standalone control with its own height
