@@ -635,9 +635,9 @@ function Settings({ api, onChanged }: { api: ReturnType<typeof createAppApi>; on
     <div>
       <Section title="Growth rubric (scoring lens)">
         <p data-type="caption" style={{ color: 'var(--color-on-surface-low)', margin: '0 0 var(--spacing-s)' }}>{isOverride ? 'Using your custom rubric.' : 'Using the built-in default.'} Dimensions + keyword requirements drive classification + readiness scoring — they don't limit what you can log.</p>
-        <label style={labelText}>Label</label>
+        <label data-type="caption" style={labelText}>Label</label>
         <input value={rubric.label} aria-label="Rubric label" onChange={(e) => setRubric((r) => r && ({ ...r, label: e.target.value }))} style={{ ...inputStyle, width: '100%', marginBottom: 'var(--spacing-m)' }} data-testid="rubric-label" />
-        <label style={labelText}>Dimensions</label>
+        <label data-type="caption" style={labelText}>Dimensions</label>
         <div style={{ display: 'grid', gap: 'var(--spacing-s)', marginBottom: 'var(--spacing-m)' }}>
           {rubric.dimensions.map((d, i) => (
             <div key={i} style={{ display: 'flex', gap: 'var(--spacing-s)' }}>
@@ -647,7 +647,7 @@ function Settings({ api, onChanged }: { api: ReturnType<typeof createAppApi>; on
           ))}
           <Button variant="secondary" size="sm" onClick={addDim}>+ Add dimension</Button>
         </div>
-        <label style={labelText}>Requirements</label>
+        <label data-type="caption" style={labelText}>Requirements</label>
         <div style={{ display: 'grid', gap: 'var(--spacing-s)', marginBottom: 'var(--spacing-m)' }}>
           {rubric.requirements.map((q, i) => (
             <Card key={i} style={{ marginBottom: 0, display: 'grid', gap: 'var(--spacing-s)' }}>
@@ -686,7 +686,9 @@ function Settings({ api, onChanged }: { api: ReturnType<typeof createAppApi>; on
 // form-control chrome and its own layout.
 const inputStyle: React.CSSProperties = { flex: 1, padding: 'var(--spacing-s) var(--spacing-m)', borderRadius: 'var(--radius-md)', border: 'none', background: 'var(--color-surface-high)', color: 'var(--color-on-surface)', fontSize: '0.9375rem', outline: 'none' }
 const selectStyle: React.CSSProperties = { ...inputStyle, appearance: 'none', paddingRight: '1.875rem' }
-const labelText: React.CSSProperties = { fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--color-on-surface-low)', marginBottom: 'var(--spacing-xs)', display: 'block' }
+// Typography comes from the host caption role (weight carries the label tier —
+// no hand-rolled uppercase/tracking); this keeps only layout and ink.
+const labelText: React.CSSProperties = { color: 'var(--color-on-surface-low)', marginBottom: 'var(--spacing-xs)', display: 'block' }
 
 /** A card whose surface chrome is the HOST's `Surface` (tone step + neumorphic ground +
  *  token radius), never a re-declaration of its token values.
