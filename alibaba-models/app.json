@@ -51,7 +51,10 @@
           ],
           "x-meta": {
             "label": "Endpoint",
-            "help": "Regional API endpoint. Token Plan users select their plan endpoint; workspace users enter their workspace URL."
+            "help": "Regional API endpoint. Token Plan users select their plan endpoint; workspace users enter their workspace URL.",
+            "tags": [
+              "advanced"
+            ]
           }
         }
       }

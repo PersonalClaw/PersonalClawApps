@@ -302,6 +302,20 @@ jobs:
       - name: Check prompt-cache posture declarations
         run: python .github/scripts/check_prompt_cache_posture.py
 
+  settings-schema-posture:
+    # Cross-app rail (AP-10): one convention for `advanced` and `required` settings
+    # fields — optional tuning fields fold, required fields never fold, api_key is
+    # never required. Lives here with the other cross-app sweeps for the same reason
+    # they do: the tests job runs pytest PER bundle. Pure stdlib — no core install.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Check settings-schema advanced/required posture
+        run: python .github/scripts/check_settings_schema_posture.py
+
   dco:
     # Every commit in a PR must carry a Signed-off-by trailer (DCO — plan 37),
     # same provenance rule as core. Pure-git check, PR-only.

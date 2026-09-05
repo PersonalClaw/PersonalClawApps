@@ -50,7 +50,10 @@
           "type": "string",
           "x-meta": {
             "label": "SSE Endpoint",
-            "help": "URL for SSE transport (e.g. http://localhost:8080/sse)."
+            "help": "URL for SSE transport (e.g. http://localhost:8080/sse).",
+            "tags": [
+              "advanced"
+            ]
           }
         }
       }
