@@ -26,7 +26,10 @@
           "default": "",
           "x-meta": {
             "label": "Endpoint URL",
-            "help": "The S3 API endpoint, scheme included — e.g. https://s3.us-east-1.amazonaws.com for AWS, or http://nas.local:9000 for a self-hosted MinIO. This single host is the ONLY host the transport may reach: egress is pinned to it. Leave empty to configure later — the transport stays idle until set."
+            "help": "The S3 API endpoint, scheme included — e.g. https://s3.us-east-1.amazonaws.com for AWS, or http://nas.local:9000 for a self-hosted MinIO. This single host is the ONLY host the transport may reach: egress is pinned to it. Leave empty to configure later — the transport stays idle until set.",
+            "tags": [
+              "advanced"
+            ]
           }
         },
         "bucket": {

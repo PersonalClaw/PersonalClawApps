@@ -23,7 +23,10 @@
           "type": "string",
           "x-meta": {
             "label": "Endpoint URL",
-            "help": "Base URL of the tool server (e.g. https://tools.example.com)."
+            "help": "Base URL of the tool server (e.g. https://tools.example.com).",
+            "tags": [
+              "advanced"
+            ]
           }
         },
         "api_key": {
