@@ -212,12 +212,3 @@ class FakeState:
 
     def notify(self, *a, **k) -> None:
         self.notified.append((a, k))
-
-
-class FakeServices:
-    def __init__(self, state) -> None:
-        self.dashboard_state = state
-        self.registered_delivery = None
-
-    def register_channel_delivery(self, delivery) -> None:
-        self.registered_delivery = delivery
