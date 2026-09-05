@@ -42,7 +42,7 @@ from personalclaw.sdk.channel import list_servers
 from personalclaw.sdk.channel import redact_credentials, redact_exfiltration_urls
 from personalclaw.sdk.channel import sel
 from personalclaw.sdk.channel import SkillsLoader
-from slack_runtime.allowlist import prompt_track_channel, send_dashboard_link
+from slack_runtime.allowlist import prompt_track_channel, send_dashboard_link, sync_channel_trust
 from slack_runtime.enterprise import check_message_origin, validate_enterprise
 from slack_runtime.files import process_slack_files
 from slack_runtime.handler import (
@@ -57,6 +57,7 @@ from slack_runtime.handler import (
     is_yolo_mode,
     set_allowed_users,
     set_dashboard_state,
+    set_gateway_services,
     set_open_channels,
     set_orch_cfg,
     set_owner_id,
@@ -614,6 +615,11 @@ def init_socket_mode(orch: "GatewayServices", seen: SeenCache) -> None:
     set_tracking_channels(orch._tracking_channels)
     set_open_channels(orch._open_channels)
     set_owner_id(orch._owner_id)
+    set_gateway_services(orch._services)
+    # EA-7: mirror the owner-only posture into core's channel_trust store — the
+    # guarded inbound door the linked-thread intercept routes through consults
+    # core, not SlackSettings. Idempotent: writes only what is missing.
+    sync_channel_trust(orch._owner_id, orch._tracking_channels)
     if orch._cfg.agent.yolo:
         set_yolo_mode(True)
     set_orch_cfg(orch._cfg)

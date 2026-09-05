@@ -464,6 +464,7 @@ _orch_cfg: AppConfig | None = None
 
 # Dashboard state reference for pushing refresh events (set by gateway).
 _dashboard_state: object | None = None
+_gateway_services = None
 
 
 _cached_default_agent: str | None = None  # None = not yet loaded from disk
@@ -783,6 +784,14 @@ def claim_owner(user_id: str) -> bool:
     except Exception:
         logger.warning("Failed to persist auto-claimed Slack owner", exc_info=True)
     logger.info("Slack owner auto-claimed on first contact: %s", user_id)
+    # EA-7: the claimed owner is slack's ONE allowed sender — seed core's
+    # channel_trust store so the guarded inbound door admits them.
+    try:
+        from personalclaw.sdk.channel import allow_sender
+
+        allow_sender("slack", user_id, via="owner")
+    except Exception:
+        logger.warning("Failed to seed channel_trust with claimed Slack owner", exc_info=True)
     return True
 
 
@@ -820,6 +829,35 @@ def set_dashboard_state(state: object) -> None:
     """Store dashboard state reference for push_refresh (called by gateway)."""
     global _dashboard_state
     _dashboard_state = state
+
+
+def _track_linked_channel(channel_id: str) -> None:
+    """Record a just-linked channel in core's channel_trust store (EA-7).
+
+    Linking a thread is the owner's explicit invitation for the agent to converse
+    there, so the guarded door must admit the thread's messages — for a group
+    channel that means the channel is tracked. DMs need no tracking: the owner is
+    an allowed sender and a DM passes the door's DM branch directly."""
+    if not channel_id or channel_id.startswith("D"):
+        return
+    try:
+        from personalclaw.sdk.channel import is_tracked_channel as _ct_is_tracked
+        from personalclaw.sdk.channel import track as _ct_track
+
+        if not _ct_is_tracked("slack", channel_id):
+            _ct_track("slack", channel_id)
+    except Exception:
+        logger.warning("Failed to track linked channel in channel_trust", exc_info=True)
+
+
+def set_gateway_services(services: object) -> None:
+    """Store the GatewayServices handle (called by events.py at socket init).
+
+    The linked-thread intercept routes through the platform's guarded inbound
+    door (``services.deliver_channel_inbound``, EA-7) instead of hand-rolling
+    the session routing — this is how the handler reaches that door."""
+    global _gateway_services
+    _gateway_services = services
 
 
 def _reload_orch_cfg() -> None:
@@ -1214,6 +1252,7 @@ async def _handle_slash_command(
             )
             await slack.post_message(channel, "Could not fetch thread history.", reply_ts)
             return ""
+        _track_linked_channel(channel)
         sel().log_tool_invocation(
             session_key=session.key, agent="personalclaw", source="slack",
             tool_name="link_to_dashboard", tool_kind="command",
@@ -1667,31 +1706,52 @@ async def handle_message(
             _first_word = text.strip().split(maxsplit=1)[0] if text.strip() else ""
             if _first_word in _BANG_TO_SLASH:
                 pass  # fall through
+            elif _gateway_services is None:
+                # No services handle (never true on the production path — events.py
+                # sets it at socket init). Fall through to normal handling so the
+                # message is still answered in-thread rather than dropped.
+                logger.warning(
+                    "Linked thread %s: no gateway services handle — falling through "
+                    "to normal handling", session_key,
+                )
             else:
-                _linked_session_name = _linked_session.key
-                # Redact for UI display only — LLM receives original text so it can
-                # process user intent fully (redaction strips URLs/creds that may be
-                # relevant context). The LLM's own output is redacted before display.
-                _safe_text, _ = redact_exfiltration_urls(text)
-                _safe_text, _ = redact_credentials(_safe_text)
-                _linked_session.append("user", _safe_text, "msg msg-u")
-                _dashboard_state.broadcast_ws("chat_message", {"session": _linked_session_name, "role": "user", "content": _safe_text, "cls": "msg msg-u"})  # type: ignore[attr-defined]
-                if not _linked_session.running:
-                    from personalclaw.sdk.channel import run_chat
-                    _chat_task = asyncio.create_task(run_chat(_dashboard_state, _linked_session, text))  # type: ignore[arg-type]
-                    _linked_session.task = _chat_task
-                    _dashboard_state._background_tasks.add(_chat_task)  # type: ignore[attr-defined]
-                    _chat_task.add_done_callback(_dashboard_state._background_tasks.discard)  # type: ignore[attr-defined]
-                else:
-                    _linked_session.queue_append(text)
-                _dashboard_state.push_sessions_update()  # type: ignore[attr-defined]
+                # The guarded door (EA-7). Core applies the trust gate, redaction,
+                # session linking, the live WS broadcast/session-list push and the
+                # turn itself — the routing this intercept used to hand-roll (the
+                # LLM still receives the original text; only the displayed line is
+                # redacted, both now core-owned). Slack keeps its own owner gate
+                # above: the "Not authorized." reply and SEL denial are
+                # slack-specific UX that core's silent verdict does not carry.
+                from personalclaw.sdk.channel import ChannelMessage
+
+                _cm = ChannelMessage(
+                    channel_id=channel,
+                    text=text,
+                    sender=user_id,
+                    thread_id=session_key,
+                    message_id=msg_ts,
+                    metadata={"sender_name": user_display_name or ""},
+                )
+                verdict = await _gateway_services.deliver_channel_inbound(
+                    "slack", _cm, is_dm=channel.startswith("D")
+                )
+                if verdict.canned_reply:
+                    await slack.post_message(channel, verdict.canned_reply, reply_ts)
                 sel().log_tool_invocation(
                     session_key=session_key, agent="personalclaw", source="slack",
                     tool_name="linked_thread_intercept", tool_kind="permission",
-                    outcome="allowed",
-                    metadata={"user_id": user_id, "session": _linked_session_name},
+                    outcome="allowed" if verdict.allowed else "denied",
+                    metadata={
+                        "user_id": user_id,
+                        "session": _linked_session.key,
+                        **({} if verdict.allowed else {"reason": verdict.reason}),
+                    },
                 )
-                logger.info("Routed linked Slack message to dashboard session %s", _linked_session_name)
+                logger.info(
+                    "Linked Slack message for session %s: %s",
+                    _linked_session.key,
+                    "routed via the guarded door" if verdict.allowed else f"denied ({verdict.reason})",
+                )
                 return
     logger.info(
         "🔍 handle_message: thread_ts=%s msg_ts=%s → session_key=%s channel=%s",
