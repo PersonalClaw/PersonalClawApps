@@ -7,13 +7,13 @@ boot with a :class:`GatewayServices` handle. The loop:
 1. holds a gateway connection (:class:`DiscordGateway` owns identify/heartbeat/
    resume — see its module docstring for the WS lifecycle);
 2. normalizes each ``MESSAGE_CREATE`` to a :class:`ChannelMessage`;
-3. runs it through the core sender-trust seam (:func:`guard_inbound`) — DM pairing,
-   guild-channel tracked-only, and non-owner-content fencing all happen there, so
-   this transport can't forget them;
-4. routes an allowed message to a channel-linked dashboard session and drives one
-   turn via core ``run_chat`` — core then mirrors the reply back out through the
-   :class:`DiscordDelivery` this transport registers at boot (the outbound half of
-   the seam). ``INTERACTION_CREATE`` events (button presses) resolve a pending
+3. hands it to the platform's guarded door (``services.deliver_channel_inbound``) —
+   the trust gate, DM pairing, guild-channel tracked-only, non-owner-content
+   fencing, redaction, session linking and the turn itself all happen in core, so
+   this transport can't forget any of them; it keeps only the outbound half,
+   delivering the verdict's canned reply. Core mirrors agent replies back out
+   through the :class:`DiscordDelivery` this transport registers at boot
+   (the outbound half of the seam). ``INTERACTION_CREATE`` events (button presses) resolve a pending
    approval in the delivery.
 
 Two Discord-specific inbound facts shape this file:
@@ -51,9 +51,6 @@ from personalclaw.sdk.channel import (
     ChannelMessage,
     ChannelTransportProvider,
     OutboundMessage,
-    guard_inbound,
-    redact_credentials,
-    redact_exfiltration_urls,
 )
 
 # Import ALL runtime deps at MODULE level (not lazily inside methods): the loader
@@ -254,55 +251,17 @@ class DiscordTransport(ChannelTransportProvider):
         if is_dm and settings.dm_activation == ACTIVATION_OFF:
             return
 
-        state = getattr(self._services, "dashboard_state", None)
-        verdict = guard_inbound(
-            state, PROVIDER, cm.sender,
-            sender_name=cm.metadata.get("sender_name", ""),
-            channel_id=cm.channel_id, is_dm=is_dm, text=cm.text,
-        )
-        if not verdict.allowed:
-            if verdict.canned_reply and self._delivery is not None:
-                try:
-                    await self._delivery.deliver_text(cm.channel_id, verdict.canned_reply)
-                except Exception:
-                    logger.debug("discord: canned reply send failed", exc_info=True)
-            return
-
-        # Non-owner guild content is fenced by the seam — feed the fenced form to the
-        # session so the model reads it as data, not instructions.
-        text_for_session = verdict.fenced_text or cm.text
-        await self._route_to_session(cm, text_for_session)
-
-    async def _route_to_session(self, cm: ChannelMessage, text: str) -> None:
-        """Link a dashboard session to this channel and drive one turn via core.
-
-        Core's ``run_chat`` mirrors the reply back out through our registered
-        DiscordDelivery for a channel-linked session, so this transport never renders
-        outbound itself — the seam does."""
-        state = getattr(self._services, "dashboard_state", None)
-        if state is None:
-            logger.warning("discord: no dashboard state — cannot route message")
-            return
-        from personalclaw.sdk.channel import run_chat
-
-        thread_key = cm.channel_id  # one session per Discord channel
-        session = state.get_linked_session(thread_key)
-        if session is None:
-            session = state.get_or_create_session(app="discord")
-            state.link_channel(session.key, thread_key, cm.channel_id)
-
-        safe, _ = redact_exfiltration_urls(text)
-        safe, _ = redact_credentials(safe)
-        session.append("user", safe, "msg msg-u")
-        if getattr(session, "running", False):
-            session.queue_append(text)
-            return
-        task = asyncio.ensure_future(run_chat(state, session, text))
-        session.task = task
-        tasks = getattr(state, "_background_tasks", None)
-        if tasks is not None:
-            tasks.add(task)
-            task.add_done_callback(tasks.discard)
+        # The guarded door (EA-7). Core applies the trust gate, the pairing-code
+        # redemption, the fence for non-owner guild content, redaction, session
+        # linking and the turn itself — the routing this transport used to carry a
+        # copy of. This transport keeps only the channel-specific outbound half:
+        # delivering the verdict's canned reply as a Discord message.
+        verdict = await self._services.deliver_channel_inbound(PROVIDER, cm, is_dm=is_dm)
+        if verdict.canned_reply and self._delivery is not None:
+            try:
+                await self._delivery.deliver_text(cm.channel_id, verdict.canned_reply)
+            except Exception:
+                logger.debug("discord: canned reply send failed", exc_info=True)
 
     # ── outbound / health ──
 

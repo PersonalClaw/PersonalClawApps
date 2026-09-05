@@ -10,12 +10,14 @@ poll loop started by :meth:`start_inbound`, which the gateway calls once at boot
    unparseable message or one with no ``From`` address surfaces nothing);
 3. drops our OWN mail (the mailbox receives copies of what we send, and any auto-reply
    from the far side would otherwise loop);
-4. runs the sender through the core sender-trust seam (:func:`guard_inbound`, provider
-   ``"email"``) — the address allowlist, the pairing flow, and fencing all live there, so
-   this transport can't forget them. A reply containing an active pairing code redeems it
-   (the plan's "pairing code = a reply containing the code");
-5. routes an allowed message to a thread-linked dashboard session and drives one turn via
-   core ``run_chat`` — core then mirrors the reply back out through the
+4. hands the message to the platform's guarded door (``services.deliver_channel_inbound``,
+   provider ``"email"``) — the address allowlist, the pairing flow, fencing, redaction,
+   session linking and the turn itself all live in core, so this transport can't forget
+   any of them. A reply containing an active pairing code redeems it BEFORE the door
+   (the plan's "pairing code = a reply containing the code" — an in-body search core's
+   whole-message check cannot do), and the transport keeps only the outbound half,
+   delivering the verdict's canned reply in-thread. Core mirrors agent replies back out
+   through the
    :class:`~email_runtime.delivery.EmailDelivery` this transport registers at boot.
 
 **Why not IMAP IDLE.** IDLE would give push-latency instead of the plan's 60s poll, but
@@ -41,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import replace
 import sys as _sys
 from pathlib import Path as _Path
 from typing import Any
@@ -59,9 +62,6 @@ from personalclaw.sdk.channel import (
     ChannelMessage,
     ChannelTransportProvider,
     OutboundMessage,
-    guard_inbound,
-    redact_credentials,
-    redact_exfiltration_urls,
     redeem_pairing_code,
 )
 from personalclaw.sdk.util import app_data_dir
@@ -439,47 +439,45 @@ class EmailTransport(ChannelTransportProvider):
             return  # nothing to act on (an empty body, or attachments only)
 
         cm = self._to_channel_message(mail)
-        state = getattr(self._services, "dashboard_state", None)
 
         # A reply from a not-yet-allowed sender that CONTAINS an active pairing code
         # redeems it (the plan's "pairing code = a reply containing the code"). Checked
-        # before guard_inbound so the pairing reply doesn't get the canned nudge again.
+        # before the door so the pairing reply doesn't get the canned nudge again —
+        # the code is searched INSIDE the body, which core's whole-message digit
+        # check cannot do through a mail client's quoting and signature.
         if await self._try_pairing(cm, text, settings):
             return
 
-        verdict = guard_inbound(
-            state, PROVIDER, cm.sender,
-            sender_name=cm.metadata.get("sender_name", ""),
-            channel_id=cm.channel_id,
-            # An email to our mailbox is a direct message by construction: there is no
-            # "room" concept here, so the DM policy (pairing by default) always applies.
-            is_dm=True,
-            text=text,
-        )
-        if not verdict.allowed:
-            if verdict.canned_reply and self._delivery is not None:
-                try:
-                    # Reply in-thread so the nudge lands under their own message.
-                    self._delivery.note_inbound(mail)
-                    await self._delivery.deliver_text(
-                        cm.channel_id, verdict.canned_reply, cm.thread_id
-                    )
-                except Exception:
-                    logger.debug("email: canned reply send failed", exc_info=True)
-            return
-
-        # Remember the inbound message so our reply threads onto it.
+        # Remember the inbound message FIRST so any reply — the agent's, or the
+        # door's canned nudge — threads under the sender's own message.
         if self._delivery is not None:
             self._delivery.note_inbound(mail)
-            # An allowed sender's body may carry an approval reply-token; resolving it
-            # consumes the message (it is an answer, not a new turn).
-            if self._delivery.resolve_reply_token(text):
+            # An ALLOWED sender's body may carry an approval reply-token; resolving it
+            # consumes the message (it is an answer, not a new turn). Gated on the
+            # allowlist read, never on the raw body: an unknown sender must not be
+            # able to resolve an approval by mailing a token.
+            from personalclaw.sdk.channel import is_allowed_sender
+
+            if is_allowed_sender(PROVIDER, cm.sender) and self._delivery.resolve_reply_token(text):
                 return
 
-        # A verdict may carry fenced text (non-owner content); use it when present so
-        # the model reads the message as data rather than instructions.
-        text_for_session = verdict.fenced_text or text
-        await self._route_to_session(cm, text_for_session)
+        # The guarded door (EA-7). Core applies the trust gate, the non-owner-content
+        # fence, redaction, session linking and the turn itself — the routing this
+        # transport used to carry a copy of. An email to our mailbox is a direct
+        # message by construction (no "room" concept), so is_dm is always True. This
+        # transport keeps only the outbound half: the canned reply, delivered
+        # in-thread so the nudge lands under the sender's own message.
+        cm_for_door = cm if text == cm.text else replace(cm, text=text)
+        verdict = await self._services.deliver_channel_inbound(
+            PROVIDER, cm_for_door, is_dm=True
+        )
+        if verdict.canned_reply and self._delivery is not None:
+            try:
+                await self._delivery.deliver_text(
+                    cm.channel_id, verdict.canned_reply, cm.thread_id
+                )
+            except Exception:
+                logger.debug("email: canned reply send failed", exc_info=True)
 
     async def _try_pairing(self, cm: ChannelMessage, text: str, settings: EmailSettings) -> bool:
         """Redeem a pairing code found in *text*. Returns whether pairing happened.
@@ -507,40 +505,6 @@ class EmailTransport(ChannelTransportProvider):
                 logger.info("email: sender %s paired via code", cm.sender)
                 return True
         return False
-
-    async def _route_to_session(self, cm: ChannelMessage, text: str) -> None:
-        """Link a dashboard session to this mail thread and drive one turn via core.
-
-        Core's ``run_chat`` mirrors the reply back out through our registered
-        EmailDelivery for a channel-linked session, so this transport never renders
-        outbound itself — the seam does."""
-        state = getattr(self._services, "dashboard_state", None)
-        if state is None:
-            logger.warning("email: no dashboard state — cannot route message")
-            return
-        from personalclaw.sdk.channel import run_chat
-
-        # One session per mail THREAD (not per correspondent): two separate
-        # conversations with the same person stay separate, which is what a threading
-        # channel promises.
-        thread_key = cm.thread_id or cm.channel_id
-        session = state.get_linked_session(thread_key)
-        if session is None:
-            session = state.get_or_create_session(app="email")
-            state.link_channel(session.key, thread_key, cm.channel_id)
-
-        safe, _ = redact_exfiltration_urls(text)
-        safe, _ = redact_credentials(safe)
-        session.append("user", safe, "msg msg-u")
-        if getattr(session, "running", False):
-            session.queue_append(text)
-            return
-        task = asyncio.ensure_future(run_chat(state, session, text))
-        session.task = task
-        tasks = getattr(state, "_background_tasks", None)
-        if tasks is not None:
-            tasks.add(task)
-            task.add_done_callback(tasks.discard)
 
     # ── outbound / health ──
 
