@@ -58,8 +58,24 @@ class FakeState:
 
 
 class FakeServices:
-    def __init__(self, state):
+    """The gateway-services handle a transport holds, faked at the SEAM the
+    transport actually calls (EA-7): ``deliver_channel_inbound`` delegates to the
+    REAL core door with a captured ``turn_runner``, so every trust behavior these
+    tests assert is the real core logic, and only the turn itself is captured."""
+
+    def __init__(self, state, captured=None):
         self.dashboard_state = state
+        self._captured = captured if captured is not None else {}
+
+    async def deliver_channel_inbound(self, provider, msg, *, is_dm=True):
+        from personalclaw.channel_inbound import deliver_inbound
+
+        async def turn_runner(state, session, text):
+            self._captured["state"] = state
+            self._captured["session"] = session
+            self._captured["text"] = text
+
+        return await deliver_inbound(self, provider, msg, is_dm=is_dm, turn_runner=turn_runner)
 
 
 def _msg(text="hi", chat_id="500", chat_type="private", from_id="42", first="Ada"):
@@ -76,20 +92,17 @@ def _msg(text="hi", chat_id="500", chat_type="private", from_id="42", first="Ada
 
 
 @pytest.fixture
-def transport_with_capture(monkeypatch):
-    """A transport wired to a fake state + delivery, with run_chat captured."""
+def transport_with_capture():
+    """A transport wired to a fake state + delivery, with the turn captured at the
+    door. The admission cache is module-global and messages reuse ids across tests,
+    so it is reset per test."""
+    from personalclaw.channel_inbound import reset_admissions
+
+    reset_admissions()
     captured: dict = {}
-
-    async def fake_run_chat(state, session, text, *a, **k):
-        captured["state"] = state
-        captured["session"] = session
-        captured["text"] = text
-
-    monkeypatch.setattr("personalclaw.sdk.channel.run_chat", fake_run_chat)
-
     t = TelegramTransport({"bot_token": "TEST"})
     state = FakeState()
-    t._services = FakeServices(state)
+    t._services = FakeServices(state, captured)
     t._delivery = FakeDelivery()
     return t, state, captured
 
