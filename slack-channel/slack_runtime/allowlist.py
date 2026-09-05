@@ -203,6 +203,15 @@ def persist_allowed_user(user_id: str, name: str = "", *, remove: bool = False) 
 
     persist_list_entry("allowed_users", "slack_id", user_id, remove=remove, name=name)
     reload_settings()
+    # EA-7 write-through: the guarded inbound door consults core's channel_trust
+    # store, so the owner's Allow/Deny ruling must land there too, not only in
+    # SlackSettings — otherwise the two stores drift and the door rules on stale data.
+    try:
+        from personalclaw.sdk.channel import apply_trust_action
+
+        apply_trust_action("deny" if remove else "allow", "slack", user_id, name)
+    except Exception:
+        logger.warning("channel_trust write-through failed for user %s", user_id, exc_info=True)
 
 
 def persist_tracking_channel(channel_id: str, name: str = "", *, remove: bool = False) -> None:
@@ -211,3 +220,41 @@ def persist_tracking_channel(channel_id: str, name: str = "", *, remove: bool = 
 
     persist_list_entry("tracking_channels", "channel_id", channel_id, remove=remove, name=name)
     reload_settings()
+    # EA-7 write-through — same reason as persist_allowed_user above.
+    try:
+        from personalclaw.sdk.channel import track, untrack
+
+        if remove:
+            untrack("slack", channel_id)
+        else:
+            track("slack", channel_id, name)
+    except Exception:
+        logger.warning(
+            "channel_trust write-through failed for channel %s", channel_id, exc_info=True
+        )
+
+
+def sync_channel_trust(owner_id: str, tracking_channels: "set[str]") -> None:
+    """Mirror the app store's trust data into core's channel_trust store (EA-7).
+
+    The guarded inbound door consults core's per-provider trust store, not this
+    app's SlackSettings. Slack's posture is owner-only, so the mirror is small:
+    the owner is the ONE allowed sender, and each tracked channel is tracked.
+    Writes only what is missing — allow_sender/track emit SEL audit rows, so an
+    unconditional re-write per boot would be audit spam.
+    """
+    from personalclaw.sdk.channel import (
+        allow_sender,
+        is_allowed_sender,
+        is_tracked_channel,
+        track,
+    )
+
+    try:
+        if owner_id and not is_allowed_sender("slack", owner_id):
+            allow_sender("slack", owner_id, via="owner")
+        for cid in tracking_channels:
+            if cid and not is_tracked_channel("slack", cid):
+                track("slack", cid)
+    except Exception:
+        logger.warning("channel_trust mirror failed", exc_info=True)

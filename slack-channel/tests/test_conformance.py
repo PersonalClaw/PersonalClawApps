@@ -50,6 +50,15 @@ def _isolate_home(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("PERSONALCLAW_HOME", str(tmp_path_factory.mktemp("pclaw-slack-conf")))
     monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
     monkeypatch.delenv("SLACK_APP_TOKEN", raising=False)
+    # The guarded door caches verdicts per message id and the kit reuses ids across
+    # clauses, so a stale entry would answer the next test's admission. The reset
+    # lives HERE and not in conftest because the apps boundary lint exempts only
+    # ``test_*.py`` files — the same placement the discord/telegram/email suites use.
+    from personalclaw.channel_inbound import reset_admissions
+
+    reset_admissions()
+    yield
+    reset_admissions()
 
 
 @pytest.mark.xfail(

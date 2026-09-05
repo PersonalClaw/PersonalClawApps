@@ -389,6 +389,10 @@ async def dispatch(payload: dict) -> None:
             )
             return
         session = await _import_thread_to_session(_orch.slack, ds, channel, thread_ts)
+        if session:
+            from slack_runtime.handler import _track_linked_channel
+
+            _track_linked_channel(channel)
         if not session:
             sel().log_tool_invocation(
                 session_key="", agent="personalclaw", source="slack",
