@@ -48,6 +48,21 @@ def _isolate_migration_marker(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_channel_trust(tmp_path_factory, monkeypatch):
+    """Point core's channel_trust entity store (and PERSONALCLAW_HOME, which its
+    SEL audit rows resolve through) at a per-test tmp dir. The EA-7 write-throughs
+    fire on owner actions (Allow/Deny/Track buttons, owner claim, thread linking),
+    so without this every such test would write the REAL ~/.personalclaw."""
+    home = tmp_path_factory.mktemp("pclaw-trust")
+    monkeypatch.setattr(
+        "personalclaw.providers.entity_routes._entity_settings_path",
+        lambda entity: home / "entity_settings" / f"{entity}.json",
+    )
+    monkeypatch.setenv("PERSONALCLAW_HOME", str(home))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_trust_mode():
     """Reset the process-global YOLO/auto-approve trust state around every test
     (``personalclaw.trust_mode`` is a deliberate process singleton)."""
