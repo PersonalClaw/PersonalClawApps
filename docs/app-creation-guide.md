@@ -160,6 +160,31 @@ instance implementing the relevant SDK contract.
 `~/.personalclaw/apps/<name>/data/config.json` and are read back via
 `personalclaw.sdk.settings.ProviderSettings`.
 
+#### Advanced and required — the one convention
+
+The host renders every app's Configure form with the same widget, so the whole
+catalog has to mean the same thing by `advanced` and `required` — otherwise
+identical forms look arbitrary. Three rules, enforced by
+`.github/scripts/check_settings_schema_posture.py` in CI:
+
+1. **Optional tuning fields fold.** A field a first-run user never needs —
+   `timeout_secs`, an optional `endpoint`/`base_url` override on a hosted
+   provider, a `*_bin` binary path — carries `tags: ["advanced"]` so it sits
+   behind the Advanced disclosure.
+2. **Required fields never fold.** Anything in the schema's `required` array is
+   first-run configuration and must not be tagged `advanced`. Requiredness, not
+   the field name, is the discriminator: `endpoint` on a self-hosted app
+   (ollama, openai-compatible, vllm, searxng) is the app's identity, belongs in
+   `required`, and stays on the first screen — while the same field name on a
+   hosted provider is an optional override and folds.
+3. **`api_key` is never `required`.** Every key field falls back to its env var
+   (say which one in `help`); the form stays mountable on a machine where the
+   key arrives via the environment. This is a deliberate convention, not an
+   oversight — do not "fix" it per app.
+
+Judgment beyond these (is a model picker advanced? is a region first-run?) is
+yours — follow the nearest peer app rather than inventing a new pattern.
+
 ### Backend
 
 ```json
