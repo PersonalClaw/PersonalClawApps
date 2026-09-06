@@ -151,7 +151,11 @@ class CodeReviewProvider(ToolProvider):
                     "required": ["pr"],
                 },
                 requires_approval=False,
-                risk_level=RiskLevel.SAFE,
+                # Not SAFE: this spawns the `gh` binary (fixed argv, no shell) to read a
+                # remote repo, and appends what it finds to a local log. "Read-only against
+                # GitHub" is a narrower claim than "no side-effects on this host", and SAFE
+                # asserts the second one — the same call the install scanner warns about.
+                risk_level=RiskLevel.CAUTION,
                 max_output=60_000,
             ),
             ToolDefinition(
@@ -177,7 +181,7 @@ class CodeReviewProvider(ToolProvider):
                     "required": ["pr", "file", "severity", "summary"],
                 },
                 requires_approval=False,
-                risk_level=RiskLevel.SAFE,
+                risk_level=RiskLevel.CAUTION,  # a bounded append to the local findings log
             ),
             ToolDefinition(
                 name="review_findings",
@@ -198,7 +202,7 @@ class CodeReviewProvider(ToolProvider):
                     },
                 },
                 requires_approval=False,
-                risk_level=RiskLevel.SAFE,
+                risk_level=RiskLevel.SAFE,  # a read of the local log, nothing else
                 max_output=60_000,
             ),
         ]
