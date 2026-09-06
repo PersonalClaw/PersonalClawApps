@@ -28,12 +28,13 @@ installs through the same scanner-gated lifecycle as any third-party app.
   `discord-channel`, `telegram-channel`, `email-channel`.
 - **Agents** (4) — `claude-code-agent`, `codex-agent`, `gemini-cli-agent`,
   `kiro-cli-agent` (ACP bundles).
-- **Tools** (7) — `mcp-tools`, `openai-tools`, `web-tools`, `code-review`
+- **Tools** (8) — `mcp-tools`, `openai-tools`, `web-tools`, `code-review`
   (deep per-file review of a GitHub PR over your local `gh`), `research-lab`
   (unattended multi-cycle research campaigns synthesised into one report),
   `notes` (a git-backed markdown notebook — an editor, not a second knowledge
   store), `design-critique` (accessibility + craft findings from a URL's markup
-  or a screenshot's pixels).
+  or a screenshot's pixels), `spec-builder` (write a spec, compile it into a
+  workflow definition the workflow engine runs).
 - **Sync** (2) — `dir-sync`, `git-sync`.
 - **Backend + UI apps** (2) — `growth` (growth/brag-doc tracker), `minutes`
   (meeting minutes on a synced timeline).
