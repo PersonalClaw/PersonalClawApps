@@ -33,6 +33,7 @@ from incidents import (
     LedgerError,
     alarm_fingerprint,
     alarms_in_document,
+    iso_or,
     normalise_severity,
     parse_alarm,
     parse_incident_id,
@@ -389,6 +390,49 @@ def test_a_resolved_incident_reopens_unclaimed_when_the_alarm_fires_again(
     assert incident.state == "new" and incident.owner == ""
     assert any(e["kind"] == "refired" and "after being resolved" in e["detail"]
                for e in incident.timeline)
+
+
+def test_a_payload_time_this_app_cannot_read_falls_back_to_now(
+    ledger: Ledger, spool: Path
+) -> None:
+    """Otherwise one unfamiliar timestamp format switches the age term off for good."""
+    write_alarm(spool, "a.json", startsAt="06/09/2026 08:00 CEST")
+    incident = ledger.load(ledger.sweep(spool)["opened"][0])
+    assert inc_mod.age_minutes(incident.first_seen) < 5
+    assert iso_or("06/09/2026 08:00 CEST", "fallback") == "fallback"
+    assert iso_or("2026-09-06T08:00:00+00:00", "fallback") == "2026-09-06T08:00:00+00:00"
+
+
+def test_a_payload_time_that_parses_is_kept_so_the_age_term_is_real(
+    ledger: Ledger, spool: Path
+) -> None:
+    then = datetime.now(timezone.utc) - timedelta(hours=2)
+    write_alarm(spool, "a.json", startsAt=then.isoformat(timespec="seconds"))
+    incident = ledger.load(ledger.sweep(spool)["opened"][0])
+    assert 110 < inc_mod.age_minutes(incident.first_seen) < 130
+    assert priority(incident)["terms"]["age"] == inc_mod.AGE_CAP
+
+
+def test_the_read_file_index_forgets_a_spool_file_that_was_removed(
+    ledger: Ledger, spool: Path
+) -> None:
+    path = write_alarm(spool, "a.json")
+    ledger.sweep(spool)
+    assert json.loads(ledger.seen_path.read_text(encoding="utf-8")).keys() == {"a.json"}
+    path.unlink()
+    ledger.sweep(spool)
+    assert json.loads(ledger.seen_path.read_text(encoding="utf-8")) == {}
+
+
+def test_a_timeline_entry_is_capped_harder_than_an_alarm_body(
+    ledger: Ledger, spool: Path
+) -> None:
+    write_alarm(spool, "a.json")
+    incident_id = ledger.sweep(spool)["opened"][0]
+    ledger.claim(incident_id, "kg")
+    ledger.record(incident_id, "y" * (inc_mod.MAX_TEXT_CHARS * 2))
+    entry = ledger.load(incident_id).timeline[-1]
+    assert len(entry["detail"]) <= inc_mod.MAX_NOTE_CHARS + 40
 
 
 def test_an_unparseable_incident_record_is_counted_not_swallowed(ledger: Ledger) -> None:

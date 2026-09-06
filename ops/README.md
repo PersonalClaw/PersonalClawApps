@@ -83,13 +83,16 @@ through an alias table (`crit`, `sev1`, `error`, `warning`, `p3`, `minor` …); 
 app does not know becomes `unknown` and is weighted **mid-scale**, not dropped — a monitor
 emitting an unfamiliar severity is not evidence the alarm is unimportant. A payload with no
 recognisable alarm name is refused rather than filed under a placeholder, and counted out
-loud in the sweep report.
+loud in the sweep report. A payload timestamp this app cannot parse falls back to the
+sweep's own clock rather than being kept — otherwise one unfamiliar time format would
+switch the age term off for every incident that monitor files.
 
 Spool files are **only ever read**. This app never deletes or moves them; the monitor owns
 them. Nothing is filed twice, two ways at once:
 
 - A spool file already read **with the same bytes** is skipped. A file the monitor rewrote
-  in place is read again.
+  in place is read again. The index of what has been read forgets a file once it is gone
+  from the spool, so it stays bounded by the folder rather than growing forever.
 - An alarm's identity is a digest of `source + name + resource + severity` — deliberately
   **not** its message or its timestamp. A second firing therefore bumps one incident's
   count instead of opening a second incident, which is what makes the repeat term of the
@@ -254,9 +257,10 @@ bundle.
 
 ## Tests
 
-`test_provider.py` — 174 tests: the three identifier grammars and every refusal, alarm
+`test_provider.py` — 178 tests: the three identifier grammars and every refusal, alarm
 normalisation across the Alertmanager/bare-object/bare-list shapes and the severity alias
-table, fingerprint identity, the file-digest and alarm-identity halves of the dedupe, reopen
+table, fingerprint identity, the file-digest and alarm-identity halves of the dedupe, the
+unparseable-timestamp fallback and the read-file index forgetting a removed file, reopen
 after resolution, unreadable spool files and unparseable records being counted, every
 priority term pinned in both directions plus the caps and the known-bad/known-good pair, the
 severity floor, runbook parsing and every argv refusal, match specificity and the catch-all,
@@ -281,7 +285,7 @@ Stated plainly, because the difference matters.
 
 **Validated:**
 
-- 174 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
+- 178 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
   `PERSONALCLAW_SKIP_APP_BACKENDS=1`).
 - `app.json` parses against core's own `AppManifest` and round-trips stably.
 - SDK-only imports (`personalclaw.sdk.{tool,security,util,cli,settings,manifest}`) — clean
