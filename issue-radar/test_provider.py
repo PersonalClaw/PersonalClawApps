@@ -362,6 +362,62 @@ def test_a_hang_report_evidences_performance(glab_payload) -> None:
     assert "performance" in [s.label for s in suggest_labels(issue, REPO_LABELS)]
 
 
+def test_a_weak_word_fires_from_a_title_but_not_from_a_body() -> None:
+    """A title is the reporter's own summary; the same word mid-body is background."""
+    titled = Issue(number=1, title="Startup is unreasonably slow", body="See attached profile.")
+    assert "performance" in [s.label for s in suggest_labels(titled, REPO_LABELS)]
+
+    buried = Issue(
+        number=2,
+        title="Crash when the cache is cold",
+        body="Steps to reproduce: it panics. The slow path is not the problem here.",
+    )
+    labels = [s.label for s in suggest_labels(buried, REPO_LABELS)]
+    assert "bug" in labels
+    assert "performance" not in labels
+
+
+def test_a_passing_mention_of_the_docs_is_not_a_docs_issue() -> None:
+    mention = Issue(
+        number=1,
+        title="Crash on an empty config",
+        body="Steps to reproduce: see the docs page on config. Traceback attached.",
+    )
+    assert "documentation" not in [s.label for s in suggest_labels(mention, REPO_LABELS)]
+
+
+def test_a_docs_complaint_fires_from_the_body() -> None:
+    complaint = Issue(
+        number=1,
+        title="Config example does not work",
+        body="Steps to reproduce: copy the example. The docs are outdated.",
+    )
+    assert "documentation" in [s.label for s in suggest_labels(complaint, REPO_LABELS)]
+
+
+def test_an_issue_templates_own_heading_is_trusted_evidence() -> None:
+    """The reporter picked the form, so the repository already asked this question."""
+    feature = Issue(
+        number=1,
+        title="Allow --reason on an already-closed issue",
+        body="### Describe the feature or problem you'd like to solve\n\nIt returns early.",
+    )
+    assert "enhancement" in [s.label for s in suggest_labels(feature, REPO_LABELS)]
+
+    bug = Issue(
+        number=2,
+        title="Wrong exit code",
+        body="### Describe the bug\n\nSteps to reproduce: run it twice.",
+    )
+    assert "bug" in [s.label for s in suggest_labels(bug, REPO_LABELS)]
+
+
+def test_a_suggestion_names_which_field_the_evidence_came_from() -> None:
+    titled = Issue(number=1, title="Startup is slow", body="x" * 300)
+    why = suggest_labels(titled, REPO_LABELS)[0].why
+    assert why.startswith("title matches")
+
+
 def test_a_label_the_repository_does_not_use_is_never_invented(issues) -> None:
     """A triage bot that invents vocabulary makes more cleanup than it saves."""
     without_bug = [name for name in REPO_LABELS if name != "bug"]

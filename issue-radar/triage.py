@@ -274,18 +274,37 @@ def _as_number(value: Any) -> int | None:
 
 @dataclass(frozen=True)
 class LabelRule:
-    """One canonical label, the names a repo might spell it with, and its evidence."""
+    """One canonical label, the names a repo might spell it with, and its evidence.
+
+    Two pattern sets, because where a phrase appears changes what it means. A TITLE is the
+    reporter's own one-line summary of what the issue is about, so a weaker word is
+    trustworthy there: "slow startup" as a title is a performance report, while "slow" in
+    the middle of a crash report is background. Anything in ``patterns`` is strong enough
+    to fire from anywhere in the text; anything in ``title_patterns`` is not, and is
+    checked against the title alone.
+    """
 
     canonical: str
     aliases: tuple[str, ...]
     patterns: tuple[re.Pattern[str], ...]
+    title_patterns: tuple[re.Pattern[str], ...] = ()
 
 
-def _rule(canonical: str, aliases: tuple[str, ...], *patterns: str) -> LabelRule:
+def _compiled(items: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
+    return tuple(re.compile(p, re.IGNORECASE) for p in items)
+
+
+def _rule(
+    canonical: str,
+    aliases: tuple[str, ...],
+    *patterns: str,
+    title_only: tuple[str, ...] = (),
+) -> LabelRule:
     return LabelRule(
         canonical=canonical,
         aliases=(canonical, *aliases),
-        patterns=tuple(re.compile(p, re.IGNORECASE) for p in patterns),
+        patterns=_compiled(patterns),
+        title_patterns=_compiled(title_only),
     )
 
 
@@ -311,25 +330,35 @@ LABEL_RULES: tuple[LabelRule, ...] = (
         r"\bunhandled (?:exception|error|rejection)\b",
         r"\bregression\b",
         r"\bexpected\b[^.\n]{0,60}\bbut (?:got|received|returns?)\b",
+        # An issue template's own heading is the highest-precision signal there is: the
+        # reporter picked the form, so the repository already asked this question.
+        r"#+\s*describe the bug\b",
+        r"#+\s*bug report\b",
     ),
     _rule(
         "performance",
         ("perf", "type/performance", "area/performance"),
         r"\bmemory leak\b",
-        r"\b(?:very |extremely )?slow(?:er|ness)?\b",
-        r"\bhangs?\b",
         r"\bhigh (?:cpu|memory) (?:usage|use)\b",
-        r"\btimes? out\b",
         r"\bO\(n\^?2\)",
+        title_only=(
+            r"\bslow(?:er|ness)?\b",
+            r"\bhangs?\b",
+            r"\bperformance\b",
+        ),
     ),
     _rule(
         "documentation",
         ("docs", "area/docs", "type/docs", "type: docs"),
-        r"\bdocumentation\b",
-        r"\bthe docs?\b",
-        r"\bREADME\b",
         r"\btypo\b",
         r"\bbroken link\b",
+        r"\bdocs?\b\s+(?:are|is|were|was)\s+(?:wrong|outdated|missing|incorrect|unclear)",
+        r"\bdocumentation\s+(?:is|says|shows)\s+(?:wrong|outdated|incorrect|unclear)",
+        title_only=(
+            r"\bdocs?\b",
+            r"\bdocumentation\b",
+            r"\bREADME\b",
+        ),
     ),
     _rule(
         "enhancement",
@@ -338,7 +367,9 @@ LABEL_RULES: tuple[LabelRule, ...] = (
         r"\bplease (?:add|support)\b",
         r"\bit would be (?:nice|great|useful|helpful)\b",
         r"\bcould (?:we|you) (?:add|support)\b",
-        r"\bsupport for\b",
+        r"describe the feature or problem",
+        r"#+\s*feature request\b",
+        title_only=(r"\bsupport for\b", r"\badd support\b"),
     ),
     _rule(
         "question",
@@ -434,13 +465,12 @@ def suggest_labels(issue: Issue, known_labels: list[str] | None = None) -> list[
         name = _resolve(rule.aliases, known_labels)
         if name is None or name.lower() in have:
             continue
-        for pattern in rule.patterns:
-            match = pattern.search(text)
-            if match:
-                out.append(
-                    Suggestion(label=name, why=f"text matches {_evidence(match.group(0))}")
-                )
-                break
+        hit = _first_match(rule.patterns, text, "text") or _first_match(
+            rule.title_patterns, issue.title, "title"
+        )
+        if hit is not None:
+            where, matched = hit
+            out.append(Suggestion(label=name, why=f"{where} matches {_evidence(matched)}"))
 
     if _needs_repro(issue):
         name = _resolve(NEEDS_REPRO_ALIASES, known_labels)
@@ -453,6 +483,17 @@ def suggest_labels(issue: Issue, known_labels: list[str] | None = None) -> list[
                 )
             )
     return out
+
+
+def _first_match(
+    patterns: tuple[re.Pattern[str], ...], haystack: str, where: str
+) -> tuple[str, str] | None:
+    """The first pattern that fires, tagged with which field it fired on."""
+    for pattern in patterns:
+        match = pattern.search(haystack)
+        if match:
+            return where, match.group(0)
+    return None
 
 
 def _needs_repro(issue: Issue) -> bool:
