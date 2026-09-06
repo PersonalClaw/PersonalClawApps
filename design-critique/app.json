@@ -1,0 +1,56 @@
+{
+  "name": "design-critique",
+  "version": "0.1.0",
+  "displayName": "Design Critique",
+  "description": "Pre-colleague design review of a URL or a screenshot. From a page's markup it reports accessibility and craft defects — unlabelled controls, missing alt text, skipped heading levels, overridden focus order, zoom locked off, declared colour pairs under 4.5:1, type set below 12px. From a screenshot it measures the pixels — contrast against the dominant surface, palette sprawl, red-green colour-vision collapse, density, gutter balance, alignment discipline. Every finding carries its evidence, its WCAG clause where one applies, and the change that clears it. The judgement no measurement can make comes back as an explicit rubric instead of a guess.",
+  "icon": "Eye",
+  "author": "PersonalClaw",
+  "license": "MIT",
+  "tags": [
+    "tool",
+    "design",
+    "accessibility",
+    "review"
+  ],
+  "cli": {
+    "setup": "app_cli:setup",
+    "doctor": "app_cli:doctor"
+  },
+  "loggerRoots": [
+    "design_critique"
+  ],
+  "permissions": {
+    "storage": false,
+    "network": true
+  },
+  "dependencies": {
+    "pythonDependencies": [
+      "Pillow>=10,<13"
+    ]
+  },
+  "provider": {
+    "type": "tool",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "design"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "timeout_secs": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 120,
+          "x-meta": {
+            "label": "Fetch timeout",
+            "help": "Seconds design_critique_page waits for the page before giving up.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
