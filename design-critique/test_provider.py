@@ -352,17 +352,195 @@ def test_unbalanced_markup_does_not_raise():
     assert isinstance(findings, list)
 
 
+# ── layout tables vs data tables ─────────────────────────────────────────────
+#
+# 🔴 On a real page `a11y.table-headers` reported "4 data table(s) have no header cells"
+# when all ten tables there were LAYOUT tables — `WIDTH` / `BORDER=0` / `CELLSPACING=0` /
+# `BGCOLOR`, the pre-CSS positioning idiom. The discriminator was `rows > 1 and th == 0`,
+# which nothing about a layout table fails.
+#
+# The false positive is not the worst of it: the offered fix told the author to add
+# `<th scope="col">` to a spacer. Following that advice invents a header for data that does
+# not exist and puts a meaningless row into the a11y tree — advice that damages the page.
+
+_LAYOUT_PAGE = """
+<html lang="en"><head><title>Legacy</title></head>
+<body><main>
+  <table width="100%" border="0" cellspacing="0" cellpadding="0" bgcolor="#ffffff">
+    <tr><td>Masthead</td></tr>
+    <tr><td>Body copy that this table is only positioning.</td></tr>
+  </table>
+</main></body></html>
+"""
+
+
+def test_a_layout_table_is_not_called_a_headerless_data_table():
+    findings, _ = analyze_markup(_LAYOUT_PAGE)
+    ids = {f.id for f in findings}
+    assert "a11y.table-headers" not in ids, sorted(ids)
+    # Re-filed, not silenced: the observation is true, so it is still reported — with advice
+    # that is correct whichever way the table is meant.
+    hit = [f for f in findings if f.id == "heuristic.layout-table"]
+    assert hit, sorted(ids)
+    assert 'role="presentation"' in hit[0].fix
+    assert "border=0" in " ".join(hit[0].evidence)
+
+
+def test_the_layout_table_advice_never_says_only_add_a_header_row():
+    """The specific wrong advice, pinned. A fix that names ONLY the header row is the
+    instruction that made this finding harmful rather than merely noisy."""
+    findings, _ = analyze_markup(_LAYOUT_PAGE)
+    fix = next(f.fix for f in findings if f.id == "heuristic.layout-table")
+    assert fix.index('role="presentation"') < fix.index("<th"), fix
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
+        # An author who declared the table presentational has already answered the question.
+        '<table role="presentation"><tr><td>a</td></tr><tr><td>b</td></tr></table>',
+        '<table role="none"><tr><td>a</td></tr><tr><td>b</td></tr></table>',
+        # A spacer: no cell holds any text, so there is no data for a header to head.
+        '<table><tr><td>&nbsp;</td></tr><tr><td><img src="dot.gif" alt=""></td></tr></table>',
+    ],
+)
+def test_a_table_with_no_data_earns_no_header_finding(table):
+    findings, _ = analyze_markup(
+        f"<html lang=en><head><title>T</title></head><body><main>{table}</main></body></html>"
+    )
+    assert "a11y.table-headers" not in {f.id for f in findings}
+
+
+def test_a_genuine_headerless_data_table_is_still_flagged():
+    """The direction a one-sided fix would have broken: plain markup, real values, no <th>.
+    Disabling the rule, or skipping every table that lacks a header, would pass a test that
+    only checked the layout page."""
+    findings, _ = analyze_markup(
+        "<html lang=en><head><title>T</title></head><body><main><table>"
+        "<tr><td>Pro</td><td>$20</td></tr><tr><td>Team</td><td>$50</td></tr>"
+        "</table></main></body></html>"
+    )
+    hit = [f for f in findings if f.id == "a11y.table-headers"]
+    assert hit, sorted(f.id for f in findings)
+    assert "scope" in hit[0].fix
+
+
+def test_a_table_that_draws_its_own_grid_is_data_even_with_a_width():
+    """`border="1"` says rows and columns ARE the point, so one presentational attribute
+    beside it does not reclassify the table."""
+    findings, _ = analyze_markup(
+        '<html lang=en><head><title>T</title></head><body><main><table border="1" width="100%">'
+        "<tr><td>Pro</td></tr><tr><td>Team</td></tr>"
+        "</table></main></body></html>"
+    )
+    assert "a11y.table-headers" in {f.id for f in findings}
+
+
 # ── pixel rules ──────────────────────────────────────────────────────────────
 
 
-def test_a_low_contrast_capture_is_flagged(tmp_path):
+def _faint_ink(tmp_path, name, ink, fill=(255, 255, 255), size=(1200, 800)):
+    """A canvas covered in thin strokes of ``ink`` — text-shaped content, not a panel."""
+    img = _canvas(size, fill)
+    draw = ImageDraw.Draw(img)
+    for row in range(40):
+        for col in range(60):
+            x, y = 40 + col * 19, 40 + row * 18
+            draw.rectangle([x, y, x + 12, y + 3], fill=ink)
+    path = tmp_path / f"{name}.png"
+    img.save(path)
+    return path
+
+
+def test_faint_ink_is_flagged(tmp_path):
+    # The fixture is thin STROKES, not a filled rectangle. It used to be a 360×130 #f2f2f2
+    # panel on white, and a panel is a surface: see the elevation-ramp tests below for why a
+    # fill one step off the page fill is not a contrast failure. The rule's own claim is
+    # about text, icons and borders, so the test now presents one.
+    findings, summary = analyze_image(_faint_ink(tmp_path, "faint", (0xEC, 0xEC, 0xEC)))
+    hit = [f for f in findings if f.id == "a11y.rendered-contrast"]
+    assert hit, sorted(f.id for f in findings)
+    assert summary["background"] == "#ffffff"
+
+
+def test_a_faint_panel_is_a_surface_not_a_contrast_failure(tmp_path):
+    # The other half of the same property: near-identical contrast, different geometry.
     img = _canvas((400, 400))
     ImageDraw.Draw(img).rectangle([20, 20, 380, 150], fill=(0xF2, 0xF2, 0xF2))
-    path = tmp_path / "faint.png"
+    path = tmp_path / "panel.png"
     img.save(path)
+    findings, _ = analyze_image(path)
+    assert "a11y.rendered-contrast" not in {f.id for f in findings}
+
+
+# ── the dark-theme elevation ramp: the real input these rules were wrong about ──
+#
+# 🔴 Run against a real 1440×1000 PersonalClaw screenshot, `a11y.rendered-contrast` produced
+# exactly one finding and it was wrong: "7 rendered colours under 3:1", on a page whose
+# background is #0f0f0f, rail #1f1f1f, card fill #1e1f20 and body text #8e8f90 at ≈5.2:1 —
+# passing AA. Every colour it named was a surface fill, and the evidence gave it away:
+# `#182020 at 1.02:1 (1.0% of canvas)` cannot be text anyone can see. WCAG 1.4.3/1.4.11
+# govern content against its background and say nothing about two adjacent backgrounds.
+#
+# The bundle's own note predicted this — "pixel thresholds are calibrated on synthetic
+# canvases only" — so the fixture below is not another flat synthetic canvas. It reproduces
+# the real capture's composition AND its antialiasing, by drawing at 3× and downsampling,
+# which is what produced the phantom near-background greys (#505050 at 2.36:1, #585858 at
+# 2.67:1) that the smoothed 1440×1000 → 480×333 statistics pass invented out of text edges.
+
+
+def _dark_shell(ink, size=(1440, 1000)):
+    """A dark app shell with a page/rail/card/panel elevation ramp and antialiased ink."""
+    scale = 3
+    width, height = size
+    img = _canvas((width * scale, height * scale), (0x0F, 0x0F, 0x0F))
+    draw = ImageDraw.Draw(img)
+    for box, fill in (
+        ([0, 0, 72, height], (0x1F, 0x1F, 0x1F)),  # rail
+        ([120, 80, 760, 420], (0x1E, 0x1F, 0x20)),  # card
+        ([800, 80, 1360, 300], (0x28, 0x28, 0x28)),  # panel
+        ([800, 340, 1360, 520], (0x28, 0x28, 0x30)),  # tinted panel
+    ):
+        draw.rectangle([v * scale for v in box], fill=fill)
+    for row in range(28):
+        for col in range(46):
+            x, y = (140 + col * 13) * scale, (110 + row * 11) * scale
+            draw.rectangle([x, y, x + 7 * scale, y + 2 * scale], fill=ink)
+    for row in range(16):
+        for col in range(80):
+            x, y = (120 + col * 15) * scale, (560 + row * 12) * scale
+            draw.rectangle([x, y, x + 9 * scale, y + 2 * scale], fill=ink)
+    return img.resize(size, Image.LANCZOS)
+
+
+def test_a_dark_elevation_ramp_earns_no_contrast_finding(tmp_path):
+    """The real-world input that fooled the rule: AA-passing ink, sub-3:1 surfaces."""
+    path = tmp_path / "shell.png"
+    _dark_shell((0x8E, 0x8F, 0x90)).save(path)
     findings, summary = analyze_image(path)
-    assert "a11y.rendered-contrast" in {f.id for f in findings}
-    assert summary["background"] == "#ffffff"
+    assert "a11y.rendered-contrast" not in {f.id for f in findings}, [
+        f.evidence for f in findings if f.id == "a11y.rendered-contrast"
+    ]
+    # The ramp really is sub-3:1 — the rule is silent because those colours are SURFACES,
+    # not because the capture came out bland. If this stops holding, the fixture has drifted.
+    assert summary["background"] == "#101010"
+    assert contrast_ratio((0x1E, 0x1F, 0x20), (0x0F, 0x0F, 0x0F)) < 1.5
+
+
+def test_the_same_shell_with_faint_ink_is_still_flagged(tmp_path):
+    """The other direction. Nothing changes but the ink colour, so a rule that had merely
+    been disabled — or that keyed on the dark palette, the canvas size or the ramp itself —
+    would go quiet here too."""
+    path = tmp_path / "shell-faint.png"
+    _dark_shell((0x3A, 0x3A, 0x3B)).save(path)
+    findings, _ = analyze_image(path)
+    hit = [f for f in findings if f.id == "a11y.rendered-contrast"]
+    assert hit, sorted(f.id for f in findings)
+    # …and it names the INK, not any of the four surface fills the ink sits on.
+    named = " ".join(hit[0].evidence)
+    assert "#383838" in named, named
+    for surface in ("#1f1f1f", "#202020", "#282828", "#282830"):
+        assert surface not in named, named
 
 
 def test_a_red_green_palette_is_flagged_for_colour_vision(tmp_path):
