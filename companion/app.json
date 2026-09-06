@@ -1,0 +1,80 @@
+{
+  "name": "companion",
+  "version": "0.1.0",
+  "displayName": "Companion",
+  "description": "An opt-in day companion: reminders that actually go off, a watchlist that speaks up when a folder really changes, and a day plan you can ask for. Three surfaces, each switched on separately, and all three off out of the box — installing this app arms nothing. Its automations are served to the Automations page from this app's own store and are never written into PersonalClaw's, so turning a surface off, disabling the app or uninstalling it removes every trigger it contributed. Every one of them raises a notification and nothing else: this app deliberately never authors an automation that runs a prompt, a workflow or an agent, so a reminder's text can never become a scheduled instruction.",
+  "icon": "Sunrise",
+  "author": "PersonalClaw",
+  "license": "MIT",
+  "tags": [
+    "tool",
+    "companion",
+    "reminders",
+    "automation"
+  ],
+  "cli": {
+    "setup": "app_cli:setup",
+    "doctor": "app_cli:doctor"
+  },
+  "loggerRoots": [
+    "companion"
+  ],
+  "permissions": {
+    "storage": true,
+    "network": false
+  },
+  "provider": {
+    "type": "tool",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "companion"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "reminders": {
+          "type": "boolean",
+          "default": false,
+          "x-meta": {
+            "label": "Reminders",
+            "help": "Off by default. On, companion_remind can add reminders and each pending one becomes an automation that raises a notification at its time. Off, the tool declines and every reminder automation disappears — the reminders themselves are kept, so switching back on restores them."
+          }
+        },
+        "watchlist": {
+          "type": "boolean",
+          "default": false,
+          "x-meta": {
+            "label": "Watchlist",
+            "help": "Off by default. On, companion_watch can add a file, folder or 'folder/*.ext' glob, and each one becomes an automation that notifies when its contents really change. Off, the tool declines and every watch automation disappears."
+          }
+        },
+        "day_brief": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Day brief at",
+            "help": "A 24-hour time like '08:30' to be nudged once a day to plan; empty means off. The nudge is a notification — the plan itself is rendered by companion_day_plan, in a session you are present for."
+          }
+        },
+        "timezone": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Timezone",
+            "help": "IANA name, e.g. 'Europe/Berlin'. Empty reads the machine's zone from /etc/localtime, and falls back to UTC if that cannot be determined — which matters, because an unset zone means your 08:30 reminder fires at 08:30 UTC. `personalclaw doctor` reports the zone actually in use."
+          }
+        }
+      }
+    }
+  },
+  "providers": [
+    {
+      "type": "trigger",
+      "implementation": "provider:create_trigger_store",
+      "capabilities": [
+        "rows",
+        "write-back"
+      ]
+    }
+  ]
+}
