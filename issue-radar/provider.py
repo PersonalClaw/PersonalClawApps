@@ -160,9 +160,9 @@ class IssueRadarProvider(ToolProvider):
                     "Triage a repository's open issues. Reads them through the local `gh` "
                     "(GitHub) or `glab` (GitLab) CLI, suggests labels for each from the "
                     "repository's OWN label set with the evidence that justifies each one, "
-                    "and ranks the issues by how much they need a maintainer (unlabelled, "
+                    "and ranks the issues by how much they need a maintainer (unlabeled, "
                     "unassigned, stale, security signal). Read-only against the tracker: "
-                    "nothing is ever labelled, commented on or closed. The sweep is kept "
+                    "nothing is ever labeled, commented on or closed. The sweep is kept "
                     "locally."
                 ),
                 provider=self.name,
@@ -194,7 +194,9 @@ class IssueRadarProvider(ToolProvider):
                     "required": ["repo"],
                 },
                 requires_approval=False,
-                risk_level=RiskLevel.SAFE,
+                # Spawns the local `gh`/`glab` and writes the sweep to disk — read-only
+                # against the tracker, but not SAFE (SAFE = local read, no exec).
+                risk_level=RiskLevel.CAUTION,
                 max_output=60_000,
             ),
             ToolDefinition(
@@ -233,7 +235,8 @@ class IssueRadarProvider(ToolProvider):
                     "required": ["issue", "note"],
                 },
                 requires_approval=False,
-                risk_level=RiskLevel.SAFE,
+                # A bounded append to the local note log — a write, so not SAFE.
+                risk_level=RiskLevel.CAUTION,
             ),
             ToolDefinition(
                 name="issue_notes",
@@ -408,6 +411,7 @@ class IssueRadarProvider(ToolProvider):
             known_labels=known_labels,
             sweep_path=sweep_path,
             dropped=dropped,
+            fence=fence_untrusted,
         )
         if mode == "plan":
             report += (
@@ -671,7 +675,8 @@ class IssueRadarProvider(ToolProvider):
         if not raw:
             issues = self._notes.investigated()
             body = "\n".join(f"- {i}" for i in issues) or (
-                "No issue has been investigated on this machine yet."
+                "No issue has been investigated on this machine yet — run triage_issues "
+                "first."
             )
             return ToolResult(success=True, output=body, metadata={"issues": issues})
         try:
@@ -682,10 +687,11 @@ class IssueRadarProvider(ToolProvider):
         if not rows:
             return ToolResult(
                 success=True,
-                output=f"No investigation notes kept locally for {ref}.",
+                output=f"No investigation notes kept locally for {ref} — record one with "
+                "record_investigation.",
                 metadata={"issue": str(ref), "notes": 0},
             )
-        lines = [f"{len(rows)} note(s) on {ref}:", ""]
+        lines = []
         for row in rows:
             lines.append(f"### {row.get('recorded')}")
             lines += ["", str(row.get("note") or ""), ""]
@@ -693,9 +699,17 @@ class IssueRadarProvider(ToolProvider):
                 lines += [f"Next: {row['next_step']}", ""]
             if row.get("labels"):
                 lines += ["Labels supported: " + ", ".join(f"`{n}`" for n in row["labels"]), ""]
+        # A note is text somebody (or some agent) wrote about an attacker-authored issue,
+        # read back off disk — so it is quoted to the model as data, never as instructions.
+        fenced = fence_untrusted(
+            "\n".join(lines),
+            source=f"investigation notes on {ref}",
+            source_type="issue_notes",
+            source_id=str(ref),
+        )
         return ToolResult(
             success=True,
-            output="\n".join(lines),
+            output=f"{len(rows)} note(s) on {ref}:\n\n{fenced}",
             metadata={
                 "issue": str(ref),
                 "notes": len(rows),
@@ -723,9 +737,7 @@ class IssueRadarProvider(ToolProvider):
                 metadata={"repo": str(repo), "issues": 0},
             )
         rows = list(sweep.get("issues") or [])
-        lines = [
-            f"# Last sweep of {repo}",
-            "",
+        body = [
             f"Swept {sweep.get('swept')} · labels from {sweep.get('label_source')} · "
             f"{len(rows)} issue(s).",
             "",
@@ -736,12 +748,21 @@ class IssueRadarProvider(ToolProvider):
             suggested = ", ".join(f"`{s.get('label')}`" for s in row.get("suggested") or []) or "—"
             why = "; ".join(row.get("reasons") or []) or "—"
             title = str(row.get("title") or "").replace("|", r"\|")[:70]
-            lines.append(
+            body.append(
                 f"| #{row.get('number')} {title} | {row.get('score')} | {suggested} | {why} |"
             )
+        # The titles, labels and evidence phrases in this table came out of tracker
+        # payloads (and the sweep file may have been edited on disk since), so the whole
+        # replay is fenced like the live sweep is.
+        fenced = fence_untrusted(
+            "\n".join(body),
+            source=f"last sweep of {repo}",
+            source_type="radar_status",
+            source_id=str(repo),
+        )
         return ToolResult(
             success=True,
-            output="\n".join(lines),
+            output=f"# Last sweep of {repo}\n\n{fenced}",
             metadata={
                 "repo": str(repo),
                 "issues": len(rows),

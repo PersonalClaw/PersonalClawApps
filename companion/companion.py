@@ -10,7 +10,7 @@ them out of this store on each pass, so a store that is not being read serves no
 **The file persists ITEMS, never rows.** That is the load-bearing decision in this module,
 and it is what keeps a companion automation from ever becoming an instruction. A reminder on
 disk is a title, a note and a time; the trigger row — its ``kind``, its ``workflow`` action,
-its frozen ``capabilities`` — is synthesised here, in code, on every read. There is no field
+its frozen ``capabilities`` — is synthesized here, in code, on every read. There is no field
 in the file where an action could be written, so no hand edit, no agent tool call and no
 tampered sync copy can turn one of these rows into an LLM run. The action is always
 ``notify``, and ``capabilities`` is always ``{"providers": ["notify"]}``.
@@ -407,7 +407,7 @@ def validate_watch_path(raw: str) -> str:
     * the result must be absolute, inside neither PersonalClaw's own home nor deeper than
       ``MAX_PATH_SEGMENTS``.
 
-    PersonalClaw's config dir is excluded for a behavioural reason rather than a secrecy one:
+    PersonalClaw's config dir is excluded for a behavioral reason rather than a secrecy one:
     the platform writes there continuously, so a watch on it fires on the platform's own
     bookkeeping every single pass — an automation that can never be quiet.
     """

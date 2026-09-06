@@ -261,7 +261,7 @@ class OpsProvider(ToolProvider):
                 name="ops_propose_fix",
                 description=(
                     "Write down a PROPOSED fix and get back its confirm token. This changes "
-                    "nothing outside the ledger — it is the artefact a human reads before "
+                    "nothing outside the ledger — it is the artifact a human reads before "
                     "deciding. Say what changes, what it touches and how to undo it; all "
                     "three are required. Name a runbook `action` only if the operator's "
                     "runbook already declares it."

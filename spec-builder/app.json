@@ -2,7 +2,7 @@
   "name": "spec-builder",
   "version": "0.1.0",
   "displayName": "Spec Builder",
-  "description": "Write a spec — problem, done-when clauses, steps, how done-ness is decided — then compile it into a workflow definition PersonalClaw's own workflow engine runs. This app is a front over that engine, not a second planner: it emits definitions and never executes one, so there is no parallel scheduler, run journal or retry policy to keep in step.",
+  "description": "Write a spec — problem, done-when clauses, steps, how done-ness is decided — then compile it into a workflow definition PersonalClaw's own workflow engine runs. The spec is the artifact you review and argue with; the compiled definition is what executes, and this app never runs one.",
   "icon": "ClipboardList",
   "author": "PersonalClaw",
   "license": "MIT",
@@ -45,7 +45,7 @@
           "default": 20,
           "minimum": 5,
           "x-meta": {
-            "label": "git Timeout",
+            "label": "Git Timeout",
             "help": "Maximum seconds to wait for a `git` command before giving up.",
             "tags": [
               "advanced"

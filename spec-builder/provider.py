@@ -241,7 +241,9 @@ class SpecBuilderProvider(ToolProvider):
                     "required": ["spec", "path"],
                 },
                 requires_approval=False,
-                risk_level=RiskLevel.SAFE,
+                # Read-only against the REPOSITORY, but it spawns `git` and writes the
+                # fetched content into the spec — not SAFE (SAFE = local read, no exec).
+                risk_level=RiskLevel.CAUTION,
                 max_output=60_000,
             ),
             ToolDefinition(

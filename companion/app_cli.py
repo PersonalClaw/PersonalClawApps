@@ -83,7 +83,7 @@ def setup(ctx: SetupContext) -> None:
         ctx.print(
             "Companion: all three surfaces are off, which is how it ships — it is contributing "
             "no automations at all. Turn on Reminders, Watchlist or set a Day brief time in "
-            "Settings -> Tools -> Companion."
+            "Settings → Tools → Companion."
         )
     zone = str(saved.get("timezone") or "").strip() or _local_zone_name()
     if zone:
@@ -133,7 +133,7 @@ def doctor() -> list[DoctorLine]:
             DoctorLine(
                 "surfaces",
                 "info",
-                "settings are not readable from here — check them in Settings -> Tools",
+                "settings are not readable from here — check them in Settings → Tools",
             )
         )
     else:
