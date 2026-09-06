@@ -80,6 +80,7 @@ MAX_SPOOL_FILES = 400
 MAX_SPOOL_FILE_BYTES = 262_144
 MAX_ALERTS_PER_FILE = 50
 MAX_TEXT_CHARS = 8_000
+MAX_NOTE_CHARS = 2_000
 MAX_FIELD_CHARS = 400
 MAX_TIMELINE_ENTRIES = 200
 MAX_PROPOSALS = 20
@@ -171,14 +172,28 @@ def _clip(value: Any, limit: int = MAX_FIELD_CHARS) -> str:
     return text[:limit]
 
 
-def _clip_text(value: Any) -> str:
+def _clip_text(value: Any, limit: int = MAX_TEXT_CHARS) -> str:
     """Multi-line untrusted prose, capped. Newlines survive; other controls do not."""
     text = str(value or "")
     text = "".join(ch if (ch.isprintable() or ch == "\n") else " " for ch in text)
     text = text.replace("\r", "\n").strip()
-    if len(text) > MAX_TEXT_CHARS:
-        text = text[:MAX_TEXT_CHARS] + "\n… (truncated at the intake cap)"
+    if len(text) > limit:
+        text = text[:limit] + "\n… (truncated at the intake cap)"
     return text
+
+
+def iso_or(raw: str, fallback: str) -> str:
+    """*raw* if it is a parseable timestamp, else *fallback*.
+
+    Used on the payload's own time before it becomes ``first_seen``. Without this a
+    monitor emitting a format this app cannot read would silently zero the age term of
+    every incident it files — a whole ranking signal switched off by one unfamiliar string.
+    """
+    try:
+        datetime.fromisoformat((raw or "").strip())
+    except (TypeError, ValueError):
+        return fallback
+    return raw.strip()
 
 
 def _first(payload: dict[str, Any], *keys: str) -> Any:
@@ -360,8 +375,13 @@ class Incident:
         return self.state in OPEN_STATES
 
     def note(self, kind: str, detail: str, **extra: Any) -> dict[str, Any]:
-        """Append one timeline entry and return it."""
-        entry = {"at": utc_now(), "kind": kind, "detail": _clip_text(detail), **extra}
+        """Append one timeline entry and return it.
+
+        Capped harder than an alarm body: 200 entries at the intake cap would make one
+        incident record megabytes wide, and a timeline entry is a sentence, not a payload.
+        """
+        entry = {"at": utc_now(), "kind": kind,
+                 "detail": _clip_text(detail, MAX_NOTE_CHARS), **extra}
         self.timeline.append(entry)
         if len(self.timeline) > MAX_TIMELINE_ENTRIES:
             del self.timeline[: len(self.timeline) - MAX_TIMELINE_ENTRIES]
@@ -505,9 +525,17 @@ class Ledger:
             return {}
         return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
 
-    def _write_seen(self, seen: dict[str, str]) -> None:
+    def _write_seen(self, seen: dict[str, str], present: set[str]) -> None:
+        """Persist the read-file index, dropping entries whose spool file is gone.
+
+        Pruning by "the file no longer exists" rather than by age is what keeps this index
+        bounded by the spool instead of growing forever — and it avoids the failure mode a
+        blind size cap has, where evicting a still-present file's digest makes the next
+        sweep read it again and record a firing that never happened.
+        """
+        seen = {name: digest for name, digest in seen.items() if name in present}
         if len(seen) > MAX_SEEN_FILES:
-            seen = dict(list(seen.items())[-MAX_SEEN_FILES:])
+            seen = dict(sorted(seen.items())[-MAX_SEEN_FILES:])
         atomic_write(self.seen_path, json.dumps(seen, indent=2, sort_keys=True) + "\n")
 
     def sweep(
@@ -535,6 +563,7 @@ class Ledger:
         except OSError as exc:
             report["error"] = str(exc)
             return report
+        present = {p.name for p in files}
         if len(files) > MAX_SPOOL_FILES:
             files = files[:MAX_SPOOL_FILES]
             report["truncated"] = True
@@ -569,7 +598,7 @@ class Ledger:
                 outcome = self._ingest(alarm, match_runbook=match_runbook, now=now)
                 report[outcome[0]].append(outcome[1])
             seen[path.name] = digest
-        self._write_seen(seen)
+        self._write_seen(seen, present)
         return report
 
     def _ingest(self, alarm: Alarm, *, match_runbook=None, now=None) -> tuple[str, str]:
@@ -580,8 +609,8 @@ class Ledger:
         except IncidentMissing:
             runbook = match_runbook(alarm) if match_runbook else ""
             incident = Incident(
-                id=alarm.incident_id, alarm=alarm, first_seen=alarm.at or stamp,
-                last_seen=stamp, runbook=runbook or "",
+                id=alarm.incident_id, alarm=alarm,
+                first_seen=iso_or(alarm.at, stamp), last_seen=stamp, runbook=runbook or "",
             )
             incident.note(
                 "opened",
