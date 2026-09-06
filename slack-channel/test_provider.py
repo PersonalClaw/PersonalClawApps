@@ -28,14 +28,21 @@ def test_slack_capabilities():
 
 def test_connected_derives_from_shared_creds(monkeypatch):
     """A live Slack integration (tokens in the SHARED credential store the gateway
-    propagates into the environment) must report connected/ready even when THIS
-    app's instance config carries no tokens — otherwise the Channels surface lies
-    'offline' for a working channel."""
+    propagates into the environment) must be seen even when THIS app's instance config
+    carries no tokens — otherwise the Channels surface lies 'offline' for a working
+    channel.
+
+    ``health()`` is asserted as "not offline" rather than "ready" (#952): a transport whose
+    ``start_inbound`` has not been driven is credentialled but deaf, and reporting a flat
+    green for it is precisely the signal that misled #952's operator. Which token SOURCE was
+    used — this test's actual subject — is unchanged; ``tests/
+    test_dashboard_settings_are_read.py`` covers the inbound-state dimension.
+    """
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-shared")
     monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-shared")
     t = SlackTransport({})  # empty instance config — tokens only in the environment
     assert t.connected is True
-    assert asyncio.run(t.health())["state"] == "ready"
+    assert asyncio.run(t.health())["state"] != "offline"
 
 
 def test_offline_when_no_tokens_anywhere(monkeypatch):

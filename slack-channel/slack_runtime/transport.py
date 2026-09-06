@@ -42,21 +42,36 @@ from slack_runtime.delivery import SlackDelivery
 from slack_runtime.events import SeenCache, init_socket_mode
 from slack_runtime.interactions import init as init_interactions
 from slack_runtime.runtime import SlackRuntime
+from slack_runtime.settings import load_tokens
 from slack_runtime.writes import SendRefused, live_writes_disabled
 
-logger = logging.getLogger(__name__)
+# NOT ``__name__``: the app loader execs this ENTRY module under a synthetic name
+# (``_pclaw_app_slack_channel__slack_runtime_transport``), so ``__name__`` produced a
+# logger outside the ``slack_runtime`` root this app declares in ``app.json``
+# ``loggerRoots`` — the level the operator sets never reached the transport, so its
+# diagnostics were unreachable at ANY verbosity. #952 called the offline notice "an INFO
+# line invisible at the default WARNING log level"; measured, it was invisible at DEBUG
+# too. Every other module in this bundle is imported as ``slack_runtime.X`` and is fine.
+logger = logging.getLogger("slack_runtime.transport")
 
 
 class SlackTransport(ChannelTransportProvider):
     def __init__(self, config: dict[str, Any] | None = None) -> None:
-        cfg = config or {}
-        import os
-
-        # Per-instance config wins; else the shared credential store the gateway
-        # propagates into the environment (SLACK_BOT_TOKEN / SLACK_APP_TOKEN).
-        self._bot_token = cfg.get("bot_token", "") or os.environ.get("SLACK_BOT_TOKEN", "")
-        self._app_token = cfg.get("app_token", "") or os.environ.get("SLACK_APP_TOKEN", "")
+        # Keep the config: ``start_inbound`` hands it to the runtime so the INBOUND half
+        # resolves its tokens from the same place the outbound half just did (#952).
+        self._config: dict[str, Any] = config if config is not None else {}
+        self._bot_token, self._app_token = load_tokens(self._config)
         self._runtime: SlackRuntime | None = None
+        #: True once the Socket-Mode receiver is actually connected. ``health()`` needs the
+        #: three-way distinction — connected / tried-and-failed / never driven — because a
+        #: config save re-cycles this provider and builds a FRESH transport that the
+        #: gateway does not re-drive, so "never driven" is a real, reportable state and not
+        #: just a boot-time blink.
+        self._inbound_started: bool = False
+        #: Why inbound is not running, when it was driven and failed (``""`` otherwise).
+        #: ``health()``/``test()`` report it, so the provider row can no longer show a
+        #: green "Tokens configured" over a receiver that never started (#952).
+        self._inbound_offline_reason: str = ""
 
     def capabilities(self) -> ChannelCapabilities:
         return ChannelCapabilities(
@@ -81,9 +96,22 @@ class SlackTransport(ChannelTransportProvider):
     # ── Inbound: the gateway drives this once at boot ──
     async def start_inbound(self, services: Any) -> None:
         """Build the Slack runtime, wire the socket receiver, connect (retry/degrade)."""
-        runtime = SlackRuntime(services)
+        # Pass this transport's own config through: without it the runtime re-derived the
+        # tokens from core's credential store alone and a dashboard-configured install
+        # never started inbound (#952).
+        runtime = SlackRuntime(services, config=self._config)
         if not runtime._slack_enabled:
-            logger.info("SlackTransport: no tokens — inbound stays offline")
+            missing = " and ".join(
+                n for n, tok in (("Bot Token", runtime._bot_token), ("App Token", runtime._app_token))
+                if not tok
+            )
+            self._inbound_offline_reason = (
+                f"no {missing} — Socket Mode needs both. Set them in "
+                "Settings → Providers → Slack Channel."
+            )
+            # WARNING, not INFO: this is the whole reason a correctly-credentialled-looking
+            # Slack install answers nothing, and it was previously below the default level.
+            logger.warning("SlackTransport: inbound stays offline — %s", self._inbound_offline_reason)
             return
         runtime.slack = RealSlackClient(runtime._bot_token)
         self._runtime = runtime
@@ -92,7 +120,15 @@ class SlackTransport(ChannelTransportProvider):
         init_socket_mode(runtime, SeenCache())
 
         if runtime._socket_client is None:
-            return  # enterprise validation failed inside init_socket_mode
+            # enterprise validation failed inside init_socket_mode (which logs the why)
+            # Not "…or add the org to Allowed Enterprise IDs": that list no longer gates
+            # acceptance (see validate_enterprise), so auth.test is the only thing that can
+            # have failed here. Pointing at an inert setting is worse than saying nothing.
+            self._inbound_offline_reason = (
+                "Slack workspace validation failed — auth.test rejected the Bot Token. "
+                "Re-check it in Settings → Providers → Slack Channel."
+            )
+            return
 
         # Register outbound delivery on the gateway + the dashboard. Core delivers
         # through this ONE provider-agnostic ChannelDelivery handle (text, attachments,
@@ -120,6 +156,8 @@ class SlackTransport(ChannelTransportProvider):
             try:
                 await runtime._socket_client.connect()
                 logger.info("SlackTransport: Socket-Mode connected")
+                self._inbound_offline_reason = ""
+                self._inbound_started = True
                 return
             except Exception as e:  # noqa: BLE001 — resilience: never crash the gateway
                 if attempt < 3:
@@ -131,6 +169,7 @@ class SlackTransport(ChannelTransportProvider):
                         "Slack offline; the rest of the gateway is unaffected.", e,
                     )
                     runtime._slack_enabled = False
+                    self._inbound_offline_reason = f"Socket-Mode connect failed after 3 attempts: {e}"
 
     async def stop_inbound(self) -> None:
         rt = self._runtime
@@ -181,9 +220,30 @@ class SlackTransport(ChannelTransportProvider):
         return bool(self._bot_token)
 
     async def health(self) -> dict[str, Any]:
+        """Readiness for the Channels page / provider row.
+
+        Reports the INBOUND half too (#952). It used to answer "ready — Tokens configured"
+        off the bot token alone, which is exactly true and exactly useless: the two signals
+        an operator trusts (a green provider row and "connected to Slack") both described
+        outbound while the receiver was dead. ``error`` rather than ``offline`` because
+        outbound genuinely works — the channel is half-up, not down.
+        """
         if not self._bot_token:
             return {"state": "offline", "detail": "No bot token configured"}
-        return {"state": "ready", "detail": "Tokens configured"}
+        if self._inbound_started:
+            return {"state": "ready", "detail": "Tokens configured, Socket-Mode connected"}
+        if self._inbound_offline_reason:
+            return {
+                "state": "error",
+                "detail": f"Outbound ready, inbound OFFLINE — {self._inbound_offline_reason}",
+            }
+        return {
+            "state": "error",
+            "detail": (
+                "Outbound ready, inbound NOT STARTED — the gateway drives the Socket-Mode "
+                "receiver once at boot, so saved tokens take effect on the next restart."
+            ),
+        }
 
     async def test(self) -> dict[str, Any]:
         if not self._bot_token:
@@ -192,9 +252,15 @@ class SlackTransport(ChannelTransportProvider):
             client = RealSlackClient(self._bot_token)
             res = await client.auth_test()
             team = (res or {}).get("team") or (res or {}).get("team_id") or "workspace"
-            return {"ok": True, "detail": f"Authenticated to {team}"}
         except Exception as e:
             return {"ok": False, "detail": f"auth.test failed: {e}"}
+        # Agree with health(): the channel contract requires test() to be not-ok whenever
+        # health() is not "ready", or the owner gets a green Test on a channel that cannot
+        # hear them. Derived from health() rather than re-deciding, so the two cannot drift.
+        h = await self.health()
+        if h["state"] != "ready":
+            return {"ok": False, "detail": f"Authenticated to {team}, but {h['detail']}"}
+        return {"ok": True, "detail": f"Authenticated to {team}"}
 
 
 def create_provider(config: dict[str, Any] | None = None) -> "SlackTransport":

@@ -55,8 +55,35 @@ any other app. (Or `POST /api/apps {"source": ".../apps/slack-channel"}`.)
 
 | Key | Label | Notes |
 |---|---|---|
-| `bot_token` | Bot Token | Slack Bot User OAuth Token (xoxb-...). |
-| `app_token` | App Token | Slack App-Level Token for Socket Mode (xapp-...). |
+| `bot_token` | Bot Token | Slack Bot User OAuth Token (xoxb-...). Outbound only needs this one. |
+| `app_token` | App Token | Slack App-Level Token for Socket Mode (xapp-...). **Inbound needs both.** |
+| `allowed_users` | Allowed Users | Who may talk to the bot, besides the owner: `{slack_id, name}` per entry. Empty means owner-only; with no owner set either, nobody is authorized. |
+
+Both tokens are **write-only**: once saved, the form shows `••••••••` and the value never
+leaves the gateway. Saving other fields keeps the stored tokens; typing a new value
+replaces one.
+
+**Inbound starts at gateway boot**, so tokens saved into a running gateway apply on the
+next restart. Until then the channel row reports the inbound half honestly — "Outbound
+ready, inbound NOT STARTED" — rather than a flat green.
+
+An allowlisted (non-owner) user is authorized for conversation *and* for the commands in
+the "any allowed user" tier — `!stop`, `!title`, `!compact`, `sessions`, and `!dashboard`,
+which DMs them a dashboard session link. Everything else stays owner-only. Add people
+deliberately.
+
+### Settings that currently do nothing
+
+Two keys are visible in the Configure form and have no effect. They are listed here rather
+than quietly left in place:
+
+- `open_channels` — "all users authorized in this channel" is not enforced; the predicate
+  behind it is a hardcoded `false`.
+- `allowed_enterprise_ids` — workspace validation accepts any workspace whose bot token
+  authenticates; the list does not restrict it.
+
+Making either live changes *who can reach the agent*, so it is a deliberate decision rather
+than a bugfix. Until then, `allowed_users` (above) is the allowlist that is enforced.
 
 ## The live-writes kill switch
 

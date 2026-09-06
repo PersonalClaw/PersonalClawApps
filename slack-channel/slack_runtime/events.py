@@ -636,8 +636,10 @@ register_slash_command("status", _handle_status, "show runtime stats")
 def init_socket_mode(orch: "GatewayServices", seen: SeenCache) -> None:
     """Wire up the Socket Mode client and attach the event listener.
 
-    Does nothing when Slack is disabled (missing tokens or no allowed
-    users).  Mutates ``orch._socket_client`` in place.
+    Does nothing when Slack is disabled (either token missing). An EMPTY allowlist does
+    not stop the socket — it starts so a first DM can arrive and claim ownership, and
+    every message is then refused by ``is_allowed_user`` until someone is authorized.
+    Mutates ``orch._socket_client`` in place.
     """
     if not orch._slack_enabled:
         return
@@ -1529,7 +1531,14 @@ async def _route_message(
                     "Ask the owner to add you to the allowlist.",
                 )
             except Exception:
-                logger.debug("Failed to send ephemeral rejection", exc_info=True)
+                # WARNING, not DEBUG (#953): a refusal the sender never sees is
+                # indistinguishable from a crash, from both sides of the conversation. The
+                # refusal itself is already recorded above (SEL + WARNING); this line is
+                # specifically "we refused them AND could not tell them".
+                logger.warning(
+                    "Refused %s in %s, but the ephemeral notice failed to send — the "
+                    "sender sees silence", sender_id, channel, exc_info=True,
+                )
         return
 
     # Dedup AFTER activation check — prevents the plain `message` event

@@ -23,11 +23,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from personalclaw.sdk.channel import (
-    CRED_OWNER_ID,
-    CRED_SLACK_APP_TOKEN,
-    CRED_SLACK_BOT_TOKEN,
-)
+from personalclaw.sdk.channel import CRED_OWNER_ID
 
 from slack_runtime.client import RealSlackClient
 
@@ -41,24 +37,41 @@ logger = logging.getLogger(__name__)
 class SlackRuntime:
     """Holds Slack-owned state; proxies core services to a GatewayServices handle."""
 
-    def __init__(self, services: "GatewayServices") -> None:
+    def __init__(
+        self, services: "GatewayServices", config: dict[str, Any] | None = None
+    ) -> None:
         self._services = services
         cfg = services.config
 
         creds = cfg.load_credentials()
-        self._app_token: str = creds.get(CRED_SLACK_APP_TOKEN, "")
-        self._bot_token: str = creds.get(CRED_SLACK_BOT_TOKEN, "")
         self._owner_id: str = creds.get(CRED_OWNER_ID, "") or services.owner_id
 
         # Slack behavioral config comes from the app's OWN store (SlackSettings) —
         # core AppConfig defines no Slack config. get_settings() caches one live
         # instance; !channel/!config writes call reload_settings() so this stays fresh.
-        from slack_runtime.settings import reload_settings
+        from slack_runtime.settings import load_tokens, reload_settings
 
         settings = reload_settings()
 
-        # Owner-only access (multi-user disabled). Prune stale allowlist entries.
-        self._allowed_users: set[str] = {self._owner_id} if self._owner_id else set()
+        # ONE token resolution, shared with the outbound half — see `load_tokens` (#952).
+        # This read ``creds`` alone, which is ``.env`` + keychain + env and never the app
+        # store: so the tokens the Configure form saves reached outbound and never reached
+        # inbound, and a dashboard-only install was silently deaf.
+        self._bot_token, self._app_token = load_tokens(config, creds)
+
+        # Who may talk to this bot: the operator's allowlist — the dashboard's "Allowed
+        # Users" AND the in-Slack Approve button, which both persist to ``allowed_users``
+        # — plus the owner. #953: this was seeded from the owner ALONE, so an operator who
+        # listed three people had authorized none of them.
+        #
+        # Fail-CLOSED by construction: no owner and an empty allowlist leaves this set
+        # empty, and ``is_allowed_user`` then refuses everyone. Widening is only ever
+        # explicit — an id the operator wrote down.
+        self._allowed_users: set[str] = {
+            u["slack_id"] for u in settings.allowed_users if u.get("slack_id")
+        }
+        if self._owner_id:
+            self._allowed_users.add(self._owner_id)
         self._tracking_channels: set[str] = {
             c["channel_id"] for c in settings.tracking_channels if c.get("channel_id")
         }
