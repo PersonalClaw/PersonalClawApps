@@ -18,13 +18,28 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 
-from personalclaw.sdk.channel import ProviderSettings, atomic_write, config_path
+from personalclaw.sdk.channel import (
+    CRED_SLACK_APP_TOKEN,
+    CRED_SLACK_BOT_TOKEN,
+    ProviderSettings,
+    atomic_write,
+    config_path,
+)
 
 logger = logging.getLogger(__name__)
 
 _APP = "slack-channel"
+
+#: The two settings-schema keys that are CREDENTIALS rather than behaviour, so they are
+#: not :class:`SlackSettings` fields (a token never belongs in a dataclass that gets
+#: logged, diffed or echoed). The Configure form still writes them into the same app
+#: store, which is why they are named here: the schema↔runtime rail iterates
+#: ``dataclasses.fields(SlackSettings)`` plus these, and a schema key in neither is a
+#: dashboard control with nothing behind it.
+CREDENTIAL_SETTING_KEYS = ("bot_token", "app_token")
 
 # Channel activation modes (moved from core config.loader).
 ACTIVATION_ALWAYS = "always"
@@ -43,6 +58,43 @@ _OWNED_KEYS = (
     "trusted_bot_ids", "allowed_enterprise_ids", "reactions", "reactions_enabled",
     "channels", "dm_activation",
 )
+
+
+def load_tokens(
+    config: dict | None = None, creds: dict[str, str] | None = None
+) -> tuple[str, str]:
+    """Resolve ``(bot_token, app_token)`` — the ONE resolution order for this channel.
+
+    Order: the per-instance ``config`` the provider registry hands the transport (which
+    *is* this app's store, ``ProviderSettings.load(_APP)``) → core's credential store
+    (``.env`` / keychain / env, passed in as *creds* by whoever holds an ``AppConfig``)
+    → the process environment.
+
+    **Why this function exists (#952).** The outbound half (``SlackTransport``) resolved
+    these two tokens from the app store, and the inbound half (``SlackRuntime``) resolved
+    them from ``AppConfig.load_credentials()`` — which reads ``.env``, the keychain and the
+    environment and never looks at the app store. So an operator who configured Slack the
+    way the dashboard invites got a live outbound half (provider row green, "connected to
+    Slack" printed) and a dead inbound half, with the two disagreeing silently. Two
+    resolutions of the same credential is the defect; one shared resolution is the fix.
+
+    ``config`` is honoured when it is a dict *even if empty*, so a transport constructed
+    explicitly with ``{}`` (the channel conformance kit) does not silently pick the
+    installed store up behind the test's back. Pass ``None`` to mean "read the store".
+    """
+    src = ProviderSettings.load(_APP) if config is None else config
+    creds = creds or {}
+    bot = (
+        src.get("bot_token", "")
+        or creds.get(CRED_SLACK_BOT_TOKEN, "")
+        or os.environ.get(CRED_SLACK_BOT_TOKEN, "")
+    )
+    app = (
+        src.get("app_token", "")
+        or creds.get(CRED_SLACK_APP_TOKEN, "")
+        or os.environ.get(CRED_SLACK_APP_TOKEN, "")
+    )
+    return bot, app
 
 
 @dataclass

@@ -897,14 +897,33 @@ def is_yolo_mode() -> bool:
 
 
 def is_allowed_user(user_id: str) -> bool:
-    """Check if user_id is the owner.
+    """Is *user_id* the owner, or on the operator's allowlist?
 
-    Multi-user access is disabled for security — only the owner
-    (PERSONALCLAW_OWNER_ID) is authorized to interact via Slack.
+    **Fail-CLOSED, and deny-by-default.** An empty ``user_id`` is refused; with no owner
+    and an empty allowlist the set is empty and NOBODY is authorized. The only way this
+    returns True for a non-owner is an id an operator explicitly wrote down — in the
+    dashboard's "Allowed Users", or by clicking Approve on an in-Slack request. Both
+    persist to the same ``allowed_users`` list; :class:`~slack_runtime.runtime.SlackRuntime`
+    seeds this set from it at boot and the interaction handlers keep it in step.
+
+    This used to ignore ``_allowed_users`` entirely and answer :func:`is_owner`, with the
+    comment "multi-user access is disabled for security" (#953). Three surfaces were
+    lying as a result: the dashboard's Allowed Users field, the in-Slack Approve button
+    (which DMs the approved user "You can now message me!" and then refused them), and the
+    two-tier command gate right here in this module, whose ``is_owner(u) or
+    is_allowed_user(u)`` sites exist precisely so that a non-owner CAN be allowed.
+
+    Note the tier that non-owner grant carries: ``!dashboard`` is in the "any allowed
+    user" tier, so an allowlisted user can have a dashboard session link DMed to them.
+    That is the app's pre-existing design (see the tier comment in ``handle_message``),
+    not something restored here — but it is what "add this person to the allowlist" now
+    means again, so it belongs in the docstring rather than in a surprise.
     """
     if not user_id:
         return False
-    return is_owner(user_id)
+    if is_owner(user_id):
+        return True
+    return user_id in _allowed_users
 
 
 def set_tracking_channels(channel_ids: set[str]) -> None:
