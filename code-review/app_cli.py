@@ -32,7 +32,7 @@ def doctor() -> list[DoctorLine]:
     """Report whether `gh` is present and authenticated."""
     if not shutil.which("gh"):
         return [DoctorLine(
-            label="Code Review",
+            label="gh",
             status="fail",
             detail="`gh` is not on PATH — install the GitHub CLI, then `gh auth login`",
         )]
@@ -46,18 +46,18 @@ def doctor() -> list[DoctorLine]:
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return [DoctorLine(
-            label="Code Review",
+            label="gh auth",
             status="warn",
             detail=f"`gh auth status` could not be run: {exc}",
         )]
     if proc.returncode != 0:
         return [DoctorLine(
-            label="Code Review",
+            label="gh auth",
             status="warn",
             detail="`gh` is installed but not signed in — run `gh auth login`",
         )]
     return [DoctorLine(
-        label="Code Review",
+        label="gh",
         status="ok",
         detail="`gh` installed and authenticated",
     )]

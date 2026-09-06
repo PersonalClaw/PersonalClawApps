@@ -2,7 +2,7 @@
   "name": "research-lab",
   "version": "0.1.0",
   "displayName": "Research Lab",
-  "description": "Ask one question and walk away. Research Lab turns it into a tree of sub-questions and works that tree down over many unattended cycles: each hourly cycle hands a few open sub-questions to their own subagents, records what came back with its sources, and grafts on whatever new questions the work raised. When the tree is answered — or the cycle budget runs out — it synthesises everything into one markdown report on your machine.",
+  "description": "Unattended research campaigns as an agent tool: one question becomes a tree of sub-questions that hourly cycles work down through subagents, recording findings with their sources. When the tree is answered — or the cycle budget runs out — it synthesizes everything into one markdown report on your machine.",
   "icon": "FlaskConical",
   "author": "PersonalClaw",
   "license": "MIT",
@@ -48,7 +48,7 @@
           "maximum": 50,
           "x-meta": {
             "label": "Default cycle budget",
-            "help": "How many unattended cycles a new campaign may run before it stops and asks to be synthesised. A research_open call can override it per campaign."
+            "help": "How many unattended cycles a new campaign may run before it stops and asks to be synthesized. A research_open call can override it per campaign."
           }
         },
         "cycle_breadth": {

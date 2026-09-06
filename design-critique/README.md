@@ -9,23 +9,21 @@ it. Then it hands you the checklist for the half of a critique no measurement ca
 **Design Critique** is a **tool provider** — it implements the `personalclaw.sdk.tool`
 `ToolProvider` contract and its three tools appear on the agent tool layer.
 
-## Why `tool` and not `agent` or `workflow`
+## Install
 
-`agent` in this platform means an **ACP agent bundle** (`claude-code-agent`,
-`codex-agent`) — a coding CLI you select in the Agents list, not a task an agent performs.
-`workflow` is a real `PROVIDER_TYPES` entry but publishes no SDK contract, so an app cannot
-build against it without breaking the SDK-only boundary. What this app actually is — a
-capability the agent *calls*, with arguments, that returns a report — is exactly the `tool`
-contract, per the capability table in
-[`docs/app-creation-guide.md`](../docs/app-creation-guide.md).
+From the App Store, add the `apps/` directory as a **local source**, then install
+**Design Critique** — the install runs through the security scanner and lifecycle exactly
+like any other app. (Or `POST /api/apps {"source": ".../apps/design-critique"}`.) Nothing
+to configure and no credential to supply — `personalclaw doctor` reports whether the image
+decoder is available and restates the egress posture.
 
 ## The three tools
 
 | Tool | What it does |
 |---|---|
 | `design_critique_page` | Fetch a URL, report accessibility and craft findings from its markup, and say what the headless renderer sees. |
-| `design_critique_image` | Measure a screenshot's pixels: contrast, palette, colour-vision safety, density, gutters, alignment. |
-| `design_critique_rubric` | Return the checklist for the visual pass — the judgement no measurement can make. |
+| `design_critique_image` | Measure a screenshot's pixels: contrast, palette, color-vision safety, density, gutters, alignment. |
+| `design_critique_rubric` | Return the checklist for the visual pass — the judgment no measurement can make. |
 
 ```
 design_critique_page(url="https://example.com/pricing")
@@ -41,21 +39,21 @@ report, so a host can render the structure instead of re-parsing prose.
 
 ## Why it is split in two
 
-Judgement about a design divides cleanly into what a machine can **measure** and what it
+Judgment about a design divides cleanly into what a machine can **measure** and what it
 must **look at**. Pretending otherwise is how design tooling ends up producing confident
 nonsense, so the split is in the tool surface itself.
 
 **Measured from markup** (23 rules): document language, page title, viewport zoom locking,
 `main` landmark, duplicate ids, missing `alt`, filename-as-`alt`, untitled `iframe`,
-autoplaying media, unlabelled form controls, placeholder-as-label, nameless links and
+autoplaying media, unlabeled form controls, placeholder-as-label, nameless links and
 buttons, vague link text, positive `tabindex`, `target=_blank` without `rel=noopener`,
 missing or duplicated `h1`, skipped heading levels, over-long headings, header-less data
-tables, declared colour pairs under 4.5:1, type below 12px, typeface count, type-scale
+tables, declared color pairs under 4.5:1, type below 12px, typeface count, type-scale
 sprawl, missing meta description.
 
 **Measured from pixels** (9 rules): capture width against real device and breakpoint
 widths, rendered contrast against the dominant surface, pure black on pure white, palette
-sprawl, full-saturation colours, red–green colour-vision collapse, near-empty and
+sprawl, full-saturation colors, red–green color-vision collapse, near-empty and
 over-dense canvases, gutter imbalance, ragged left edges.
 
 **Not measured, and not faked.** Whether the hierarchy matches the user's goal, whether the
@@ -65,7 +63,7 @@ three of them, for a `screenshot`, a `flow` and a live `page` — so the visual 
 same every run instead of improvised. A report with no findings says so plainly and tells
 you it is **not** a pass.
 
-## The colour-vision check, since it is the least obvious one
+## The color-vision check, since it is the least obvious one
 
 Deuteranopia is modelled with the standard channel-mixing approximation, whose red/green
 block is near-singular — that near-collapse *is* the condition. The check is then a
@@ -73,7 +71,7 @@ block is near-singular — that near-collapse *is* the condition. The check is t
 120 apart in RGB and keeps less than 62% of that separation after the transform. Measured
 on the canonical pairs, the classic unsafe red/green (`#d62728` vs `#2ca02c`) keeps 52% and
 is flagged; the classic safe blue/orange (`#1f77b4` vs `#ff7f0e`) keeps 87% and is not.
-Both directions are pinned by a test, because a check that fires on every two-colour
+Both directions are pinned by a test, because a check that fires on every two-color
 palette would be worse than no check.
 
 ## What it cannot see, stated rather than implied
@@ -99,7 +97,7 @@ palette would be worse than no check.
 - **The URL** is the one attacker-influenced input that reaches the network. It goes
   through core's guarded egress chokepoint (`personalclaw.sdk.net.fetch` with
   `egress_policy_for(CONNECTOR)`), so a private, denied or non-http(s) target is refused by
-  Settings → Security → Network rather than by this app's own judgement. A test asserts the
+  Settings → Security → Network rather than by this app's own judgment. A test asserts the
   bundle contains no `aiohttp` / `requests` / `httpx` / `urllib.request` import that could
   route around it, and a non-http scheme is refused before any fetch is attempted.
 - **The screenshot path** reads exactly the one file named. It refuses a directory or
@@ -112,18 +110,11 @@ palette would be worse than no check.
 - **Nothing is posted anywhere.** There is no reporter and no upload path. The review is
   the tool's return value.
 
-## Install
-
-From the App Store, add this `apps/` directory as a **local source**, then install **Design
-Critique**. (Or `POST /api/apps {"source": ".../design-critique"}`.) Nothing to configure
-and no credential to supply — `personalclaw doctor` reports whether the image decoder is
-available and restates the egress posture.
-
 ## Settings
 
 | Key | Label | Notes |
 |---|---|---|
-| `timeout_secs` | Fetch timeout | Seconds `design_critique_page` waits for the page, 1–120, default 20. Advanced. |
+| `timeout_secs` | Fetch Timeout | Seconds `design_critique_page` waits for the page, 1–120, default 20. Advanced. |
 
 ## Permissions
 
@@ -132,7 +123,7 @@ available and restates the egress posture.
 ## Tests
 
 `test_provider.py` covers the provider contract, the manifest against core's own
-`AppManifest`, the colour maths against the WCAG anchors, all 23 markup rules on a
+`AppManifest`, the color maths against the WCAG anchors, all 23 markup rules on a
 deliberately broken page **and their silence on a correct one**, the pixel rules against
 images the test draws, every refusal path, and the whole `design_critique_page` pipeline
 over the two fetch seams. No network, no credentials, no gateway.
@@ -141,10 +132,24 @@ over the two fetch seams. No network, no credentials, no gateway.
 python -m pytest design-critique -q
 ```
 
+## Design notes
+
+### Why `tool` and not `agent` or `workflow`
+
+`agent` in this platform means an **ACP agent bundle** (`claude-code-agent`,
+`codex-agent`) — a coding CLI you select in the Agents list, not a task an agent performs.
+`workflow` is a real `PROVIDER_TYPES` entry but publishes no SDK contract, so an app cannot
+build against it without breaking the SDK-only boundary. What this app actually is — a
+capability the agent *calls*, with arguments, that returns a report — is exactly the `tool`
+contract, per the capability table in
+[`docs/app-creation-guide.md`](../docs/app-creation-guide.md).
+
+### Why there is no `test_server.py`
+
 There is no `test_server.py`: this app declares no `backend`, so it has no server to test.
 In this repo only `growth` and `minutes` — the backend+UI apps — ship one.
 
-## Validated / not yet validated
+### Validated / not yet validated
 
 Stated plainly, because the difference matters.
 
@@ -174,7 +179,7 @@ Stated plainly, because the difference matters.
   in the tests; Playwright has not run, so the client-rendered-shell detection is proven on
   its arithmetic rather than on a real SPA.
 - **The pixel rules against real product screenshots.** They are proven against synthetic
-  canvases with known colours and geometry. The thresholds (palette size, density bands,
+  canvases with known colors and geometry. The thresholds (palette size, density bands,
   the 6-left-edge alignment ceiling) have not been calibrated against a corpus of real UI,
   so expect to tune them.
 

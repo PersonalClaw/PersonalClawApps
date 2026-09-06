@@ -885,7 +885,7 @@ def analyze_markup(markup: str, *, url: str = "") -> tuple[list[Finding], dict[s
                 id="a11y.declared-contrast",
                 kind="a11y",
                 severity="major",
-                title=f"{len(low)} declared colour pair(s) fall below 4.5:1",
+                title=f"{len(low)} declared color pair(s) fall below 4.5:1",
                 detail=(
                     "A foreground and background declared together in one rule do not reach "
                     f"the body-text minimum. Worst pair: {_hex(worst[0])} on "
@@ -1117,36 +1117,42 @@ def analyze_image(path: Path) -> tuple[list[Finding], dict[str, Any]]:
     """Pixel-level craft + accessibility findings for one screenshot.
 
     Raises :class:`DesignCritiqueError` for anything the caller must fix (missing file, not
-    an image, Pillow absent) so the tool renders a WHAT/WHY/FIX refusal instead of an empty
+    an image, Pillow absent) so the tool returns an actionable refusal instead of an empty
     report that reads like a pass.
     """
     try:
         from PIL import Image
-    except ImportError as exc:  # pragma: no cover — Pillow is a core dependency
+    except ImportError as exc:  # pragma: no cover — Pillow ships with this app
         raise DesignCritiqueError(
-            what="Pillow is not importable, so the screenshot cannot be decoded.",
-            why="Image analysis needs the Pillow decoder that ships with PersonalClaw.",
-            fix="Reinstall PersonalClaw's dependencies (`pip install -e .`), then retry.",
+            "Pillow is not importable, so the screenshot cannot be decoded.",
+            recovery_hints=[
+                "Reinstall Design Critique from the Store — Pillow ships with this app, "
+                "not with PersonalClaw itself.",
+                "Restart the gateway after the reinstall (the install reports "
+                "restart_required); the URL review works in the meantime.",
+            ],
         ) from exc
 
     if not path.exists():
         raise DesignCritiqueError(
-            what=f"No file at {path}.",
-            why="The screenshot path does not resolve to anything on disk.",
-            fix="Check the path, or use `list_dir`/`glob` to find the capture you meant.",
+            f"No file at {path} — the screenshot path does not resolve to anything on disk.",
+            recovery_hints=[
+                "Check the path, or use `list_dir`/`glob` to find the capture you meant.",
+            ],
         )
     if not path.is_file():
         raise DesignCritiqueError(
-            what=f"{path} is not a file.",
-            why="A directory or device node cannot be decoded as an image.",
-            fix="Pass the path of a single PNG/JPEG/WebP screenshot.",
+            f"{path} is not a file — a directory or device node cannot be decoded as an image.",
+            recovery_hints=["Pass the path of a single PNG/JPEG/WebP screenshot."],
         )
     size_bytes = path.stat().st_size
     if size_bytes > _MAX_IMAGE_BYTES:
         raise DesignCritiqueError(
-            what=f"{path.name} is {size_bytes / 1e6:.0f} MB.",
-            why=f"Images above {_MAX_IMAGE_BYTES / 1e6:.0f} MB are refused before decoding.",
-            fix="Export the capture at screen resolution rather than at print scale.",
+            f"{path.name} is {size_bytes / 1e6:.0f} MB; images above "
+            f"{_MAX_IMAGE_BYTES / 1e6:.0f} MB are refused before decoding.",
+            recovery_hints=[
+                "Export the capture at screen resolution rather than at print scale.",
+            ],
         )
     try:
         with Image.open(path) as opened:
@@ -1155,18 +1161,21 @@ def analyze_image(path: Path) -> tuple[list[Finding], dict[str, Any]]:
             # before a single pixel is decoded.
             if width * height > _MAX_IMAGE_PIXELS:
                 raise DesignCritiqueError(
-                    what=f"{path.name} declares {width}×{height} pixels.",
-                    why="That is past the decode ceiling this tool will spend memory on.",
-                    fix="Downscale the capture (2× screen resolution is plenty) and retry.",
+                    f"{path.name} declares {width}×{height} pixels — past the decode "
+                    "ceiling this tool will spend memory on.",
+                    recovery_hints=[
+                        "Downscale the capture (2× screen resolution is plenty) and retry.",
+                    ],
                 )
             rgb = opened.convert("RGB")
     except DesignCritiqueError:
         raise
     except Exception as exc:
         raise DesignCritiqueError(
-            what=f"{path.name} could not be decoded as an image.",
-            why=f"The decoder refused it: {exc}",
-            fix="Confirm the file is a PNG/JPEG/WebP capture and not, say, a PDF or an SVG.",
+            f"{path.name} could not be decoded as an image ({exc}).",
+            recovery_hints=[
+                "Confirm the file is a PNG/JPEG/WebP capture and not, say, a PDF or an SVG.",
+            ],
         ) from exc
 
     stats = rgb.copy()
@@ -1228,7 +1237,7 @@ def analyze_image(path: Path) -> tuple[list[Finding], dict[str, Any]]:
                 id="a11y.rendered-contrast",
                 kind="a11y",
                 severity="major",
-                title=f"{len(faint)} rendered colour(s) sit under 3:1 against the background",
+                title=f"{len(faint)} rendered color(s) sit under 3:1 against the background",
                 detail=(
                     f"Against the dominant {_hex(background)} surface these read as barely "
                     f"there — the faintest is {_hex(worst.rgb)} at "
@@ -1276,9 +1285,9 @@ def analyze_image(path: Path) -> tuple[list[Finding], dict[str, Any]]:
                 id="heuristic.palette-sprawl",
                 kind="heuristic",
                 severity="major",
-                title=f"{len(families)} distinct colours each cover at least 1% of the canvas",
+                title=f"{len(families)} distinct colors each cover at least 1% of the canvas",
                 detail=(
-                    "Past about a dozen, colour has stopped carrying meaning: nothing is "
+                    "Past about a dozen, color has stopped carrying meaning: nothing is "
                     "emphasised because everything is."
                 ),
                 fix=(
@@ -1299,10 +1308,10 @@ def analyze_image(path: Path) -> tuple[list[Finding], dict[str, Any]]:
                 id="heuristic.oversaturated",
                 kind="heuristic",
                 severity="minor",
-                title=f"{len(saturated)} fully saturated colour(s) in the palette",
+                title=f"{len(saturated)} fully saturated color(s) in the palette",
                 detail=(
                     "Maximum saturation at maximum brightness vibrates against neighbouring "
-                    "colour and leaves nothing louder for a genuine alert."
+                    "color and leaves nothing louder for a genuine alert."
                 ),
                 fix=(
                     "Pull saturation back toward 70–85% and reserve the loudest value for one "
@@ -1329,14 +1338,14 @@ def analyze_image(path: Path) -> tuple[list[Finding], dict[str, Any]]:
                 id="a11y.color-vision-collapse",
                 kind="a11y",
                 severity="major",
-                title=f"{len(collapsing)} palette pair(s) collapse for red-green colour blindness",
+                title=f"{len(collapsing)} palette pair(s) collapse for red-green color blindness",
                 detail=(
-                    "These colours are clearly different to most viewers and nearly identical "
+                    "These colors are clearly different to most viewers and nearly identical "
                     "to the roughly 8% of men with deuteranomaly. If either one encodes "
                     "meaning — pass/fail, series, status — that meaning is lost."
                 ),
                 fix="Separate the pair in lightness as well as hue, and add a shape or a label.",
-                guideline="WCAG 2.2 1.4.1 Use of Colour (A)",
+                guideline="WCAG 2.2 1.4.1 Use of Color (A)",
                 evidence=_evidence(collapsing),
             )
         )
@@ -1543,16 +1552,11 @@ _RUBRIC: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
 
 
 class DesignCritiqueError(Exception):
-    """A refusal the caller can act on — rendered as the WHAT/WHY/FIX envelope."""
+    """A refusal the caller can act on — one plain sentence, plus recovery hints."""
 
-    def __init__(self, *, what: str, why: str, fix: str) -> None:
-        super().__init__(what)
-        self.what = what
-        self.why = why
-        self.fix = fix
-
-    def render(self) -> str:
-        return f"WHAT: {self.what}\nWHY: {self.why}\nFIX: {self.fix}"
+    def __init__(self, message: str, recovery_hints: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.recovery_hints = list(recovery_hints or [])
 
 
 # ── fetch seams ──────────────────────────────────────────────────────────────
@@ -1695,7 +1699,7 @@ class DesignCritiqueProvider(ToolProvider):
                 description=(
                     "Review a live URL and return structured accessibility and craft findings "
                     "— label association, alt text, heading order, focus order, declared "
-                    "colour contrast, type scale — each with its evidence and the fix. Reads "
+                    "color contrast, type scale — each with its evidence and the fix. Reads "
                     "the static markup through the guarded fetch and, unless render=false, "
                     "also reports what the headless renderer sees. Use it before asking a "
                     "person to look at a page."
@@ -1728,7 +1732,7 @@ class DesignCritiqueProvider(ToolProvider):
                 description=(
                     "Review a screenshot on disk and return structured accessibility and "
                     "craft findings measured from the pixels — rendered contrast, palette "
-                    "sprawl, red-green colour-vision collapse, density, margin balance, "
+                    "sprawl, red-green color-vision collapse, density, margin balance, "
                     "alignment discipline — each with its evidence and the fix. Pair it with "
                     "your own look at the image: this measures, it does not see."
                 ),
@@ -1787,54 +1791,64 @@ class DesignCritiqueProvider(ToolProvider):
             if tool_name == "design_critique_rubric":
                 return self._rubric(args)
         except DesignCritiqueError as exc:
-            return ToolResult(success=False, error=exc.render())
+            return ToolResult(success=False, error=str(exc), recovery_hints=exc.recovery_hints)
         except Exception as exc:  # a broken review must never take the turn down
             logger.exception("design-critique: %s failed", tool_name)
             return ToolResult(
                 success=False,
-                error=(
-                    f"WHAT: {tool_name} could not complete.\n"
-                    f"WHY: {type(exc).__name__}: {exc}\n"
-                    "FIX: Retry with a simpler target; if it repeats, review by hand with "
-                    "`design_critique_rubric`."
-                ),
+                error=f"{tool_name} could not complete: {type(exc).__name__}: {exc}",
+                recovery_hints=[
+                    "Retry with a simpler target; if it repeats, review by hand with "
+                    "design_critique_rubric.",
+                ],
             )
-        return ToolResult(success=False, error=f"Unknown tool: {tool_name}")
+        return ToolResult(
+            success=False,
+            error=f"Unknown tool: {tool_name}",
+            recovery_hints=[
+                "This provider exposes: design_critique_page, design_critique_image, "
+                "design_critique_rubric.",
+            ],
+        )
 
     # -- tools ------------------------------------------------------------
     async def _page(self, args: dict[str, Any]) -> ToolResult:
         url = str(args.get("url") or "").strip()
         if not url:
             raise DesignCritiqueError(
-                what="design_critique_page needs a 'url'.",
-                why="There is nothing to review without one.",
-                fix="Pass the http(s) URL of the page, e.g. https://example.com/pricing.",
+                "design_critique_page needs a 'url' — there is nothing to review without one.",
+                recovery_hints=[
+                    "Pass the http(s) URL of the page, e.g. https://example.com/pricing.",
+                ],
             )
         if not re.match(r"^https?://", url, re.I):
             raise DesignCritiqueError(
-                what=f"{url!r} is not an http(s) URL.",
-                why="Only http and https are fetchable through the guarded egress path.",
-                fix=(
-                    "Pass a full https:// URL, or use design_critique_image for a local " "capture."
-                ),
+                f"{url!r} is not an http(s) URL — only http and https are fetchable "
+                "through the guarded egress path.",
+                recovery_hints=[
+                    "Pass a full https:// URL, or use design_critique_image for a local "
+                    "capture.",
+                ],
             )
         try:
             final_url, markup, status = await _fetch_markup(url, timeout_s=self._timeout)
         except Exception as exc:
             raise DesignCritiqueError(
-                what=f"{url} could not be fetched.",
-                why=f"{type(exc).__name__}: {exc}",
-                fix=(
+                f"{url} could not be fetched: {type(exc).__name__}: {exc}",
+                recovery_hints=[
                     "Check the URL, and check Settings → Security → Network if the host is "
-                    "private or denied. For a page you can already see, screenshot it and use "
-                    "design_critique_image."
-                ),
+                    "private or denied.",
+                    "For a page you can already see, screenshot it and use "
+                    "design_critique_image.",
+                ],
             ) from exc
         if status >= 400:
             raise DesignCritiqueError(
-                what=f"{final_url} answered HTTP {status}.",
-                why="An error page is not the design under review.",
-                fix="Check the URL, and any auth it needs, before reviewing it.",
+                f"{final_url} answered HTTP {status} — an error page is not the design "
+                "under review.",
+                recovery_hints=[
+                    "Check the URL, and any auth it needs, before reviewing it.",
+                ],
             )
 
         findings, summary = analyze_markup(markup, url=final_url)
@@ -1898,9 +1912,11 @@ class DesignCritiqueProvider(ToolProvider):
         raw = str(args.get("path") or "").strip()
         if not raw:
             raise DesignCritiqueError(
-                what="design_critique_image needs a 'path'.",
-                why="There is nothing to review without one.",
-                fix="Pass the path of a screenshot, e.g. ~/Desktop/checkout.png.",
+                "design_critique_image needs a 'path' — there is nothing to review "
+                "without one.",
+                recovery_hints=[
+                    "Pass the path of a screenshot, e.g. ~/Desktop/checkout.png.",
+                ],
             )
         path = Path(raw).expanduser()
         findings, summary = analyze_image(path)

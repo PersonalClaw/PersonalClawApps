@@ -95,7 +95,7 @@ class NotesProvider(ToolProvider):
                 description=(
                     "Create, replace or append to a markdown note in the user's notebook and "
                     "commit that one note to git. Notes are plain files in a git repository, "
-                    "so every version is recoverable. Use this for drafting and journalling; "
+                    "so every version is recoverable. Use this for drafting and journaling; "
                     "use knowledge_create when something should become indexed knowledge."
                 ),
                 provider=self.name,

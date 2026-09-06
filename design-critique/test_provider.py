@@ -452,9 +452,8 @@ def test_image_refusals_name_the_fix(tmp_path, make, expected):
     make(path)
     with pytest.raises(DesignCritiqueError) as exc:
         analyze_image(path)
-    assert expected in exc.value.what or expected in exc.value.why
-    assert exc.value.fix.strip()
-    assert exc.value.render().startswith("WHAT: ")
+    assert expected in str(exc.value)
+    assert exc.value.recovery_hints
 
 
 def test_an_oversized_declared_pixel_count_is_refused_before_decoding(tmp_path, monkeypatch):
@@ -464,7 +463,7 @@ def test_an_oversized_declared_pixel_count_is_refused_before_decoding(tmp_path, 
     monkeypatch.setattr(mod, "_MAX_IMAGE_PIXELS", 4)
     with pytest.raises(DesignCritiqueError) as exc:
         analyze_image(path)
-    assert "declares 10×10 pixels" in exc.value.what
+    assert "declares 10×10 pixels" in str(exc.value)
 
 
 def test_an_oversized_file_is_refused_before_decoding(tmp_path, monkeypatch):
@@ -473,7 +472,7 @@ def test_an_oversized_file_is_refused_before_decoding(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "_MAX_IMAGE_BYTES", 1)
     with pytest.raises(DesignCritiqueError) as exc:
         analyze_image(path)
-    assert "refused before decoding" in exc.value.why
+    assert "refused before decoding" in str(exc.value)
 
 
 # ── the page tool, end to end over the seams ─────────────────────────────────
@@ -573,7 +572,7 @@ def test_a_non_http_target_is_refused_before_any_fetch(app, monkeypatch, url):
     monkeypatch.setattr(mod, "_fetch_markup", exploding)
     result = asyncio.run(app.invoke("design_critique_page", {"url": url}))
     assert not result.success
-    assert result.error.startswith("WHAT: ")
+    assert result.recovery_hints
 
 
 def test_an_error_status_is_not_reviewed(app, monkeypatch):
@@ -591,7 +590,7 @@ def test_a_blocked_fetch_becomes_an_actionable_refusal(app, monkeypatch):
     result = asyncio.run(app.invoke("design_critique_page", {"url": "http://10.0.0.1/"}))
     assert not result.success
     assert "egress denied" in result.error
-    assert "Security → Network" in result.error
+    assert "Security → Network" in " ".join(result.recovery_hints)
 
 
 def test_the_page_tool_passes_the_configured_timeout(monkeypatch):
@@ -646,7 +645,8 @@ def test_a_screenshot_yields_both_a11y_and_craft_findings(app, tmp_path):
 def test_a_missing_screenshot_is_refused_not_raised(app):
     result = asyncio.run(app.invoke("design_critique_image", {"path": "/nope/none.png"}))
     assert not result.success
-    assert result.error.startswith("WHAT: ")
+    assert "No file at" in result.error
+    assert result.recovery_hints
 
 
 def test_a_home_relative_path_is_expanded(app, monkeypatch, tmp_path):
