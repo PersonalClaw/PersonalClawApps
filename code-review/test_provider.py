@@ -18,6 +18,7 @@ import pytest
 from personalclaw.sdk.manifest import AppManifest
 from personalclaw.sdk.model import EVENT_COMPLETE, EVENT_TEXT_CHUNK, LLMEvent, ProviderEntry
 from personalclaw.sdk.security import fence_untrusted
+from personalclaw.sdk.tool import RiskLevel
 
 from provider import (
     FANOUT_MODES,
@@ -123,6 +124,20 @@ async def test_exposes_the_three_tools(provider) -> None:
     assert tools["review_pr"].provider == "code-review"
     # A read-only review of someone else's PR should not stall on an approval prompt.
     assert all(not t.requires_approval for t in tools.values())
+
+
+@pytest.mark.asyncio
+async def test_declared_risk_matches_what_each_tool_actually_does(provider) -> None:
+    """The Tools page renders this declaration as a badge. All three were declared SAFE,
+    which put a green Safe badge on the tool that spawns `gh` — contradicting the install
+    scanner's own warning about the same call. The badge has to match the behaviour."""
+    tools = {t.name: t for t in await provider.list_tools()}
+    # Spawns a subprocess and reads a remote repo; also appends to the findings log.
+    assert tools["review_pr"].risk_level is RiskLevel.CAUTION
+    # Writes to disk.
+    assert tools["record_finding"].risk_level is RiskLevel.CAUTION
+    # Reads the local log and nothing else.
+    assert tools["review_findings"].risk_level is RiskLevel.SAFE
 
 
 @pytest.mark.asyncio
