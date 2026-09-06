@@ -1,0 +1,93 @@
+{
+  "name": "ops",
+  "version": "0.1.0",
+  "displayName": "Ops",
+  "description": "An on-call first responder. Ops watches a folder your monitor writes alarms into, files each firing as an incident, and ranks the queue by what actually needs a human first — severity, whether it paged, whether anyone has claimed it, how long it has been open, how often it has fired, and whether any runbook matches it. Then it walks the shift: claim, get the investigation plan from your own runbook, record what you found, and write down a proposed fix with its blast radius and its rollback. Proposing changes nothing. Running a fix needs a setting you turned on, an explicit confirm, and the token that digests the exact plan you read — and it can only ever run a command your own runbook already declared.",
+  "icon": "Siren",
+  "author": "PersonalClaw",
+  "license": "MIT",
+  "tags": [
+    "tool",
+    "ops",
+    "on-call",
+    "incidents"
+  ],
+  "cli": {
+    "setup": "app_cli:setup",
+    "doctor": "app_cli:doctor"
+  },
+  "loggerRoots": [
+    "ops"
+  ],
+  "permissions": {
+    "storage": true,
+    "cron": true,
+    "network": false
+  },
+  "crons": [
+    {
+      "name": "ops-sweep",
+      "cron_expr": "*/10 * * * *",
+      "silent": true,
+      "persistent_session": false,
+      "message": "Take one on-call sweep.\n\n1. Call ops_watch. If it opened and reopened nothing, stop — say nothing and end the turn.\n2. For each incident it opened or reopened at severity high or critical, or that paged: ops_claim it, then ops_investigate to get its plan.\n3. Walk that plan with your own READ-ONLY tools. Call ops_record once per check with what you actually saw, including the ones that came back clean — a ruled-out cause is worth as much to the next responder as a found one.\n4. When you can name a fix, call ops_propose_fix with the fix, its blast radius and its rollback. If the incident's runbook declares an action that is the fix, name it.\n5. NEVER call ops_apply_fix. An unattended turn does not get to change the system — leave the proposal and its confirm token for a human.\n\nIf you cannot name a fix, record why not and leave the incident claimed. An honest 'not diagnosed, here is what was ruled out' is the useful outcome."
+    }
+  ],
+  "provider": {
+    "type": "tool",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "ops"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "spool_dir": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Alarm spool folder",
+            "help": "Where your monitor writes alarms — one JSON file per firing. Empty uses a 'spool' folder in this app's own data dir. Files here are only ever read; this app never deletes or moves them."
+          }
+        },
+        "runbooks_dir": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Runbooks folder",
+            "help": "Your runbooks — one JSON file each, its filename being its name. Empty uses a 'runbooks' folder in this app's own data dir. A runbook holds the checks to walk and, optionally, named remediations with a literal argv."
+          }
+        },
+        "allow_apply": {
+          "type": "boolean",
+          "default": false,
+          "x-meta": {
+            "label": "Allow gated remediation",
+            "help": "Off means this app can only ever PROPOSE a fix. On lets ops_apply_fix run a remediation your runbook already declared — and only with an explicit confirm plus the token that digests the exact proposal. Leave it off unless you want that."
+          }
+        },
+        "on_call": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "On-call name",
+            "help": "Recorded as the owner when an incident is claimed without naming one. Empty records 'on-call'."
+          }
+        },
+        "timeout_secs": {
+          "type": "integer",
+          "default": 60,
+          "minimum": 5,
+          "maximum": 900,
+          "x-meta": {
+            "label": "Remediation timeout",
+            "help": "Maximum seconds a confirmed remediation may run before it is given up on.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
