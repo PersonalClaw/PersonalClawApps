@@ -1,0 +1,94 @@
+diff --git a/src/auth/session.py b/src/auth/session.py
+index 1111111..2222222 100644
+--- a/src/auth/session.py
++++ b/src/auth/session.py
+@@ -1,12 +1,20 @@
+ import time
++import hmac
+
+-SESSION_TTL = 3600
++SESSION_TTL = 86400 * 30
++SIGNING_KEY = "s3cr3t-do-not-ship-this-key"
+
+
+ def mint(user_id: str) -> str:
+-    return f"{user_id}:{int(time.time())}"
++    stamp = int(time.time())
++    sig = hmac.new(SIGNING_KEY.encode(), f"{user_id}:{stamp}".encode()).hexdigest()
++    return f"{user_id}:{stamp}:{sig}"
++
++
++def verify(token: str) -> bool:
++    try:
++        user_id, stamp, sig = token.split(":")
++    except Exception:
++        return False
++    return sig == mint(user_id).split(":")[-1]
+diff --git a/src/api/routes.py b/src/api/routes.py
+index 3333333..4444444 100644
+--- a/src/api/routes.py
++++ b/src/api/routes.py
+@@ -1,8 +1,14 @@
+-from src.auth import session
++from src.auth.session import mint, verify
+
+
+ def login(user_id: str) -> dict:
+-    return {"token": session.mint(user_id)}
++    print("login called for", user_id)  # debug
++    return {"token": mint(user_id)}
++
++
++def whoami(token: str) -> dict:
++    # TODO fix this properly
++    return {"ok": verify(token)}
+diff --git a/src/api/handlers.js b/src/api/handlers.js
+index 5555555..6666666 100644
+--- a/src/api/handlers.js
++++ b/src/api/handlers.js
+@@ -1,5 +1,9 @@
+-const session = require('./session');
++const { mint, verify } = require('../auth/session');
+
+ export function login(userId) {
+-  return { token: session.mint(userId) };
++  console.log('login', userId);
++  return { token: mint(userId) };
+ }
+diff --git a/docs/auth.md b/docs/auth.md
+index 7777777..8888888 100644
+--- a/docs/auth.md
++++ b/docs/auth.md
+@@ -1,4 +1,6 @@
+ # Auth
+
+-Sessions last an hour.
++Sessions last thirty days.
++
++Tokens are signed.
+diff --git a/tests/test_session.py b/tests/test_session.py
+deleted file mode 100644
+index 9999999..0000000
+--- a/tests/test_session.py
++++ /dev/null
+@@ -1,6 +0,0 @@
+-from src.auth.session import mint
+-
+-
+-def test_mint_includes_user():
+-    assert mint("alice").startswith("alice:")
+-
+diff --git a/package-lock.json b/package-lock.json
+index aaaaaaa..bbbbbbb 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,5 +1,5 @@
+ {
+-  "lockfileVersion": 2,
++  "lockfileVersion": 3,
+   "requires": true,
+   "packages": {}
+ }
+diff --git a/assets/logo.png b/assets/logo.png
+index ccccccc..ddddddd 100644
+Binary files a/assets/logo.png and b/assets/logo.png differ

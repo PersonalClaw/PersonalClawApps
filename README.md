@@ -28,7 +28,8 @@ installs through the same scanner-gated lifecycle as any third-party app.
   `discord-channel`, `telegram-channel`, `email-channel`.
 - **Agents** (4) — `claude-code-agent`, `codex-agent`, `gemini-cli-agent`,
   `kiro-cli-agent` (ACP bundles).
-- **Tools** (3) — `mcp-tools`, `openai-tools`, `web-tools`.
+- **Tools** (4) — `mcp-tools`, `openai-tools`, `web-tools`, `code-review`
+  (deep per-file review of a GitHub PR over your local `gh`).
 - **Sync** (2) — `dir-sync`, `git-sync`.
 - **Backend + UI apps** (2) — `growth` (growth/brag-doc tracker), `minutes`
   (meeting minutes on a synced timeline).
