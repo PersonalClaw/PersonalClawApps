@@ -7,29 +7,13 @@ the artifact you review; the definition is what executes.
 **Spec Builder** is a **tool provider** — it implements the `personalclaw.sdk.tool`
 `ToolProvider` contract and its eight tools appear on the agent tool layer.
 
-## Why `tool` and not `agent` or `workflow`
+## Install
 
-`agent` in this platform means an **ACP agent bundle** (`claude-code-agent`, `codex-agent`) —
-a coding CLI you select in the Agents list, not a task an agent performs.
-
-`workflow` is the interesting one here, and the answer is not the obvious one. It *is* a real
-`PROVIDER_TYPES` entry, and core's own `personalclaw.workflows.defs` docstring says a v2
-def-provider is "the registry apps contribute template packs through". But that registry
-publishes **no SDK contract**: `WorkflowDefProvider` lives at
-`personalclaw.workflows.defs`, its def objects are `personalclaw.workflows.models.WorkflowDef`,
-and neither is re-exported under `personalclaw.sdk.*`. A bundle implementing that type would
-have to import around the SDK boundary, which this repo's `boundary` job refuses — correctly.
-So this app is a `tool` provider that **emits** definitions in the engine's format and hands
-them to core's own `workflow_author`. Promoting the def-provider seam into the SDK is core's
-call, not this bundle's; when it happens, this app's compiler is already the thing that would
-plug into it.
-
-What this app actually is — a set of capabilities the agent *calls*, with arguments, that read
-and write the user's specs — is exactly the `tool` contract, per the capability table in
-[`docs/app-creation-guide.md`](../docs/app-creation-guide.md).
-
-This bundle contributes no frontend, so there is no `ui/` and no design-system or a11y claim to
-make. The authoring surface is the agent tool layer, in chat.
+From the App Store, add the `apps/` directory as a **local source**, then install
+**Spec Builder** — the install runs through the security scanner and lifecycle exactly like
+any other app. (Or `POST /api/apps {"source": ".../apps/spec-builder"}`.) `git` on `PATH` is
+needed only for `spec_seed` — `personalclaw doctor` reports it as a **warning**, not a failure,
+because writing and compiling specs works without it.
 
 ## The eight tools
 
@@ -39,7 +23,7 @@ make. The authoring surface is the agent tool layer, in chat.
 | `spec_write` | Write one section — replace or append. Reports readiness as it goes. |
 | `spec_read` | The spec as markdown, fenced, with its readiness verdict. `section` for one. |
 | `spec_list` | Every spec: clauses, steps, filled sections, ready or not. |
-| `spec_seed` | Fold one repository file at a named revision into `background`. Read-only. |
+| `spec_seed` | Fold one repository file at a named revision into `background`. Read-only against the repository. |
 | `spec_review` | The structural readiness verdict. Zero model calls — it is a count. |
 | `spec_compile` | The workflow definition. Runs nothing. |
 | `spec_delete` | Remove a spec. Approval-gated. Any saved definition survives it. |
@@ -186,19 +170,12 @@ and `spec_seed` fetches file content outright. Applying the ARCC input-validatio
 recursive tree walk, so a stray file or symlink under a spec directory cannot widen a delete.
 Files this app did not create are reported and left in place.
 
-## Install
-
-From the App Store, add this `apps/` directory as a **local source**, then install
-**Spec Builder**. (Or `POST /api/apps {"source": ".../spec-builder"}`.) `git` on `PATH` is
-needed only for `spec_seed` — `personalclaw doctor` reports it as a **warning**, not a failure,
-because writing and compiling specs works without it.
-
 ## Settings
 
 | Key | Label | Notes |
 |---|---|---|
 | `source_repo` | Source repository | The repo a spec is about. Empty leaves `spec_seed` unavailable; there is no default on purpose. |
-| `timeout_secs` | git Timeout | Seconds to wait for a `git` command (minimum 5, default 20). Advanced. |
+| `timeout_secs` | Git Timeout | Seconds to wait for a `git` command (minimum 5, default 20). Advanced. |
 
 ## Permissions
 
@@ -226,10 +203,38 @@ Falsified rather than assumed: neutering the per-segment path check and inlining
 into the shared context block turned **18 tests red**, including the tripwire and both
 injection-durability assertions.
 
+## Design notes
+
+### Why `tool` and not `agent` or `workflow`
+
+`agent` in this platform means an **ACP agent bundle** (`claude-code-agent`, `codex-agent`) —
+a coding CLI you select in the Agents list, not a task an agent performs.
+
+`workflow` is the interesting one here, and the answer is not the obvious one. It *is* a real
+`PROVIDER_TYPES` entry, and core's own `personalclaw.workflows.defs` docstring says a v2
+def-provider is "the registry apps contribute template packs through". But that registry
+publishes **no SDK contract**: `WorkflowDefProvider` lives at
+`personalclaw.workflows.defs`, its def objects are `personalclaw.workflows.models.WorkflowDef`,
+and neither is re-exported under `personalclaw.sdk.*`. A bundle implementing that type would
+have to import around the SDK boundary, which this repo's `boundary` job refuses — correctly.
+So this app is a `tool` provider that **emits** definitions in the engine's format and hands
+them to core's own `workflow_author`. Promoting the def-provider seam into the SDK is core's
+call, not this bundle's; when it happens, this app's compiler is already the thing that would
+plug into it.
+
+What this app actually is — a set of capabilities the agent *calls*, with arguments, that read
+and write the user's specs — is exactly the `tool` contract, per the capability table in
+[`docs/app-creation-guide.md`](../docs/app-creation-guide.md).
+
+This bundle contributes no frontend, so there is no `ui/` and no design-system or a11y claim to
+make. The authoring surface is the agent tool layer, in chat.
+
+### Why there is no `test_server.py`
+
 There is no `test_server.py`: this app declares no `backend`, so it has no server to test. In
 this repo only `growth` and `minutes` — the backend+UI apps — ship one.
 
-## Validated / not yet validated
+### Validated / not yet validated
 
 Stated plainly, because the difference matters.
 

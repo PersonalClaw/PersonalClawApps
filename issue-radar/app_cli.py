@@ -60,8 +60,12 @@ def doctor() -> list[DoctorLine]:
 
 
 def _tracker_line(name: str, binary: str, probe: tuple[str, ...], url: str) -> DoctorLine:
+    # The probe is labeled by the binary it actually runs (`gh`, `glab`), the way
+    # code-review labels its `gh` probe — the host name stays in the detail text.
     if not shutil.which(binary):
-        return DoctorLine(name, "info", f"no `{binary}` on PATH — install it from {url}")
+        return DoctorLine(
+            binary, "info", f"no `{binary}` on PATH — install it from {url} to triage {name}"
+        )
     try:
         proc = subprocess.run(  # noqa: S603 — fixed argv, no shell, no user input
             list(probe),
@@ -71,12 +75,12 @@ def _tracker_line(name: str, binary: str, probe: tuple[str, ...], url: str) -> D
             check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        return DoctorLine(name, "warn", f"`{' '.join(probe)}` could not be run: {exc}")
+        return DoctorLine(binary, "warn", f"`{' '.join(probe)}` could not be run: {exc}")
     if proc.returncode != 0:
         return DoctorLine(
-            name, "warn", f"`{binary}` is installed but not signed in — run `{binary} auth login`"
+            binary, "warn", f"`{binary}` is installed but not signed in — run `{binary} auth login`"
         )
-    return DoctorLine(name, "ok", f"`{binary}` installed and authenticated")
+    return DoctorLine(binary, "ok", f"`{binary}` installed and authenticated")
 
 
 def _notes_line() -> DoctorLine:

@@ -58,7 +58,7 @@ def setup(ctx: SetupContext) -> None:
         ctx.print(f"Specs can be seeded from {repo} (read-only, via `git show`).")
     else:
         ctx.print(
-            "Set 'Source repository' in Settings -> Tools -> Spec Builder to seed a spec from "
+            "Set 'Source repository' in Settings → Tools → Spec Builder to seed a spec from "
             "the code it is about. Without it every other tool still works; only spec_seed "
             "is unavailable."
         )

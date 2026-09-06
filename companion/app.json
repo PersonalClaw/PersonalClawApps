@@ -2,7 +2,7 @@
   "name": "companion",
   "version": "0.1.0",
   "displayName": "Companion",
-  "description": "An opt-in day companion: reminders that actually go off, a watchlist that speaks up when a folder really changes, and a day plan you can ask for. Three surfaces, each switched on separately, and all three off out of the box — installing this app arms nothing. Its automations are served to the Automations page from this app's own store and are never written into PersonalClaw's, so turning a surface off, disabling the app or uninstalling it removes every trigger it contributed. Every one of them raises a notification and nothing else: this app deliberately never authors an automation that runs a prompt, a workflow or an agent, so a reminder's text can never become a scheduled instruction.",
+  "description": "An opt-in day companion: reminders that actually go off, a watchlist that speaks up when a folder really changes, and a day plan you can ask for — three surfaces, all off out of the box. Every automation it contributes only ever raises a notification, and turning a surface off, disabling the app or uninstalling it removes every trigger it contributed.",
   "icon": "Sunrise",
   "author": "PersonalClaw",
   "license": "MIT",

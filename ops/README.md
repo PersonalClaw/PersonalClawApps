@@ -12,21 +12,13 @@ command your own runbook already declared.
 **Ops** is a **tool provider** — it implements the `personalclaw.sdk.tool` `ToolProvider`
 contract and its nine tools appear on the agent tool layer.
 
-## Why `tool` and not `agent` or `workflow`
+## Install
 
-`agent` in this platform means an **ACP agent bundle** (`claude-code-agent`, `codex-agent`)
-— a coding CLI you select in the Agents list, not a task an agent performs. `workflow` is a
-real `PROVIDER_TYPES` entry but publishes no SDK contract, so an app cannot build against it
-without breaking the SDK-only boundary. What this app actually is — a set of capabilities
-the agent *calls*, with arguments, over one incident ledger — is exactly the `tool`
-contract, per the capability table in
-[`docs/app-creation-guide.md`](../docs/app-creation-guide.md).
-
-The shift loop itself is a **declared cron**, not a loop in this bundle: `ops-sweep` runs
-every ten minutes and hands the agent a fixed instruction (watch, triage, claim,
-investigate, record, propose — and never apply). That is the same shape `research-lab` uses
-for its unattended cycles, and it is why this app needs no background thread of its own.
-Edit or disable it in Triggers like any other schedule.
+From the App Store, add the `apps/` directory as a **local source**, then install **Ops**.
+(Or `POST /api/apps {"source": ".../apps/ops"}`.) Nothing else is required to install: with
+no spool folder and no runbooks it comes up idle and says so. To make it useful, point your
+monitor at the spool folder and write your first runbook — `personalclaw doctor` reports
+both, plus how the remediation gate is set.
 
 ## The nine tools
 
@@ -82,7 +74,7 @@ A bare object, a bare list, and Alertmanager's `{"alerts": […]}` are all read;
 through an alias table (`crit`, `sev1`, `error`, `warning`, `p3`, `minor` …); a word this
 app does not know becomes `unknown` and is weighted **mid-scale**, not dropped — a monitor
 emitting an unfamiliar severity is not evidence the alarm is unimportant. A payload with no
-recognisable alarm name is refused rather than filed under a placeholder, and counted out
+recognizable alarm name is refused rather than filed under a placeholder, and counted out
 loud in the sweep report. A payload timestamp this app cannot parse falls back to the
 sweep's own clock rather than being kept — otherwise one unfamiliar time format would
 switch the age term off for every incident that monitor files.
@@ -231,14 +223,6 @@ What this app does **not** do: no network (`network: false`, and nothing in the 
 a socket), no credentials, no writes to any tracker or monitor, and no arbitrary command —
 only one you declared.
 
-## Install
-
-From the App Store, add this `apps/` directory as a **local source**, then install **Ops**.
-(Or `POST /api/apps {"source": ".../ops"}`.) Nothing else is required to install: with no
-spool folder and no runbooks it comes up idle and says so. To make it useful, point your
-monitor at the spool folder and write your first runbook — `personalclaw doctor` reports
-both, plus how the remediation gate is set.
-
 ## Settings
 
 | Key | Label | Notes |
@@ -247,7 +231,7 @@ both, plus how the remediation gate is set.
 | `runbooks_dir` | Runbooks folder | One JSON file per runbook. Empty = `runbooks/` in this app's data dir. |
 | `allow_apply` | Allow gated remediation | **Off by default.** Off = propose-only. On enables `ops_apply_fix`, still behind the other three gates. |
 | `on_call` | On-call name | Recorded as owner when a claim names nobody. Empty records `on-call`. |
-| `timeout_secs` | Remediation timeout | Seconds a confirmed remediation may run, 5–900 (default 60). Advanced. |
+| `timeout_secs` | Remediation Timeout | Seconds a confirmed remediation may run, 5–900 (default 60). Advanced. |
 
 ## Permissions
 
@@ -258,7 +242,7 @@ bundle.
 ## Tests
 
 `test_provider.py` — 178 tests: the three identifier grammars and every refusal, alarm
-normalisation across the Alertmanager/bare-object/bare-list shapes and the severity alias
+normalization across the Alertmanager/bare-object/bare-list shapes and the severity alias
 table, fingerprint identity, the file-digest and alarm-identity halves of the dedupe, the
 unparseable-timestamp fallback and the read-file index forgetting a removed file, reopen
 after resolution, unreadable spool files and unparseable records being counted, every
@@ -276,10 +260,30 @@ round-trip.
 python -m pytest ops -q
 ```
 
+## Design notes
+
+### Why `tool` and not `agent` or `workflow`
+
+`agent` in this platform means an **ACP agent bundle** (`claude-code-agent`, `codex-agent`)
+— a coding CLI you select in the Agents list, not a task an agent performs. `workflow` is a
+real `PROVIDER_TYPES` entry but publishes no SDK contract, so an app cannot build against it
+without breaking the SDK-only boundary. What this app actually is — a set of capabilities
+the agent *calls*, with arguments, over one incident ledger — is exactly the `tool`
+contract, per the capability table in
+[`docs/app-creation-guide.md`](../docs/app-creation-guide.md).
+
+The shift loop itself is a **declared cron**, not a loop in this bundle: `ops-sweep` runs
+every ten minutes and hands the agent a fixed instruction (watch, triage, claim,
+investigate, record, propose — and never apply). That is the same shape `research-lab` uses
+for its unattended cycles, and it is why this app needs no background thread of its own.
+Edit or disable it in Triggers like any other schedule.
+
+### Why there is no `test_server.py`
+
 There is no `test_server.py`: this app declares no `backend`, so it has no server to test.
 In this repo only `growth` and `minutes` — the backend+UI apps — ship one.
 
-## Validated / not yet validated
+### Validated / not yet validated
 
 Stated plainly, because the difference matters.
 

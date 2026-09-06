@@ -2,7 +2,7 @@
   "name": "ops",
   "version": "0.1.0",
   "displayName": "Ops",
-  "description": "An on-call first responder. Ops watches a folder your monitor writes alarms into, files each firing as an incident, and ranks the queue by what actually needs a human first — severity, whether it paged, whether anyone has claimed it, how long it has been open, how often it has fired, and whether any runbook matches it. Then it walks the shift: claim, get the investigation plan from your own runbook, record what you found, and write down a proposed fix with its blast radius and its rollback. Proposing changes nothing. Running a fix needs a setting you turned on, an explicit confirm, and the token that digests the exact plan you read — and it can only ever run a command your own runbook already declared.",
+  "description": "An on-call first responder: it files each alarm your monitor writes as an incident, ranks the queue by what needs a human first, and walks the shift with you — claim, investigate against your own runbook, record findings, propose a fix. Proposing changes nothing, and running a fix is off by default, needs an explicit confirm, and can only ever be a command your own runbook already declared.",
   "icon": "Siren",
   "author": "PersonalClaw",
   "license": "MIT",
@@ -80,7 +80,7 @@
           "minimum": 5,
           "maximum": 900,
           "x-meta": {
-            "label": "Remediation timeout",
+            "label": "Remediation Timeout",
             "help": "Maximum seconds a confirmed remediation may run before it is given up on.",
             "tags": [
               "advanced"

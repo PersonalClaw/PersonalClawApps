@@ -2,7 +2,7 @@
   "name": "issue-radar",
   "version": "0.1.0",
   "displayName": "Issue Radar",
-  "description": "Point it at a repository and it tells you which open issues need you first. Issue Radar reads the open issues through your local `gh` or `glab`, suggests labels for each one from the repository's OWN label set — with the phrase that justifies every suggestion — and ranks the queue by what a maintainer actually cares about: unlabelled, unassigned, gone quiet, or carrying a security signal. Whatever you find while digging into an issue is appended to that issue's note log on your machine. Nothing is ever labelled, commented on or closed on the tracker.",
+  "description": "Triages a repository's open issues through your local gh or glab: suggests labels from the repository's own label set and ranks the queue by which issues need a maintainer first. Investigation notes stay on your machine, and nothing is ever labeled, commented on or closed on the tracker.",
   "icon": "Radar",
   "author": "PersonalClaw",
   "license": "MIT",
@@ -76,7 +76,7 @@
           "maximum": 8,
           "x-meta": {
             "label": "Concurrent per-issue label calls",
-            "help": "How many issues are labelled at once in the model pass.",
+            "help": "How many issues are labeled at once in the model pass.",
             "tags": [
               "advanced"
             ]
@@ -99,7 +99,7 @@
           "minimum": 5,
           "maximum": 300,
           "x-meta": {
-            "label": "Tracker CLI timeout",
+            "label": "Tracker CLI Timeout",
             "help": "Maximum seconds to wait for `gh` or `glab` before giving up.",
             "tags": [
               "advanced"

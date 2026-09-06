@@ -41,7 +41,9 @@ META_CAPABILITY = ProviderCapability(
         }
     ),
     supports_streaming=True,
-    supports_tools=True,
+    # No tools capability is declared and none is implemented here — the app registers
+    # chat/streaming/vision only, so the flag must not claim otherwise.
+    supports_tools=False,
     supports_embeddings=False,
     supports_vision=True,
     max_context_tokens=1_048_576,

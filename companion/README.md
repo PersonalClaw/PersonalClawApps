@@ -9,37 +9,12 @@ separately, and **all three off out of the box** — installing this app arms no
 (`personalclaw.sdk.triggers`, the rows those tools produce). The tool answers *"change my
 day"*; the store answers *"which automations exist"*.
 
-## Why `tool` + `trigger` and not the others
+## Install
 
-The tool half is the same reasoning every app in this suite reached: `agent` in this platform
-means an **ACP agent bundle** (`claude-code-agent`, `codex-agent`) — a coding CLI you pick in
-the Agents list, not a task an agent performs. `workflow` is a real `PROVIDER_TYPES` entry but
-publishes no SDK contract, so an app cannot build against it without breaking the SDK-only
-boundary. What this app's six calls are — capabilities the agent invokes, with arguments, that
-read and write the user's own day — is exactly the `tool` contract.
-
-The **`trigger`** half is what makes this app more than a notepad, and it is the reason the
-bundle declares two providers instead of one. `trigger` (`TriggerStoreProvider`) contributes a
-**store of trigger rows**: it answers "which automations exist" and core does every bit of the
-firing, under all of its own gates. Its sibling `trigger_source` is the wrong contract here —
-that one contributes a live *observer* that pushes events onto the bus, and this app observes
-nothing; it holds definitions.
-
-That choice is also what makes the app's central promise **structural rather than a policy**:
-
-> Every surface is opt-in, and disabling it removes all its triggers.
-
-There is no companion row anywhere in PersonalClaw's own `triggers.json`. Core re-reads this
-app's store on each pass, so a store nobody reads serves nothing. Switch a surface off, disable
-the app, or uninstall it, and its automations are gone from the Automations page — with no
-migration, no cleanup step, and nothing left behind to fire.
-
-There is no `ui/` in this bundle, so no design-system or a11y claim is made. The companion's
-surface is the chat tool layer plus the platform's own Automations page and notification
-inbox — the surfaces the user already has. A desktop *window* already exists as a separate
-app: [`menu-bar-companion`](../menu-bar-companion) is a macOS status-bar client for a
-PersonalClaw you already run. The two are complementary and deliberately not merged — that one
-is a client installed on *your* Mac, this one is a gateway-side app that owns items and rows.
+From the App Store, add the `apps/` directory as a **local source**, then install
+**Companion**. (Or `POST /api/apps {"source": ".../apps/companion"}`.) There is nothing else
+to install — no binary, no credential, no network. After installing, turn on the surface you
+want: nothing happens until you do.
 
 ## The six tools
 
@@ -92,7 +67,7 @@ and it is stated here rather than dressed up.
 The ceiling is enforced by shape, not by a check that could be forgotten:
 
 **The store persists ITEMS, never rows.** A reminder on disk is a title, a note, and a time. The
-trigger row — its `kind`, its `workflow` action, its `capabilities` — is synthesised in code on
+trigger row — its `kind`, its `workflow` action, its `capabilities` — is synthesized in code on
 every read, by one function that has no parameter for an action. So there is no field anywhere
 in the file where an action could be written, and no hand edit, stale sync copy or agent tool
 call can turn a companion row into an LLM run. A test drives exactly that: it injects
@@ -131,7 +106,7 @@ read back from a file that may have been edited. Applying the ARCC input-validat
   path turns a watchlist into a filesystem crawl. The result must be absolute; depth and length
   are capped. `~` is expanded and **`$VARS` deliberately are not** — resolving an environment
   variable out of a typed pattern is a way to make this app read a value the user did not type.
-- **PersonalClaw's own config dir is excluded**, for a behavioural reason rather than a secrecy
+- **PersonalClaw's own config dir is excluded**, for a behavioral reason rather than a secrecy
   one: the platform writes there continuously, so a watch on it would fire on the platform's own
   bookkeeping every pass — an automation that can never be quiet. A sibling directory with the
   same *prefix* is not excluded; a test pins both directions.
@@ -198,13 +173,6 @@ Rows are namespaced `companion:*`, because a row whose id also exists in the own
 `triggers.json` is not armed (the local row wins). `author` is left empty, which core reads as
 the local owner's: this is a single-machine personal store, not a team one.
 
-## Install
-
-From the App Store, add this `apps/` directory as a **local source**, then install
-**Companion**. (Or `POST /api/apps {"source": ".../companion"}`.) There is nothing else to
-install — no binary, no credential, no network. After installing, turn on the surface you want:
-nothing happens until you do.
-
 ## Settings
 
 | Key | Label | Notes |
@@ -248,10 +216,46 @@ manifest round-trip and both provider declarations, and the CLI seams.
 python -m pytest companion -q
 ```
 
+## Design notes
+
+### Why `tool` + `trigger` and not the others
+
+The tool half is the same reasoning every app in this suite reached: `agent` in this platform
+means an **ACP agent bundle** (`claude-code-agent`, `codex-agent`) — a coding CLI you pick in
+the Agents list, not a task an agent performs. `workflow` is a real `PROVIDER_TYPES` entry but
+publishes no SDK contract, so an app cannot build against it without breaking the SDK-only
+boundary. What this app's six calls are — capabilities the agent invokes, with arguments, that
+read and write the user's own day — is exactly the `tool` contract.
+
+The **`trigger`** half is what makes this app more than a notepad, and it is the reason the
+bundle declares two providers instead of one. `trigger` (`TriggerStoreProvider`) contributes a
+**store of trigger rows**: it answers "which automations exist" and core does every bit of the
+firing, under all of its own gates. Its sibling `trigger_source` is the wrong contract here —
+that one contributes a live *observer* that pushes events onto the bus, and this app observes
+nothing; it holds definitions.
+
+That choice is also what makes the app's central promise **structural rather than a policy**:
+
+> Every surface is opt-in, and disabling it removes all its triggers.
+
+There is no companion row anywhere in PersonalClaw's own `triggers.json`. Core re-reads this
+app's store on each pass, so a store nobody reads serves nothing. Switch a surface off, disable
+the app, or uninstall it, and its automations are gone from the Automations page — with no
+migration, no cleanup step, and nothing left behind to fire.
+
+There is no `ui/` in this bundle, so no design-system or a11y claim is made. The companion's
+surface is the chat tool layer plus the platform's own Automations page and notification
+inbox — the surfaces the user already has. A desktop *window* already exists as a separate
+app: [`menu-bar-companion`](../menu-bar-companion) is a macOS status-bar client for a
+PersonalClaw you already run. The two are complementary and deliberately not merged — that one
+is a client installed on *your* Mac, this one is a gateway-side app that owns items and rows.
+
+### Why there is no `test_server.py`
+
 There is no `test_server.py`: this app declares no `backend`, so it has no server to test. In
 this repo only `growth` and `minutes` — the backend+UI apps — ship one.
 
-## Validated / not yet validated
+### Validated / not yet validated
 
 Stated plainly, because the difference matters.
 
@@ -279,13 +283,13 @@ Stated plainly, because the difference matters.
 - **A real fire.** No reminder has actually gone off. The rows are proven to be *acceptable* to
   core's parser and the write-back contract is exercised against the store, but no gateway tick
   has armed one of these rows, dispatched `notify`, and raised a notification. The claim that a
-  reminder fires rests on core's own `arm`/`dispatch` behaviour, not on an observed fire.
+  reminder fires rests on core's own `arm`/`dispatch` behavior, not on an observed fire.
 - **A real `file` trigger poll.** Same shape: the row is a valid `file` trigger and `base_dir` is
   a real writable directory, but core's `file_poll` has never walked one of these globs.
 - **A real disable/uninstall cycle.** The "disabling removes every trigger" claim is proven
   *structurally* (rows exist only in this store, surfaces gate what it serves, and the tests
   drive all-off → zero rows) and rests on core's documented "a provider that is not registered
-  is not read" behaviour — but no gateway has actually deactivated this app and re-read the
+  is not read" behavior — but no gateway has actually deactivated this app and re-read the
   Automations page.
 - **`personalclaw setup` / `doctor` in a real CLI run.** Both seams are unit-tested; neither has
   been rendered by the actual CLI.

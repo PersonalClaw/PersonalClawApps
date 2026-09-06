@@ -1324,18 +1324,18 @@ def test_doctor_reports_all_four_checks_and_never_hides_the_gate(
     monkeypatch.setattr(app_cli, "app_data_dir", lambda _n: root)
     monkeypatch.setattr(app_cli, "_load_settings", lambda: {})
     labels = [line.label for line in app_cli.doctor()]
-    assert labels == ["Ops · alarm spool", "Ops · runbooks", "Ops · queue",
-                      "Ops · remediation gate"]
-    assert all(label.startswith("Ops · ") for label in labels)
+    # Bare probe names — doctor already renders these under this app's own section,
+    # so an app-name prefix would just say "Ops" twice.
+    assert labels == ["alarm spool", "runbooks", "queue", "remediation gate"]
     off = {line.label: line for line in app_cli.doctor()}
-    assert off["Ops · alarm spool"].status == "warn"
-    assert off["Ops · remediation gate"].status == "ok"
-    assert "propose-only" in off["Ops · remediation gate"].detail
+    assert off["alarm spool"].status == "warn"
+    assert off["remediation gate"].status == "ok"
+    assert "propose-only" in off["remediation gate"].detail
 
     monkeypatch.setattr(app_cli, "_load_settings", lambda: {"allow_apply": True})
     on = {line.label: line for line in app_cli.doctor()}
-    assert on["Ops · remediation gate"].status == "warn"
-    assert "is ON" in on["Ops · remediation gate"].detail
+    assert on["remediation gate"].status == "warn"
+    assert "is ON" in on["remediation gate"].detail
 
 
 def test_doctor_counts_the_spool_the_runbooks_and_what_will_not_parse(
@@ -1354,11 +1354,11 @@ def test_doctor_counts_the_spool_the_runbooks_and_what_will_not_parse(
     monkeypatch.setattr(app_cli, "app_data_dir", lambda _n: root)
     monkeypatch.setattr(app_cli, "_load_settings", lambda: {})
     lines = {line.label: line for line in app_cli.doctor()}
-    assert "1 file(s) waiting" in lines["Ops · alarm spool"].detail
-    assert lines["Ops · runbooks"].status == "warn"
-    assert "1 runbook file(s) will not parse" in lines["Ops · runbooks"].detail
-    assert lines["Ops · queue"].status == "warn"
-    assert "1 incident record(s) will not parse" in lines["Ops · queue"].detail
+    assert "1 file(s) waiting" in lines["alarm spool"].detail
+    assert lines["runbooks"].status == "warn"
+    assert "1 runbook file(s) will not parse" in lines["runbooks"].detail
+    assert lines["queue"].status == "warn"
+    assert "1 incident record(s) will not parse" in lines["queue"].detail
 
 
 def test_doctor_survives_a_home_with_nothing_in_it(tmp_path: Path, monkeypatch) -> None:
