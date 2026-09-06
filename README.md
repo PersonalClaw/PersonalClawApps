@@ -10,25 +10,32 @@ installs through the same scanner-gated lifecycle as any third-party app.
 
 ## What's here
 
-47 apps across the capability types:
+**64 app bundles**, one `app.json` each. 60 contribute a capability provider and
+4 contribute none. Two contribute *two* — `companion` (a `tool` and a `trigger`)
+and `slack-channel` (a `channel` and an `inbox`) — so the lists below count
+**providers, not bundles**, and those two are each listed twice. 62 providers
+over 60 bundles, plus the 4 provider-less bundles, is 66 entries over 64
+bundles; that is the whole gap between the headline and the sum of the counts.
 
-- **Model providers** (22) — branded APIs (`anthropic-models`, `openai-models`,
-  `bedrock-models`, `google-models`, `deepseek-models`, `groq-models`,
-  `mistral-models`, `together-models`, `alibaba-models`, `openrouter-models`,
-  `meta-muse-spark`), generic endpoints (`anthropic-compatible`,
-  `openai-compatible`, `vllm-models`, `ollama-models`), subscription sign-in
+- **Model providers** (`model`, 23) — branded APIs (`anthropic-models`,
+  `openai-models`, `bedrock-models`, `google-models`, `deepseek-models`,
+  `groq-models`, `mistral-models`, `together-models`, `alibaba-models`,
+  `openrouter-models`, `meta-muse-spark`), generic endpoints
+  (`anthropic-compatible`, `openai-compatible`, `vllm-models`, `ollama-models`),
+  subscription sign-in
   (`claude-subscription` — rides the Claude Code CLI's own login, no API key),
-  and local inference
-  (`faster-whisper` STT, `piper-tts` TTS, `sentence-transformers` embeddings,
-  `diarization-onnx` / `diarization-pyannote`), plus `fal-image` image generation.
-- **Search providers** (7) — `duckduckgo-search` (keyless default),
+  and local inference (`faster-whisper` STT, `piper-tts` TTS plus
+  `voice-clone-tts` for zero-shot cloning from a reference clip,
+  `sentence-transformers` embeddings, `diarization-onnx` /
+  `diarization-pyannote`), plus `fal-image` image generation.
+- **Search providers** (`search`, 7) — `duckduckgo-search` (keyless default),
   `brave-search`, `tavily-search`, `exa-search`, `perplexity-search`,
   `searxng-search`, `wikipedia-search`.
-- **Channels** (4) — `slack-channel` (see [docs/SLACK_SETUP.md](docs/SLACK_SETUP.md)),
+- **Channels** (`channel`, 4) — `slack-channel` (see [docs/SLACK_SETUP.md](docs/SLACK_SETUP.md)),
   `discord-channel`, `telegram-channel`, `email-channel`.
-- **Agents** (4) — `claude-code-agent`, `codex-agent`, `gemini-cli-agent`,
+- **Agents** (`agent`, 4) — `claude-code-agent`, `codex-agent`, `gemini-cli-agent`,
   `kiro-cli-agent` (ACP bundles).
-- **Tools** (12) — `mcp-tools`, `openai-tools`, `web-tools`, `code-review`
+- **Tools** (`tool`, 12) — `mcp-tools`, `openai-tools`, `web-tools`, `code-review`
   (deep per-file review of a GitHub PR over your local `gh`), `research-lab`
   (unattended multi-cycle research campaigns synthesised into one report),
   `notes` (a git-backed markdown notebook — an editor, not a second knowledge
@@ -43,12 +50,28 @@ installs through the same scanner-gated lifecycle as any third-party app.
   investigation notes kept locally), `docs-slides` (a brief becomes a real
   `.pptx` deck or a compiled `.docx`, rendered by the document writers core
   already ships).
-- **Sync** (2) — `dir-sync`, `git-sync`.
-- **Backend + UI apps** (2) — `growth` (growth/brag-doc tracker), `minutes`
-  (meeting minutes on a synced timeline).
-- **Action** (1) — `webhook-action`.
-- **Inbox** (1) — `mail-inbox`.
-- **Skills marketplace** (1) — `skills-sh`.
+- **Sync** (`sync`, 4) — four transports for the same state, pick by what you
+  already have: `dir-sync` (a shared/synced folder or mount), `git-sync` (a git
+  remote you own), `rsync-sync` (rsync over ssh to any host you can already log
+  into), `s3-sync` (an S3-compatible object store you own).
+- **Actions** (`action`, 2) — `webhook-action`, `a2a-action` (hand one task to an
+  external A2A agent when a trigger fires, egress-allowlisted).
+- **Inboxes** (`inbox`, 2) — `mail-inbox`, plus `slack-channel`'s inbox half.
+- **Triggers** (`trigger`, 2) — `shared-automations` (serve trigger rows from one
+  file a team shares — a synced folder, an NFS share, a checked-out repo), plus
+  `companion`'s trigger half.
+- **Sandboxes** (`sandbox`, 1) — `lima-sandbox`, the virtual-machine
+  execution-isolation tier (`limactl`, macOS and Linux).
+- **Skills marketplace** (`skills`, 1) — `skills-sh`.
+- **Backend + UI apps** (`backend+ui`, 2) — no provider at all, just a backend
+  and a UI page: `growth` (growth/brag-doc tracker), `minutes` (meeting minutes
+  on a synced timeline).
+- **Client-install companions** (`client-install`, 2) — `browser-connector`
+  (attach your own everyday browser to a gateway you already run) and
+  `menu-bar-companion` (a macOS status-bar view of running loops and the
+  approvals waiting on you). Both declare `platform.installMode: "client"`: they
+  install on **your** machine, not the server, so the Store hands you a
+  copy-paste command instead of installing them.
 
 Building your own app? See the [app creation guide](docs/app-creation-guide.md) —
 the `demo-dashboard` worked example there exercises every platform surface
