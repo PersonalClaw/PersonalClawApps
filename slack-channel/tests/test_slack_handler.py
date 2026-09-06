@@ -1482,17 +1482,23 @@ class TestStopCommand:
         assert "reset:thread1" not in sessions.removed
 
     @pytest.mark.asyncio
-    async def test_stop_denied_for_non_owner(self):
-        """!stop is denied for non-owner users (multi-user access disabled)."""
+    async def test_stop_allowed_for_an_allowlisted_non_owner(self):
+        """!stop is in the "any allowed user" tier, so an allowlisted non-owner may run it.
+
+        This asserted the opposite ("U_ALLOWED in set but still denied") because
+        ``is_allowed_user`` ignored the allowlist entirely and answered ``is_owner`` —
+        #953. The tier comment in ``handle_message`` has always said ``!dashboard``,
+        ``!stop`` and ``!title`` are available to any allowed user; now they are.
+        ``test_stop_denied_for_unauthorized`` below is the fail-closed half.
+        """
         set_owner_id("U_OWNER")
-        set_allowed_users({"U_OWNER", "U_ALLOWED"})  # U_ALLOWED in set but still denied
+        set_allowed_users({"U_OWNER", "U_ALLOWED"})
         slack = MockSlackClient()
         sessions = FakeSessionManager()
         sessions.keys_seen.append("thread1")
         await handle_message(slack, sessions, "C1", "!stop", "thread1", "msg1", "U_ALLOWED")
-        assert "reset:thread1" not in sessions.removed
         posts = [a for a in slack.actions if a[0] == "post"]
-        assert any("Not authorized" in p[1]["text"] or "Owner-only" in p[1]["text"] or "authorized" in p[1]["text"].lower() for p in posts)
+        assert not any("Not authorized" in p[1]["text"] for p in posts), posts
 
     @pytest.mark.asyncio
     async def test_stop_denied_for_unauthorized(self):
@@ -1640,17 +1646,22 @@ class TestThreadTitle:
         assert any("Usage" in p[1]["text"] for p in posts)
 
     @pytest.mark.asyncio
-    async def test_title_denied_for_non_owner(self):
-        """!title is denied for non-owner users (multi-user access disabled)."""
+    async def test_title_allowed_for_an_allowlisted_non_owner(self):
+        """!title is in the "any allowed user" tier, so an allowlisted non-owner may run it.
+
+        Asserted the opposite ("U_ALLOWED in set but still denied") before #953, because
+        ``is_allowed_user`` ignored the allowlist. ``test_title_denied_for_unauthorized``
+        below is the fail-closed half.
+        """
         set_owner_id("U_OWNER")
-        set_allowed_users({"U_OWNER", "U_ALLOWED"})  # U_ALLOWED in set but still denied
+        set_allowed_users({"U_OWNER", "U_ALLOWED"})
         slack = MockSlackClient()
         sessions = FakeSessionManager()
         await handle_message(
             slack, sessions, "C1", "!title My Thread", "thread2", "msg2", "U_ALLOWED"
         )
         title_actions = [a for a in slack.actions if a[0] == "set_thread_title"]
-        assert len(title_actions) == 0
+        assert len(title_actions) == 1, slack.actions
 
     @pytest.mark.asyncio
     async def test_title_denied_for_unauthorized(self):
