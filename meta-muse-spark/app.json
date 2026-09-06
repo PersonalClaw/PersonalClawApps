@@ -2,10 +2,9 @@
   "name": "meta-muse-spark",
   "displayName": "Meta Muse Spark",
   "version": "0.1.0",
-  "description": "Meta Muse Spark chat models via the Meta AI API (OpenAI-compatible). Bring your own Meta Model API key.",
+  "description": "Meta Muse Spark chat models via the Meta AI API (OpenAI-compatible). Bring your own Meta AI API key.",
   "author": "PersonalClaw",
-  "icon": "brain",
-  "native": false,
+  "icon": "Brain",
   "tags": [
     "model",
     "llm"
@@ -24,6 +23,39 @@
       "chat",
       "streaming",
       "vision"
-    ]
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Meta AI API Key",
+            "help": "Your Meta AI API key. Leave empty to fall back to the META_MODEL_API_KEY environment variable.",
+            "sensitive": true
+          }
+        },
+        "default_model": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Default Model",
+            "help": "A Meta AI model id. Empty uses muse-spark-1.1."
+          }
+        },
+        "endpoint": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Base URL",
+            "help": "Optional override of the Meta AI base URL. Empty uses https://api.meta.ai/v1.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
   }
 }
