@@ -837,7 +837,10 @@ async def test_only_delete_is_approval_gated_and_destructive(
     assert tools["spec_delete"].risk_level is RiskLevel.DESTRUCTIVE
     assert tools["spec_open"].risk_level is RiskLevel.CAUTION
     assert tools["spec_write"].risk_level is RiskLevel.CAUTION
-    for read_only in ("spec_read", "spec_list", "spec_seed", "spec_review", "spec_compile"):
+    # spec_seed never writes to the repository, but it spawns `git` and writes the
+    # fetched content into the spec — SAFE is reserved for local reads with no exec.
+    assert tools["spec_seed"].risk_level is RiskLevel.CAUTION
+    for read_only in ("spec_read", "spec_list", "spec_review", "spec_compile"):
         assert tools[read_only].risk_level is RiskLevel.SAFE
 
 

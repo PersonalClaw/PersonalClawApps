@@ -45,7 +45,7 @@ GIT_MISSING = (
     "whatever happens to be in the working tree."
 )
 NO_SOURCE_REPO = (
-    "No source repository is configured. Set 'Source repository' in Settings -> Tools -> "
+    "No source repository is configured. Set 'Source repository' in Settings → Tools → "
     "Spec Builder to the repo this spec is about; there is deliberately no default, because "
     "an app that guesses which checkout to read is an app that reads the wrong one."
 )

@@ -899,8 +899,15 @@ def render_sweep(
     known_labels: list[str] | None,
     sweep_path: Path | str,
     dropped: int = 0,
+    fence: Any = None,
 ) -> str:
-    """The markdown a sweep returns: the queue, then each issue's suggestions and why."""
+    """The markdown a sweep returns: the queue, then each issue's suggestions and why.
+
+    Everything quoted out of an issue — titles, URLs, label names, the evidence phrases,
+    a model's leftover output — is attacker-authored, so the queue table and the detail
+    sections are handed back inside one fence. The header and tail carry only facts this
+    app derived itself (counts, the label source, the sweep path) and stay outside it.
+    """
     lines = [
         f"# Issue radar — {repo}",
         "",
@@ -912,29 +919,39 @@ def render_sweep(
             "The repository's own label set could not be read, so suggestions use canonical "
             "names you may have to translate."
         )
-    lines += ["", "| Issue | Score | Suggested labels | Why it needs an eye |", "|---|---|---|---|"]
+    body = ["| Issue | Score | Suggested labels | Why it needs an eye |", "|---|---|---|---|"]
     for item in triaged:
         suggested = ", ".join(f"`{s.label}`" for s in item.suggestions) or "—"
         why = "; ".join(item.reasons) or "—"
         title = item.issue.title.replace("|", r"\|")[:70]
-        lines.append(f"| #{item.number} {title} | {item.score} | {suggested} | {why} |")
+        body.append(f"| #{item.number} {title} | {item.score} | {suggested} | {why} |")
 
-    lines += ["", "## Suggestions in detail", ""]
+    body += ["", "## Suggestions in detail", ""]
     for item in triaged:
-        lines.append(f"### #{item.number} — {item.issue.title}")
-        lines.append("")
+        body.append(f"### #{item.number} — {item.issue.title}")
+        body.append("")
         if item.issue.url:
-            lines += [item.issue.url, ""]
+            body += [item.issue.url, ""]
         have = ", ".join(f"`{n}`" for n in item.issue.labels) or "none"
-        lines += [f"Has: {have}", ""]
+        body += [f"Has: {have}", ""]
         if item.suggestions:
             for suggestion in item.suggestions:
-                lines.append(f"- **`{suggestion.label}`** ({suggestion.source}) — {suggestion.why}")
+                body.append(f"- **`{suggestion.label}`** ({suggestion.source}) — {suggestion.why}")
         else:
-            lines.append("- no label suggested — nothing in the text evidences one")
+            body.append("- no label suggested — nothing in the text evidences one")
         if item.model_note:
-            lines.append(f"- model output that did not parse, kept: {item.model_note}")
-        lines.append("")
+            body.append(f"- model output that did not parse, kept: {item.model_note}")
+        body.append("")
+
+    payload = "\n".join(body)
+    if fence is not None:
+        payload = fence(
+            payload,
+            source=f"open issues of {repo}",
+            source_type="issue_sweep",
+            source_id=str(repo),
+        )
+    lines += ["", payload, ""]
 
     if dropped:
         lines += [

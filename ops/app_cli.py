@@ -24,7 +24,6 @@ from personalclaw.sdk.settings import ProviderSettings
 from personalclaw.sdk.util import app_data_dir
 
 APP_NAME = "ops"
-LABEL = "Ops"
 
 
 def _dirs(settings: dict) -> tuple[Path, Path, Path]:
@@ -65,7 +64,7 @@ def doctor() -> list[DoctorLine]:
 
     lines.append(
         DoctorLine(
-            label=f"{LABEL} · alarm spool",
+            label="alarm spool",
             status="ok" if spool.is_dir() else "warn",
             detail=(
                 f"{spool} — {_count(spool, '*.json')} file(s) waiting"
@@ -79,7 +78,7 @@ def doctor() -> list[DoctorLine]:
     loaded, broken = _scan_runbooks(books)
     lines.append(
         DoctorLine(
-            label=f"{LABEL} · runbooks",
+            label="runbooks",
             status="warn" if broken else ("ok" if loaded else "info"),
             detail=(
                 f"{broken} runbook file(s) will not parse and are skipped; {loaded} load"
@@ -94,7 +93,7 @@ def doctor() -> list[DoctorLine]:
     open_count, unreadable = _scan_incidents(root / "incidents")
     lines.append(
         DoctorLine(
-            label=f"{LABEL} · queue",
+            label="queue",
             status="warn" if unreadable else "ok",
             detail=(
                 f"{unreadable} incident record(s) will not parse and are not shown in the "
@@ -107,7 +106,7 @@ def doctor() -> list[DoctorLine]:
     allowed = bool(settings.get("allow_apply"))
     lines.append(
         DoctorLine(
-            label=f"{LABEL} · remediation gate",
+            label="remediation gate",
             status="warn" if allowed else "ok",
             detail=(
                 "'Allow gated remediation' is ON — a proposed runbook action can run after "
