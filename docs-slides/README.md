@@ -124,20 +124,27 @@ Stated plainly, because the difference matters.
   `live-writes-posture`, `quality-declarations`.
 - A brief rendered to a `.pptx` whose slides, titles and bullets read back correctly
   through core's parser, and to a `.docx` whose title, headings and bullets do the same.
+- **Local-Store install + registration + a real tool call, headless.** The exact Store path
+  (`apps.source.resolve` → `apps.app_manager.install`, `origin="local"`) in an isolated
+  `PERSONALCLAW_HOME`: installs, then `providers.loader.load_all_extensions()` registers
+  `DocsSlidesProvider` on the tool layer and all three tools appear in
+  `tool_providers.registry.list_all_tools()`. All three were then invoked through the
+  registered provider — `docs_slides_formats` reported `decks: pptx / documents: docx, pdf`,
+  and the deck and document it wrote into the app's own data dir read back through core's
+  parsers with the right slide titles and headings.
 
 **Not yet validated — the remaining legs, for the owner or a live session:**
 
-- **A real UI drive.** Adding this directory as a local Store source, installing into a
-  running gateway, and calling `deck_from_brief` from the chat surface has not been done
-  here. The install/quarantine/scan path and the Settings → Tools rendering of this
-  manifest are therefore unverified in the real UI.
+- **The browser.** The headless run above proves install → register → invoke, but no one has
+  driven `deck_from_brief` from the chat surface or looked at how this manifest renders in
+  Settings → Tools.
 - **Registry listing.** This app is not in `PersonalClaw/registry`'s `app-registry.json`;
   listing requires a published repo the validator can reach.
-- **`.pdf` output.** The `pdf` writer is offered when core registers it and the refusal
-  path is tested, but no PDF produced by this app has been opened in a viewer. Only the
-  `.docx` half of `document_from_brief` is round-trip-proven.
-- **Real-world briefs.** Every brief exercised here is hand-written in the test file. No
-  model-authored brief has been rendered through this app.
+- **`.pdf` in a viewer.** A rendered PDF has a valid `%PDF-` header and `%%EOF` trailer, but
+  none has been opened in a reader. Only the `.docx` half of `document_from_brief` is
+  round-trip-proven through a parser.
+- **Real-world briefs.** Every brief exercised here is hand-written. No model-authored brief
+  has been rendered through this app.
 
 None of these are faked or asserted as done anywhere in this bundle.
 
