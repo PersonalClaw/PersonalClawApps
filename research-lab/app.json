@@ -1,0 +1,70 @@
+{
+  "name": "research-lab",
+  "version": "0.1.0",
+  "displayName": "Research Lab",
+  "description": "Ask one question and walk away. Research Lab turns it into a tree of sub-questions and works that tree down over many unattended cycles: each hourly cycle hands a few open sub-questions to their own subagents, records what came back with its sources, and grafts on whatever new questions the work raised. When the tree is answered — or the cycle budget runs out — it synthesises everything into one markdown report on your machine.",
+  "icon": "FlaskConical",
+  "author": "PersonalClaw",
+  "license": "MIT",
+  "tags": [
+    "tool",
+    "research",
+    "unattended"
+  ],
+  "cli": {
+    "setup": "app_cli:setup",
+    "doctor": "app_cli:doctor"
+  },
+  "loggerRoots": [
+    "research_lab"
+  ],
+  "permissions": {
+    "storage": true,
+    "cron": true,
+    "network": false
+  },
+  "crons": [
+    {
+      "name": "advance-campaigns",
+      "cron_expr": "23 * * * *",
+      "silent": true,
+      "persistent_session": false,
+      "message": "Advance the open Research Lab campaign by one cycle.\n\n1. Call research_next. If its metadata says done: true, call research_report once and stop — do not open a new campaign.\n2. Otherwise take the worklist it returns and research each sub-question in its own subagent, in parallel, so one slow question does not stall the cycle.\n3. For each answered sub-question call research_record with the finding, the sources it rests on, and any follow-up questions the work raised.\n4. Stop after this one cycle. The next cron tick runs the next one.\n\nRecord what you actually found, including \"no reliable source says\" — an unattended campaign is only worth reading if its findings are honest."
+    }
+  ],
+  "provider": {
+    "type": "tool",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "research"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "default_cycle_budget": {
+          "type": "integer",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 50,
+          "x-meta": {
+            "label": "Default cycle budget",
+            "help": "How many unattended cycles a new campaign may run before it stops and asks to be synthesised. A research_open call can override it per campaign."
+          }
+        },
+        "cycle_breadth": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 10,
+          "x-meta": {
+            "label": "Sub-questions per cycle",
+            "help": "How many sub-questions one cycle hands out to subagents. A research_next call can override it per cycle.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
