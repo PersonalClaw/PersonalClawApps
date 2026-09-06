@@ -342,7 +342,10 @@ class CompanionProvider(ToolProvider):
             path=str(args.get("path") or ""),
             label=str(args.get("label") or ""),
         )
-        logger.info("watch %s added (%d segments)", item.id, item.path.count("/"))
+        # The id and the DEPTH, never the path: a watched path is the user's own filesystem and
+        # a folder name is exactly the sort of thing that should not end up in a log file.
+        depth = item.path.count("/")
+        logger.info("watch %s added (%d segments)", item.id, depth)
         fenced = fence_untrusted(
             item.path,
             source="companion watch path",
