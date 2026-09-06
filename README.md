@@ -17,6 +17,11 @@ and `slack-channel` (a `channel` and an `inbox`) — so the lists below count
 over 60 bundles, plus the 4 provider-less bundles, is 66 entries over 64
 bundles; that is the whole gap between the headline and the sum of the counts.
 
+Nobody has to keep that true by hand: the `readme-census` CI job
+(`.github/scripts/check_readme_census.py`) checks the headline, every count
+below, and every bundle name against the tree, so a new app cannot land
+unlisted.
+
 - **Model providers** (`model`, 23) — branded APIs (`anthropic-models`,
   `openai-models`, `bedrock-models`, `google-models`, `deepseek-models`,
   `groq-models`, `mistral-models`, `together-models`, `alibaba-models`,
