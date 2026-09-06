@@ -255,7 +255,8 @@ Stated plainly, because the difference matters.
 - **The `plan` leg with real spawned subagents.** It emits the briefs and the contract for a
   host to spawn against; no host has actually spawned per-issue subagents from them.
 - **The exemplar record.** Recording this app in `ECOSYSTEM-TOOLING`'s exemplar list is a
-  core-repo document edit and is not part of this PR.
+  core-repo document edit owned by that file's single editor. It is **pending**, not claimed
+  here, and deliberately not part of this PR.
 
 None of these are faked or asserted as done anywhere in this bundle.
 
