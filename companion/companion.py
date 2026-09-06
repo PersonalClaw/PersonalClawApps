@@ -305,8 +305,13 @@ def validate_zone(raw: str) -> str:
 
 
 def validate_brief_time(raw: str) -> str:
-    """``HH:MM`` (24-hour), or ``""`` meaning the day brief is off."""
-    value = one_line(raw, 5)
+    """``HH:MM`` (24-hour), or ``""`` meaning the day brief is off.
+
+    Flattened but NOT truncated before matching. Truncating first would quietly turn
+    ``08:30:00`` into a valid ``08:30`` — a value the user did not type, accepted silently,
+    which is the whole failure mode this function exists to prevent.
+    """
+    value = one_line(raw, 32)
     if not value:
         return ""
     if not _HHMM_RE.match(value):
