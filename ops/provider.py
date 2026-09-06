@@ -507,18 +507,23 @@ class OpsProvider(ToolProvider):
         incident = await asyncio.to_thread(self._ledger.load, str(args.get("incident") or ""))
         score = priority(incident)
         alarm = incident.alarm
+        # The header carries only facts this app or the operator authored — the ledger's own
+        # state, the validated runbook name, the derived score. The alarm's NAME and
+        # RESOURCE came out of a monitor payload, so they live inside the fence with its
+        # message rather than being quoted as if this app had said them.
         header = (
-            f"# `{incident.id}` — {incident.state}\n\n"
-            f"- **alarm**: {alarm.name} ({alarm.severity}"
-            f"{', paging' if alarm.page else ''})\n"
-            f"- **resource**: {alarm.resource or '—'}\n"
+            f"# `{incident.id}` — {incident.state}, {alarm.severity}"
+            f"{', paging' if alarm.page else ''}\n\n"
             f"- **first seen**: {incident.first_seen} · **last**: {incident.last_seen} · "
             f"**firings**: {incident.occurrences}\n"
             f"- **owner**: {incident.owner or 'unclaimed'}\n"
             f"- **runbook**: {incident.runbook or 'none matched'}\n"
             f"- **priority**: {score['score']} {score['terms']}\n"
         )
-        body = [f"## Alarm text\n\n{alarm.summary or '(the payload carried no message)'}"]
+        body = [
+            f"## Alarm\n\n- name: {alarm.name}\n- resource: {alarm.resource or '—'}\n\n"
+            f"### Alarm text\n\n{alarm.summary or '(the payload carried no message)'}"
+        ]
         if incident.timeline:
             body.append("## Timeline\n\n" + "\n".join(
                 f"- `{e.get('at')}` **{e.get('kind')}** — {e.get('detail')}"
@@ -585,7 +590,11 @@ class OpsProvider(ToolProvider):
                 # removed. That is worth saying out loud rather than silently falling back.
                 incident.note("runbook-missing", str(exc))
                 await asyncio.to_thread(self._ledger.save, incident)
-        sections = []
+        sections = [
+            f"## Incident\n\n- alarm: {incident.alarm.name}\n"
+            f"- resource: {incident.alarm.resource or '—'}\n"
+            f"- what it said: {incident.alarm.summary or '(no message)'}"
+        ]
         if book is not None:
             checks = "\n".join(f"{i}. {c}" for i, c in enumerate(book.checks, 1)) \
                 or "(the runbook lists no checks)"
@@ -628,9 +637,10 @@ class OpsProvider(ToolProvider):
         return ToolResult(
             success=True,
             output=(
-                f"Plan for `{incident.id}` ({incident.alarm.severity} "
-                f"{incident.alarm.name}). Walk it with your own read-only tools and write "
-                f"each answer back with ops_record.\n\n{fenced}"
+                # The alarm's name is deliberately absent from this line: it is payload text,
+                # and it is already inside the fenced plan below.
+                f"Plan for `{incident.id}` ({incident.alarm.severity}). Walk it with your "
+                f"own read-only tools and write each answer back with ops_record.\n\n{fenced}"
             ),
             metadata={
                 "id": incident.id, "state": incident.state, "runbook": incident.runbook,

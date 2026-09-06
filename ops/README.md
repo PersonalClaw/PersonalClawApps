@@ -209,8 +209,12 @@ untrusted edge:
 - **Everything handed back to a model is fenced** with
   `personalclaw.sdk.security.fence_untrusted` — the alarm text, the queue table (its names
   and resources came from payloads), the investigation plan (a runbook is read off disk),
-  and a remediation's stdout/stderr. A test asserts an alarm containing the closing marker
-  cannot break out of its own fence, and another asserts the same for command output.
+  and a remediation's stdout/stderr. Nothing payload-shaped is quoted OUTSIDE a fence:
+  the header of `ops_incident` carries only the ledger's own state, the validated
+  runbook name and the derived score, and a test drives every tool with a marker
+  planted in the alarm's name, resource and body and asserts it never appears before
+  the fence opens. A further test asserts an alarm containing the closing marker cannot
+  break out of its own fence, and another asserts the same for command output.
 - **Refs and verdicts are logged; bodies are not.** The log records incident ids, action
   names, exit codes, sweep counts and gate refusals. A test plants a card number in an alarm
   summary and a token in a finding and asserts neither reaches the log.
@@ -250,7 +254,7 @@ bundle.
 
 ## Tests
 
-`test_provider.py` — 173 tests: the three identifier grammars and every refusal, alarm
+`test_provider.py` — 174 tests: the three identifier grammars and every refusal, alarm
 normalisation across the Alertmanager/bare-object/bare-list shapes and the severity alias
 table, fingerprint identity, the file-digest and alarm-identity halves of the dedupe, reopen
 after resolution, unreadable spool files and unparseable records being counted, every
@@ -259,7 +263,8 @@ severity floor, runbook parsing and every argv refusal, match specificity and th
 the enforced claim→investigate→propose chain, the double-claim refusal, all four gates
 including argv drift and replay, a real remediation running the exact declared argv with a
 hostile alarm attached, the timeout and not-on-PATH paths, the AST properties behind "no
-ungated mutation", fencing and both fence-break cases, the log-hygiene assertions, the whole
+ungated mutation", fencing (including that no payload text is quoted outside a fence)
+and both fence-break cases, the log-hygiene assertions, the whole
 tool surface with its risk levels and approval flags, the CLI seams, and the manifest
 round-trip.
 
@@ -276,7 +281,7 @@ Stated plainly, because the difference matters.
 
 **Validated:**
 
-- 173 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
+- 174 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
   `PERSONALCLAW_SKIP_APP_BACKENDS=1`).
 - `app.json` parses against core's own `AppManifest` and round-trips stably.
 - SDK-only imports (`personalclaw.sdk.{tool,security,util,cli,settings,manifest}`) — clean
