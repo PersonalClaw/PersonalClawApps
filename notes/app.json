@@ -58,7 +58,7 @@
           "default": 20,
           "minimum": 5,
           "x-meta": {
-            "label": "git Timeout",
+            "label": "Git Timeout",
             "help": "Maximum seconds to wait for a `git` command before giving up.",
             "tags": [
               "advanced"

@@ -2,7 +2,7 @@
   "name": "design-critique",
   "version": "0.1.0",
   "displayName": "Design Critique",
-  "description": "Pre-colleague design review of a URL or a screenshot. From a page's markup it reports accessibility and craft defects — unlabelled controls, missing alt text, skipped heading levels, overridden focus order, zoom locked off, declared colour pairs under 4.5:1, type set below 12px. From a screenshot it measures the pixels — contrast against the dominant surface, palette sprawl, red-green colour-vision collapse, density, gutter balance, alignment discipline. Every finding carries its evidence, its WCAG clause where one applies, and the change that clears it. The judgement no measurement can make comes back as an explicit rubric instead of a guess.",
+  "description": "The review a colleague would give you, before you spend their attention. Point it at a URL or a screenshot and it returns evidence-backed accessibility and craft findings — each with its WCAG clause where one applies and the change that clears it — plus an explicit rubric for the judgment no measurement can make.",
   "icon": "Eye",
   "author": "PersonalClaw",
   "license": "MIT",
@@ -43,7 +43,7 @@
           "minimum": 1,
           "maximum": 120,
           "x-meta": {
-            "label": "Fetch timeout",
+            "label": "Fetch Timeout",
             "help": "Seconds design_critique_page waits for the page before giving up.",
             "tags": [
               "advanced"
