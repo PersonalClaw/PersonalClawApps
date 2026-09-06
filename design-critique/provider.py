@@ -374,11 +374,25 @@ class _Markup(HTMLParser):
         elif tag in ("input", "select", "textarea"):
             self.controls.append({**a, "tag": tag, "in_label": self._label_depth > 0})
         elif tag == "table":
-            self._table_stack.append({"th": 0, "scope": 0, "rows": 0})
-        elif tag == "th" and self._table_stack:
-            self._table_stack[-1]["th"] += 1
-            if a.get("scope"):
-                self._table_stack[-1]["scope"] += 1
+            self._table_stack.append(
+                {
+                    "th": 0,
+                    "scope": 0,
+                    "rows": 0,
+                    "cells": 0,
+                    # Text found DIRECTLY in this table's own cells (a nested table keeps its
+                    # own count). Zero means a spacer: there is no data for a header to head.
+                    "text_chars": 0,
+                    "role": (a.get("role") or "").strip().lower(),
+                    "layout_markers": _layout_markers(a),
+                }
+            )
+        elif tag in ("th", "td") and self._table_stack:
+            self._table_stack[-1]["cells"] += 1
+            if tag == "th":
+                self._table_stack[-1]["th"] += 1
+                if a.get("scope"):
+                    self._table_stack[-1]["scope"] += 1
         elif tag == "tr" and self._table_stack:
             self._table_stack[-1]["rows"] += 1
         elif tag in ("video", "audio") and "autoplay" in a:
@@ -432,8 +446,37 @@ class _Markup(HTMLParser):
             return
         if data.strip():
             self.text_chars += len(data.strip())
+            if self._table_stack:
+                self._table_stack[-1]["text_chars"] += len(data.strip())
         for buf in self._text_stack:
             buf.append(data)
+
+
+#: How many presentational declarations a table needs before it reads as LAYOUT rather than
+#: data. Two, not one: `width="100%"` alone is ordinary on a real data table, while the
+#: 1998-era positioning idiom always arrives in a cluster — `border="0" cellspacing="0"`
+#: plus a `width`/`bgcolor`/`align`. The real page that exposed this carried four at once.
+_LAYOUT_MARKERS_REQUIRED = 2
+
+
+def _layout_markers(a: dict[str, str]) -> tuple[str, ...]:
+    """The presentational declarations on a ``<table>`` that only positioning explains.
+
+    ``border="0"`` (a table that draws no rules is not tabulating), ``cellspacing="0"``,
+    a ``cellpadding``/``width``/``bgcolor``/``align`` — none of these describe DATA. Note
+    that ``border="1"`` is deliberately not a marker: a table that draws its own grid is
+    presenting rows and columns as rows and columns.
+    """
+    out: list[str] = []
+    if (a.get("border") or "").strip() == "0":
+        out.append("border=0")
+    if (a.get("cellspacing") or "").strip() == "0":
+        out.append("cellspacing=0")
+    for attr in ("cellpadding", "width", "bgcolor", "align"):
+        value = (a.get(attr) or "").strip()
+        if value:
+            out.append(f"{attr}={value}")
+    return tuple(out)
 
 
 def _control_is_labelled(ctrl: dict[str, Any], label_for: set[str]) -> bool:
@@ -848,14 +891,43 @@ def analyze_markup(markup: str, *, url: str = "") -> tuple[list[Finding], dict[s
         )
 
     # ── tables ───────────────────────────────────────────────────────────
+    #
+    # 🔴 THIS RULE CALLED LAYOUT TABLES DATA TABLES, AND THEN GAVE WRONG ADVICE.
+    #
+    # The discriminator was `rows > 1 and th == 0` ⇒ data table. On a real page — the first
+    # non-synthetic input these rules met — that reported "4 data table(s) have no header
+    # cells" when all ten tables on it were LAYOUT tables (`WIDTH` / `BORDER=0` /
+    # `CELLSPACING=0` / `BGCOLOR`), positioning content the way markup did before CSS.
+    #
+    # A false positive would be bad enough. The offered fix made it worse: it told the author
+    # to put `<th scope="col">` on a spacer, which invents a header for data that does not
+    # exist and adds a row to the a11y tree that means nothing. Advice that damages the page
+    # is worse than no finding.
+    #
+    # Three things a header-cell claim has to rule out first, none of which it checked:
+    #  · `role="presentation"` / `role="none"` — the author already declared this is not a
+    #    table, and it is not exposed as one, so 1.3.1 has nothing to say about it.
+    #  · a table whose cells hold NO TEXT — a spacer. There is no data to head.
+    #  · the positioning idiom, which is presentation expressed in markup. That is a real
+    #    observation, so it is re-filed as `heuristic.layout-table` with advice that is
+    #    correct whichever way the table is actually meant — never "add a header row".
     headerless = [t for t in doc.tables if t["rows"] > 1 and t["th"] == 0]
-    if headerless:
+    laid_out: list[dict[str, Any]] = []
+    data_tables: list[dict[str, Any]] = []
+    for table in headerless:
+        if table["role"] in ("presentation", "none") or not table["text_chars"]:
+            continue
+        if len(table["layout_markers"]) >= _LAYOUT_MARKERS_REQUIRED:
+            laid_out.append(table)
+        else:
+            data_tables.append(table)
+    if data_tables:
         out.append(
             Finding(
                 id="a11y.table-headers",
                 kind="a11y",
                 severity="major",
-                title=f"{len(headerless)} data table(s) have no header cells",
+                title=f"{len(data_tables)} data table(s) have no header cells",
                 detail=(
                     "Without <th> every cell is read as a bare value, so the reader has to "
                     "remember the column order."
@@ -865,6 +937,34 @@ def analyze_markup(markup: str, *, url: str = "") -> tuple[list[Finding], dict[s
                     'scope="row").'
                 ),
                 guideline="WCAG 2.2 1.3.1 Info and Relationships (A)",
+                evidence=_evidence(
+                    [f"{t['rows']} rows × {t['cells']} cells, no <th>" for t in data_tables]
+                ),
+            )
+        )
+    if laid_out:
+        out.append(
+            Finding(
+                id="heuristic.layout-table",
+                kind="heuristic",
+                severity="minor",
+                title=f"{len(laid_out)} table(s) are positioning content, not tabulating it",
+                detail=(
+                    "These tables carry the pre-CSS positioning idiom and no header cells, so "
+                    "they read as layout rather than data. That is why no missing-header "
+                    "finding is raised against them: a spacer has no data for a header to head."
+                ),
+                fix=(
+                    'If the table is layout, mark it role="presentation" and move the '
+                    "positioning to CSS. If it really is data, give it a header row of "
+                    '<th scope="col"> — decide which, because the markup currently says both.'
+                ),
+                evidence=_evidence(
+                    [
+                        f"{t['rows']} rows, {', '.join(t['layout_markers'])}"
+                        for t in laid_out
+                    ]
+                ),
             )
         )
 
@@ -1035,6 +1135,12 @@ _FAMILY_DISTANCE = 40
 #: near-invisible content must read as low contrast, not as empty.
 _INK_TOLERANCE = 12
 _MAX_PALETTE = 12
+#: Above this fraction of its area surviving a one-pixel erosion, a rendered colour is a
+#: SURFACE, not ink — see :func:`_fill_survival`. Set well below the lowest fill measured
+#: (0.40, a 72px rail whose bucket also collects its own antialiased edge) and well above
+#: the highest ink measured (0.00, body text), because the quantity separates by two orders
+#: of magnitude and a threshold in the gap is not a tuned constant.
+_SURFACE_SURVIVAL = 0.2
 #: Colour-vision collapse is claimed only for a pair that is unmistakable to most
 #: viewers…
 _COLLAPSE_START_DISTANCE = 120
@@ -1067,6 +1173,60 @@ def _palette(image: Any) -> list[_Swatch]:
     total = float(image.width * image.height) or 1.0
     swatches = [_Swatch(rgb=(rgb[0], rgb[1], rgb[2]), share=n / total) for n, rgb in counts]
     return sorted(swatches, key=lambda s: -s.share)
+
+
+def _quantize(image: Any) -> Any:
+    """The census quantisation, as an image — shared by the palette and the fill test."""
+    step = _QUANTIZE_STEP
+    return image.point(lambda v: min(255, round(v / step) * step))
+
+
+def _ink_palette(image: Any, mask: Any) -> list[_Swatch]:
+    """The colour census restricted to INK — the pixels that differ from the page fill.
+
+    Shares stay relative to the WHOLE canvas so "% of canvas" in the report keeps meaning.
+
+    Non-ink pixels are composited to ``(1, 1, 1)``, which the quantiser cannot produce (its
+    outputs are multiples of 8, plus 255), so the sentinel bucket is dropped without any
+    chance of colliding with a colour that is really on the page.
+    """
+    from PIL import Image
+
+    quantized = _quantize(image)
+    sentinel = (1, 1, 1)
+    inked = Image.composite(quantized, Image.new("RGB", image.size, sentinel), mask)
+    counts = inked.getcolors(maxcolors=1 << 20) or []
+    total = float(image.width * image.height) or 1.0
+    swatches = [
+        _Swatch(rgb=(rgb[0], rgb[1], rgb[2]), share=n / total)
+        for n, rgb in counts
+        if (rgb[0], rgb[1], rgb[2]) != sentinel
+    ]
+    return sorted(swatches, key=lambda s: -s.share)
+
+
+def _fill_survival(quantized: Any, rgb: tuple[int, int, int]) -> float:
+    """What fraction of ``rgb``'s area survives a one-pixel erosion.
+
+    THE FOREGROUND/BACKGROUND DISCRIMINATOR the rendered-contrast rule was missing. A
+    SURFACE is an area: erode its edge by a pixel and almost all of it is still there. INK
+    — a glyph stroke, an icon, a hairline border — is thin by construction, so erosion
+    removes essentially all of it. Measured on a 1440×1000 dark-theme replica of the
+    PersonalClaw shell: the rail scored 0.40, two card/panel fills 0.88 and 0.94, and body
+    text 0.00. Two orders of magnitude of separation, not a knife edge.
+    """
+    from PIL import Image, ImageChops, ImageFilter
+
+    bands = quantized.split()
+    size = quantized.size
+    diff = ImageChops.difference(bands[0], Image.new("L", size, rgb[0]))
+    for band, value in zip(bands[1:], rgb[1:]):
+        diff = ImageChops.lighter(diff, ImageChops.difference(band, Image.new("L", size, value)))
+    exact = diff.point(lambda v: 255 if v == 0 else 0)
+    area = exact.histogram()[255]
+    if not area:
+        return 0.0
+    return exact.filter(ImageFilter.MinFilter(3)).histogram()[255] / float(area)
 
 
 def _families(swatches: list[_Swatch]) -> list[_Swatch]:
@@ -1188,6 +1348,25 @@ def analyze_image(path: Path) -> tuple[list[Finding], dict[str, Any]]:
     # family-level for the questions about how many decisions the screen makes.
     families = [s for s in _families(significant) if s.share >= _PALETTE_SHARE]
     mask = _ink_mask(stats, background)
+    # ── a SECOND census, sampled rather than averaged ─────────────────────
+    #
+    # 🔴 `stats` is produced by `thumbnail`, which resamples with a smoothing filter, and
+    # smoothing INVENTS COLOURS. Downsampling a 1440×1000 dark UI to 480×333 blended the
+    # antialiased edges of #8e8f90 text on #0f0f0f into #505050 (2.36:1, 1.7% of canvas) and
+    # #585858 (2.67:1, 1.4%) — two "rendered colours under 3:1" that the renderer never put
+    # on the screen. Nearest-neighbour decimation samples pixels instead of averaging them,
+    # so every colour here is one the page really rendered, and shares stay proportional
+    # because decimation is an unbiased sample. Measured on the same replica: the two
+    # phantom greys disappear entirely.
+    #
+    # `stats` is left alone — the layout rules that read it want the smoothed image.
+    census_scale = min(1.0, _STAT_MAX_EDGE / float(max(width, height) or 1))
+    census = rgb.resize(
+        (max(1, int(width * census_scale)), max(1, int(height * census_scale))),
+        Image.NEAREST,
+    )
+    census_quantized = _quantize(census)
+    census_ink = _ink_palette(census, _ink_mask(census, background))
     bbox = mask.getbbox()
     ink_pixels = mask.histogram()[255]
     ink_share = ink_pixels / float(stats.width * stats.height or 1)
@@ -1229,7 +1408,36 @@ def analyze_image(path: Path) -> tuple[list[Finding], dict[str, Any]]:
         )
 
     # ── contrast ─────────────────────────────────────────────────────────
-    faint = [s for s in palette[1:] if contrast_ratio(s.rgb, background) < 3.0 and s.share < 0.4]
+    #
+    # 🔴 THIS RULE FLAGGED A DARK THEME'S ELEVATION RAMP AS SEVEN CONTRAST FAILURES.
+    #
+    # Run against a real 1440×1000 PersonalClaw screenshot, its only finding was wrong: "7
+    # rendered colours under 3:1", when the page background was #0f0f0f, the rail #1f1f1f,
+    # the card fill #1e1f20, and the body text #8e8f90 at ≈5.2:1 — passing AA. Every colour
+    # it named was a SURFACE FILL, and the evidence incriminated itself: `#182020 at 1.02:1
+    # (1.0% of canvas)` cannot be text anyone can see.
+    #
+    # WCAG 1.4.3 and 1.4.11 govern the contrast between CONTENT and the background it sits
+    # on. They say nothing about two adjacent backgrounds, so a dark elevation ramp is
+    # DESIGNED sub-3:1 — stacking surfaces is how depth is expressed without shadows.
+    #
+    # Two causes, both fixed here rather than papered over with a threshold:
+    #  · No foreground/background discriminator: the census could not tell a card fill from
+    #    a glyph. `_fill_survival` decides it by GEOMETRY (an area survives erosion, ink does
+    #    not), which leaves the rule fully sensitive to genuinely faint ink — including ink
+    #    below 1.5:1, which a blanket near-background exclusion would have gone blind to.
+    #  · Phantom colours from smoothed downsampling, dealt with by the nearest-neighbour
+    #    census above, and by restricting the census to ink so near-background blends drop.
+    candidates = [s for s in census_ink if s.share >= _PALETTE_SHARE and s.share < 0.4]
+    surfaces = [
+        s for s in candidates if _fill_survival(census_quantized, s.rgb) >= _SURFACE_SURVIVAL
+    ]
+    surface_rgbs = {s.rgb for s in surfaces}
+    faint = [
+        s
+        for s in candidates
+        if s.rgb not in surface_rgbs and contrast_ratio(s.rgb, background) < 3.0
+    ]
     if faint:
         worst = min(faint, key=lambda s: contrast_ratio(s.rgb, background))
         out.append(
@@ -1237,12 +1445,13 @@ def analyze_image(path: Path) -> tuple[list[Finding], dict[str, Any]]:
                 id="a11y.rendered-contrast",
                 kind="a11y",
                 severity="major",
-                title=f"{len(faint)} rendered color(s) sit under 3:1 against the background",
+                title=f"{len(faint)} rendered ink color(s) sit under 3:1 against the background",
                 detail=(
                     f"Against the dominant {_hex(background)} surface these read as barely "
                     f"there — the faintest is {_hex(worst.rgb)} at "
-                    f"{contrast_ratio(worst.rgb, background):.2f}:1. Text or an icon in them "
-                    "fails the minimum, and a UI border in them disappears entirely."
+                    f"{contrast_ratio(worst.rgb, background):.2f}:1. Each is INK, not a "
+                    "surface fill: it is thin enough that a one-pixel erosion removes it, so "
+                    "it is text, an icon or a border rather than a panel behind them."
                 ),
                 fix=(
                     "Take text to 4.5:1 and non-text boundaries to 3:1 against the surface "
