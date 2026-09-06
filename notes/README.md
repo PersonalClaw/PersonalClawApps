@@ -156,7 +156,7 @@ no remote and no wire call anywhere in this bundle.
 
 ## Tests
 
-`test_provider.py` — 109 tests: the reference and revision grammars and every refusal,
+`test_provider.py` — 111 tests: the reference and revision grammars and every refusal,
 symlink containment, write/append/no-op-rewrite, revision reads, history, restore-as-a-new-
 commit, both delete paths, listing (including the unaddressable-file count), literal and
 regex search with their caps, repo adoption with a pathspec-scoped commit, the
@@ -177,7 +177,7 @@ Stated plainly, because the difference matters.
 
 **Validated:**
 
-- 109 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
+- 111 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
   `PERSONALCLAW_SKIP_APP_BACKENDS=1`).
 - `app.json` parses against core's own `AppManifest` and round-trips stably.
 - SDK-only imports (`personalclaw.sdk.{tool,security,util,cli,manifest}`) — clean under the

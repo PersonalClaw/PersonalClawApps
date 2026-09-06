@@ -208,6 +208,14 @@ def test_unknown_write_mode_is_refused(book: Notebook) -> None:
         book.write("tempo", "x", mode="clobber")
 
 
+@needs_git
+def test_writing_over_a_folder_is_refused(book: Notebook) -> None:
+    book.ensure()
+    (book.root / "stuck.md").mkdir()
+    with pytest.raises(NoteRefError, match="is a folder"):
+        book.write("stuck.md", "x")
+
+
 def test_an_oversized_note_is_refused(book: Notebook) -> None:
     with pytest.raises(NoteRefError, match="prose, not a payload"):
         book.write("blob", "x" * (MAX_NOTE_BYTES + 1))
@@ -657,6 +665,16 @@ async def test_missing_git_is_surfaced_with_a_hint(
     assert result.success is False
     assert result.error == GIT_MISSING
     assert "Install git" in " ".join(result.recovery_hints)
+
+
+@pytest.mark.asyncio
+async def test_an_unwritable_notebook_is_a_legible_error(tmp_path: Path) -> None:
+    blocker = tmp_path / "not-a-folder"
+    blocker.write_text("i am a file\n")
+    prov = create_provider({"notebook_path": str(blocker / "notebook")})
+    result = await prov.invoke("note_write", {"ref": "tempo", "content": "x"})
+    assert result.success is False
+    assert "could not be read or written" in result.error
 
 
 def test_settings_are_clamped() -> None:

@@ -292,6 +292,8 @@ class Notebook:
             raise NoteRefError(f"mode must be one of {WRITE_MODES}, got {mode!r}")
         target, rel = note_path(self._root, ref)
         posix = rel.as_posix()
+        if target.exists() and not target.is_file():
+            raise NoteRefError(f"{posix} is a folder in the notebook, not a note")
         body = content or ""
         existed = target.is_file()
         if mode == "append" and existed:
@@ -391,22 +393,24 @@ class Notebook:
             raise NoteRefError("a search query is required")
         if len(q) > MAX_QUERY_LEN:
             raise NoteRefError(f"a search query is capped at {MAX_QUERY_LEN} characters")
-        matcher: Any
+        matcher: re.Pattern[str] | None = None
+        needle = q.lower()
         if regex:
             try:
                 matcher = re.compile(q, re.IGNORECASE)
             except re.error as exc:
                 raise NoteRefError(f"{q!r} is not a valid regular expression: {exc}") from exc
-        else:
-            matcher = None
-            needle = q.lower()
         cap = max(1, min(200, int(limit)))
         hits: list[Hit] = []
         notes, _ = self.list_notes()
         for info in notes:
             path = self._root / Path(*info.ref.split("/"))
-            with path.open("r", encoding="utf-8", errors="replace") as fh:
-                text = fh.read(SEARCH_MAX_FILE_BYTES)
+            try:
+                with path.open("r", encoding="utf-8", errors="replace") as fh:
+                    text = fh.read(SEARCH_MAX_FILE_BYTES)
+            except OSError:
+                continue  # deleted or unreadable between the listing and now
+
             for number, line in enumerate(text.splitlines(), start=1):
                 found = matcher.search(line) if matcher is not None else needle in line.lower()
                 if not found:
