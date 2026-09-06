@@ -28,7 +28,7 @@ installs through the same scanner-gated lifecycle as any third-party app.
   `discord-channel`, `telegram-channel`, `email-channel`.
 - **Agents** (4) — `claude-code-agent`, `codex-agent`, `gemini-cli-agent`,
   `kiro-cli-agent` (ACP bundles).
-- **Tools** (11) — `mcp-tools`, `openai-tools`, `web-tools`, `code-review`
+- **Tools** (12) — `mcp-tools`, `openai-tools`, `web-tools`, `code-review`
   (deep per-file review of a GitHub PR over your local `gh`), `research-lab`
   (unattended multi-cycle research campaigns synthesised into one report),
   `notes` (a git-backed markdown notebook — an editor, not a second knowledge
@@ -40,7 +40,9 @@ installs through the same scanner-gated lifecycle as any third-party app.
   day plan — it also serves its own automations as a `trigger` store, so
   disabling it removes every trigger it contributed), `issue-radar`
   (GitHub/GitLab issue triage — labels from the repository's own set,
-  investigation notes kept locally).
+  investigation notes kept locally), `docs-slides` (a brief becomes a real
+  `.pptx` deck or a compiled `.docx`, rendered by the document writers core
+  already ships).
 - **Sync** (2) — `dir-sync`, `git-sync`.
 - **Backend + UI apps** (2) — `growth` (growth/brag-doc tracker), `minutes`
   (meeting minutes on a synced timeline).
