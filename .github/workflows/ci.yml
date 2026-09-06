@@ -2,7 +2,7 @@
 # WITHOUT installing vendor SDKs (the apps stub them; a test needing a real SDK
 # fails loudly here, which is correct). Jobs per CI-RELEASE-ENGINEERING §"apps repo":
 # manifest-validate · tests · quality-declarations · boundary · live-writes-posture ·
-# prompt-cache-posture · dco (PR-only).
+# prompt-cache-posture · settings-schema-posture · readme-census · dco (PR-only).
 name: CI
 
 on:
@@ -315,6 +315,24 @@ jobs:
           python-version: "3.12"
       - name: Check settings-schema advanced/required posture
         run: python .github/scripts/check_settings_schema_posture.py
+
+  readme-census:
+    # The repo-root README's app census — headline bundle count, per-category counts,
+    # and the named bundles — must match the tree. This is the one fact in the repo
+    # that no app's own PR owns: nine consecutive app PRs each correctly left it
+    # alone and it drifted to "47 apps" over 64 bundles, with category counts that
+    # summed to 56. So a machine owns it. Cross-repo sweep, same reason as its
+    # neighbours: the tests job runs pytest PER bundle, and a README is no bundle's
+    # test. Committed script, not an inline heredoc, so a contributor runs the EXACT
+    # same check locally. Pure stdlib — no core install.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: README census matches the tree
+        run: python .github/scripts/check_readme_census.py
 
   dco:
     # Every commit in a PR must carry a Signed-off-by trailer (DCO — plan 37),
