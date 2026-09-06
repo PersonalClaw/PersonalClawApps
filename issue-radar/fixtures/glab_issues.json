@@ -1,0 +1,28 @@
+[
+  {
+    "id": 918273,
+    "iid": 12,
+    "title": "Importer hangs on a 200 MB archive",
+    "description": "The importer hangs for over an hour on a 200 MB archive and pins one core at 100%. High CPU usage the whole time.\n\nSteps to reproduce: `widget import big.tar.gz`.",
+    "labels": ["needs triage"],
+    "author": {"id": 44, "username": "rivera", "name": "R. Rivera"},
+    "created_at": "2025-10-14T07:45:11.000Z",
+    "updated_at": "2025-10-14T07:45:11.000Z",
+    "web_url": "https://gitlab.com/acme/tools/widget/-/issues/12",
+    "state": "opened",
+    "assignees": []
+  },
+  {
+    "id": 918290,
+    "iid": 13,
+    "title": "Broken link in the contributing docs",
+    "description": "The CONTRIBUTING page links to a moved wiki page — broken link.",
+    "labels": ["docs"],
+    "author": {"id": 51, "username": "nadia"},
+    "created_at": "2026-01-03T10:00:00.000Z",
+    "updated_at": "2026-01-04T10:00:00.000Z",
+    "web_url": "https://gitlab.com/acme/tools/widget/-/issues/13",
+    "state": "opened",
+    "assignees": [{"id": 51, "username": "nadia"}]
+  }
+]
