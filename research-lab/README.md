@@ -6,24 +6,48 @@ Research Lab turns a question into a tree of sub-questions and works that tree d
 many unattended cycles: each cycle takes a few open sub-questions, hands each one to its
 own subagent, records what came back with its sources, and grafts on whatever new
 questions the work turned up. When the tree is answered — or the cycle budget runs out —
-it synthesises everything into one markdown report on your machine.
+it synthesizes everything into one markdown report on your machine.
 
 **Research Lab** is a **tool provider** — it implements the `personalclaw.sdk.tool`
 `ToolProvider` contract and its five tools appear on the agent tool layer.
 
-## Why `tool` and not `agent` or `workflow`
+## Install
 
-`agent` in this platform means an **ACP agent bundle** (`claude-code-agent`,
-`codex-agent`) — a coding CLI you select in the Agents list, not a task an agent performs.
-`workflow` is a real `PROVIDER_TYPES` entry but publishes no SDK contract, so an app cannot
-build against it without breaking the SDK-only boundary. What this app actually is — a
-capability the agent *calls*, with arguments, that returns a report — is exactly the `tool`
-contract, per the capability table in
-[`docs/app-creation-guide.md`](../docs/app-creation-guide.md).
+From the App Store, add the `apps/` directory as a **local source**, then install
+**Research Lab** — the install runs through the security scanner and lifecycle exactly like
+any other app. (Or `POST /api/apps {"source": ".../apps/research-lab"}`.) Enabling the app
+registers the provider and reconciles the cron; disabling it removes both.
 
-The multi-cycle half is not a provider type at all. It is a **declared cron**
-(`crons[]` in `app.json`), which is how an app gets an unattended, headless, auto-approved
-turn without inventing a scheduler of its own.
+Prefer a shell? Against a running gateway — which takes the owner token as a `?token=`
+query parameter (`personalclaw token` prints a URL carrying it), not an `Authorization`
+header:
+
+```bash
+curl -X POST "$PERSONALCLAW_URL/api/apps?token=$PERSONALCLAW_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"source": "'"$PWD"'", "confirm": true}'
+curl -X POST "$PERSONALCLAW_URL/api/apps/research-lab/enable?token=$PERSONALCLAW_TOKEN"
+```
+
+## The five tools
+
+| Tool | What it does |
+|---|---|
+| `research_open` | Open a campaign: a question, optional starting sub-questions, a cycle budget. |
+| `research_list` | Every campaign with its status, cycles used and progress. |
+| `research_next` | Close the open cycle, hand back the next worklist. Reports `done` when the tree is answered or the budget is spent. |
+| `research_record` | One sub-question's finding + sources, plus any follow-up questions it raised. The write end of the fan-out. |
+| `research_report` | Synthesize findings, open questions and sources into `report.md`. |
+
+```
+research_open(question="Does local-first sync beat a cloud broker?",
+              sub_questions=["What do local-first users lose?", "What does a broker cost?"],
+              cycle_budget=4)
+research_next(campaign="does-local-first-sync-beat-a", breadth=2)
+research_record(campaign="does-local-first-sync-beat-a", node="q1",
+                finding="…", sources=["https://…"], follow_ups=["…"])
+research_report(campaign="does-local-first-sync-beat-a")
+```
 
 ## The app is the ledger, not the researcher
 
@@ -42,26 +66,6 @@ subagents.
 Which is why the manifest declares `storage` + `cron` and nothing else. No `network`, no
 `agent`, no `api`. If you were expecting a web-search provider, that is a different app;
 this one composes with whichever one you have.
-
-## The five tools
-
-| Tool | What it does |
-|---|---|
-| `research_open` | Open a campaign: a question, optional starting sub-questions, a cycle budget. |
-| `research_list` | Every campaign with its status, cycles used and progress. |
-| `research_next` | Close the open cycle, hand back the next worklist. Reports `done` when the tree is answered or the budget is spent. |
-| `research_record` | One sub-question's finding + sources, plus any follow-up questions it raised. The write end of the fan-out. |
-| `research_report` | Synthesise findings, open questions and sources into `report.md`. |
-
-```
-research_open(question="Does local-first sync beat a cloud broker?",
-              sub_questions=["What do local-first users lose?", "What does a broker cost?"],
-              cycle_budget=4)
-research_next(campaign="does-local-first-sync-beat-a", breadth=2)
-research_record(campaign="does-local-first-sync-beat-a", node="q1",
-                finding="…", sources=["https://…"], follow_ups=["…"])
-research_report(campaign="does-local-first-sync-beat-a")
-```
 
 ## The unattended loop
 
@@ -117,31 +121,12 @@ is posted anywhere: the app has no network permission with which to post it.
 - **No shell, no subprocess, no network.** The whole app is stdlib plus
   `personalclaw.sdk.{tool,util,cli}`.
 
-## Install
-
-From the dashboard: **Store → Add source → local path**, point it at this directory, then
-install and enable it. Or from a shell against a running gateway — the gateway takes the
-owner token as a `?token=` query parameter (`personalclaw token` prints a URL carrying it),
-not an `Authorization` header:
-
-```bash
-curl -X POST "$PERSONALCLAW_URL/api/apps?token=$PERSONALCLAW_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"source": "'"$PWD"'", "confirm": true}'
-curl -X POST "$PERSONALCLAW_URL/api/apps/research-lab/enable?token=$PERSONALCLAW_TOKEN"
-```
-
-Enabling the app registers the provider and reconciles the cron; disabling it removes both.
-
 ## Settings
 
-| Setting | Default | Meaning |
+| Key | Label | Notes |
 |---|---|---|
-| `default_cycle_budget` | 5 | Cycles a new campaign may run unattended. |
-| `cycle_breadth` (advanced) | 3 | Sub-questions one cycle hands out to subagents. |
-
-A `research_open` call may override the budget; a `research_next` call may override the
-breadth.
+| `default_cycle_budget` | Default cycle budget | Cycles a new campaign may run unattended (default 5). A `research_open` call may override it per campaign. |
+| `cycle_breadth` | Sub-questions per cycle | Sub-questions one cycle hands out to subagents (default 3). A `research_next` call may override it per cycle. Advanced. |
 
 ## Permissions
 
@@ -162,10 +147,28 @@ than `pytest.mark.asyncio`, so a bare `pytest` runs them. The one to read first 
 `test_a_campaign_runs_multiple_unattended_cycles_and_synthesises_a_report`: it drives the
 loop the way the cron's prompt does, then asserts the report on disk.
 
+## Design notes
+
+### Why `tool` and not `agent` or `workflow`
+
+`agent` in this platform means an **ACP agent bundle** (`claude-code-agent`,
+`codex-agent`) — a coding CLI you select in the Agents list, not a task an agent performs.
+`workflow` is a real `PROVIDER_TYPES` entry but publishes no SDK contract, so an app cannot
+build against it without breaking the SDK-only boundary. What this app actually is — a
+capability the agent *calls*, with arguments, that returns a report — is exactly the `tool`
+contract, per the capability table in
+[`docs/app-creation-guide.md`](../docs/app-creation-guide.md).
+
+The multi-cycle half is not a provider type at all. It is a **declared cron**
+(`crons[]` in `app.json`), which is how an app gets an unattended, headless, auto-approved
+turn without inventing a scheduler of its own.
+
+### Why there is no `test_server.py`
+
 There is no `test_server.py`: this app declares no `backend`, so it has no server to test.
 In this repo only `growth` and `minutes` — the backend+UI apps — ship one.
 
-## Validated / not yet validated
+### Validated / not yet validated
 
 Stated plainly, because the difference matters.
 
@@ -178,7 +181,7 @@ Stated plainly, because the difference matters.
   `boundary` AST lint.
 - The cross-app rails: `settings-schema-posture`, `prompt-cache-posture`,
   `live-writes-posture`, `quality-declarations`.
-- A whole campaign end to end: open → several unattended cycles → a synthesised
+- A whole campaign end to end: open → several unattended cycles → a synthesized
   `report.md` on a real filesystem, plus the budget-exhaustion, depth-cap, duplicate-drop
   and path-refusal rails.
 

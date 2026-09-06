@@ -368,7 +368,7 @@ class ResearchLabProvider(ToolProvider):
             return ToolResult(
                 success=True,
                 output=(
-                    f"Campaign {campaign['id']} is answered — synthesise it with research_report."
+                    f"Campaign {campaign['id']} is answered — synthesize it with research_report."
                 ),
                 metadata={"campaign": campaign["id"], "done": True, "reason": "answered"},
             )
@@ -379,7 +379,7 @@ class ResearchLabProvider(ToolProvider):
                 success=True,
                 output=(
                     f"Campaign {campaign['id']} spent its {campaign['cycle_budget']}-cycle "
-                    f"budget with {len(open_nodes)} sub-question(s) still open — synthesise "
+                    f"budget with {len(open_nodes)} sub-question(s) still open — synthesize "
                     f"what it has with research_report."
                 ),
                 metadata={

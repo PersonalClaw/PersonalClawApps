@@ -2,7 +2,7 @@
   "name": "code-review",
   "version": "0.1.0",
   "displayName": "Code Review",
-  "description": "Deep-review a GitHub pull request one file at a time. Fetches the diff with your local `gh`, weights every changed file by blast radius (churn, path criticality, fan-in inside the changed set, add/delete/rename), then reviews each file in isolation — heaviest first, each review seeing only its own diff. Findings are appended to a JSONL log on your machine; nothing is ever posted back to the PR.",
+  "description": "Deep-review a GitHub pull request one file at a time, riskiest changes first, through the GitHub CLI you are already signed in to. Findings stay in a local log on your machine — nothing is ever posted back to the PR.",
   "icon": "GitPullRequest",
   "author": "PersonalClaw",
   "license": "MIT",
@@ -42,7 +42,7 @@
           "default": "model",
           "x-meta": {
             "label": "Per-file fan-out",
-            "help": "model — one isolated model call per changed file. plan — emit one review brief per file for your agent to spawn a real subagent from, each reporting via record_finding. static — the deterministic diff pass only, no model."
+            "help": "model — reviews each changed file with its own isolated model call. plan — skips the model and returns a per-file plan your agent can delegate to subagents. static — runs only the built-in diff checks, with no model."
           }
         },
         "concurrency": {
@@ -86,7 +86,7 @@
           "type": "integer",
           "default": 20,
           "x-meta": {
-            "label": "gh Timeout",
+            "label": "GitHub CLI Timeout",
             "help": "Maximum seconds to wait for `gh pr diff` before giving up.",
             "tags": [
               "advanced"

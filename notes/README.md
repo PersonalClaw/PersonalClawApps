@@ -7,41 +7,13 @@ stays readable in any editor with this app uninstalled and PersonalClaw shut dow
 **Notes** is a **tool provider** — it implements the `personalclaw.sdk.tool` `ToolProvider`
 contract and its seven tools appear on the agent tool layer.
 
-## Why `tool` and not `agent` or `workflow`
+## Install
 
-`agent` in this platform means an **ACP agent bundle** (`claude-code-agent`, `codex-agent`)
-— a coding CLI you select in the Agents list, not a task an agent performs. `workflow` is a
-real `PROVIDER_TYPES` entry but publishes no SDK contract, so an app cannot build against it
-without breaking the SDK-only boundary. What this app actually is — a set of capabilities
-the agent *calls*, with arguments, that read and write the user's notes — is exactly the
-`tool` contract, per the capability table in
-[`docs/app-creation-guide.md`](../docs/app-creation-guide.md).
-
-The word "editor" in *notebook editor* is about **what this app owns** (drafting, revision,
-history) versus what Knowledge owns (indexed recall). It is not a claim about a UI: this
-bundle contributes no frontend, so there is no `ui/` and no design-system or a11y claim to
-make. The editing surface is the agent tool layer, in chat, which is where the rest of this
-product's writing already happens.
-
-## An editor, not a second knowledge store
-
-This is the design constraint that shaped everything else. PersonalClaw already has a
-knowledge library with an index, embeddings, dedup and consolidation behind
-`knowledge_search` / `knowledge_create`. This app does **not** duplicate any of it:
-
-- **No index, no embeddings, no database, no sidecar metadata.** The notebook is markdown
-  files and a `.git` directory. A test asserts nothing else ever appears in it.
-- **`note_search` is a literal, case-insensitive line match** — a grep over the files on
-  disk. Its own description and its no-results message both say so and point at
-  `knowledge_search` for meaning-based recall, so the agent is told the boundary at the
-  moment it would otherwise guess wrong.
-- **Nothing here writes to the knowledge library.** When something in a note should become
-  durable knowledge, the agent hands it to core's `knowledge_create`. The notebook keeps
-  the draft and its history; Knowledge keeps the retrievable fact.
-
-The two are different objects on purpose: a Knowledge `note` is a library item, and a
-notebook note is a *file you own* — diffable, greppable, syncable, and recoverable version
-by version.
+From the App Store, add the `apps/` directory as a **local source**, then install
+**Notes** — the install runs through the security scanner and lifecycle exactly like any
+other app. (Or `POST /api/apps {"source": ".../apps/notes"}`.) You need `git` on `PATH` —
+`personalclaw doctor` reports it, and reports it as a **failure**, not a warning, because
+without git there is no note history and the app's central promise is void.
 
 ## The seven tools
 
@@ -65,6 +37,26 @@ note_restore(ref="ideas/tempo", revision=…)
 
 `ref` is relative to the notebook, `/` between folders, and `.md` is optional —
 `note_write(ref="ideas/tempo")` writes `ideas/tempo.md`.
+
+## An editor, not a second knowledge store
+
+This is the design constraint that shaped everything else. PersonalClaw already has a
+knowledge library with an index, embeddings, dedup and consolidation behind
+`knowledge_search` / `knowledge_create`. This app does **not** duplicate any of it:
+
+- **No index, no embeddings, no database, no sidecar metadata.** The notebook is markdown
+  files and a `.git` directory. A test asserts nothing else ever appears in it.
+- **`note_search` is a literal, case-insensitive line match** — a grep over the files on
+  disk. Its own description and its no-results message both say so and point at
+  `knowledge_search` for meaning-based recall, so the agent is told the boundary at the
+  moment it would otherwise guess wrong.
+- **Nothing here writes to the knowledge library.** When something in a note should become
+  durable knowledge, the agent hands it to core's `knowledge_create`. The notebook keeps
+  the draft and its history; Knowledge keeps the retrievable fact.
+
+The two are different objects on purpose: a Knowledge `note` is a library item, and a
+notebook note is a *file you own* — diffable, greppable, syncable, and recoverable version
+by version.
 
 ## Where the notes live, and why they survive a reinstall
 
@@ -134,20 +126,13 @@ validation, SAX-06 log injection) to each untrusted edge:
 `regex=True` on `note_search` is opt-in and runs the caller's own pattern in-process with no
 backtracking guard, over the user's own files. That is why it is not the default.
 
-## Install
-
-From the App Store, add this `apps/` directory as a **local source**, then install
-**Notes**. (Or `POST /api/apps {"source": ".../notes"}`.) You need `git` on `PATH` —
-`personalclaw doctor` reports it, and reports it as a **failure**, not a warning, because
-without git there is no note history and the app's central promise is void.
-
 ## Settings
 
 | Key | Label | Notes |
 |---|---|---|
 | `notebook_path` | Notebook folder | Empty = this app's data dir. Point it inside an existing repo and that repo is adopted. |
 | `max_results` | Search results | Default cap on `note_search` lines, 1–200 (default 20). Advanced. |
-| `timeout_secs` | git Timeout | Seconds to wait for a `git` command (minimum 5, default 20). Advanced. |
+| `timeout_secs` | Git Timeout | Seconds to wait for a `git` command (minimum 5, default 20). Advanced. |
 
 ## Permissions
 
@@ -168,10 +153,30 @@ fence-break cases, the CLI seams, and the manifest round-trip.
 python -m pytest notes -q
 ```
 
+## Design notes
+
+### Why `tool` and not `agent` or `workflow`
+
+`agent` in this platform means an **ACP agent bundle** (`claude-code-agent`, `codex-agent`)
+— a coding CLI you select in the Agents list, not a task an agent performs. `workflow` is a
+real `PROVIDER_TYPES` entry but publishes no SDK contract, so an app cannot build against it
+without breaking the SDK-only boundary. What this app actually is — a set of capabilities
+the agent *calls*, with arguments, that read and write the user's notes — is exactly the
+`tool` contract, per the capability table in
+[`docs/app-creation-guide.md`](../docs/app-creation-guide.md).
+
+The word "editor" in *notebook editor* is about **what this app owns** (drafting, revision,
+history) versus what Knowledge owns (indexed recall). It is not a claim about a UI: this
+bundle contributes no frontend, so there is no `ui/` and no design-system or a11y claim to
+make. The editing surface is the agent tool layer, in chat, which is where the rest of this
+product's writing already happens.
+
+### Why there is no `test_server.py`
+
 There is no `test_server.py`: this app declares no `backend`, so it has no server to test.
 In this repo only `growth` and `minutes` — the backend+UI apps — ship one.
 
-## Validated / not yet validated
+### Validated / not yet validated
 
 Stated plainly, because the difference matters.
 

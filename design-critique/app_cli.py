@@ -1,4 +1,4 @@
-"""CLI seams for personalclaw-design-critique: a setup step and a doctor probe.
+"""CLI seams for design-critique: a setup step and a doctor probe.
 
 ``personalclaw setup`` calls :func:`setup` after the core steps; ``personalclaw doctor``
 calls :func:`doctor` and renders the lines it returns as this app's section.
@@ -35,7 +35,7 @@ def doctor() -> list[DoctorLine]:
 
         lines.append(
             DoctorLine(
-                label="Design Critique · screenshot review",
+                label="screenshot review",
                 status="ok",
                 detail="Pillow available — design_critique_image can decode captures",
             )
@@ -43,18 +43,18 @@ def doctor() -> list[DoctorLine]:
     except ImportError:
         lines.append(
             DoctorLine(
-                label="Design Critique · screenshot review",
+                label="screenshot review",
                 status="warn",
                 detail=(
                     "Pillow is not importable, so design_critique_image cannot run. "
-                    "Reinstall dependencies (`pip install -e .`). The URL review is "
-                    "unaffected."
+                    "Reinstall the app from the Store, then restart the gateway (the "
+                    "install reports restart_required). The URL review is unaffected."
                 ),
             )
         )
     lines.append(
         DoctorLine(
-            label="Design Critique · page review",
+            label="page review",
             status="ok",
             detail=(
                 "design_critique_page fetches through core's egress guard, so a private or "

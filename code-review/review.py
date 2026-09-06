@@ -289,7 +289,7 @@ def blast_radius(files: list[ChangedFile]) -> list[ChangedFile]:
 DEPTH_BUDGET = {"deep": 24_000, "normal": 10_000, "skim": 2_500}
 
 _BRIEF = """You are reviewing ONE file from a pull request, in isolation. You cannot see any
-other file and must not speculate about them; if a judgement depends on a file you cannot
+other file and must not speculate about them; if a judgment depends on a file you cannot
 see, say so instead of guessing.
 
 File: {path}

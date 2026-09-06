@@ -38,8 +38,8 @@ def setup(ctx: SetupContext) -> None:
     if _git_version():
         ctx.print(
             "Notes: `git` found. Your notebook lives in this app's data dir by default "
-            "(Settings -> Notes to point it somewhere else, e.g. a folder in a repo you "
-            "already sync)."
+            "(Settings → Tools → Notes to point it somewhere else, e.g. a folder in a "
+            "repo you already sync)."
         )
     else:
         ctx.print(
@@ -54,12 +54,12 @@ def doctor() -> list[DoctorLine]:
     version = _git_version()
     if version is None:
         return [DoctorLine(
-            label="Notes",
+            label="git",
             status="fail",
             detail="`git` is not runnable — install git; the notebook is a git repository",
         )]
     return [DoctorLine(
-        label="Notes",
+        label="git",
         status="ok",
         detail=f"{version} — notes are versioned in git",
     )]

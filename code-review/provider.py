@@ -463,7 +463,9 @@ class CodeReviewProvider(ToolProvider):
         raw = str(args.get("pr") or "").strip()
         if not raw:
             prs = self._log.reviewed_prs()
-            body = "\n".join(f"- {p}" for p in prs) or "No PR has been reviewed on this machine yet."
+            body = "\n".join(f"- {p}" for p in prs) or (
+                "No PR has been reviewed on this machine yet — run review_pr first."
+            )
             return ToolResult(success=True, output=body, metadata={"prs": prs})
         try:
             ref = parse_pr_ref(raw)
@@ -476,7 +478,7 @@ class CodeReviewProvider(ToolProvider):
         if not rows:
             return ToolResult(
                 success=True,
-                output=f"No findings kept locally for {ref}.",
+                output=f"No findings kept locally for {ref} — run review_pr on it first.",
                 metadata={"pr": str(ref), "findings": 0},
             )
         lines = [f"{len(rows)} finding(s) for {ref}:", ""]

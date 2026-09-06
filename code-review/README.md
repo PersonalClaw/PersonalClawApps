@@ -8,15 +8,13 @@ log on your machine. Nothing is ever posted back to the PR.
 **Code Review** is a **tool provider** — it implements the `personalclaw.sdk.tool`
 `ToolProvider` contract and its three tools appear on the agent tool layer.
 
-## Why `tool` and not `agent` or `workflow`
+## Install
 
-`agent` in this platform means an **ACP agent bundle** (`claude-code-agent`,
-`codex-agent`) — a coding CLI you select in the Agents list, not a task an agent performs.
-`workflow` is a real `PROVIDER_TYPES` entry but publishes no SDK contract, so an app
-cannot build against it without breaking the SDK-only boundary. What this app actually is
-— a capability the agent *calls*, with arguments, that returns a report — is exactly the
-`tool` contract, per the capability table in
-[`docs/app-creation-guide.md`](../docs/app-creation-guide.md).
+From the App Store, add the `apps/` directory as a **local source**, then install
+**Code Review** — the install runs through the security scanner and lifecycle exactly like
+any other app. (Or `POST /api/apps {"source": ".../apps/code-review"}`.) You need the
+[GitHub CLI](https://cli.github.com) on `PATH` and `gh auth login` done —
+`personalclaw doctor` reports both.
 
 ## The three tools
 
@@ -75,14 +73,14 @@ Five cheap signals, no repo checkout and no language server:
 3. **Fan-in inside the changed set** (+7 per importer, capped +20). How many *other changed
    files* import this one, matched on Python and JS import syntax. Scoped to the PR on
    purpose: the app never clones the repo, so this is a **floor** on real fan-in, not an
-   estimate of it — and it is labelled that way in the weight's reasons.
+   estimate of it — and it is labeled that way in the weight's reasons.
 4. **Status.** A deletion of something others import is the highest-reach change in a PR and
    the easiest to wave through (+12, +8 more with fan-in); a brand-new file reaches nothing
    yet (−6).
 5. **Nothing to review.** Binary and generated/vendored/lockfile paths cap at 5.
 
 Every weight ships the reasons that produced it, in the report table and in the brief the
-reviewer sees. A number with no explanation is not a judgement anyone can argue with.
+reviewer sees. A number with no explanation is not a judgment anyone can argue with.
 
 ## Findings kept locally — literally
 
@@ -115,13 +113,6 @@ injection) to the three untrusted edges:
   control characters, CR and LF are stripped before it is written. A newline in a diff line
   must not be able to forge a second finding.
 
-## Install
-
-From the App Store, add this `apps/` directory as a **local source**, then install
-**Code Review**. (Or `POST /api/apps {"source": ".../code-review"}`.) You need the
-[GitHub CLI](https://cli.github.com) on `PATH` and `gh auth login` done —
-`personalclaw doctor` reports both.
-
 ## Settings
 
 | Key | Label | Notes |
@@ -130,7 +121,7 @@ From the App Store, add this `apps/` directory as a **local source**, then insta
 | `concurrency` | Concurrent per-file reviews | 1–8, default 3. Advanced. |
 | `max_files` | Files per review | Cap the fan-out to the N heaviest, default 40. Dropped files still appear in the weight table, named as skipped. Advanced. |
 | `model_entry` | Model entry | Which configured model runs the per-file reviews. Empty = the first chat-capable provider from Settings → Models. Advanced. |
-| `timeout_secs` | gh Timeout | Seconds to wait for `gh pr diff`. Advanced. |
+| `timeout_secs` | GitHub CLI Timeout | Seconds to wait for `gh pr diff`. Advanced. |
 
 ## Permissions
 
@@ -149,10 +140,24 @@ model, the isolation contract on the briefs, the deterministic rules, the findin
 python -m pytest code-review -q
 ```
 
+## Design notes
+
+### Why `tool` and not `agent` or `workflow`
+
+`agent` in this platform means an **ACP agent bundle** (`claude-code-agent`,
+`codex-agent`) — a coding CLI you select in the Agents list, not a task an agent performs.
+`workflow` is a real `PROVIDER_TYPES` entry but publishes no SDK contract, so an app
+cannot build against it without breaking the SDK-only boundary. What this app actually is
+— a capability the agent *calls*, with arguments, that returns a report — is exactly the
+`tool` contract, per the capability table in
+[`docs/app-creation-guide.md`](../docs/app-creation-guide.md).
+
+### Why there is no `test_server.py`
+
 There is no `test_server.py`: this app declares no `backend`, so it has no server to test.
 In this repo only `growth` and `minutes` — the backend+UI apps — ship one.
 
-## Validated / not yet validated
+### Validated / not yet validated
 
 Stated plainly, because the difference matters.
 
