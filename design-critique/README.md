@@ -43,18 +43,18 @@ Judgment about a design divides cleanly into what a machine can **measure** and 
 must **look at**. Pretending otherwise is how design tooling ends up producing confident
 nonsense, so the split is in the tool surface itself.
 
-**Measured from markup** (23 rules): document language, page title, viewport zoom locking,
+**Measured from markup** (24 rules): document language, page title, viewport zoom locking,
 `main` landmark, duplicate ids, missing `alt`, filename-as-`alt`, untitled `iframe`,
 autoplaying media, unlabeled form controls, placeholder-as-label, nameless links and
 buttons, vague link text, positive `tabindex`, `target=_blank` without `rel=noopener`,
 missing or duplicated `h1`, skipped heading levels, over-long headings, header-less data
-tables, declared color pairs under 4.5:1, type below 12px, typeface count, type-scale
-sprawl, missing meta description.
+tables, tables that position rather than tabulate, declared color pairs under 4.5:1, type
+below 12px, typeface count, type-scale sprawl, missing meta description.
 
 **Measured from pixels** (9 rules): capture width against real device and breakpoint
-widths, rendered contrast against the dominant surface, pure black on pure white, palette
-sprawl, full-saturation colors, red–green color-vision collapse, near-empty and
-over-dense canvases, gutter imbalance, ragged left edges.
+widths, rendered contrast of **ink** against the dominant surface, pure black on pure
+white, palette sprawl, full-saturation colors, red–green color-vision collapse, near-empty
+and over-dense canvases, gutter imbalance, ragged left edges.
 
 **Not measured, and not faked.** Whether the hierarchy matches the user's goal, whether the
 copy earns its space, whether an affordance reads as clickable, whether the unhappy path
@@ -91,6 +91,22 @@ palette would be worse than no check.
 - **This is not an axe-core replacement.** It runs no browser, so it cannot check anything
   that needs a computed accessibility tree — focus visibility, live regions, actual
   reading order after CSS.
+- **Rendered contrast is judged on INK, and ink is recognised by its geometry.** WCAG
+  1.4.3 / 1.4.11 govern content against the background it sits on and say nothing about two
+  adjacent backgrounds, so a dark theme's page → rail → card elevation ramp is *designed*
+  sub-3:1 and earns no finding. A colour is called ink when a one-pixel erosion removes
+  essentially all of it (a glyph, an icon, a hairline) and a surface when its area survives
+  (a card, a panel, a rail). Two consequences, stated rather than discovered: a faint colour
+  used as a large flat FILL is not reported, and a faint colour whose quantised bucket
+  coincides with a surface's is read as that surface. The census for this rule is sampled
+  with nearest-neighbour, never smoothed — a smoothing downsample blends antialiased edges
+  into greys the renderer never drew, and that is what produced seven phantom "colours under
+  3:1" on a page whose only real ink passed AA at 5.2:1.
+- **A table is only called a data table when nothing says otherwise.** `role="presentation"`
+  / `role="none"`, no text in any cell, or the pre-CSS positioning idiom (`border="0"`
+  plus `cellspacing`/`width`/`bgcolor`) all mean the missing-header finding does not apply —
+  it is re-filed as `heuristic.layout-table`, whose fix names both readings, because telling
+  an author to add `<th scope="col">` to a spacer damages the page.
 
 ## Security posture
 
@@ -123,10 +139,16 @@ palette would be worse than no check.
 ## Tests
 
 `test_provider.py` covers the provider contract, the manifest against core's own
-`AppManifest`, the color maths against the WCAG anchors, all 23 markup rules on a
+`AppManifest`, the color maths against the WCAG anchors, all 24 markup rules on a
 deliberately broken page **and their silence on a correct one**, the pixel rules against
 images the test draws, every refusal path, and the whole `design_critique_page` pipeline
 over the two fetch seams. No network, no credentials, no gateway.
+
+The two rules that were wrong on real input — rendered contrast and table headers — are
+pinned in BOTH directions: silent on the input that fooled them (a dark elevation ramp with
+antialiased ink; a `WIDTH`/`BORDER=0`/`CELLSPACING=0`/`BGCOLOR` layout table) and still
+firing on a genuinely bad one (the same shell with faint ink; a plain headerless data
+table). One direction alone would pass if the rule were simply switched off.
 
 ```
 python -m pytest design-critique -q
@@ -178,10 +200,17 @@ Stated plainly, because the difference matters.
 - **The headless-render pass against a real browser.** `web_fetch(render=True)` is stubbed
   in the tests; Playwright has not run, so the client-rendered-shell detection is proven on
   its arithmetic rather than on a real SPA.
-- **The pixel rules against real product screenshots.** They are proven against synthetic
-  canvases with known colors and geometry. The thresholds (palette size, density bands,
-  the 6-left-edge alignment ceiling) have not been calibrated against a corpus of real UI,
-  so expect to tune them.
+- **The pixel rules against real product screenshots.** They are proven against canvases
+  the tests draw. The thresholds (palette size, density bands, the 6-left-edge alignment
+  ceiling) have not been calibrated against a corpus of real UI, so expect to tune them.
+
+  This limit has now cost something and been partly paid down. The first real screenshot
+  run against these rules — a 1440×1000 PersonalClaw UI capture — produced exactly one
+  finding and it was wrong: `a11y.rendered-contrast` called a dark theme's elevation ramp
+  seven contrast failures, and `a11y.table-headers` called four layout tables data tables.
+  Both are fixed, and the contrast rule's fixture is no longer a flat synthetic canvas —
+  it reproduces a real shell's composition and its antialiasing. The remaining pixel
+  thresholds above are still synthetic-only.
 
 None of these are faked or asserted as done anywhere in this bundle.
 
