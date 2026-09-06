@@ -227,9 +227,7 @@ def issues_from_gitlab(payload: Any) -> list[Issue]:
                 title=_clean_line(row.get("title"))[:MAX_TITLE_CHARS],
                 body=_clean_text(row.get("description"))[:MAX_BODY_CHARS],
                 labels=_labels_of(row.get("labels")),
-                author=_clean_line(
-                    author.get("username") if isinstance(author, dict) else author
-                ),
+                author=_clean_line(author.get("username") if isinstance(author, dict) else author),
                 created=_clean_line(row.get("created_at")),
                 updated=_clean_line(row.get("updated_at")),
                 url=_clean_line(row.get("web_url")),
@@ -931,9 +929,7 @@ def render_sweep(
         lines += [f"Has: {have}", ""]
         if item.suggestions:
             for suggestion in item.suggestions:
-                lines.append(
-                    f"- **`{suggestion.label}`** ({suggestion.source}) — {suggestion.why}"
-                )
+                lines.append(f"- **`{suggestion.label}`** ({suggestion.source}) — {suggestion.why}")
         else:
             lines.append("- no label suggested — nothing in the text evidences one")
         if item.model_note:

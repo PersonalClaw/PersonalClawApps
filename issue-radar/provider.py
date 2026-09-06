@@ -466,18 +466,29 @@ class IssueRadarProvider(ToolProvider):
         """
         if repo.host == HOST_GITHUB:
             argv = [
-                "gh", "issue", "list",
-                "--repo", repo.path,
-                "--state", "open",
-                "--limit", str(limit),
-                "--json", "number,title,body,labels,author,createdAt,updatedAt,url,assignees",
+                "gh",
+                "issue",
+                "list",
+                "--repo",
+                repo.path,
+                "--state",
+                "open",
+                "--limit",
+                str(limit),
+                "--json",
+                "number,title,body,labels,author,createdAt,updatedAt,url,assignees",
             ]
         else:
             argv = [
-                "glab", "issue", "list",
-                "--repo", repo.path,
-                "--per-page", str(limit),
-                "--output", "json",
+                "glab",
+                "issue",
+                "list",
+                "--repo",
+                repo.path,
+                "--per-page",
+                str(limit),
+                "--output",
+                "json",
             ]
         return await self._run_json(argv, repo)
 
@@ -488,8 +499,7 @@ class IssueRadarProvider(ToolProvider):
         worth a second CLI call — but it is not worth failing a sweep over.
         """
         if repo.host == HOST_GITHUB:
-            argv = ["gh", "label", "list", "--repo", repo.path, "--limit", "200",
-                    "--json", "name"]
+            argv = ["gh", "label", "list", "--repo", repo.path, "--limit", "200", "--json", "name"]
         else:
             argv = ["glab", "label", "list", "--repo", repo.path, "--output", "json"]
         try:
@@ -498,9 +508,7 @@ class IssueRadarProvider(ToolProvider):
             logger.info("label list unavailable for %s: %s", repo, exc)
             return None
         labels = (
-            labels_from_github(payload)
-            if repo.host == HOST_GITHUB
-            else labels_from_gitlab(payload)
+            labels_from_github(payload) if repo.host == HOST_GITHUB else labels_from_gitlab(payload)
         )
         return labels or None
 
@@ -515,9 +523,7 @@ class IssueRadarProvider(ToolProvider):
         except TimeoutError as exc:
             proc.kill()
             await proc.wait()
-            raise TrackerError(
-                f"`{' '.join(argv[:3])}` timed out after {self._timeout}s"
-            ) from exc
+            raise TrackerError(f"`{' '.join(argv[:3])}` timed out after {self._timeout}s") from exc
         if proc.returncode != 0:
             detail = (err or b"").decode("utf-8", "replace").strip()[:600]
             raise TrackerError(
@@ -535,9 +541,7 @@ class IssueRadarProvider(ToolProvider):
 
     # ── The model leg of the suggestions ────────────────────────────────────
 
-    async def _suggest_with_model(
-        self, triaged: list[Any], briefs: list[IssueBrief]
-    ) -> str:
+    async def _suggest_with_model(self, triaged: list[Any], briefs: list[IssueBrief]) -> str:
         """One model call per issue, bounded concurrency, a fresh provider each time.
 
         Degrades rather than fails: with no model provider registered the sweep still
@@ -732,7 +736,9 @@ class IssueRadarProvider(ToolProvider):
             suggested = ", ".join(f"`{s.get('label')}`" for s in row.get("suggested") or []) or "—"
             why = "; ".join(row.get("reasons") or []) or "—"
             title = str(row.get("title") or "").replace("|", r"\|")[:70]
-            lines.append(f"| #{row.get('number')} {title} | {row.get('score')} | {suggested} | {why} |")
+            lines.append(
+                f"| #{row.get('number')} {title} | {row.get('score')} | {suggested} | {why} |"
+            )
         return ToolResult(
             success=True,
             output="\n".join(lines),
