@@ -269,6 +269,17 @@ class NotesProvider(ToolProvider):
             hints = ["Install git — the notebook is a git repository."] if str(exc) == GIT_MISSING \
                 else ["Check the notebook path in Settings, and that it is a git worktree."]
             return ToolResult(success=False, error=str(exc), recovery_hints=hints)
+        except OSError as exc:
+            # A notebook on a full disk, a read-only mount, a path the gateway user cannot
+            # write: a legible failure, not a traceback out of the tool layer.
+            logger.warning("notebook I/O failed for %s: %s", tool_name, exc)
+            return ToolResult(
+                success=False,
+                error=f"The notebook could not be read or written: {exc}",
+                recovery_hints=[
+                    "Check that the notebook path exists and is writable by PersonalClaw.",
+                ],
+            )
 
     # ── Handlers ────────────────────────────────────────────────────────────────
 
