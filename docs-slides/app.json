@@ -1,0 +1,53 @@
+{
+  "name": "docs-slides",
+  "version": "0.1.0",
+  "displayName": "Docs & Slides",
+  "description": "Turn a brief into a real PowerPoint deck (.pptx) or a compiled document (.docx/.pdf) you can open and send. Write the brief as ordinary markdown — '## ' per slide for a deck, headings and lists for a document — and the document writers PersonalClaw already ships render the file. Nothing leaves your machine and nothing is written outside this app's own data directory.",
+  "icon": "Presentation",
+  "author": "PersonalClaw",
+  "license": "MIT",
+  "tags": [
+    "tool",
+    "documents",
+    "slides",
+    "pptx",
+    "docx",
+    "productivity"
+  ],
+  "cli": {
+    "setup": "app_cli:setup",
+    "doctor": "app_cli:doctor"
+  },
+  "loggerRoots": [
+    "docs_slides"
+  ],
+  "permissions": {
+    "storage": true,
+    "network": false
+  },
+  "provider": {
+    "type": "tool",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "documents"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "max_brief_chars": {
+          "type": "integer",
+          "default": 200000,
+          "minimum": 1000,
+          "maximum": 2000000,
+          "x-meta": {
+            "label": "Brief size cap",
+            "help": "Largest brief, in characters, this app will render. A brief past the cap is refused with the number rather than rendered into a file nothing can open.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
