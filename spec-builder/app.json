@@ -1,0 +1,58 @@
+{
+  "name": "spec-builder",
+  "version": "0.1.0",
+  "displayName": "Spec Builder",
+  "description": "Write a spec — problem, done-when clauses, steps, how done-ness is decided — then compile it into a workflow definition PersonalClaw's own workflow engine runs. This app is a front over that engine, not a second planner: it emits definitions and never executes one, so there is no parallel scheduler, run journal or retry policy to keep in step.",
+  "icon": "ClipboardList",
+  "author": "PersonalClaw",
+  "license": "MIT",
+  "tags": [
+    "tool",
+    "spec",
+    "planning",
+    "workflow"
+  ],
+  "cli": {
+    "setup": "app_cli:setup",
+    "doctor": "app_cli:doctor"
+  },
+  "loggerRoots": [
+    "spec-builder"
+  ],
+  "permissions": {
+    "storage": true,
+    "network": false
+  },
+  "provider": {
+    "type": "tool",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "specs"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "source_repo": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Source repository",
+            "help": "The git repository a spec is about. spec_seed reads one file out of it at a named revision (read-only, via `git show`) so a spec can be grounded in the code rather than in a guess. Empty leaves spec_seed unavailable — there is deliberately no default, because an app that guesses which checkout to read is an app that reads the wrong one."
+          }
+        },
+        "timeout_secs": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 5,
+          "x-meta": {
+            "label": "git Timeout",
+            "help": "Maximum seconds to wait for a `git` command before giving up.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
