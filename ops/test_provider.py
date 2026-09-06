@@ -1082,6 +1082,29 @@ async def test_the_alarm_text_the_queue_and_the_plan_are_all_fenced(
 
 
 @pytest.mark.asyncio
+async def test_no_alarm_text_is_quoted_outside_a_fence(
+    app: OpsProvider, spool: Path, books: Path
+) -> None:
+    """A payload field rendered as if this app had said it is an injection surface."""
+    write_runbook(books, "worker-backlog")
+    marker = "ZZINJECTZZ"
+    write_alarm(spool, "loud.json", alertname=f"Alarm{marker}", instance=f"host{marker}",
+                summary=f"body{marker}")
+    incident_id = (await app.invoke("ops_watch", {})).metadata["opened"][0]
+    await app.invoke("ops_claim", {"incident": incident_id})
+    for tool, args in (
+        ("ops_watch", {}),
+        ("ops_queue", {}),
+        ("ops_incident", {"incident": incident_id}),
+        ("ops_investigate", {"incident": incident_id}),
+    ):
+        output = (await app.invoke(tool, args)).output
+        head, _, fenced = output.partition("<untrusted_content")
+        assert marker in fenced, f"{tool}: the alarm text should be inside the fence"
+        assert marker not in head, f"{tool}: alarm text quoted before the fence opens"
+
+
+@pytest.mark.asyncio
 async def test_an_alarm_carrying_the_close_marker_cannot_break_out_of_its_fence(
     app: OpsProvider, spool: Path
 ) -> None:
