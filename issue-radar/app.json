@@ -1,0 +1,112 @@
+{
+  "name": "issue-radar",
+  "version": "0.1.0",
+  "displayName": "Issue Radar",
+  "description": "Point it at a repository and it tells you which open issues need you first. Issue Radar reads the open issues through your local `gh` or `glab`, suggests labels for each one from the repository's OWN label set — with the phrase that justifies every suggestion — and ranks the queue by what a maintainer actually cares about: unlabelled, unassigned, gone quiet, or carrying a security signal. Whatever you find while digging into an issue is appended to that issue's note log on your machine. Nothing is ever labelled, commented on or closed on the tracker.",
+  "icon": "Radar",
+  "author": "PersonalClaw",
+  "license": "MIT",
+  "tags": [
+    "tool",
+    "issues",
+    "triage",
+    "github",
+    "gitlab"
+  ],
+  "cli": {
+    "setup": "app_cli:setup",
+    "doctor": "app_cli:doctor"
+  },
+  "loggerRoots": [
+    "issue_radar"
+  ],
+  "permissions": {
+    "storage": true,
+    "network": false
+  },
+  "provider": {
+    "type": "tool",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "issues"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "label_source": {
+          "type": "string",
+          "enum": [
+            "model",
+            "plan",
+            "rules"
+          ],
+          "default": "model",
+          "x-meta": {
+            "label": "Where label suggestions come from",
+            "help": "model — one isolated model call per issue, constrained to the repository's own labels. plan — emit one brief per issue for your agent to spawn a real subagent from, each reporting via record_investigation. rules — the conservative deterministic pass only, no model."
+          }
+        },
+        "max_issues": {
+          "type": "integer",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 200,
+          "x-meta": {
+            "label": "Issues per sweep",
+            "help": "How many open issues one sweep reads and triages. A triage_issues call can override it per sweep."
+          }
+        },
+        "stale_days": {
+          "type": "integer",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 3650,
+          "x-meta": {
+            "label": "Stale after",
+            "help": "Days without an update before an issue scores as gone quiet.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        },
+        "concurrency": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 8,
+          "x-meta": {
+            "label": "Concurrent per-issue label calls",
+            "help": "How many issues are labelled at once in the model pass.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        },
+        "model_entry": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Model entry",
+            "help": "Which configured model runs the per-issue label calls. Empty uses the first chat-capable provider from Settings → Models.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        },
+        "timeout_secs": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 5,
+          "maximum": 300,
+          "x-meta": {
+            "label": "Tracker CLI timeout",
+            "help": "Maximum seconds to wait for `gh` or `glab` before giving up.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
