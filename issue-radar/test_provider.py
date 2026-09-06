@@ -874,9 +874,7 @@ def test_an_empty_tracker_is_a_success_not_an_error(monkeypatch, provider) -> No
     assert result.metadata["issues"] == 0
 
 
-def test_plan_mode_hands_the_fan_out_to_the_host_agent(
-    monkeypatch, home, gh_payload
-) -> None:
+def test_plan_mode_hands_the_fan_out_to_the_host_agent(monkeypatch, home, gh_payload) -> None:
     app = create_provider({"label_source": "plan"})
     monkeypatch.setattr(IssueRadarProvider, "_run_json", _fake_cli(gh_payload, ["bug"]))
     result = run(app.invoke("triage_issues", {"repo": "acme/widget"}))
@@ -1041,9 +1039,7 @@ def test_model_suggestions_join_the_rule_suggestions(
     assert sources == {"rules", "model"}
 
 
-def test_no_model_provider_degrades_to_the_rules_and_says_so(
-    monkeypatch, home, gh_payload
-) -> None:
+def test_no_model_provider_degrades_to_the_rules_and_says_so(monkeypatch, home, gh_payload) -> None:
     import personalclaw.sdk.model as sdk_model
 
     monkeypatch.setattr(sdk_model, "get_default_registry", lambda: _FakeRegistry([]))
@@ -1076,9 +1072,7 @@ def test_an_unregistered_model_entry_falls_back(monkeypatch, home) -> None:
     assert app._resolve_entry() == "only"
 
 
-def test_one_failed_model_call_never_loses_the_other_issues(
-    monkeypatch, home, gh_payload
-) -> None:
+def test_one_failed_model_call_never_loses_the_other_issues(monkeypatch, home, gh_payload) -> None:
     import personalclaw.sdk.model as sdk_model
 
     class _Angry(_FakeRegistry):
@@ -1141,7 +1135,11 @@ def test_a_note_on_a_bad_issue_reference_is_refused(provider) -> None:
 
 def test_notes_with_no_issue_lists_what_was_investigated(provider) -> None:
     run(provider.invoke("record_investigation", {"issue": "acme/widget#101", "note": "a"}))
-    run(provider.invoke("record_investigation", {"issue": "gitlab:acme/tools/widget#12", "note": "b"}))
+    run(
+        provider.invoke(
+            "record_investigation", {"issue": "gitlab:acme/tools/widget#12", "note": "b"}
+        )
+    )
     result = run(provider.invoke("issue_notes", {}))
     assert result.success
     assert len(result.metadata["issues"]) == 2
