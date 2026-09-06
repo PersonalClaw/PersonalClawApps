@@ -1,0 +1,99 @@
+{
+  "name": "code-review",
+  "version": "0.1.0",
+  "displayName": "Code Review",
+  "description": "Deep-review a GitHub pull request one file at a time. Fetches the diff with your local `gh`, weights every changed file by blast radius (churn, path criticality, fan-in inside the changed set, add/delete/rename), then reviews each file in isolation — heaviest first, each review seeing only its own diff. Findings are appended to a JSONL log on your machine; nothing is ever posted back to the PR.",
+  "icon": "GitPullRequest",
+  "author": "PersonalClaw",
+  "license": "MIT",
+  "tags": [
+    "tool",
+    "code",
+    "review",
+    "github"
+  ],
+  "cli": {
+    "setup": "app_cli:setup",
+    "doctor": "app_cli:doctor"
+  },
+  "loggerRoots": [
+    "code_review"
+  ],
+  "permissions": {
+    "storage": true,
+    "network": false
+  },
+  "provider": {
+    "type": "tool",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "code"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "fanout": {
+          "type": "string",
+          "enum": [
+            "model",
+            "plan",
+            "static"
+          ],
+          "default": "model",
+          "x-meta": {
+            "label": "Per-file fan-out",
+            "help": "model — one isolated model call per changed file. plan — emit one review brief per file for your agent to spawn a real subagent from, each reporting via record_finding. static — the deterministic diff pass only, no model."
+          }
+        },
+        "concurrency": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 8,
+          "x-meta": {
+            "label": "Concurrent per-file reviews",
+            "help": "How many files are reviewed at once in model fan-out.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        },
+        "max_files": {
+          "type": "integer",
+          "default": 40,
+          "minimum": 1,
+          "maximum": 200,
+          "x-meta": {
+            "label": "Files per review",
+            "help": "Cap the fan-out to the N heaviest files. The rest still appear in the weight table, named as skipped.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        },
+        "model_entry": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Model entry",
+            "help": "Which configured model runs the per-file reviews. Empty uses the first chat-capable provider from Settings → Models.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        },
+        "timeout_secs": {
+          "type": "integer",
+          "default": 20,
+          "x-meta": {
+            "label": "gh Timeout",
+            "help": "Maximum seconds to wait for `gh pr diff` before giving up.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
