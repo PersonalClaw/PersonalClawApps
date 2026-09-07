@@ -50,5 +50,15 @@
         }
       }
     }
-  }
+  },
+  "providers": [
+    {
+      "type": "trigger_source",
+      "implementation": "telegram_runtime.trigger_source:create_provider",
+      "capabilities": [
+        "direct_message",
+        "group_message"
+      ]
+    }
+  ]
 }

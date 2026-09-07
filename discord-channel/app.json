@@ -59,5 +59,15 @@
         }
       }
     }
-  }
+  },
+  "providers": [
+    {
+      "type": "trigger_source",
+      "implementation": "discord_runtime.trigger_source:create_provider",
+      "capabilities": [
+        "direct_message",
+        "guild_message"
+      ]
+    }
+  ]
 }
