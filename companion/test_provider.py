@@ -159,11 +159,18 @@ def test_watch_path_accepts(raw: str, expected: str) -> None:
         "/tmp/**/notes",
         "/tmp/*/notes.md",  # glob outside the last segment
         "/tmp/-oProxyCommand=x/notes",
-        "/tmp/inbox\nrm -rf /",  # forged log line
+        # `id`, and deliberately not a root delete, here and at "/tmp/note;id" below: what
+        # both assert is that the separator — the newline here, the `;` there — is refused,
+        # so the trailing command is interchangeable (cf. "/tmp/note$(id)" at the end of
+        # this list). A literal recursive root `rm` in a file that also holds an execution
+        # sink is a non-overridable DANGEROUS finding for core's scanner (rule
+        # `destructive_root`) and would make this bundle UNINSTALLABLE. The scanner reads
+        # comments too, so don't spell it out here either.
+        "/tmp/inbox\nid",  # forged log line
         "/tmp/inbox\x00.md",
         "/tmp/$HOME/notes",  # a variable, deliberately not expanded
         "/tmp/${HOME}/notes",
-        "/tmp/note;rm -rf /",
+        "/tmp/note;id",  # `id`, not a root delete — see the note above
         "/tmp/note|tee",
         "/tmp/note&background",
         "/tmp/'quoted'",
