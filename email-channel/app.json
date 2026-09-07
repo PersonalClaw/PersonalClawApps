@@ -140,5 +140,14 @@
         }
       }
     }
-  }
+  },
+  "providers": [
+    {
+      "type": "trigger_source",
+      "implementation": "email_runtime.trigger_source:create_provider",
+      "capabilities": [
+        "mail_received"
+      ]
+    }
+  ]
 }

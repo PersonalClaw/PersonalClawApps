@@ -60,6 +60,7 @@ from personalclaw.sdk.channel import (
 from discord_runtime.api import DISCORD_MAX_TEXT, DiscordAPI, HTTPDiscordAPI
 from discord_runtime.delivery import DiscordDelivery, split_message
 from discord_runtime.gateway import DEFAULT_GATEWAY_URL, DiscordGateway
+from discord_runtime.inbound_tap import publish as publish_inbound
 from discord_runtime.settings import (
     ACTIVATION_OFF,
     CRED_DISCORD_BOT_TOKEN,
@@ -262,6 +263,14 @@ class DiscordTransport(ChannelTransportProvider):
                 await self._delivery.deliver_text(cm.channel_id, verdict.canned_reply)
             except Exception:
                 logger.debug("discord: canned reply send failed", exc_info=True)
+
+        # CE-10: hand the message to this bundle's own trigger source, if one is attached.
+        # AFTER the door and gated on `verdict.allowed`, which is the entire security
+        # property: a denied poster gets no session, and must equally get no trigger fire —
+        # otherwise anyone sharing a guild with the bot can arm the owner's automations.
+        # The tap never raises and knows nothing about events; see inbound_tap's docstring.
+        if verdict.allowed:
+            publish_inbound(cm, is_dm=is_dm)
 
     # ── outbound / health ──
 

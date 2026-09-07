@@ -61,6 +61,33 @@ evolve without breaking it:
 **No vendor SDK and no new dependencies:** `imaplib`, `smtplib` and `email` are stdlib.
 The manifest declares no `pythonDependencies`.
 
+## Automations from inbound traffic
+
+This bundle also registers a **`trigger_source`** provider
+(`email_runtime.trigger_source:create_provider`), so a message that arrives here can fire a
+`kind: event` automation. Event names are namespaced by core from the app name:
+
+- `app:email-channel:mail_received` — mail arrived from an allowed correspondent.
+  One event, not two: every mail is a direct message (there is no room concept), so
+  there is no second structural fact to name a second event with.
+
+Author a trigger with pattern `AppEvent` and an `event_glob` matching one of those (or
+`app:email-channel:*` for any of them). The quote-stripped new prose of the mail arrives as
+the payload, **fenced at origin** by core; `meta` carries identifiers only
+(`channel_id`, `sender`, `is_dm`).
+
+Three things this deliberately does *not* do:
+
+- **It observes nothing your trust gate refused.** The publish happens after core's guarded
+  door returns `allowed` — and a `From` address is trivially forged, which is exactly why
+  that decision is core's. A denied sender gets no session and arms no automation.
+- **The event name never comes from the message.** It is chosen in code from the frozen
+  list above by a structural fact, so a sender cannot pick which of your automations runs.
+- **Prose never lands in `meta`.** `meta` is matched, not narrated, and core does not fence
+  it — so neither the `From` display name nor the **`Subject`** is there. That does mean a
+  subject-matching trigger is not expressible today; the limit is recorded rather than
+  traded for the fence.
+
 ## Install
 
 From the App Store, add the apps directory as a **local source**, then install **Email

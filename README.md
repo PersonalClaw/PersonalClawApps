@@ -11,11 +11,12 @@ installs through the same scanner-gated lifecycle as any third-party app.
 ## What's here
 
 **64 app bundles**, one `app.json` each. 60 contribute a capability provider and
-4 contribute none. Two contribute *two* — `companion` (a `tool` and a `trigger`)
-and `slack-channel` (a `channel` and an `inbox`) — so the lists below count
-**providers, not bundles**, and those two are each listed twice. 62 providers
-over 60 bundles, plus the 4 provider-less bundles, is 66 entries over 64
-bundles; that is the whole gap between the headline and the sum of the counts.
+4 contribute none. Five contribute more than one — `companion` (a `tool` and a
+`trigger`) and each of the four channel apps (a `channel` plus a
+`trigger_source`, and `slack-channel` an `inbox` as well) — so the lists below
+count **providers, not bundles**, and those five appear once per provider. 66
+providers over 60 bundles, plus the 4 provider-less bundles, is 70 entries over
+64 bundles; that is the whole gap between the headline and the sum of the counts.
 
 Nobody has to keep that true by hand: the `readme-census` CI job
 (`.github/scripts/check_readme_census.py`) checks the headline, every count
@@ -65,6 +66,14 @@ unlisted.
 - **Triggers** (`trigger`, 2) — `shared-automations` (serve trigger rows from one
   file a team shares — a synced folder, an NFS share, a checked-out repo), plus
   `companion`'s trigger half.
+- **Trigger sources** (`trigger_source`, 4) — the trigger-source half of every
+  channel app: `slack-channel`, `discord-channel`, `telegram-channel`,
+  `email-channel`. Each turns the inbound traffic its transport already receives
+  into `app:<name>:<event>` automation events, so a `kind: event` trigger can fire
+  on a real message. Only traffic the app's trust gate already admitted is
+  observed, and the event name comes from a frozen vocabulary in the app rather
+  than from the message — a sender must not get to pick which of your automations
+  runs.
 - **Sandboxes** (`sandbox`, 1) — `lima-sandbox`, the virtual-machine
   execution-isolation tier (`limactl`, macOS and Linux).
 - **Skills marketplace** (`skills`, 1) — `skills-sh`.

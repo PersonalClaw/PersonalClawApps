@@ -38,6 +38,29 @@ Who may talk (allowlist, pairing) and which groups are tracked are owned by the
 no allowlist of its own. The bot token is a secret in the shared credential store
 under this app's own `TELEGRAM_BOT_TOKEN` key.
 
+## Automations from inbound traffic
+
+This bundle also registers a **`trigger_source`** provider
+(`telegram_runtime.trigger_source:create_provider`), so a message that arrives here can fire a
+`kind: event` automation. Event names are namespaced by core from the app name:
+
+- `app:telegram-channel:direct_message` — a message in a private chat.
+- `app:telegram-channel:group_message` — a message in a tracked group or supergroup.
+
+Author a trigger with pattern `AppEvent` and an `event_glob` matching one of those (or
+`app:telegram-channel:*` for any of them). The message body arrives as the payload,
+**fenced at origin** by core; `meta` carries identifiers only (`channel_id`, `sender`,
+`chat_type`, `is_dm`).
+
+Three things this deliberately does *not* do:
+
+- **It observes nothing your trust gate refused.** The publish happens after core's guarded
+  door returns `allowed`. A denied sender gets no session and arms no automation.
+- **The event name never comes from the message.** It is chosen in code from the frozen
+  list above by a structural fact, so a sender cannot pick which of your automations runs.
+- **Prose never lands in `meta`.** `meta` is matched, not narrated, and core does not fence
+  it — so a sender's chosen display name is not there.
+
 ## Install
 
 From the App Store, add the `apps/` directory as a **local source**, then install

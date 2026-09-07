@@ -83,6 +83,48 @@ def _get_skills_loader() -> SkillsLoader:
     return _skills_loader
 
 
+def publish_inbound_for_trigger_source(
+    *, channel: str, text: str, sender_id: str, thread_ts: str, msg_ts: str
+) -> int:
+    """Normalize one ADMITTED message and hand it to this bundle's inbound tap (CE-10).
+
+    Lives here rather than in ``inbound_tap`` so the tap stays vendor-neutral: it moves a
+    :class:`~personalclaw.sdk.channel.ChannelMessage` and knows nothing about Slack's event
+    shape. Called from exactly one place — see the comment at that call site for why it is
+    that place and not an earlier one.
+
+    ``is_dm`` is derived from the channel id's ``D`` prefix, which is Slack's own DM signal
+    and the same test ``handler.py``'s guarded-door call uses. STRUCTURAL on purpose: the
+    trigger source picks its event name from this, so it must not be readable out of the
+    message body.
+
+    Never raises. The caller is about to start a turn, and a broken source must not cost the
+    user their conversation. Returns the observer count the tap reported so a caller can log
+    honestly; today nothing reads it, which is why there is no log line here rather than a
+    misleading one.
+    """
+    try:
+        from personalclaw.sdk.channel import ChannelMessage
+
+        from slack_runtime.inbound_tap import publish
+
+        message = ChannelMessage(
+            channel_id=channel,
+            text=text,
+            sender=sender_id,
+            thread_id=thread_ts or msg_ts,
+            message_id=msg_ts,
+            # Deliberately EMPTY. The trigger source reads no metadata, and a display name
+            # here would be attacker-chosen prose sitting one refactor away from an unfenced
+            # `meta` field. See trigger_source.py's rule 3.
+            metadata={},
+        )
+        return publish(message, is_dm=channel.startswith("D"))
+    except Exception:  # noqa: BLE001 - see the docstring
+        logger.debug("slack: trigger-source publish failed", exc_info=True)
+        return 0
+
+
 # Suppress noisy Slack SDK WebSocket reconnect errors — these are normal
 # idle connection drops that the SDK handles automatically.
 # WARNING lets ERROR through (recv failures, reconnect failures) while
@@ -1655,6 +1697,22 @@ async def _route_message(
 
     logger.info(
         "Message from %s in %s (activation=%s): %s", sender_id, channel, activation, text[:80]
+    )
+
+    # CE-10: hand the message to this bundle's own trigger source, if one is attached.
+    # HERE and not earlier: everything above this line is the gate — the allowlist /
+    # open-channel / tracked-channel decision, the channel activation mode, and the dedup
+    # cache. A message that reaches this point is one this app has admitted and is about to
+    # answer, so it is exactly the traffic a user's automation should see; anything refused
+    # above arms nothing. Published BEFORE the busy-session queue check on purpose: a queued
+    # message is still an admitted message, and whether a session happened to be busy is not
+    # something the user's trigger should depend on.
+    publish_inbound_for_trigger_source(
+        channel=channel,
+        text=clean_text,
+        sender_id=sender_id,
+        thread_ts=thread_ts,
+        msg_ts=msg_ts,
     )
 
     # ── Queue check: if session is busy, enqueue instead of blocking ──

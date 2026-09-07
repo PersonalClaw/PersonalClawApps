@@ -150,6 +150,14 @@
         "reactions",
         "history"
       ]
+    },
+    {
+      "type": "trigger_source",
+      "implementation": "slack_runtime.trigger_source:create_provider",
+      "capabilities": [
+        "direct_message",
+        "channel_message"
+      ]
     }
   ]
 }

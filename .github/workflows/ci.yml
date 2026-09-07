@@ -316,6 +316,26 @@ jobs:
       - name: Check settings-schema advanced/required posture
         run: python .github/scripts/check_settings_schema_posture.py
 
+  trigger-source-adoption:
+    # Cross-app rail (CE-10): every app that declares a `channel` transport must also declare
+    # a `trigger_source` provider, MEASURED over the channel apps DISCOVERED rather than
+    # against a remembered count — so a new channel app arriving without one reds too, not
+    # just an existing one losing its declaration. Section B of the same script holds the
+    # other half of CE-10: no app reaches the event bus except through core's registered
+    # trigger_source handler. Lives here with the other cross-app sweeps for the same reason
+    # they do: the tests job runs pytest PER bundle, so no single bundle can see the
+    # denominator. Each app's own tests/test_trigger_source.py drives its source to a real
+    # fire; this job measures the ratio. Committed script, not an inline heredoc, so a
+    # contributor runs the EXACT same check locally. Pure stdlib — no core install.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Every channel app declares a trigger source, and none hand-rolls glue
+        run: python .github/scripts/check_trigger_source_adoption.py
+
   readme-census:
     # The repo-root README's app census — headline bundle count, per-category counts,
     # and the named bundles — must match the tree. This is the one fact in the repo
