@@ -58,6 +58,29 @@ store under this app's own `DISCORD_BOT_TOKEN` key. The **application id** is *n
 secret (Discord prints it publicly and it appears in every invite URL), so it lives
 in the app's own settings where you can see and edit it.
 
+## Automations from inbound traffic
+
+This bundle also registers a **`trigger_source`** provider
+(`discord_runtime.trigger_source:create_provider`), so a message that arrives here can fire a
+`kind: event` automation. Event names are namespaced by core from the app name:
+
+- `app:discord-channel:direct_message` — a message in a DM with the bot.
+- `app:discord-channel:guild_message` — a message in a tracked guild channel or thread.
+
+Author a trigger with pattern `AppEvent` and an `event_glob` matching one of those (or
+`app:discord-channel:*` for any of them). The message body arrives as the payload,
+**fenced at origin** by core; `meta` carries identifiers only (`channel_id`, `sender`,
+`guild_id`, `is_dm`).
+
+Three things this deliberately does *not* do:
+
+- **It observes nothing your trust gate refused.** The publish happens after core's guarded
+  door returns `allowed`. A denied sender gets no session and arms no automation.
+- **The event name never comes from the message.** It is chosen in code from the frozen
+  list above by a structural fact, so a sender cannot pick which of your automations runs.
+- **Prose never lands in `meta`.** `meta` is matched, not narrated, and core does not fence
+  it — so an author's chosen `global_name` is not there.
+
 ## Install
 
 From the App Store, add the `apps/` directory as a **local source**, then install
