@@ -34,7 +34,8 @@
           "default": "",
           "x-meta": {
             "label": "API Key",
-            "help": "Optional bearer token for authentication."
+            "help": "Optional bearer token for authentication.",
+            "sensitive": true
           }
         },
         "tool_filter": {
