@@ -42,15 +42,63 @@ _MODELS = [
     SttModel(name="turbo", size_mb=1600, description="Optimized large model (recommended)"),
 ]
 
-_CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "huggingface" / "hub"
+
+def _models_dir() -> Path:
+    """Where downloaded weights are WRITTEN — rooted at ``PERSONALCLAW_HOME`` so an
+    isolated home is actually isolated. Same one-line idiom as the sibling model bundles
+    (sentence-transformers, piper-tts, voice-clone-tts); this used to root at
+    ``XDG_CACHE_HOME``/``~/.cache``, which no PersonalClaw home can reach."""
+    home = os.environ.get("PERSONALCLAW_HOME", str(Path.home() / ".personalclaw"))
+    return Path(home) / "models" / "stt"
+
+
+def _legacy_dir() -> Path:
+    """Where weights landed BEFORE they were rooted under ``PERSONALCLAW_HOME``: the
+    machine-wide HuggingFace hub cache. Read-through only (see :func:`_weights_root`) —
+    an existing install keeps working with zero downloads, and nothing is ever copied out
+    of here. A multi-GB migration copy at startup is its own outage, and looks like a hang
+    rather than an error."""
+    return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "huggingface" / "hub"
+
+
+def _repo_dir(root: Path, model_name: str) -> Path:
+    """HuggingFace's on-disk cache layout for a repo id — ``models--{org}--{repo}`` —
+    rebuilt UNDERNEATH *root*. ctranslate2 resolves a snapshot through ``huggingface_hub``,
+    so the layout is the contract but the root is ours to pick; mirrors what
+    ``sentence-transformers`` already does with its own ``models--…`` dirs."""
+    repo_id = f"Systran/faster-whisper-{model_name}"
+    return root / ("models--" + repo_id.replace("/", "--"))
+
+
+def _has_weights(d: Path) -> bool:
+    """True only if a snapshot dir holds real weights. A bare ``models--…`` shell is what
+    an interrupted download leaves behind, and accepting it is how a legacy fallback
+    quietly resolves to nothing."""
+    if not d.is_dir():
+        return False
+    return any(d.rglob("model.bin")) or any(d.rglob("*.safetensors"))
+
+
+def _weights_root(model_name: str) -> Path:
+    """The root handed to ``huggingface_hub`` when LOADING *model_name*: the new
+    ``PERSONALCLAW_HOME`` one, unless the weights live only in the legacy cache — then read
+    straight through it so an upgrade fetches nothing."""
+    new = _models_dir()
+    if _has_weights(_repo_dir(new, model_name)):
+        return new
+    if _has_weights(_repo_dir(_legacy_dir(), model_name)):
+        return _legacy_dir()
+    return new
 
 
 def _model_downloaded(model_name: str) -> bool:
-    """Check if a faster-whisper model has been downloaded (from HuggingFace cache)."""
-    repo_id = f"Systran/faster-whisper-{model_name}"
-    safe_name = repo_id.replace("/", "--")
-    model_dir = _CACHE_DIR / f"models--{safe_name}"
-    return model_dir.is_dir()
+    """Whether usable weights exist in EITHER root. Accepting the legacy cache is what
+    keeps an upgrade free: without it every already-downloaded model reads as missing and
+    the Settings UI invites the user to re-fetch gigabytes."""
+    return (
+        _has_weights(_repo_dir(_models_dir(), model_name))
+        or _has_weights(_repo_dir(_legacy_dir(), model_name))
+    )
 
 
 class FasterWhisperProvider(SttProvider, LocalModelProvider):
@@ -67,9 +115,14 @@ class FasterWhisperProvider(SttProvider, LocalModelProvider):
         return True
 
     def cache_dir(self) -> str:
-        """Where downloaded weights land (HuggingFace hub cache) — lets the core
-        download UI track byte progress without knowing this backend's layout."""
-        return str(_CACHE_DIR)
+        """Where downloaded weights land — lets the core download UI track byte progress
+        without knowing this backend's layout.
+
+        ALWAYS the new root, never the legacy one, because every download writes here
+        (see :meth:`download_model`) even when the legacy cache already holds a copy.
+        Returning the legacy dir whenever it happened to hold weights would aim the
+        progress bar at a tree that never grows."""
+        return str(_models_dir())
 
     async def is_available(self) -> bool:
         try:
@@ -100,7 +153,14 @@ class FasterWhisperProvider(SttProvider, LocalModelProvider):
         def _download():
             try:
                 from faster_whisper import WhisperModel
-                WhisperModel(model_name, device="cpu", compute_type="int8")
+                # ``download_root`` becomes huggingface_hub's ``cache_dir``, which rebuilds
+                # the models--<org>--<repo> layout underneath it. A deliberate download
+                # always fills the NEW root — never the legacy one — so cache_dir()'s byte
+                # progress tracks the tree that is actually growing.
+                root = _models_dir()
+                root.mkdir(parents=True, exist_ok=True)
+                WhisperModel(model_name, device="cpu", compute_type="int8",
+                             download_root=str(root))
                 return True
             except Exception:
                 return False
@@ -113,13 +173,16 @@ class FasterWhisperProvider(SttProvider, LocalModelProvider):
 
     async def delete_model(self, model_name: str) -> bool:
         import shutil
-        repo_id = f"Systran/faster-whisper-{model_name}"
-        safe_name = repo_id.replace("/", "--")
-        model_dir = _CACHE_DIR / f"models--{safe_name}"
-        if model_dir.is_dir():
-            shutil.rmtree(model_dir)
-            return True
-        return False
+        # BOTH roots, for the same reason sentence-transformers removes both of its
+        # layouts: _model_downloaded() reads through to the legacy cache, so leaving that
+        # copy behind would keep the model reporting as "downloaded" right after a delete.
+        removed = False
+        for root in (_models_dir(), _legacy_dir()):
+            model_dir = _repo_dir(root, model_name)
+            if model_dir.is_dir():
+                shutil.rmtree(model_dir, ignore_errors=True)
+                removed = True
+        return removed
 
     async def transcribe(self, audio_path: str, model: str = "", language: str = "") -> str | None:
         # Flat path: run the detailed transcription and return just its text, so there is
@@ -169,7 +232,11 @@ class FasterWhisperProvider(SttProvider, LocalModelProvider):
 
         def _run() -> "TranscriptResult | None":
             try:
-                m = WhisperModel(model_name, device="cpu", compute_type="int8")
+                # Read-through: the legacy root is passed only when the weights live
+                # ONLY there, so an upgraded install loads what it already has instead of
+                # re-fetching it. Nothing is copied.
+                m = WhisperModel(model_name, device="cpu", compute_type="int8",
+                                 download_root=str(_weights_root(model_name)))
                 kwargs: dict = {"language": lang, "word_timestamps": True, "vad_filter": True}
                 if bias_prompt:
                     # Prefer ``hotwords`` (the purpose-built biasing lever) when the
