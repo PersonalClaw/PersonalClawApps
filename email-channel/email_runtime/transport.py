@@ -73,6 +73,7 @@ from personalclaw.sdk.util import app_data_dir
 from email_runtime.delivery import EmailDelivery, ThreadStore
 from email_runtime.imap_client import Imap4Client, ImapClient, ImapError
 from email_runtime.imap_client import probe_login as imap_probe
+from email_runtime.inbound_tap import publish as publish_inbound
 from email_runtime.mime import parse_inbound, strip_quoted_reply
 from email_runtime.settings import (
     ACTIVATION_OFF,
@@ -478,6 +479,16 @@ class EmailTransport(ChannelTransportProvider):
                 )
             except Exception:
                 logger.debug("email: canned reply send failed", exc_info=True)
+
+        # CE-10: hand the mail to this bundle's own trigger source, if one is attached.
+        # AFTER the door and gated on `verdict.allowed`, which is the entire security
+        # property: a `From` address is trivially forged, so only core's allowlist decision
+        # may admit a sender — and a denied sender must arm no automation either. The
+        # quote-STRIPPED `text` is published rather than `cm.text`, so a reply's event
+        # carries its new prose and not the history of our own previous words. The tap never
+        # raises and knows nothing about events; see inbound_tap's docstring.
+        if verdict.allowed:
+            publish_inbound(cm, text=text)
 
     async def _try_pairing(self, cm: ChannelMessage, text: str, settings: EmailSettings) -> bool:
         """Redeem a pairing code found in *text*. Returns whether pairing happened.

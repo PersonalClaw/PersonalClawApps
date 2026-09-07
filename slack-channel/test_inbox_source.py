@@ -98,14 +98,22 @@ def _source(**kw):
 
 def test_manifest_declares_at_least_two_providers():
     """CE-8's core claim: a channel app that only registers a channel leaves its
-    messages outside the generic inbox. The manifest must declare BOTH."""
+    messages outside the generic inbox. The manifest must declare BOTH.
+
+    Asserted as a SUBSET, not as set equality. The original spelling was
+    ``types == {"channel", "inbox"}``, which froze the vendor-completeness checklist at the
+    bar available when CE-8 shipped — so the next seam this app adopted turned CE-8's own
+    test red for succeeding. It did, at CE-10 (``trigger_source``). What this test owns is
+    that the inbox seam is declared and points at THIS module; which other seams the bundle
+    has grown is the completeness rail's business, not this file's.
+    """
     manifest = json.loads((_APP_DIR / "app.json").read_text(encoding="utf-8"))
     declared = ([manifest["provider"]] if manifest.get("provider") else []) + manifest.get(
         "providers", []
     )
     assert len(declared) >= 2, declared
     types = {p["type"] for p in declared}
-    assert types == {"channel", "inbox"}, types
+    assert {"channel", "inbox"} <= types, types
     inbox = next(p for p in declared if p["type"] == "inbox")
     assert inbox["implementation"] == "slack_runtime.inbox_source:create_provider"
 

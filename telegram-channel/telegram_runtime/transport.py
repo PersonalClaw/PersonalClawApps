@@ -51,6 +51,7 @@ from personalclaw.sdk.channel import (
 # and fail. Binding them here, during exec, captures them for the process life.
 from telegram_runtime.api import DEFAULT_POLL_TIMEOUT, HTTPTelegramAPI, TelegramAPI, TelegramAPIError
 from telegram_runtime.delivery import TelegramDelivery
+from telegram_runtime.inbound_tap import publish as publish_inbound
 from telegram_runtime.settings import (
     ACTIVATION_OFF,
     CRED_TELEGRAM_BOT_TOKEN,
@@ -271,6 +272,14 @@ class TelegramTransport(ChannelTransportProvider):
                 await self._delivery.deliver_text(cm.channel_id, verdict.canned_reply)
             except Exception:
                 logger.debug("telegram: canned reply send failed", exc_info=True)
+
+        # CE-10: hand the message to this bundle's own trigger source, if one is attached.
+        # AFTER the door and gated on `verdict.allowed`, which is the entire security
+        # property: a denied stranger gets no session, and must equally get no trigger
+        # fire — otherwise anyone who can reach the bot can arm the owner's automations.
+        # The tap never raises and knows nothing about events; see inbound_tap's docstring.
+        if verdict.allowed:
+            publish_inbound(cm, is_dm=is_dm)
 
     async def send(self, message: OutboundMessage) -> bool | SendRefused:
         """Transmit one outbound message. ``True`` delivered, ``False`` failed, or a
