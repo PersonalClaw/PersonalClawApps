@@ -181,7 +181,12 @@ def test_accepts_every_pr_reference_shape(raw: str) -> None:
     "widget#42",
     "acme/widget#notanumber",
     "acme/../../etc/passwd#1",
-    "acme/widget#42; rm -rf /",
+    # `id`, and deliberately not a root delete: what this case asserts is that the `;` is
+    # refused, so the trailing command is interchangeable. A literal recursive root `rm`
+    # in a file that also holds an execution sink is a non-overridable DANGEROUS finding
+    # for core's scanner (rule `destructive_root`) and would make this bundle
+    # UNINSTALLABLE. The scanner reads comments too, so don't spell it out here either.
+    "acme/widget#42; id",
     "--repo=evil/repo#1",
     "https://evil.example.com/acme/widget/pull/42",
     "acme/widget#42\nacme/other#1",
@@ -511,7 +516,11 @@ async def test_a_bad_pr_reference_never_reaches_gh(monkeypatch, provider) -> Non
     async def _explode(self, ref):  # pragma: no cover — must not be called
         raise AssertionError("gh was invoked with an unvalidated reference")
     monkeypatch.setattr(CodeReviewProvider, "_gh_diff", _explode)
-    result = await provider.invoke("review_pr", {"pr": "acme/widget#42; rm -rf /"})
+    # `id`, and deliberately not a root delete: the assertion is that a reference carrying
+    # a `;` is refused before `gh` is reached, not what follows the `;`. See the note on
+    # the refusal list above — a literal recursive root `rm` here would make this bundle
+    # UNINSTALLABLE under core's scanner (rule `destructive_root`).
+    result = await provider.invoke("review_pr", {"pr": "acme/widget#42; id"})
     assert not result.success
     assert "not a PR reference" in result.error
 
