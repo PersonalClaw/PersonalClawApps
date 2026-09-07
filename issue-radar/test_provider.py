@@ -242,7 +242,12 @@ def test_a_bare_path_is_read_as_github_not_guessed() -> None:
         "",
         "   ",
         "acme",
-        "acme/widget; rm -rf /",
+        # `id`, and deliberately not a root delete: what this case asserts is that the `;`
+        # is refused, so the trailing command is interchangeable. A literal recursive root
+        # `rm` in a file that also holds an execution sink is a non-overridable DANGEROUS
+        # finding for core's scanner (rule `destructive_root`) and would make this bundle
+        # UNINSTALLABLE. The scanner reads comments too, so don't spell it out here either.
+        "acme/widget; id",
         "acme/widget --repo other/repo",
         "../../etc/passwd",
         "acme/../widget",
@@ -915,7 +920,11 @@ def test_a_bad_repository_never_reaches_a_tracker_cli(monkeypatch, provider) -> 
         raise AssertionError("a tracker CLI was invoked with an unvalidated reference")
 
     monkeypatch.setattr(IssueRadarProvider, "_run_json", _explode)
-    result = run(provider.invoke("triage_issues", {"repo": "acme/widget; rm -rf /"}))
+    # `id`, and deliberately not a root delete: the assertion is that a reference carrying
+    # a `;` is refused before any tracker CLI is reached, not what follows the `;`. See the
+    # note on the refusal list above — a literal recursive root `rm` here would make this
+    # bundle UNINSTALLABLE under core's scanner (rule `destructive_root`).
+    result = run(provider.invoke("triage_issues", {"repo": "acme/widget; id"}))
     assert not result.success
     assert "not a repository reference" in result.error
 
