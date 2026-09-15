@@ -2,7 +2,7 @@
   "name": "spec-builder",
   "version": "0.1.0",
   "displayName": "Spec Builder",
-  "description": "Write a spec — problem, done-when clauses, steps, how done-ness is decided — then compile it into a workflow definition PersonalClaw's own workflow engine runs. The spec is the artifact you review and argue with; the compiled definition is what executes, and this app never runs one.",
+  "description": "Write a spec, then compile it into a workflow definition PersonalClaw's engine runs. The spec spells out the problem, done-when clauses, steps, and how done-ness is decided. It is the artifact you review and argue with; the compiled definition is what executes, and this app never runs one.",
   "icon": "ClipboardList",
   "author": "PersonalClaw",
   "license": "MIT",

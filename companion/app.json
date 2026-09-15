@@ -2,7 +2,7 @@
   "name": "companion",
   "version": "0.1.0",
   "displayName": "Companion",
-  "description": "An opt-in day companion: reminders that actually go off, a watchlist that speaks up when a folder really changes, and a day plan you can ask for — three surfaces, all off out of the box. Every automation it contributes only ever raises a notification, and turning a surface off, disabling the app or uninstalling it removes every trigger it contributed.",
+  "description": "An opt-in day companion: three surfaces, all off out of the box. Reminders that actually go off, a watchlist that speaks up when a folder really changes, and a day plan you can ask for. Every automation it contributes only ever raises a notification, and turning a surface off, disabling the app or uninstalling it removes every trigger it contributed.",
   "icon": "Sunrise",
   "author": "PersonalClaw",
   "license": "MIT",

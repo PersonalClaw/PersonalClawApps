@@ -21,6 +21,10 @@ PersonalClaw gateway via the platform's typed provider contracts. Full contract:
 - **Tests without vendor SDKs:** the `tests` job installs core but **no** vendor
   SDKs — model apps stub theirs. A test importing a real vendor SDK fails here.
   Declare genuine runtime deps in `dependencies.pythonDependencies`.
+- **Store-card copy:** `description` must end in a full stop and its **lead sentence
+  must fit 90 characters** — the card clamps to two lines, so a longer lead is shown
+  cut mid-phrase. Put the detail in later sentences (the detail panel and search read
+  the whole field). The `store-card-copy` job enforces it.
 
 ## Per-app deliverables
 

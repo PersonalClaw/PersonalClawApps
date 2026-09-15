@@ -2,7 +2,7 @@
   "name": "web-tools",
   "version": "0.1.0",
   "displayName": "Native Tools (Web)",
-  "description": "General web primitives the agent can call \u2014 web_search (over the Search entity you bind in Settings \u2192 Search), web_fetch (SSRF-guarded page fetch + extraction), and web_extract (structured extraction). No key of its own \u2014 it uses the bound search provider's.",
+  "description": "General web primitives the agent can call: web_search, web_fetch, and web_extract. web_search runs over the Search entity you bind in Settings \u2192 Search, web_fetch is an SSRF-guarded page fetch + extraction, and web_extract does structured extraction. No key of its own \u2014 it uses the bound search provider's.",
   "icon": "Globe",
   "author": "PersonalClaw",
   "tags": [
