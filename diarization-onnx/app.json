@@ -2,7 +2,7 @@
   "name": "diarization-onnx",
   "version": "0.1.0",
   "displayName": "Diarization (ONNX)",
-  "description": "Non-gated speaker diarization (\"who spoke when\") via a sherpa-onnx segmentation + speaker-embedding pipeline. Install-and-go \u2014 no HuggingFace token. Provides a model for the diarization use-case; bind it in Settings \u2192 Models.",
+  "description": "Non-gated speaker diarization (\"who spoke when\") \u2014 no HuggingFace token. Runs a sherpa-onnx segmentation + speaker-embedding pipeline, install-and-go. Provides a model for the diarization use-case; bind it in Settings \u2192 Models.",
   "icon": "Users",
   "author": "PersonalClaw",
   "tags": [

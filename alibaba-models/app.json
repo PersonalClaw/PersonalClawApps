@@ -2,7 +2,7 @@
   "name": "alibaba-models",
   "version": "0.1.0",
   "displayName": "Alibaba Model Studio",
-  "description": "Alibaba Cloud Model Studio (DashScope) \u2014 Qwen chat + embedding, image generation (Qwen-Image, Wan), and more. Select your regional endpoint.",
+  "description": "Alibaba Cloud Model Studio (DashScope) \u2014 Qwen chat and embedding models. Image generation too (Qwen-Image, Wan), and more. Select your regional endpoint.",
   "icon": "Cloud",
   "author": "PersonalClaw",
   "tags": [

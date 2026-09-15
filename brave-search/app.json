@@ -2,7 +2,7 @@
   "name": "brave-search",
   "version": "0.1.0",
   "displayName": "Brave Search",
-  "description": "Cheap, broad web search: ranked links with descriptions + extra snippets and a recency filter. Links-only (no answer or page content \u2014 web_fetch a result to read it). API key from search.brave.com.",
+  "description": "Cheap, broad web search: ranked links with descriptions and a recency filter. Extra snippets come with each result. Links-only (no answer or page content \u2014 web_fetch a result to read it). API key from search.brave.com.",
   "icon": "Search",
   "author": "PersonalClaw",
   "tags": [
