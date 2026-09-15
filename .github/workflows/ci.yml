@@ -2,7 +2,7 @@
 # WITHOUT installing vendor SDKs (the apps stub them; a test needing a real SDK
 # fails loudly here, which is correct). Jobs per CI-RELEASE-ENGINEERING §"apps repo":
 # manifest-validate · tests · quality-declarations · boundary · live-writes-posture ·
-# prompt-cache-posture · settings-schema-posture · readme-census · dco (PR-only).
+# prompt-cache-posture · settings-schema-posture · readme-census · store-card-copy · dco (PR-only).
 name: CI
 
 on:
@@ -361,6 +361,24 @@ jobs:
           python-version: "3.12"
       - name: README census matches the tree
         run: python .github/scripts/check_readme_census.py
+
+  store-card-copy:
+    # Cross-app rail: `description` is documented as "One or two sentences shown on the
+    # Store card", and the card renders it in a `line-clamp-2` paragraph — so a lead
+    # sentence longer than two lines is shown to the user as a fragment cut mid-phrase.
+    # The budget in the script is CALIBRATED against the real rendered grid (see its
+    # docstring); it is a character proxy for a pixel constraint, not a style preference.
+    # Rides here with the other cross-app sweeps for the same reason they do: the `tests`
+    # job runs pytest per bundle, so a check over the whole catalogue has no other home.
+    # Pure stdlib — no core install needed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Every lead sentence fits the Store card
+        run: python .github/scripts/check_store_card_copy.py
 
   dco:
     # Every commit in a PR must carry a Signed-off-by trailer (DCO — plan 37),

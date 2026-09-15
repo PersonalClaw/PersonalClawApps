@@ -2,7 +2,7 @@
   "name": "bedrock-models",
   "version": "0.1.0",
   "displayName": "Amazon Bedrock",
-  "description": "Amazon Bedrock \u2014 chat (Converse API), embedding (Titan/Cohere), image generation (Nova Canvas), video generation (Nova Reel), and speech-to-text. One instance per AWS profile/region; authentication uses your AWS credential chain \u2014 no key is stored by PersonalClaw.",
+  "description": "Amazon Bedrock models, authenticated with your own AWS credential chain. No key is stored by PersonalClaw. Chat (Converse API), embedding (Titan/Cohere), image generation (Nova Canvas), video generation (Nova Reel), and speech-to-text. One instance per AWS profile/region.",
   "icon": "Cloud",
   "author": "PersonalClaw",
   "tags": [

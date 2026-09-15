@@ -2,7 +2,7 @@
   "name": "exa-search",
   "version": "0.1.0",
   "displayName": "Exa",
-  "description": "Neural/semantic web search: embeddings-ranked results with relevant highlights and extracted content, plus single-URL content retrieval. Good for discovering non-obvious sources. API key from exa.ai.",
+  "description": "Neural/semantic web search: embeddings-ranked results with relevant highlights. Also returns extracted content, plus single-URL content retrieval. Good for discovering non-obvious sources. API key from exa.ai.",
   "icon": "Search",
   "author": "PersonalClaw",
   "tags": [

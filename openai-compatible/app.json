@@ -2,7 +2,7 @@
   "name": "openai-compatible",
   "version": "0.1.0",
   "displayName": "OpenAI-Compatible",
-  "description": "Any OpenAI-compatible Chat Completions endpoint (self-hosted, proxy, or an unlisted cloud). Supply the base URL + API key.",
+  "description": "Any OpenAI-compatible Chat Completions endpoint. Self-hosted, a proxy, or an unlisted cloud. Supply the base URL + API key.",
   "icon": "Brain",
   "author": "PersonalClaw",
   "tags": [
