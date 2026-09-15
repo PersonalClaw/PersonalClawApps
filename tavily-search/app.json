@@ -2,7 +2,7 @@
   "name": "tavily-search",
   "version": "0.1.0",
   "displayName": "Tavily",
-  "description": "Agent-optimized web search: a synthesized answer, scored results, optional extracted page content, and single-URL extraction. Best out-of-box quality; free-tier API key.",
+  "description": "Agent-optimized web search: a synthesized answer plus scored results. Optional extracted page content and single-URL extraction too. Best out-of-box quality; free-tier API key.",
   "icon": "Search",
   "author": "PersonalClaw",
   "tags": [

@@ -119,6 +119,15 @@ Unknown fields are preserved for forward compatibility, never fatal.
 }
 ```
 
+The Store card renders `description` in a two-line clamp and appends ` · by <author>`
+inside it, so **the lead sentence is all the grid shows** — the rest is still in the DOM
+for search and renders in full in the detail panel, but nobody reads it on the card. Lead
+with a sentence that stands alone in **90 characters or fewer** and put the detail in the
+sentences after it; end the description with a full stop. A longer lead is cut mid-phrase
+on the card, which reads as a rendering bug rather than a summary. CI's `store-card-copy`
+job enforces both (`.github/scripts/check_store_card_copy.py` — the 90 is measured against
+the real grid, not a style preference).
+
 ### Recommended metadata
 
 ```json

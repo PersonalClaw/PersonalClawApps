@@ -2,7 +2,7 @@
   "name": "issue-radar",
   "version": "0.1.0",
   "displayName": "Issue Radar",
-  "description": "Triages a repository's open issues through your local gh or glab: suggests labels from the repository's own label set and ranks the queue by which issues need a maintainer first. Investigation notes stay on your machine, and nothing is ever labeled, commented on or closed on the tracker.",
+  "description": "Triages a repository's open issues through your local gh or glab. It suggests labels from the repository's own label set and ranks the queue by which issues need a maintainer first. Investigation notes stay on your machine, and nothing is ever labeled, commented on or closed on the tracker.",
   "icon": "Radar",
   "author": "PersonalClaw",
   "license": "MIT",

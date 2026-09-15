@@ -2,7 +2,7 @@
   "name": "google-models",
   "version": "0.1.0",
   "displayName": "Google Gemini",
-  "description": "Google Gemini models \u2014 chat, embedding, image generation (Imagen / gemini-image), video generation (Veo), and text-to-speech. Bring your own Gemini API key; one instance serves every use case.",
+  "description": "Google Gemini models \u2014 bring your own Gemini API key. Chat, embedding, image generation (Imagen / gemini-image), video generation (Veo), and text-to-speech. One instance serves every use case.",
   "icon": "Sparkle",
   "author": "PersonalClaw",
   "tags": [

@@ -2,7 +2,7 @@
   "name": "s3-sync",
   "version": "0.1.0",
   "displayName": "S3 Sync",
-  "description": "Sync PersonalClaw state between your machines through an S3-compatible object store you own — AWS S3, a self-hosted MinIO, a NAS gateway, or any store that speaks the S3 API. Requests are signed with AWS Signature V4 and travel through PersonalClaw's guarded egress chokepoint, pinned to the one endpoint you configure. Shards are encrypted end-to-end by default (the store never sees plaintext), and secrets are excluded upstream so they never reach it.",
+  "description": "Sync PersonalClaw state between your machines through an S3-compatible store. Use AWS S3, a self-hosted MinIO, a NAS gateway, or any object store that speaks the S3 API — one you own. Requests are signed with AWS Signature V4 and travel through PersonalClaw's guarded egress chokepoint, pinned to the one endpoint you configure. Shards are encrypted end-to-end by default (the store never sees plaintext), and secrets are excluded upstream so they never reach it.",
   "icon": "Database",
   "author": "PersonalClaw",
   "tags": [
