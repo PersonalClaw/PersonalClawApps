@@ -1,0 +1,83 @@
+{
+  "name": "git-repo",
+  "version": "0.1.0",
+  "displayName": "Git Repository",
+  "description": "Index the CONTENT of a git repository you own into your knowledge library. Source code AND docs, from a local clone or a github.com URL; each file becomes a searchable knowledge item, and a re-poll after a new commit ingests only the changed files (commit-cursor), never the whole tree. Remote fetches route through the core network chokepoint; it owns no socket.",
+  "icon": "GitBranch",
+  "author": "PersonalClaw",
+  "license": "MIT",
+  "tags": [
+    "knowledge",
+    "git",
+    "source",
+    "code",
+    "docs"
+  ],
+  "provider": {
+    "type": "knowledge",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "source"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Repository",
+            "help": "The git repository to index: an absolute path to a local working clone on this machine, or an https://github.com/<owner>/<repo> URL. Leave empty to stay idle until set."
+          }
+        },
+        "ref": {
+          "type": "string",
+          "default": "HEAD",
+          "x-meta": {
+            "label": "Ref",
+            "help": "The branch, tag, or commit to index. Defaults to HEAD (the repository's current head)."
+          }
+        },
+        "include": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Include globs",
+            "help": "Comma-separated filename globs to index (e.g. *.py, *.md). Empty means the built-in default, which covers common source-code AND doc extensions."
+          }
+        },
+        "exclude": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Exclude globs",
+            "help": "Comma-separated globs to skip, matched on the path or basename (e.g. *.min.js, tests/*). VCS/dependency/build directories are always skipped."
+          }
+        },
+        "max_files": {
+          "type": "integer",
+          "default": 5000,
+          "x-meta": {
+            "label": "Max files",
+            "help": "Hard ceiling on files ingested per poll (1–5000). A huge tree degrades to a bounded ingest rather than a long walk."
+          }
+        },
+        "token_credential": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Access token credential",
+            "help": "For a PRIVATE github.com repository: the name of a credential (in Settings > Credentials) holding a personal access token. Sent in an Authorization header, never in a URL. Leave empty for a public repo or a local clone.",
+            "sensitive": true
+          }
+        }
+      }
+    }
+  },
+  "permissions": {
+    "network": true
+  },
+  "quality": {
+    "tested": true
+  }
+}
