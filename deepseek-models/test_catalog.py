@@ -1,13 +1,14 @@
 """Catalog tests for the deepseek app — live /v1/models discovery only (no hardcoded
-fallback catalog; when discovery fails the picker is honestly empty)."""
+fallback catalog; with nothing to fall back on a discovery failure is raised, core #955)."""
 
 from __future__ import annotations
 
 import asyncio
 
 import provider as prov  # app-local; registers on import
+import pytest
 
-from personalclaw.llm.catalog import ModelCatalog, ModelManager
+from personalclaw.llm.catalog import ModelCatalog, ModelDiscoveryError, ModelManager
 
 
 def _run(coro):
@@ -27,17 +28,22 @@ def test_catalog_is_plain_catalog():
     assert not isinstance(cat, ModelManager)  # hosted API, no local model management
 
 
-def test_empty_list_when_endpoint_unreachable(monkeypatch):
-    # No live models (endpoint 500) -> EMPTY list. No hardcoded curated fallback
-    # (de-hardcode directive 2026-07-06): an OpenAI-compatible provider relies on
-    # /v1/models discovery; when it fails the picker shows nothing, not fake ids.
+def test_discovery_failure_is_raised_not_swallowed(monkeypatch):
+    # Endpoint 500 -> the failure is RAISED. No hardcoded curated fallback
+    # (de-hardcode directive 2026-07-06), and with nothing to fall back on a
+    # discovery failure is not the same event as "this endpoint serves no
+    # models" (core #955): every caller relays a raised failure onto the
+    # provider row, while a silent [] is the one answer a user cannot act on.
     async def _fake_fetch(url, *, policy=None, method="GET", headers=None, data=None):
         return _FakeFetchResponse(500, {})
     monkeypatch.setattr("personalclaw.net.client.fetch", _fake_fetch, raising=False)
     monkeypatch.setattr("personalclaw.sdk.net.fetch", _fake_fetch, raising=False)
     monkeypatch.setattr("personalclaw.net.fetch", _fake_fetch, raising=False)
+    assert list(prov.SPEC.fallback_models) == []  # the invariant the raise depends on
     cat = prov.create_catalog({"api_key": "k"})
-    assert _run(cat.list_models()) == []
+    with pytest.raises(ModelDiscoveryError) as exc:
+        _run(cat.list_models())
+    assert "500" in str(exc.value)  # the status the user has to act on, not a bare ""
 
 
 def test_live_models_win_over_fallback(monkeypatch):
