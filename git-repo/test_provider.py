@@ -16,6 +16,15 @@ cannot pass:
   REST endpoints, using the ``compare`` API for the incremental poll; a structural rail proves
   the module imports no socket/HTTP library and runs no NETWORK git verb.
 
+And the AECO-2 clause, which is the one the AECO-1 shape structurally could not pass:
+
+* **ONE install, TWO repositories** — one ``create_provider`` call serves two sources whose
+  specs name different repos, and each source's items come from ITS tree with ITS own commit
+  cursor. Asserted on the globs as well as on ``repo``, because a provider that special-cased
+  the repository and read the rest off its instance would pass a repo-only test. A source
+  with an EMPTY spec is asserted byte-identical to the pre-spec call shape, which is what
+  makes the change additive rather than a break for an already-installed copy.
+
 Time/network are never touched: local git is real subprocess against ``tmp_path`` repos; the
 remote path is a canned-JSON fake. Isolation: ``tmp_path`` knowledge.db + ``PERSONALCLAW_HOME``.
 """
@@ -35,7 +44,9 @@ import pytest
 from provider import (
     DEFAULT_INCLUDE,
     MAX_FILES_PER_SOURCE,
+    SPEC_KEYS,
     GitRepoSourceProvider,
+    _validate_repo,
     create_provider,
 )
 from personalclaw.knowledge.retrieval import HybridRetriever
@@ -376,63 +387,96 @@ def test_provider_imports_only_the_sdk():
 # ── config + validation ────────────────────────────────────────────────────────────
 
 
-def test_create_provider_reads_settings(tmp_path):
+def test_create_provider_reads_settings(repo):
     p = create_provider({
-        "repo": "/some/clone", "ref": "dev", "include": "*.py, *.md",
+        "repo": str(repo), "ref": "dev", "include": "*.py, *.md",
         "exclude": "*.min.js", "max_files": 42, "token_credential": "gh",
     })
     assert p.name == "git-repo" and p.display_name == "Git Repository"
-    assert p._repo == "/some/clone" and p._ref == "dev"
-    assert p._include == ("*.py", "*.md") and p._exclude == ("*.min.js",)
-    assert p._max_files == 42 and p._token_credential == "gh"
+    # The settings are the DEFAULTS a source inherits, so they are asserted through the
+    # resolver every poll uses rather than as instance attributes — the resolved value is
+    # what the poll acts on, and an attribute check would pass a provider that read it and
+    # then ignored it.
+    cfg, err = p._resolve(None)
+    assert err == ""
+    assert cfg.repo == str(repo) and cfg.ref == "dev"
+    assert cfg.include == ("*.py", "*.md") and cfg.exclude == ("*.min.js",)
+    assert cfg.max_files == 42 and cfg.token_credential == "gh"
 
 
-def test_create_provider_defaults_are_idle_and_broad():
-    p = create_provider(None)
-    assert p._repo == "" and p._ref == "HEAD"
-    assert p._include == DEFAULT_INCLUDE
+def test_create_provider_defaults_are_idle_and_broad(repo):
+    idle = create_provider(None)
+    cfg, err = idle._resolve(None)
+    assert cfg is None and "no repository for this source" in err, "no repo anywhere → idle"
+
+    cfg, err = create_provider({"repo": str(repo)})._resolve(None)
+    assert err == "" and cfg.ref == "HEAD"
+    assert cfg.include == DEFAULT_INCLUDE
     assert "*.py" in DEFAULT_INCLUDE and "*.md" in DEFAULT_INCLUDE, "source AND docs by default"
-    assert p._max_files == MAX_FILES_PER_SOURCE
+    assert cfg.max_files == MAX_FILES_PER_SOURCE
 
 
-def test_max_files_is_clamped():
-    assert create_provider({"repo": "/x", "max_files": 10_000})._max_files == MAX_FILES_PER_SOURCE
-    assert create_provider({"repo": "/x", "max_files": 0})._max_files == 1
-    assert create_provider({"repo": "/x", "max_files": "nope"})._max_files == MAX_FILES_PER_SOURCE
+def test_max_files_is_clamped(repo):
+    def resolved(value):
+        return create_provider({"repo": str(repo), "max_files": value})._resolve(None)[0].max_files
+
+    assert resolved(10_000) == MAX_FILES_PER_SOURCE
+    assert resolved(0) == 1
+    assert resolved("nope") == MAX_FILES_PER_SOURCE
+    # The cap is per SOURCE too — a spec cannot buy itself a bigger walk than the app allows.
+    p = create_provider({"repo": str(repo)})
+    assert p._resolve({"max_files": 10_000})[0].max_files == MAX_FILES_PER_SOURCE
 
 
-def test_validate_spec_requires_configured_repo_and_empty_spec(repo):
-    # No repo configured → refuse creating a source, with guidance.
+def test_validate_spec_accepts_a_per_source_repo_and_refuses_a_typo(repo):
+    # No repo in Settings AND none in the spec → refuse creating a source, with guidance.
     idle = create_provider(None)
     ok, err = idle.validate_spec({})
     assert ok is False and "Settings" in err
 
-    # Repo configured (a real clone) + empty spec → accepted.
+    # A repo in the SPEC alone is enough — an install with no default can still add sources.
+    ok, err = idle.validate_spec({"repo": str(repo)})
+    assert (ok, err) == (True, "")
+
+    # Repo configured in Settings + empty spec → accepted (the single-repo install).
     p = create_provider({"repo": str(repo)})
     assert p.validate_spec({})[0] is True
 
-    # A non-empty spec is refused — the repo belongs in Settings, not the spec.
-    ok, err = p.validate_spec({"repo": "elsewhere"})
-    assert ok is False and "Settings" in err
+    # A misspelled key is REFUSED rather than ignored: a source that silently indexed the
+    # install default while its spec said otherwise would read as working.
+    ok, err = p.validate_spec({"repos": str(repo)})
+    assert ok is False and "unknown key(s) ['repos']" in err
+
+    # And a spec's repo is validated like any other: a non-github remote is still refused.
+    ok, err = p.validate_spec({"repo": "https://gitlab.com/acme/widgets"})
+    assert ok is False and "github.com" in err
+
+
+def test_spec_keys_and_the_manifest_settings_are_the_same_set():
+    """Two artifacts, one vocabulary. A setting the spec cannot override would be a knob
+    that works install-wide and silently not per-source; a spec key with no setting behind
+    it would be a per-source override of a default the user can never see or change."""
+    manifest = json.loads((Path(__file__).parent / "app.json").read_text(encoding="utf-8"))
+    settings = manifest["provider"]["settingsSchema"]["properties"]
+    assert set(SPEC_KEYS) == set(settings)
 
 
 def test_validate_repo_local_and_remote_rules(tmp_path, repo):
-    p = create_provider(None)
-    assert p._validate_repo(str(repo))[0] is True                       # a real git clone
-    assert p._validate_repo(str(tmp_path / "nope"))[0] is False          # missing
+    assert _validate_repo(str(repo))[0] is True                         # a real git clone
+    assert _validate_repo(str(tmp_path / "nope"))[0] is False           # missing
     plain = tmp_path / "plain"
     plain.mkdir()
-    assert p._validate_repo(str(plain))[0] is False                     # dir but not a git repo
-    assert p._validate_repo("https://github.com/acme/widgets")[0] is True
-    assert p._validate_repo("https://github.com/acme/widgets.git")[0] is True
-    ok, err = p._validate_repo("https://gitlab.com/acme/widgets")       # non-github remote
+    assert _validate_repo(str(plain))[0] is False                       # dir but not a git repo
+    assert _validate_repo("https://github.com/acme/widgets")[0] is True
+    assert _validate_repo("https://github.com/acme/widgets.git")[0] is True
+    ok, err = _validate_repo("https://gitlab.com/acme/widgets")         # non-github remote
     assert ok is False and "github.com" in err
 
 
 @pytest.mark.asyncio
 async def test_poll_with_no_repo_is_a_soft_error_not_a_raise():
     result = await create_provider(None).poll("src", "")
-    assert result.items == [] and "no repository configured" in result.error
+    assert result.items == [] and "no repository for this source" in result.error
 
 
 @pytest.mark.asyncio
@@ -442,3 +486,123 @@ async def test_include_override_narrows_ingestion(store, repo):
     sid = store.create_source(name="r", provider="git-repo", kind="external", spec={})
     await _poll(engine, store, sid)
     assert {r["guid"] for r in _rows(store, sid)} == {"guide.md"}, "an explicit include narrows scope"
+
+
+# ── AECO-2: ONE install, TWO repositories, each source polled against ITS spec ─────
+
+
+@pytest.fixture()
+def second_repo(tmp_path):
+    """A SECOND git repo, disjoint from ``repo``: different files, different markers."""
+    d = tmp_path / "otherrepo"
+    d.mkdir()
+    _git(d, "init", "-b", "main")
+    (d / "delta.py").write_text("# pangolinmarker\ndef delta():\n    return 4\n", encoding="utf-8")
+    (d / "notes.md").write_text("# Notes\n\ncapybaramarker documentation.\n", encoding="utf-8")
+    _commit(d, "initial")
+    return d
+
+
+@pytest.mark.asyncio
+async def test_one_install_watches_two_repositories_each_from_its_own_spec(store, repo, second_repo):
+    """The AECO-2 headline, end to end through the real engine.
+
+    ONE ``create_provider`` call — one install, one set of settings, one provider instance —
+    serves TWO sources whose specs name different repositories. The pre-AECO-2 shape (repo
+    from a per-install setting) cannot pass this: both sources would index the same tree.
+    """
+    provider = create_provider({"repo": str(repo)})  # the install default
+    engine = _engine(store, provider)
+    first = store.create_source(name="myrepo", provider="git-repo", kind="external", spec={})
+    second = store.create_source(
+        name="otherrepo", provider="git-repo", kind="external", spec={"repo": str(second_repo)}
+    )
+
+    assert await _poll(engine, store, first) == 3
+    assert await _poll(engine, store, second) == 2
+
+    # Each source's items come from ITS repository, and the two sets are disjoint.
+    assert {r["guid"] for r in _rows(store, first)} == {"alpha.py", "beta.ts", "guide.md"}
+    assert {r["guid"] for r in _rows(store, second)} == {"delta.py", "notes.md"}
+
+    # Searchable AND attributable to the right SOURCE ROW — the search hit's id is resolved
+    # back to its `source_id`, which is the claim "attributable to ITS spec" in full. Title
+    # alone would pass even if both sources had indexed one shared tree.
+    ret = HybridRetriever(store)
+
+    def sources_for(query):
+        ids = [h["id"] for h in ret.search(query)]
+        return {
+            store.db.execute("SELECT source_id FROM items WHERE id = ?", (i,)).fetchone()[
+                "source_id"
+            ]
+            for i in ids
+        }
+
+    assert sources_for("pangolinmarker") == {second}, "the 2nd repo's SOURCE file, under the 2nd source"
+    assert sources_for("capybaramarker") == {second}, "…and its doc"
+    assert sources_for("quokkamarker") == {first}, "the 1st repo's file stayed under the 1st source"
+
+    # Two independent commit cursors, so neither source's position tracks the other's.
+    cursors = (store.get_source_cursor(first), store.get_source_cursor(second))
+    assert all(cursors) and cursors[0] != cursors[1]
+
+
+@pytest.mark.asyncio
+async def test_a_commit_in_one_repo_leaves_the_other_source_untouched(store, repo, second_repo):
+    """Per-source incrementality: the cursors are independent, not a shared position."""
+    provider = create_provider({"repo": str(repo)})
+    engine = _engine(store, provider)
+    first = store.create_source(name="a", provider="git-repo", kind="external", spec={})
+    second = store.create_source(
+        name="b", provider="git-repo", kind="external", spec={"repo": str(second_repo)}
+    )
+    await _poll(engine, store, first)
+    await _poll(engine, store, second)
+
+    (second_repo / "epsilon.py").write_text("# epsilon\nvalue = 5\n", encoding="utf-8")
+    _commit(second_repo, "add epsilon")
+
+    assert await _poll(engine, store, first) == 0, "the untouched repo re-ingests nothing"
+    assert await _poll(engine, store, second) == 1, "and only the changed file, in its own repo"
+    assert {r["guid"] for r in _rows(store, second)} == {"delta.py", "notes.md", "epsilon.py"}
+
+
+@pytest.mark.asyncio
+async def test_a_source_spec_overrides_the_globs_for_that_source_alone(store, repo, second_repo):
+    """Any settable key is per-source, not just ``repo`` — asserted on the include globs,
+    because a provider that special-cased ``repo`` and read the rest off its instance would
+    pass the repository test above and fail here."""
+    provider = create_provider({"repo": str(repo)})
+    engine = _engine(store, provider)
+    broad = store.create_source(name="broad", provider="git-repo", kind="external", spec={})
+    narrow = store.create_source(
+        name="narrow", provider="git-repo", kind="external",
+        spec={"repo": str(second_repo), "include": "*.md"},
+    )
+
+    await _poll(engine, store, broad)
+    await _poll(engine, store, narrow)
+
+    assert {r["guid"] for r in _rows(store, broad)} == {"alpha.py", "beta.ts", "guide.md"}
+    assert {r["guid"] for r in _rows(store, narrow)} == {"notes.md"}, "the spec's globs, not the install's"
+
+
+@pytest.mark.asyncio
+async def test_an_empty_spec_install_is_unchanged_by_the_new_contract(store, repo):
+    """Clause 4's round-trip: a single-source install with an empty spec behaves EXACTLY as
+    it did before the spec could be delivered. Driven twice over the same fixture — once
+    through the engine (which now passes ``spec={}``) and once by calling ``poll`` with no
+    spec at all, as the pre-AECO-2 engine did — and the two must agree item for item."""
+    provider = create_provider({"repo": str(repo)})
+    engine = _engine(store, provider)
+    sid = store.create_source(name="r", provider="git-repo", kind="external", spec={})
+
+    through_engine = await provider.poll(sid, "", spec={})
+    legacy_shape = await provider.poll(sid, "")
+
+    assert [(i.guid, i.content, i.change) for i in through_engine.items] == [
+        (i.guid, i.content, i.change) for i in legacy_shape.items
+    ]
+    assert through_engine.cursor == legacy_shape.cursor
+    assert await _poll(engine, store, sid) == 3

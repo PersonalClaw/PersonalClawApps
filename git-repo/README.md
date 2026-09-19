@@ -46,16 +46,24 @@ evolve without breaking it.
 1. From the **App Store**, add the `apps/` directory as a **local source**, then install
    **Git Repository** (or `POST /api/apps {"source": ".../git-repo", "confirm": true}`) and
    **enable** it.
-2. Open the app's **Settings** and set **Repository** to either an absolute path to a local
-   clone on this machine (e.g. `/Users/you/code/myproject`) or a `https://github.com/<owner>/<repo>`
-   URL. Optionally set a **Ref**, **Include/Exclude** globs, and — for a private GitHub repo —
-   a **token credential** name (a token you saved under Settings → Credentials).
+2. Open the app's **Settings** and set **Repository** to the repository you index most — an
+   absolute path to a local clone on this machine (e.g. `/Users/you/code/myproject`) or a
+   `https://github.com/<owner>/<repo>` URL. Optionally set a **Ref**, **Include/Exclude**
+   globs, and — for a private GitHub repo — a **token credential** name (a token you saved
+   under Settings → Credentials). These are the **defaults** every source inherits; you can
+   leave them empty and configure each source instead.
 3. Go to **Knowledge → Sources → Add source**, choose **Git Repository**, give it a name, and
-   save (leave the spec empty — the repository is read from the app's Settings). The engine
-   begins polling it; the first poll ingests the tree, and each later poll ingests only what a
-   new commit changed.
+   save. Leave the **Spec** as `{}` to index the repository from Settings, or put any of the
+   keys below in it to override Settings for that one source. The engine begins polling it;
+   the first poll ingests the tree, and each later poll ingests only what a new commit
+   changed.
 
-## Settings
+## Settings, and the per-source spec
+
+The **same six keys** are the app's settings and a source's spec. Settings are the per-install
+defaults; a source's spec overrides them for that source alone. An empty value in a spec means
+*inherit*, and a key the table does not list is **refused** when you save the source — so a
+typo is an error message rather than a source that quietly indexes the wrong repository.
 
 | Key | Label | Notes |
 |---|---|---|
@@ -63,18 +71,25 @@ evolve without breaking it.
 | `ref` | Ref | Branch/tag/commit to index. Default `HEAD`. |
 | `include` | Include globs | Comma-separated filename globs. Empty = built-in default (source **and** docs). |
 | `exclude` | Exclude globs | Comma-separated globs to skip (path or basename). VCS/build/dep dirs are always skipped. |
-| `max_files` | Max files | Per-poll ceiling, 1–5000. |
+| `max_files` | Max files | Per-poll ceiling, 1–5000. Clamped, so a spec cannot exceed it. |
 | `token_credential` | Access token credential | Credential name for a **private** GitHub repo's token (header auth). |
 
-## Scope note (v1)
+## Several repositories from one install
 
-The repository is a **per-install setting** — one install indexes **one repository**. This is
-the same shape `git-sync` uses (its `repo_url` is a setting), and it is a deliberate
-consequence of the SDK surface: a full `KnowledgeSourceProvider` subclass an app ships is
-handed only `source_id` + a cursor at poll time and has no store handle to read a *per-source*
-spec, so the repository cannot live in the WatchedSource row. To index several repositories
-today, the cleanest path is a per-repo knowledge source once the SDK exposes per-source spec
-access to app providers.
+Add one source per repository and give each its own `repo` in the spec:
+
+```json
+{ "repo": "/Users/you/code/api" }
+{ "repo": "https://github.com/you/web", "ref": "develop", "include": "*.ts, *.tsx, *.md" }
+```
+
+Each source keeps its **own commit cursor**, so a commit in one repository re-indexes only
+that repository's changed files and leaves the others untouched.
+
+This works because the engine now hands `poll` the source row's validated spec (AECO-2) — a
+`KnowledgeSourceProvider` an app ships has no knowledge-store handle of its own, so before
+that delivery existed the repository could only be a per-install setting and one install could
+watch exactly one repository.
 
 ## Tests
 
