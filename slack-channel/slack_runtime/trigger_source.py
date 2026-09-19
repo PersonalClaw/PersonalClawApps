@@ -23,8 +23,9 @@ because they fail separately:
    ONE point where a message has cleared this app's allowlist / open-channel /
    tracked-channel gate, its channel activation mode and its dedup cache. So a workspace
    member who is not on the allowlist gets no session AND arms no automation. See
-   ``inbound_tap``'s docstring for why this app's own gate is the one available here (T1.4
-   has not landed) and what changes when it does. A test drives the denied path.
+   ``inbound_tap``'s docstring for why this app's own gate is the one available here
+   (admission still runs on this app's allowlist, not core's ``guard_inbound``) and what
+   changes when it moves onto the door. A test drives the denied path.
 2. **The event NAME comes from a closed vocabulary in this file** (:data:`EVENTS`), chosen by
    a STRUCTURAL fact (the channel id's ``D`` prefix, which is Slack's DM signal) and never
    from anything in the message. A source that let inbound data pick its own event name would

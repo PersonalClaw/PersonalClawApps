@@ -30,6 +30,7 @@ from personalclaw.sdk.channel import (
     ChannelCapabilities,
     ChannelTransportProvider,
     OutboundMessage,
+    fence_channel_content,
 )
 
 # Import ALL runtime deps at MODULE level (not lazily in start_inbound): the app
@@ -53,6 +54,32 @@ from slack_runtime.writes import SendRefused, live_writes_disabled
 # line invisible at the default WARNING log level"; measured, it was invisible at DEBUG
 # too. Every other module in this bundle is imported as ``slack_runtime.X`` and is fine.
 logger = logging.getLogger("slack_runtime.transport")
+
+
+def fence_untrusted_inbound(text: str, sender_id: str, *, trusted: bool) -> str:
+    """Fence untrusted NON-OWNER inbound content as DATA before it reaches the agent.
+
+    CHANNEL-EXPANSION T1.4 / CE-6 — the channel conformance kit's ``[fencing]`` clause.
+    A non-owner's chat text is untrusted input, never instructions: on Slack's direct
+    inbound path (``handler.handle_message``) it MUST reach the model wrapped in the
+    platform's untrusted-content fence — the SAME fence core's guarded door hands the
+    sibling channels as ``verdict.fenced_text``
+    (``fence_channel_content(text, provider, sender)``). It is applied HERE, at the
+    transport that owns Slack's inbound path, so the handler cannot forget it — and so
+    the fence a channel produces has a consumer this bundle can point to.
+
+    A *trusted* sender passes through unfenced — the owner, an explicitly-allowlisted
+    user, or a trusted bot — exactly as core exempts ``is_allowed_sender``: fencing the
+    owner's own request would make the agent read it as inert data it must not act on.
+    Mirrors core's ``verdict.fenced_text or msg.text``: the fenced form for an untrusted
+    sender, the raw text otherwise (an empty message is returned unchanged — nothing to
+    fence). The caller decides trust; keeping that decision out of here leaves this a
+    pure function of ``(text, sender_id, trusted)``.
+    """
+    if trusted or not text:
+        return text
+    fenced_text = fence_channel_content(text, "slack", sender_id)
+    return fenced_text
 
 
 class SlackTransport(ChannelTransportProvider):

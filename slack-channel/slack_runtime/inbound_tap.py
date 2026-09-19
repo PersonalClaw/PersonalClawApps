@@ -22,14 +22,16 @@ workspace arm the owner's automations by posting, which is strictly worse than t
 the gate already refuses them.
 
 Note the difference from the telegram/discord/email bundles, and why it is not a weakening:
-those three publish on ``verdict.allowed`` from core's guarded door
-(``deliver_channel_inbound``). Slack predates that seam — CHANNEL-EXPANSION T1.4 has not
-landed, ``slack_runtime/allowlist.py`` still owns this app's allow/deny UX, and
-``grep -rn guard_inbound slack-channel/`` is empty (the same finding
-``tests/test_conformance.py`` records as a strict xfail). So the gate this tap sits behind is
-the app's own, at the ONE point where an admitted message is handed to ``handle_message``.
-When T1.4 lands and Slack consumes a verdict, this call site moves behind it and nothing else
-here changes.
+those three ADMIT on ``verdict.allowed`` from core's guarded door
+(``deliver_channel_inbound``). Slack still ADMITS through its own
+``slack_runtime/allowlist.py`` allow/deny UX — ``grep -rn guard_inbound slack-channel/`` is
+still empty — so the gate this tap sits behind is the app's own, at the ONE point where an
+admitted message is handed to ``handle_message``. That admission gate is unchanged. What DID
+land (CHANNEL-EXPANSION T1.4, the CE-6 ``[fencing]`` clause) is downstream of here:
+``handle_message`` now fences a non-owner's text before it becomes the agent's prompt
+(``transport.fence_untrusted_inbound``), so ``tests/test_conformance.py`` passes the kit with
+no xfail. If Slack's admission later moves onto the door too, this call site moves behind
+``verdict.allowed`` and nothing else here changes.
 
 **No event glue lives here.** This module knows nothing about events, the bus, or triggers —
 it moves a :class:`~personalclaw.sdk.channel.ChannelMessage` between two objects in one
