@@ -11,12 +11,13 @@ own registered ``TriggerSourceTypeHandler`` supplies, core's namespacing + origi
 event bus, and core's ``matches``. Only ``handle_message`` is patched — the turn itself is not
 what is under test, and running it would drag ACP in.
 
-**Why the gate here is this app's own and not core's guarded door.** Slack predates the CE-1
-trust seam: ``slack_runtime/allowlist.py`` owns this app's allow/deny UX and
-``grep -rn guard_inbound slack-channel/`` is empty, which ``tests/test_conformance.py``
-already records as a strict xfail for T1.4. So the denied-sender clause below drives the
-allowlist that actually governs this app today. The three sibling bundles drive
-``verdict.allowed`` instead, because they have one.
+**Why the gate here is this app's own and not core's guarded door.** Admission is still
+Slack's own: ``slack_runtime/allowlist.py`` owns this app's allow/deny UX and
+``grep -rn guard_inbound slack-channel/`` is empty. So the denied-sender clause below drives
+the allowlist that actually governs this app today. The three sibling bundles drive
+``verdict.allowed`` instead, because they route admission through the door. (The CE-6
+``[fencing]`` clause of T1.4 DID land — ``handle_message`` now fences non-owner content
+before the agent — so ``tests/test_conformance.py`` passes the kit; it is no longer an xfail.)
 
 **Process-global state.** ``trigger_sources``' registry, the event-trigger engine's memoized
 store, and ``handler``'s owner/allowlist/tracking module globals are all process-global. Every

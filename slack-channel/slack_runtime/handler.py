@@ -2147,11 +2147,24 @@ async def handle_message(
                         + "\n[truncated — use batch_get_thread_replies for full text]"
                     )
 
+        # ── Fence untrusted non-owner content before it becomes the agent's prompt ──
+        # CHANNEL-EXPANSION T1.4 / CE-6. A non-owner's chat text is untrusted DATA, never
+        # instructions; wrap it in the platform's untrusted-content fence — the SAME fence
+        # core's guarded door hands the sibling channels as ``verdict.fenced_text`` — before
+        # it reaches the model. Trusted senders (owner, an allowlisted user, a trusted bot)
+        # pass through unfenced, exactly as core exempts ``is_allowed_sender``. Only the model
+        # input is fenced: display, history and the dashboard mirror below keep the raw text.
+        from slack_runtime.transport import fence_untrusted_inbound
+
+        agent_text = fence_untrusted_inbound(
+            text, user_id, trusted=(from_trusted_bot or is_allowed_user(user_id))
+        )
+
         if context_builder:
             # Thread-scoped temporary mode: blocks memory reads.
             _slack_blocks_reads = is_thread_temporary(session_key)
             full_message, _ = context_builder.build_message(
-                text,
+                agent_text,
                 is_new,
                 session_key,
                 channel_id=channel,
@@ -2165,7 +2178,7 @@ async def handle_message(
                 blocks_reads=_slack_blocks_reads,
             )
         else:
-            full_message = text
+            full_message = agent_text
 
         # ── Early cancellation check: bail before expensive LLM call ──
         if sessions.is_cancelled(session_key, msg_ts):
