@@ -10,20 +10,20 @@ installs through the same scanner-gated lifecycle as any third-party app.
 
 ## What's here
 
-**65 app bundles**, one `app.json` each. 61 contribute a capability provider and
+**66 app bundles**, one `app.json` each. 62 contribute a capability provider and
 4 contribute none. Five contribute more than one — `companion` (a `tool` and a
 `trigger`) and each of the four channel apps (a `channel` plus a
 `trigger_source`, and `slack-channel` an `inbox` as well) — so the lists below
-count **providers, not bundles**, and those five appear once per provider. 67
-providers over 61 bundles, plus the 4 provider-less bundles, is 71 entries over
-65 bundles; that is the whole gap between the headline and the sum of the counts.
+count **providers, not bundles**, and those five appear once per provider. 68
+providers over 62 bundles, plus the 4 provider-less bundles, is 72 entries over
+66 bundles; that is the whole gap between the headline and the sum of the counts.
 
 Nobody has to keep that true by hand: the `readme-census` CI job
 (`.github/scripts/check_readme_census.py`) checks the headline, every count
 below, and every bundle name against the tree, so a new app cannot land
 unlisted.
 
-- **Model providers** (`model`, 23) — branded APIs (`anthropic-models`,
+- **Model providers** (`model`, 24) — branded APIs (`anthropic-models`,
   `openai-models`, `bedrock-models`, `google-models`, `deepseek-models`,
   `groq-models`, `mistral-models`, `together-models`, `alibaba-models`,
   `openrouter-models`, `meta-muse-spark`), generic endpoints
@@ -33,7 +33,9 @@ unlisted.
   and local inference (`faster-whisper` STT, `piper-tts` TTS plus
   `voice-clone-tts` for zero-shot cloning from a reference clip,
   `sentence-transformers` embeddings, `diarization-onnx` /
-  `diarization-pyannote`), plus `fal-image` image generation.
+  `diarization-pyannote`), plus image generation hosted (`fal-image`) and
+  fully local (`local-image-gen` — a ComfyUI checkpoint on your own machine,
+  no API key and no prompt leaving the host).
 - **Search providers** (`search`, 7) — `duckduckgo-search` (keyless default),
   `brave-search`, `tavily-search`, `exa-search`, `perplexity-search`,
   `searxng-search`, `wikipedia-search`.

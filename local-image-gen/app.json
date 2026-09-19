@@ -1,0 +1,53 @@
+{
+  "name": "local-image-gen",
+  "version": "0.1.0",
+  "displayName": "Local Image Generation",
+  "description": "Generate images on your own machine — no cloud, no API key. Runs through a local ComfyUI server, so no prompt or pixel leaves the host. Bind a locally-installed checkpoint to the Image Generation use case in Models. Weights are user-pulled: this app ships code only and downloads nothing. Recommended permissive default: FLUX.1-schnell (Apache-2.0).",
+  "icon": "Image",
+  "author": "PersonalClaw",
+  "license": "MIT",
+  "tags": [
+    "model",
+    "image_gen",
+    "local",
+    "offline"
+  ],
+  "permissions": {
+    "network": true,
+    "storage": false
+  },
+  "provider": {
+    "type": "model",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "image_gen"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "default": "http://127.0.0.1:8188",
+          "x-meta": {
+            "label": "ComfyUI endpoint",
+            "help": "Where your local ComfyUI server listens. Must be a loopback or private-network address — a public host is refused, because this backend exists to keep generation on your own machine.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        },
+        "steps": {
+          "type": "integer",
+          "default": 4,
+          "x-meta": {
+            "label": "Sampling steps",
+            "help": "Denoising steps per image. FLUX.1-schnell is distilled for 1-4 steps; raise it only for a model that needs more.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
