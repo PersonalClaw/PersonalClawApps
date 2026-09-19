@@ -10,20 +10,20 @@ installs through the same scanner-gated lifecycle as any third-party app.
 
 ## What's here
 
-**65 app bundles**, one `app.json` each. 61 contribute a capability provider and
+**68 app bundles**, one `app.json` each. 64 contribute a capability provider and
 4 contribute none. Five contribute more than one — `companion` (a `tool` and a
 `trigger`) and each of the four channel apps (a `channel` plus a
 `trigger_source`, and `slack-channel` an `inbox` as well) — so the lists below
-count **providers, not bundles**, and those five appear once per provider. 67
-providers over 61 bundles, plus the 4 provider-less bundles, is 71 entries over
-65 bundles; that is the whole gap between the headline and the sum of the counts.
+count **providers, not bundles**, and those five appear once per provider. 70
+providers over 64 bundles, plus the 4 provider-less bundles, is 74 entries over
+68 bundles; that is the whole gap between the headline and the sum of the counts.
 
 Nobody has to keep that true by hand: the `readme-census` CI job
 (`.github/scripts/check_readme_census.py`) checks the headline, every count
 below, and every bundle name against the tree, so a new app cannot land
 unlisted.
 
-- **Model providers** (`model`, 23) — branded APIs (`anthropic-models`,
+- **Model providers** (`model`, 24) — branded APIs (`anthropic-models`,
   `openai-models`, `bedrock-models`, `google-models`, `deepseek-models`,
   `groq-models`, `mistral-models`, `together-models`, `alibaba-models`,
   `openrouter-models`, `meta-muse-spark`), generic endpoints
@@ -33,13 +33,24 @@ unlisted.
   and local inference (`faster-whisper` STT, `piper-tts` TTS plus
   `voice-clone-tts` for zero-shot cloning from a reference clip,
   `sentence-transformers` embeddings, `diarization-onnx` /
-  `diarization-pyannote`), plus `fal-image` image generation.
+  `diarization-pyannote`), plus image generation hosted (`fal-image`) and
+  fully local (`local-image-gen` — a ComfyUI checkpoint on your own machine,
+  no API key and no prompt leaving the host).
 - **Search providers** (`search`, 7) — `duckduckgo-search` (keyless default),
   `brave-search`, `tavily-search`, `exa-search`, `perplexity-search`,
   `searxng-search`, `wikipedia-search`.
 - **Knowledge sources** (`knowledge`, 1) — `git-repo` (index a git repository's
   source code AND docs into the knowledge library — a local clone or a github.com
   URL, incremental by commit, fetched through the core network chokepoint).
+- **Vector stores** (`vector_store`, 1) — `vector-store-qdrant` (point knowledge
+  chunk-vector search at a Qdrant you run instead of the built-in `sqlite-vec`
+  index; your documents stay in PersonalClaw, Qdrant holds vectors only, and
+  keyword + graph retrieval are unchanged). Enabling it is the binding; disable it
+  and retrieval returns to the built-in index.
+- **OCR engines** (`ocr`, 1) — `rapidocr` (read text out of scans and screenshots
+  with no model bound: the RapidOCR ONNX weights ship in the wheel, so the first
+  OCR needs no download and nothing leaves the machine, and the same image always
+  gives the same text). Install it and a scanned PDF stops ingesting empty.
 - **Channels** (`channel`, 4) — `slack-channel` (see [docs/SLACK_SETUP.md](docs/SLACK_SETUP.md)),
   `discord-channel`, `telegram-channel`, `email-channel`.
 - **Agents** (`agent`, 4) — `claude-code-agent`, `codex-agent`, `gemini-cli-agent`,

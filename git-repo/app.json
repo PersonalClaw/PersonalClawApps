@@ -27,7 +27,7 @@
           "default": "",
           "x-meta": {
             "label": "Repository",
-            "help": "The git repository to index: an absolute path to a local working clone on this machine, or an https://github.com/<owner>/<repo> URL. Leave empty to stay idle until set."
+            "help": "Default repository for new sources: an absolute path to a local working clone on this machine, or an https://github.com/<owner>/<repo> URL. Each source can override it with {\"repo\": \"...\"} in its own spec, so one install can watch several repositories. Leave empty to configure every source individually."
           }
         },
         "ref": {
@@ -35,7 +35,7 @@
           "default": "HEAD",
           "x-meta": {
             "label": "Ref",
-            "help": "The branch, tag, or commit to index. Defaults to HEAD (the repository's current head)."
+            "help": "Default branch, tag, or commit to index, overridable per source. Defaults to HEAD (the repository's current head)."
           }
         },
         "include": {
