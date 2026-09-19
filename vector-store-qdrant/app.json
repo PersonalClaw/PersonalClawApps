@@ -1,0 +1,79 @@
+{
+  "name": "vector-store-qdrant",
+  "version": "0.1.0",
+  "displayName": "Qdrant Vector Store",
+  "description": "Point knowledge vector search at your own Qdrant instead of the built-in sqlite-vec index. Chunk vectors are written to Qdrant as documents are ingested, and Qdrant answers the vector half of hybrid retrieval — FTS5 keyword search, the graph arm and RRF fusion are unchanged. Your documents stay in PersonalClaw's own database; Qdrant holds vectors and chunk ids only. Enable it to bind it; disable it and retrieval returns to the built-in index.",
+  "icon": "Database",
+  "author": "PersonalClaw",
+  "tags": [
+    "knowledge",
+    "vector-store",
+    "retrieval",
+    "bundled"
+  ],
+  "dependencies": {
+    "pythonDependencies": [
+      "qdrant-client>=1.9,<2"
+    ]
+  },
+  "quality": {
+    "tested": true,
+    "designSystem": "n/a"
+  },
+  "provider": {
+    "type": "vector_store",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "vector_store"
+    ],
+    "settingsSchema": {
+      "type": "object",
+      "required": [
+        "url",
+        "collection"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "default": "http://localhost:6333",
+          "x-meta": {
+            "label": "Qdrant URL",
+            "help": "Where your Qdrant is listening. The default is a Qdrant running on this machine (docker run -p 6333:6333 qdrant/qdrant). Pointing at your server IS this app, so it stays on the first screen."
+          }
+        },
+        "collection": {
+          "type": "string",
+          "default": "personalclaw_knowledge",
+          "x-meta": {
+            "label": "Collection",
+            "help": "The Qdrant collection to hold chunk vectors. Created on first use with the dimension of whatever embedding model you have bound. Use a fresh name rather than an existing collection — this app deletes and rewrites the points it owns."
+          }
+        },
+        "path": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Local folder (no server)",
+            "help": "Run Qdrant's engine in-process over a local folder instead of connecting to a server — nothing to install, good for trying this out. Wins over the URL when set. Single-process only: the folder is locked, so the gateway must be the only reader.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        },
+        "timeout_secs": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 120,
+          "x-meta": {
+            "label": "Timeout (seconds)",
+            "help": "How long to wait on a Qdrant call before giving up. A timeout makes the vector arm contribute nothing for that query; keyword and graph results are unaffected.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
