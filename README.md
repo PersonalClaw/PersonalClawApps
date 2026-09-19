@@ -10,13 +10,13 @@ installs through the same scanner-gated lifecycle as any third-party app.
 
 ## What's here
 
-**67 app bundles**, one `app.json` each. 63 contribute a capability provider and
+**68 app bundles**, one `app.json` each. 64 contribute a capability provider and
 4 contribute none. Five contribute more than one — `companion` (a `tool` and a
 `trigger`) and each of the four channel apps (a `channel` plus a
 `trigger_source`, and `slack-channel` an `inbox` as well) — so the lists below
-count **providers, not bundles**, and those five appear once per provider. 69
-providers over 63 bundles, plus the 4 provider-less bundles, is 73 entries over
-67 bundles; that is the whole gap between the headline and the sum of the counts.
+count **providers, not bundles**, and those five appear once per provider. 70
+providers over 64 bundles, plus the 4 provider-less bundles, is 74 entries over
+68 bundles; that is the whole gap between the headline and the sum of the counts.
 
 Nobody has to keep that true by hand: the `readme-census` CI job
 (`.github/scripts/check_readme_census.py`) checks the headline, every count
@@ -47,6 +47,10 @@ unlisted.
   index; your documents stay in PersonalClaw, Qdrant holds vectors only, and
   keyword + graph retrieval are unchanged). Enabling it is the binding; disable it
   and retrieval returns to the built-in index.
+- **OCR engines** (`ocr`, 1) — `rapidocr` (read text out of scans and screenshots
+  with no model bound: the RapidOCR ONNX weights ship in the wheel, so the first
+  OCR needs no download and nothing leaves the machine, and the same image always
+  gives the same text). Install it and a scanned PDF stops ingesting empty.
 - **Channels** (`channel`, 4) — `slack-channel` (see [docs/SLACK_SETUP.md](docs/SLACK_SETUP.md)),
   `discord-channel`, `telegram-channel`, `email-channel`.
 - **Agents** (`agent`, 4) — `claude-code-agent`, `codex-agent`, `gemini-cli-agent`,
