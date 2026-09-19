@@ -10,13 +10,13 @@ installs through the same scanner-gated lifecycle as any third-party app.
 
 ## What's here
 
-**66 app bundles**, one `app.json` each. 62 contribute a capability provider and
+**67 app bundles**, one `app.json` each. 63 contribute a capability provider and
 4 contribute none. Five contribute more than one — `companion` (a `tool` and a
 `trigger`) and each of the four channel apps (a `channel` plus a
 `trigger_source`, and `slack-channel` an `inbox` as well) — so the lists below
-count **providers, not bundles**, and those five appear once per provider. 68
-providers over 62 bundles, plus the 4 provider-less bundles, is 72 entries over
-66 bundles; that is the whole gap between the headline and the sum of the counts.
+count **providers, not bundles**, and those five appear once per provider. 69
+providers over 63 bundles, plus the 4 provider-less bundles, is 73 entries over
+67 bundles; that is the whole gap between the headline and the sum of the counts.
 
 Nobody has to keep that true by hand: the `readme-census` CI job
 (`.github/scripts/check_readme_census.py`) checks the headline, every count
@@ -42,6 +42,11 @@ unlisted.
 - **Knowledge sources** (`knowledge`, 1) — `git-repo` (index a git repository's
   source code AND docs into the knowledge library — a local clone or a github.com
   URL, incremental by commit, fetched through the core network chokepoint).
+- **Vector stores** (`vector_store`, 1) — `vector-store-qdrant` (point knowledge
+  chunk-vector search at a Qdrant you run instead of the built-in `sqlite-vec`
+  index; your documents stay in PersonalClaw, Qdrant holds vectors only, and
+  keyword + graph retrieval are unchanged). Enabling it is the binding; disable it
+  and retrieval returns to the built-in index.
 - **Channels** (`channel`, 4) — `slack-channel` (see [docs/SLACK_SETUP.md](docs/SLACK_SETUP.md)),
   `discord-channel`, `telegram-channel`, `email-channel`.
 - **Agents** (`agent`, 4) — `claude-code-agent`, `codex-agent`, `gemini-cli-agent`,
