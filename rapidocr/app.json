@@ -1,0 +1,31 @@
+{
+  "name": "rapidocr",
+  "version": "0.1.0",
+  "displayName": "RapidOCR (Offline)",
+  "description": "Read text out of scans and screenshots with no model bound. Runs the RapidOCR ONNX engine entirely on this machine — the weights ship in the wheel, so nothing is downloaded and nothing leaves the device — and returns the same text for the same image every time. Install it and a scanned PDF or a photographed page becomes searchable knowledge.",
+  "icon": "ScanText",
+  "author": "PersonalClaw",
+  "license": "MIT",
+  "tags": [
+    "ocr",
+    "offline",
+    "local",
+    "knowledge",
+    "scan"
+  ],
+  "dependencies": {
+    "pythonDependencies": [
+      "rapidocr-onnxruntime==1.2.3"
+    ]
+  },
+  "provider": {
+    "type": "ocr",
+    "implementation": "provider:create_provider",
+    "capabilities": [
+      "ocr"
+    ]
+  },
+  "quality": {
+    "tested": true
+  }
+}
