@@ -53,6 +53,9 @@ jobs:
                   m = AppManifest.from_dict(json.loads(mf.read_text()))
                   # round-trip must be stable (the parity contract apps rely on)
                   assert AppManifest.from_dict(m.to_dict()).to_dict() == m.to_dict()
+                  errs = m.validate()
+                  if errs:
+                      bad.append(f"{mf}: " + "; ".join(errs))
               except Exception as e:  # noqa: BLE001
                   bad.append(f"{mf}: {type(e).__name__}: {e}")
               # every published bundle ships its own LICENSE — a bundle is
