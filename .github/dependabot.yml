@@ -1,7 +1,9 @@
 # Dependabot for the first-party app bundles. The apps declare their heavy deps
 # in each app.json's pythonDependencies (installed by the platform at app-install),
 # so there is no repo-level Python lockfile to track here — Dependabot watches the
-# GitHub Actions the CI workflow pins (CI-RELEASE-ENGINEERING S4).
+# GitHub Actions the CI workflow pins (CI-RELEASE-ENGINEERING S4). The npm manifests
+# and lockfiles live in nested app UI directories, so each directory is watched
+# separately and its dependency updates are grouped.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -10,4 +12,18 @@ updates:
       interval: weekly
     groups:
       actions:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /growth/ui
+    schedule:
+      interval: weekly
+    groups:
+      growth-ui:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /minutes/ui
+    schedule:
+      interval: weekly
+    groups:
+      minutes-ui:
         patterns: ["*"]
