@@ -259,7 +259,7 @@ Stated plainly, because the difference matters.
 - **Local-Store install + a real UI drive.** Adding this directory as a local Store source,
   installing the app in a running gateway, and driving `spec_open`/`spec_compile` from the chat
   surface has *not* been done. The install/quarantine/scan path, the Store listing, and the
-  Settings → Tools rendering of this manifest are therefore unverified in the real UI.
+  Settings → Providers rendering of this manifest are therefore unverified in the real UI.
 - **A definition compiled here has never actually been RUN.** `workflow_author` has not been
   handed one of these payloads in a live gateway, and no `workflow_start` has executed the
   emitted tree. The validator says the shape is admissible; it does not say a run through it

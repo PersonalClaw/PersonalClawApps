@@ -137,7 +137,7 @@ Stated plainly, because the difference matters.
 
 - **The browser.** The headless run above proves install → register → invoke, but no one has
   driven `deck_from_brief` from the chat surface or looked at how this manifest renders in
-  Settings → Tools.
+  Settings → Providers.
 - **Registry listing.** This app is not in `PersonalClaw/registry`'s `app-registry.json`;
   listing requires a published repo the validator can reach.
 - **`.pdf` in a viewer.** A rendered PDF has a valid `%PDF-` header and `%%EOF` trailer, but

@@ -310,7 +310,7 @@ Stated plainly, because the difference matters.
 - **Local-Store install + a real UI drive.** Adding this directory as a local Store source,
   installing the app in a running gateway, and driving `ops_watch`/`ops_claim` from the chat
   surface has *not* been done. The install/quarantine/scan path, the Store listing, and the
-  Settings → Tools rendering of this manifest are therefore unverified in the real UI.
+  Settings → Providers rendering of this manifest are therefore unverified in the real UI.
 - **The `ops-sweep` cron in a real scheduler.** The cron entry parses as part of the
   manifest and its message is asserted, but no gateway has ever fired it, so the unattended
   loop has never actually run end to end.

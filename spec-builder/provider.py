@@ -63,9 +63,9 @@ class SpecBuilderProvider(ToolProvider):
     def _store(self) -> SpecStore:
         """The spec store, bound on first use.
 
-        Lazy because core constructs a provider just to READ its tool list (Settings -> Tools,
-        the manifest round-trip), and that must not mkdir under the user's home. The store
-        appears the first time a spec is actually touched.
+        Lazy because core constructs a provider just to READ its tool list
+        (Settings → Providers, the manifest round-trip), and that must not mkdir under the
+        user's home. The store appears the first time a spec is actually touched.
         """
         if self._store_impl is None:
             self._store_impl = SpecStore(source_repo=self._source_repo, timeout=self._timeout)

@@ -327,6 +327,20 @@ jobs:
       - name: Check settings-schema advanced/required/sensitive posture
         run: python .github/scripts/check_settings_schema_posture.py
 
+  settings-route-ratchet:
+    # Cross-app rail: provider settings moved out of the removed Settings/Tools
+    # route. Scan every tracked file because runtime refusals, CLI output, READMEs,
+    # and inline docs can all drift independently, while pytest runs per bundle.
+    # The committed script covers both arrow encodings and split-line forms.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Reject references to the removed settings route
+        run: python .github/scripts/check_settings_route_references.py
+
   trigger-source-adoption:
     # Cross-app rail (CE-10): every app that declares a `channel` transport must also declare
     # a `trigger_source` provider, MEASURED over the channel apps DISCOVERED rather than
