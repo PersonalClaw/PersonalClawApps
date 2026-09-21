@@ -45,9 +45,10 @@ GIT_MISSING = (
     "whatever happens to be in the working tree."
 )
 NO_SOURCE_REPO = (
-    "No source repository is configured. Set 'Source repository' in Settings → Tools → "
-    "Spec Builder to the repo this spec is about; there is deliberately no default, because "
-    "an app that guesses which checkout to read is an app that reads the wrong one."
+    "No source repository is configured. Set 'Source repository' in "
+    "Settings → Providers → Spec Builder → Configure to the repo this spec is about; "
+    "there is deliberately no default, because an app that guesses which checkout to read "
+    "is an app that reads the wrong one."
 )
 
 # A spec id becomes a directory name AND the compiled workflow definition's name, so it is
@@ -392,7 +393,7 @@ class SpecStore:
         timeout: int = 20,
     ) -> None:
         # Lazy on purpose: constructing the provider is what core does to READ its tool list
-        # (Settings -> Tools, the manifest round-trip), and that must not mkdir under the
+        # (Settings → Providers, the manifest round-trip), and that must not mkdir under the
         # user's home. The store appears the first time a spec is actually written.
         self._root = Path(root) if root else app_data_dir(APP_NAME) / "specs"
         self._source_repo = str(source_repo or "").strip()

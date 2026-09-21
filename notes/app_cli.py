@@ -38,8 +38,8 @@ def setup(ctx: SetupContext) -> None:
     if _git_version():
         ctx.print(
             "Notes: `git` found. Your notebook lives in this app's data dir by default "
-            "(Settings → Tools → Notes to point it somewhere else, e.g. a folder in a "
-            "repo you already sync)."
+            "(Settings → Providers → Notes → Configure to point it somewhere else, e.g. "
+            "a folder in a repo you already sync)."
         )
     else:
         ctx.print(

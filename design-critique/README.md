@@ -192,7 +192,7 @@ Stated plainly, because the difference matters.
 
 - **Local-Store install + a real UI drive.** Adding this directory as a local Store source,
   installing the app in a running gateway, and driving the tools from the chat surface has
-  *not* been done. The install/quarantine/scan path and the Settings → Tools rendering of
+  *not* been done. The install/quarantine/scan path and the Settings → Providers rendering of
   this manifest are therefore unverified in the real UI.
 - **A real live URL.** No real `fetch` has run through this app. The egress seam is
   exercised only against markup supplied by the test, so real-world HTML shapes, redirects,

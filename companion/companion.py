@@ -501,8 +501,8 @@ class Companion:
         """This app's data dir, bound on first use.
 
         Lazy for the reason ``notes`` is lazy: core constructs a provider just to read its
-        tool list (the Settings → Tools round-trip), and that must not mkdir under the user's
-        home. The directory appears the first time an item is actually touched.
+        tool list (the Settings → Providers round-trip), and that must not mkdir under the
+        user's home. The directory appears the first time an item is actually touched.
         """
         if self._root_impl is None:
             self._root_impl = (
@@ -622,8 +622,9 @@ class Companion:
         """Store one reminder. Exactly one of ``at`` / ``cron`` must be given."""
         if not self._reminders_on:
             raise SurfaceOff(
-                "the Reminders surface is off — turn it on in Settings → Tools → Companion "
-                "and this app will start scheduling them"
+                "the Reminders surface is off — turn it on in "
+                "Settings → Providers → Companion → Configure and this app will start "
+                "scheduling them"
             )
         if bool(at) == bool(cron):
             raise InvalidInput(
@@ -655,8 +656,9 @@ class Companion:
         """Store one watch. The parent folder must already exist, so a typo is caught now."""
         if not self._watchlist_on:
             raise SurfaceOff(
-                "the Watchlist surface is off — turn it on in Settings → Tools → Companion "
-                "and this app will start watching what you add"
+                "the Watchlist surface is off — turn it on in "
+                "Settings → Providers → Companion → Configure and this app will start "
+                "watching what you add"
             )
         resolved = validate_watch_path(path)
         parent = os.path.dirname(resolved) or "/"

@@ -254,7 +254,7 @@ Stated plainly, because the difference matters.
 
 - **Local-Store install + a real UI drive.** Adding this directory as a local Store source,
   installing the app in a running gateway, and calling `triage_issues` from the chat surface
-  has *not* been done. The install/quarantine/scan path and the Settings → Tools rendering
+  has *not* been done. The install/quarantine/scan path and the Settings → Providers rendering
   of this manifest are unverified in the real UI.
 - **GitLab.** There is no `glab` on the machine this was built on, so the GitLab leg has
   never run against a live CLI. Its argv shape and its JSON adapter are covered by a

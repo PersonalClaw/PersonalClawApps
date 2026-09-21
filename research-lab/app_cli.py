@@ -40,7 +40,7 @@ def setup(ctx: SetupContext) -> None:
     )
     ctx.print(
         "The hourly 'advance-campaigns' cron runs the cycles; change either number in "
-        "Settings → Tools → Research Lab."
+        "Settings → Providers → Research Lab → Configure."
     )
 
 

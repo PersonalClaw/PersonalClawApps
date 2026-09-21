@@ -115,7 +115,7 @@ class IssueRadarProvider(ToolProvider):
         return max(low, min(high, value))
 
     # The two stores open on first use. Constructing a provider is what core does to READ
-    # its tool list (Settings → Tools, the manifest round-trip), and that must not mkdir
+    # its tool list (Settings → Providers, the manifest round-trip), and that must not mkdir
     # under the user's home; the directories appear the first time a tool actually runs.
 
     @property

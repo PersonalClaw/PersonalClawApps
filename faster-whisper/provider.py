@@ -1,7 +1,9 @@
 """Faster-Whisper STT provider — CTranslate2-backed in-process Whisper."""
 
 import asyncio
+import logging
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +16,8 @@ from personalclaw.sdk.stt import (
     TranscriptWord,
     ensure_ffmpeg_in_path,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def create_provider(config: dict[str, Any] | None = None) -> "FasterWhisperProvider":
@@ -61,12 +65,49 @@ def _legacy_dir() -> Path:
     return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "huggingface" / "hub"
 
 
+def _repo_id(model_name: str) -> str:
+    """Resolve the repository exactly as the installed faster-whisper release does."""
+    fallback = f"Systran/faster-whisper-{model_name}"
+    try:
+        from faster_whisper.utils import _MODELS as upstream_models
+    except (ImportError, AttributeError) as exc:
+        logger.warning(
+            "faster_whisper.utils._MODELS is unavailable for %r (%s); "
+            "using fallback repository %r",
+            model_name,
+            exc,
+            fallback,
+        )
+        return fallback
+
+    if not isinstance(upstream_models, Mapping):
+        logger.warning(
+            "faster_whisper.utils._MODELS has unexpected type %s for %r; "
+            "using fallback repository %r",
+            type(upstream_models).__name__,
+            model_name,
+            fallback,
+        )
+        return fallback
+
+    repo_id = upstream_models.get(model_name)
+    if not isinstance(repo_id, str) or "/" not in repo_id:
+        logger.warning(
+            "faster_whisper.utils._MODELS has no usable repository for %r; "
+            "using fallback repository %r",
+            model_name,
+            fallback,
+        )
+        return fallback
+    return repo_id
+
+
 def _repo_dir(root: Path, model_name: str) -> Path:
     """HuggingFace's on-disk cache layout for a repo id — ``models--{org}--{repo}`` —
     rebuilt UNDERNEATH *root*. ctranslate2 resolves a snapshot through ``huggingface_hub``,
-    so the layout is the contract but the root is ours to pick; mirrors what
-    ``sentence-transformers`` already does with its own ``models--…`` dirs."""
-    repo_id = f"Systran/faster-whisper-{model_name}"
+    so the layout is the contract but the root is ours to pick. The installed library's
+    model map owns the repo id because public names do not all follow one template."""
+    repo_id = _repo_id(model_name)
     return root / ("models--" + repo_id.replace("/", "--"))
 
 

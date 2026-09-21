@@ -55,7 +55,7 @@ class NotesProvider(ToolProvider):
         """The notebook, bound on first use.
 
         Lazy for the same reason the findings log in `code-review` is: core constructs a
-        provider just to READ its tool list (Settings → Tools, the manifest round-trip),
+        provider just to READ its tool list (Settings → Providers, the manifest round-trip),
         and that must not mkdir under the user's home. The notebook appears the first time
         a note is actually touched.
         """

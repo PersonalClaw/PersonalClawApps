@@ -14,7 +14,8 @@ the front-door bar. Every commit must be signed off (DCO): `git commit -s`.
 - [ ] Imports core **only** via `personalclaw.sdk.*` (boundary job passes)
 - [ ] Declares the **minimum** permissions in `app.json`
 - [ ] Declares runtime deps in `dependencies.pythonDependencies` (if any)
-- [ ] Ships `test_provider.py` / `test_server.py` that pass without vendor SDKs
+- [ ] Ships `test_provider.py` / `test_server.py` that pass through
+      `./scripts/test-bundles` (declared dependencies installed; undeclared SDKs absent)
 - [ ] Has a `README.md` and `LICENSE` in the app directory
 - [ ] `manifest-validate` passes (parses + round-trips against core's parser)
 

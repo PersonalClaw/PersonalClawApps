@@ -86,7 +86,7 @@ class CodeReviewProvider(ToolProvider):
         """The findings log, opened on first use.
 
         Lazy on purpose: constructing a provider is what core does to READ its tool list
-        (Settings → Tools, the manifest round-trip), and that must not mkdir under the
+        (Settings → Providers, the manifest round-trip), and that must not mkdir under the
         user's home. The directory appears the first time a review is actually run.
         """
         if self._log_impl is None:

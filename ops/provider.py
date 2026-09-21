@@ -68,9 +68,9 @@ class OpsProvider(ToolProvider):
     def _ledger(self) -> Ledger:
         """The ledger, bound on first use.
 
-        Lazy on purpose: core constructs a provider just to READ its tool list (Settings →
-        Tools, the manifest round-trip), and that must not create directories under the
-        user's home. The ledger appears the first time an incident is actually touched.
+        Lazy on purpose: core constructs a provider just to READ its tool list
+        (Settings → Providers, the manifest round-trip), and that must not create directories
+        under the user's home. The ledger appears the first time an incident is actually touched.
         """
         if self._ledger_impl is None:
             self._ledger_impl = Ledger()
@@ -727,7 +727,8 @@ class OpsProvider(ToolProvider):
                 error=(
                     "'Allow gated remediation' is off, so this app cannot run anything. "
                     "The proposal stands; carry it out by hand, or switch the setting on "
-                    "in Settings → Tools → Ops if you want this app to be able to."
+                    "in Settings → Providers → Ops → Configure if you want this app to be "
+                    "able to."
                 ),
                 metadata={"id": incident.id, "proposal": proposal_id, "gate": "allow_apply",
                           "applied": False},

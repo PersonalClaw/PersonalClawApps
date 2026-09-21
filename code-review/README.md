@@ -177,7 +177,7 @@ Stated plainly, because the difference matters.
 
 - **Local-Store install + a real UI drive.** Adding this directory as a local Store source,
   installing the app in a running gateway, and driving `review_pr` from the chat surface has
-  *not* been done. The install/quarantine/scan path and the Settings → Tools rendering of
+  *not* been done. The install/quarantine/scan path and the Settings → Providers rendering of
   this manifest are therefore unverified in the real UI.
 - **A real PR reviewed end to end.** No live `gh pr diff` has been run through this app.
   The `gh` edge is exercised only against a fixture, so `gh`'s real output shape, auth

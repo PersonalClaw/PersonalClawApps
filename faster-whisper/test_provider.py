@@ -186,6 +186,58 @@ def test_cache_dir_tracks_new_root_even_when_legacy_holds_weights(monkeypatch, t
     assert captured["download_root"] != str(prov._legacy_dir())
 
 
+def test_turbo_mapped_repo_reports_downloaded_and_deletes(monkeypatch, tmp_path):
+    """The public name ``turbo`` resolves to a non-templated upstream repository.
+
+    Seed the literal HuggingFace cache path rather than asking the provider where it
+    expects the files; otherwise the fixture would repeat the implementation bug.
+    """
+    monkeypatch.setenv("PERSONALCLAW_HOME", str(tmp_path / "pclaw-home"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+
+    from faster_whisper import utils as faster_whisper_utils
+
+    monkeypatch.setitem(
+        faster_whisper_utils._MODELS,
+        "turbo",
+        "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+    )
+    cache_name = "models--mobiuslabsgmbh--faster-whisper-large-v3-turbo"
+
+    legacy_model_dir = prov._legacy_dir() / cache_name
+    legacy_snapshot = legacy_model_dir / "snapshots" / "00000000"
+    legacy_snapshot.mkdir(parents=True)
+    (legacy_snapshot / "model.bin").write_bytes(b"\x00" * 16)
+
+    assert not prov._models_dir().exists()
+    assert prov._model_downloaded("turbo") is True
+    assert prov._weights_root("turbo") == prov._legacy_dir()
+    models = _run(prov.create_provider({}).list_models())
+    assert next(m for m in models if m.name == "turbo").downloaded is True
+
+    new_model_dir = prov._models_dir() / cache_name
+    new_snapshot = new_model_dir / "snapshots" / "00000000"
+    new_snapshot.mkdir(parents=True)
+    (new_snapshot / "model.bin").write_bytes(b"\x00" * 16)
+
+    assert _run(prov.create_provider({}).delete_model("turbo")) is True
+    assert not new_model_dir.exists()
+    assert not legacy_model_dir.exists()
+    assert prov._model_downloaded("turbo") is False
+
+
+def test_repo_resolution_fallback_is_logged(monkeypatch, caplog, tmp_path):
+    """A release without the private map degrades visibly to the old template."""
+    from faster_whisper import utils as faster_whisper_utils
+
+    monkeypatch.delattr(faster_whisper_utils, "_MODELS")
+    with caplog.at_level("WARNING", logger=prov.__name__):
+        repo_dir = prov._repo_dir(tmp_path, "small")
+
+    assert repo_dir == tmp_path / "models--Systran--faster-whisper-small"
+    assert "using fallback repository" in caplog.text
+
+
 def test_partial_snapshot_is_not_weights(monkeypatch, tmp_path):
     """A bare ``models--…`` shell is what an interrupted download leaves behind. Counting it
     as present is how the legacy fallback silently resolves to an unusable tree."""
