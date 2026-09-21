@@ -278,8 +278,8 @@ Stated plainly, because the difference matters.
 
 - **Local-Store install + a real UI drive.** Adding this directory as a local Store source,
   installing it in a running gateway, and driving `companion_remind` from chat has *not* been
-  done. The install/quarantine/scan path, the Store listing, and the Settings → Tools rendering
-  of this manifest are unverified in the real UI.
+  done. The install/quarantine/scan path, the Store listing, and the Settings → Providers
+  rendering of this manifest are unverified in the real UI.
 - **A real fire.** No reminder has actually gone off. The rows are proven to be *acceptable* to
   core's parser and the write-back contract is exercised against the store, but no gateway tick
   has armed one of these rows, dispatched `notify`, and raised a notification. The claim that a

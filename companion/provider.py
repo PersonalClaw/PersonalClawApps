@@ -46,7 +46,9 @@ from companion import (
 
 logger = logging.getLogger(APP_NAME)
 
-_SETTINGS_HINT = "Settings → Tools → Companion is where the three surfaces are turned on."
+_SETTINGS_HINT = (
+    "Settings → Providers → Companion → Configure is where the three surfaces are turned on."
+)
 
 
 class CompanionProvider(ToolProvider):

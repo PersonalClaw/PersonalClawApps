@@ -199,7 +199,7 @@ Stated plainly, because the difference matters.
 - **Local-Store install + a real UI drive.** Adding this directory as a local Store source,
   installing the app in a running gateway, and driving `note_write`/`note_read` from the
   chat surface has *not* been done. The install/quarantine/scan path, the Store listing, and
-  the Settings → Tools rendering of this manifest are therefore unverified in the real UI.
+  the Settings → Providers rendering of this manifest are therefore unverified in the real UI.
 - **A real uninstall/reinstall cycle.** The reinstall test rebinds a new `Notebook` over the
   same root, which is what a reinstalled app does — but no gateway has actually deactivated
   and re-activated this app. The claim rests on core's documented "uninstall keeps `data/`"

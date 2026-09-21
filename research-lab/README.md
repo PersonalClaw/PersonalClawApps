@@ -190,7 +190,7 @@ Stated plainly, because the difference matters.
 - **Local-Store install + a real UI drive.** In the core repo the local-source install path
   (`add_local_source` → `available_catalog` → `install` → `enable`) was exercised headless
   against this bundle before it moved here; nobody has clicked it in a running dashboard,
-  so the install/quarantine/scan path and the Settings → Tools rendering of this manifest
+  so the install/quarantine/scan path and the Settings → Providers rendering of this manifest
   are unverified in the real UI.
 - **The cron actually firing.** `reconcile_app_crons` was confirmed to accept this app
   (the `cron` permission is granted, the entry has a schedule and a message), but no clock
