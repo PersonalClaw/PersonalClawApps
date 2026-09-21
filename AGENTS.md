@@ -18,9 +18,10 @@ PersonalClaw gateway via the platform's typed provider contracts. Full contract:
   it; never reach around.
 - **Manifest validity:** `manifest-validate` parses every `app.json` against
   core's real `AppManifest` and requires a stable round-trip.
-- **Tests without vendor SDKs:** the `tests` job installs core but **no** vendor
-  SDKs — model apps stub theirs. A test importing a real vendor SDK fails here.
-  Declare genuine runtime deps in `dependencies.pythonDependencies`.
+- **Tests honor declared dependencies:** the `tests` job installs each bundle's
+  `dependencies.pythonDependencies` before collection. Undeclared vendor SDKs
+  remain absent, so model apps stub SDKs they deliberately do not declare. Run
+  `./scripts/test-bundles <bundle>` locally to use the exact same path.
 - **Store-card copy:** `description` must end in a full stop and its **lead sentence
   must fit 90 characters** — the card clamps to two lines, so a longer lead is shown
   cut mid-phrase. Put the detail in later sentences (the detail panel and search read

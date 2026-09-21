@@ -26,11 +26,22 @@ A PR that adds or changes an app must meet all of:
   `dependencies.pythonDependencies` (the app-install pipeline installs them);
   don't assume core ships them.
 - **Ship tests.** `test_provider.py` / `test_server.py` that pass under the
-  `tests` CI job — which runs with core installed but **no vendor SDKs** (model
-  apps stub theirs; a test importing a real vendor SDK fails here, by design).
+  `tests` CI job. The job installs each bundle's declared
+  `dependencies.pythonDependencies`; undeclared vendor SDKs remain absent, so
+  model apps must continue to stub SDKs they deliberately do not declare.
 - **Ship a `README.md` and a `LICENSE`** in the app directory.
 - **Manifest completeness.** `manifest-validate` parses every `app.json` against
   core's real `AppManifest` parser and requires a stable round-trip.
+
+Run one bundle locally with the same dependency posture as CI:
+
+```bash
+./scripts/test-bundles <bundle>
+```
+
+The runner installs that bundle's declared Python dependencies into the active
+Python environment with `uv`, then invokes pytest. With no bundle argument it
+runs every tested bundle, matching the CI job.
 
 Full contract: [`docs/app-creation-guide.md`](docs/app-creation-guide.md) and
 [`docs/platform-architecture.md`](docs/platform-architecture.md).
