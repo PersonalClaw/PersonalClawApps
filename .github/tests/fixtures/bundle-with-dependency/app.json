@@ -1,0 +1,11 @@
+{
+  "name": "bundle-with-dependency",
+  "version": "0.0.0",
+  "displayName": "Bundle Runner Fixture",
+  "description": "Proves that the bundle runner installs manifest dependencies.",
+  "dependencies": {
+    "pythonDependencies": [
+      "./.github/tests/fixtures/declared-dependency"
+    ]
+  }
+}

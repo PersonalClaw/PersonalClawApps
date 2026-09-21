@@ -1,6 +1,6 @@
-# CI — first-party app bundles. Verifies every app against the platform contract
-# WITHOUT installing vendor SDKs (the apps stub them; a test needing a real SDK
-# fails loudly here, which is correct). Jobs per CI-RELEASE-ENGINEERING §"apps repo":
+# CI — first-party app bundles. Verifies every app against the platform contract.
+# Tests install each bundle's declared dependencies; undeclared vendor SDKs remain
+# absent so apps that intentionally omit them must stub them. Jobs per CI-RELEASE-ENGINEERING §"apps repo":
 # manifest-validate · tests · quality-declarations · boundary · live-writes-posture ·
 # prompt-cache-posture · settings-schema-posture · readme-census · store-card-copy · dco (PR-only).
 name: CI
@@ -78,8 +78,9 @@ jobs:
           PY
 
   tests:
-    # Each bundle's test_*.py, with core installed but NO vendor SDKs — the apps
-    # stub them into sys.modules; a test that imports a real vendor SDK fails here.
+    # Each bundle's test_*.py runs after its manifest-declared Python dependencies
+    # are installed. Undeclared vendor SDKs remain absent, so model apps still stub
+    # SDKs they deliberately do not declare.
     runs-on: ubuntu-latest
     # No PERSONALCLAW_HOME: the app tests resolve state via Path.home() directly
     # (not config_dir()), and setting a global home would defeat the Path.home()/HOME
@@ -101,37 +102,13 @@ jobs:
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
           echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
           uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC" pytest pytest-asyncio
+      - name: Test the per-bundle runner dependency rail
+        run: python -m pytest .github/tests/test_bundle_runner.py -q
       - name: Run each bundle's tests (per-bundle)
-        # Per-bundle so duplicate test_*.py basenames across apps don't collide in
-        # one pytest run. Before running a bundle, install its manifest-declared
-        # pythonDependencies (what the platform installs at real app-install time) —
-        # a channel app like slack-channel genuinely needs its SDK (slack-sdk) to
-        # import, unlike the model apps that stub theirs. Model-provider apps that
-        # DON'T declare deps still run with their vendor SDK stubbed (the contract).
-        run: |
-          rc=0
-          for d in */; do
-            d=${d%/}
-            # Two INDEPENDENT guards. `[ -d "$d" ] || [ "$d" = docs ] && continue`
-            # parsed as `([ -d ] || [ = docs ]) && continue`: since `for d in */`
-            # only yields directories the first test always passed, so `continue`
-            # fired every iteration and the job ran zero tests. Keep them separate,
-            # and use `if` (not `&& continue`) so a false test can't be the step's
-            # last command and fail it under `bash -e`.
-            if [ ! -d "$d" ]; then continue; fi
-            if [ "$d" = docs ]; then continue; fi
-            # any test file, incl. a tests/ subdir (slack-channel) or test_catalog.py
-            if compgen -G "$d/test_*.py" >/dev/null || compgen -G "$d/tests/test_*.py" >/dev/null; then
-              echo "::group::$d"
-              # install this bundle's declared pythonDependencies, if any (into the
-              # venv — VIRTUAL_ENV is exported, so uv pip targets it without --system)
-              deps=$(python -c "import json,sys; d=json.load(open('$d/app.json')); print(' '.join((d.get('dependencies') or {}).get('pythonDependencies') or []))" 2>/dev/null || true)
-              [ -n "$deps" ] && uv pip install $deps
-              python -m pytest "$d" -q || rc=1
-              echo "::endgroup::"
-            fi
-          done
-          exit $rc
+        # The repository runner is the single definition shared by CI and local use:
+        # it discovers tested app bundles, installs each manifest's declared
+        # pythonDependencies, and invokes pytest separately to avoid basename clashes.
+        run: ./scripts/test-bundles
 
   quality-declarations:
     # A `quality` block in app.json — {tested, designSystem, a11y} — is what the Store

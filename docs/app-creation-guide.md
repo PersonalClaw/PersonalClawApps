@@ -23,8 +23,8 @@ my-app/
 
 ## Quickstart: minutes to first run
 
-Prerequisites: PersonalClaw installed (`pip install personalclaw`), `pytest` available, and
-a gateway running (`personalclaw gateway`).
+Prerequisites: PersonalClaw installed (`pip install personalclaw`), `pytest` and `uv`
+available, and a gateway running (`personalclaw gateway`).
 
 **1 — see what you can build.** The type table is derived from the running build's provider
 registry, so it is always the truth about this version:
@@ -45,11 +45,13 @@ parser, a provider stub implementing that type's SDK contract with real signatur
 an MIT `LICENSE`. No `permissions` block — add only what your provider actually uses, since
 the Store shows declared permissions as the install-consent surface.
 
-**3 — run its tests.** They pass as generated, with no network, no credentials and no
-gateway:
+**3 — run its tests.** Use the same per-bundle runner as CI. It installs
+`dependencies.pythonDependencies` from the bundle's `app.json` into the active Python
+environment with `uv`, then runs pytest. Generated apps with no dependencies still run with
+no network, credentials, or gateway:
 
 ```bash
-python -m pytest my-tool -q
+./scripts/test-bundles my-tool
 ```
 
 **4 — point a shell at your gateway.** `personalclaw token` prints one line: a dashboard URL
