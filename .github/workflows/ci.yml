@@ -304,6 +304,32 @@ jobs:
       - name: Check settings-schema advanced/required/sensitive posture
         run: python .github/scripts/check_settings_schema_posture.py
 
+  settings-declared-reads:
+    # The OTHER half of the settings contract, and the half `settings-schema-posture`
+    # above is structurally blind to: a setting the provider CODE reads which the
+    # manifest schema never declares. Every rule in that rail iterates the declared
+    # properties, so an undeclared one is invisible to all of them and the schema reads
+    # clean.
+    #
+    # Two failures live there. A DEAD setting (the config form renders only declared
+    # properties, so the operator cannot set it and the read takes its default forever —
+    # `bedrock-models.max_tokens` and `claude-subscription.max_tokens`, both fixed in the
+    # commit that adds this rail) and an UNMASKABLE credential (core's masking keys
+    # entirely off a declared `x-meta.sensitive` property, so no masker can see an
+    # undeclared one — the defect all four published satellite exemplars carried, in
+    # repositories that have no catalogue CI at all).
+    #
+    # Pure stdlib — no core install. Cross-app by necessity: the tests job runs pytest
+    # PER bundle, so no bundle can see the denominator.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Every setting the code reads is declared in the manifest schema
+        run: python .github/scripts/check_settings_declared_reads.py
+
   settings-route-ratchet:
     # Cross-app rail: provider settings moved out of the removed Settings/Tools
     # route. Scan every tracked file because runtime refusals, CLI output, READMEs,
