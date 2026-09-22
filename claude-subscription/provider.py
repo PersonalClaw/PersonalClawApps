@@ -152,8 +152,11 @@ def create_provider(config: dict[str, Any] | None = None) -> ModelProvider:
     endpoint = str(cfg.get("endpoint") or cfg.get("base_url") or "")
     if endpoint:
         options["endpoint"] = endpoint
+    # DECLARED in the manifest schema as of this change — the config form renders only
+    # declared properties, so this read took nothing at all before. Its declared default is 0
+    # and 0 means "leave it to the model", so a zero must not become a zero-token ceiling.
     max_tokens = cfg.get("max_tokens")
-    if isinstance(max_tokens, int) and not isinstance(max_tokens, bool):
+    if isinstance(max_tokens, int) and not isinstance(max_tokens, bool) and max_tokens > 0:
         options["max_tokens"] = max_tokens
     return _factory(
         entry=ProviderEntry(

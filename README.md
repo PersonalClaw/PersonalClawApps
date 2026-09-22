@@ -10,13 +10,13 @@ installs through the same scanner-gated lifecycle as any third-party app.
 
 ## What's here
 
-**68 app bundles**, one `app.json` each. 64 contribute a capability provider and
+**69 app bundles**, one `app.json` each. 65 contribute a capability provider and
 4 contribute none. Five contribute more than one — `companion` (a `tool` and a
 `trigger`) and each of the four channel apps (a `channel` plus a
 `trigger_source`, and `slack-channel` an `inbox` as well) — so the lists below
-count **providers, not bundles**, and those five appear once per provider. 70
-providers over 64 bundles, plus the 4 provider-less bundles, is 74 entries over
-68 bundles; that is the whole gap between the headline and the sum of the counts.
+count **providers, not bundles**, and those five appear once per provider. 71
+providers over 65 bundles, plus the 4 provider-less bundles, is 75 entries over
+69 bundles; that is the whole gap between the headline and the sum of the counts.
 
 Nobody has to keep that true by hand: the `readme-census` CI job
 (`.github/scripts/check_readme_census.py`) checks the headline, every count
@@ -77,6 +77,12 @@ unlisted.
 - **Actions** (`action`, 2) — `webhook-action`, `a2a-action` (hand one task to an
   external A2A agent when a trigger fires, egress-allowlisted).
 - **Inboxes** (`inbox`, 2) — `mail-inbox`, plus `slack-channel`'s inbox half.
+- **Notification delivery** (`notification`, 1) — `dir-notification` (a notification
+  addressed to a teammate is recorded here and fired nowhere here; this writes it
+  into a shared folder as one JSON file per note, so pairing it with `dir-sync` or
+  `s3-sync` is what makes the note actually reach them). Also the reference app for
+  the type: it is the only implementation of the delivery contract anywhere,
+  including core.
 - **Triggers** (`trigger`, 2) — `shared-automations` (serve trigger rows from one
   file a team shares — a synced folder, an NFS share, a checked-out repo), plus
   `companion`'s trigger half.

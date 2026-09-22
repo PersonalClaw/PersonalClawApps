@@ -75,6 +75,18 @@
             ]
           }
         },
+        "max_tokens": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "x-meta": {
+            "label": "Max Output Tokens",
+            "help": "Ceiling on tokens Bedrock may generate per turn. 0 leaves it to the model's own default.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        },
         "video_s3_bucket": {
           "type": "string",
           "default": "",

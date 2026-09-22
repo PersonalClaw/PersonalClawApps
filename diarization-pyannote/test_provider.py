@@ -7,6 +7,42 @@ import pytest
 import provider as P
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_hf_token(monkeypatch):
+    """Make "without a token" mean exactly that, on any host.
+
+    ``_hf_token()`` delegates its fallback to the shared SDK cascade, which reads the real
+    credential store, ``HF_TOKEN``/``HUGGING_FACE_HUB_TOKEN`` and ``~/.cache/huggingface/token``.
+    Left unpatched, a contributor who has ever run ``huggingface-cli login`` would hand the
+    two "refused without a token" cases below a LIVE token — flipping them from an assertion
+    about a guard into a real gated download of a multi-gigabyte model. Neutralized per-test
+    (not globally) so the delegation tests can still substitute their own resolver.
+    """
+    monkeypatch.setattr(P, "resolve_token", lambda: "")
+
+
+def test_hf_token_delegates_to_the_shared_cascade(monkeypatch):
+    """With no app-level setting, the token comes from the shared SDK cascade.
+
+    The point of the change: the provider no longer hand-rolls a single ``os.environ``
+    read, so a token held in the credential store or by ``huggingface-cli`` — neither of
+    which the old two-term lookup could see — now reaches this provider.
+    """
+    monkeypatch.setattr(P, "resolve_token", lambda: "hf_from_cascade")
+    assert P.create_provider({})._hf_token() == "hf_from_cascade"
+
+
+def test_app_setting_wins_over_the_cascade(monkeypatch):
+    """The manifest's ``hf_token`` field stays authoritative when it is set.
+
+    It is persisted only to this bundle's ``data/config.json`` and mirrored into neither the
+    credential store nor the environment, so the cascade cannot see it. If the cascade won
+    here, the declared ``sensitive`` setting would be a dead control.
+    """
+    monkeypatch.setattr(P, "resolve_token", lambda: "hf_from_cascade")
+    assert P.create_provider({"hf_token": "hf_explicit"})._hf_token() == "hf_explicit"
+
+
 def test_create_provider():
     p = P.create_provider({})
     assert p.name == "diarization-pyannote" and p.display_name
