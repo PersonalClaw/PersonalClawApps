@@ -19,6 +19,7 @@ were on a different scale, binding this app would silently re-tune that threshol
 
 from __future__ import annotations
 
+import importlib.util
 import math
 
 import pytest
@@ -32,6 +33,15 @@ from provider import (
 from personalclaw.sdk.vector_store import VectorHit, VectorRecord, VectorStoreProvider
 
 DIM = 8
+
+#: `provider.py` imports `qdrant_client` lazily, inside each method, so this file COLLECTS
+#: cleanly without the dependency and then fails 24 of its 33 tests on
+#: `ModuleNotFoundError` at the first engine call (measured 2026-09-21). That reads as a
+#: broken provider rather than an unprepared environment. The dependency is declared in
+#: `app.json` and installed per bundle by `scripts/test_bundles.py`, which is the gate that
+#: runs this file; the guard below is for every other invocation.
+HAVE_QDRANT = importlib.util.find_spec("qdrant_client") is not None
+needs_qdrant = pytest.mark.skipif(not HAVE_QDRANT, reason="qdrant-client not installed")
 
 
 def _vec(*vals: float) -> list[float]:
@@ -67,7 +77,12 @@ def store(tmp_path):
     32-char hex chunk ids throughout, because that is what core mints (``uuid4().hex``) and
     Qdrant rejects a point id that is neither an int nor a UUID — a test using ``"c1"`` would
     pass through :func:`_point_id`'s UUID5 fallback and never exercise the real path.
+
+    Skips rather than erroring when the engine is absent, so the nine tests in this file that
+    need no engine at all still run and still assert.
     """
+    if not HAVE_QDRANT:
+        pytest.skip("qdrant-client not installed")
     p = QdrantVectorStore(path=str(tmp_path / "q"), collection="test_chunks")
     yield p
 
@@ -79,6 +94,21 @@ C3 = "0" * 31 + "3"
 
 
 # ── the contract, against the real engine ────────────────────────────────────────────
+
+
+def test_qdrant_is_installed_so_the_engine_suite_is_not_vacuous():
+    """A missing `qdrant-client` must read as a RED, not as a quiet row of skips.
+
+    Every assertion in this file that touches the real engine is gated on the dependency, and
+    a suite of skips is indistinguishable from a suite of passes in a CI summary. This test is
+    the vacuity floor for the whole file: install the bundle's declared dependencies (that is
+    what ``./scripts/test-bundles`` does) rather than trusting a green run without them.
+    """
+    assert HAVE_QDRANT, (
+        "qdrant-client is not installed, so every engine assertion in this file was skipped — "
+        "run this bundle through ./scripts/test-bundles, which installs app.json's declared "
+        "pythonDependencies, instead of invoking pytest against a bare environment"
+    )
 
 
 def test_it_implements_the_sdk_contract():
@@ -296,6 +326,7 @@ def test_the_api_key_comes_from_the_environment_when_no_credential_is_registered
     assert _api_key() == ""
 
 
+@needs_qdrant
 def test_a_url_config_builds_a_networked_client(monkeypatch, tmp_path):
     """The server branch of ``_connect``, without a server.
 
@@ -330,6 +361,7 @@ def test_a_url_config_builds_a_networked_client(monkeypatch, tmp_path):
     assert "api_key" not in seen
 
 
+@needs_qdrant
 def test_the_local_folder_wins_over_the_url(tmp_path):
     p = create_provider({"url": "http://should-not-be-used:6333", "path": str(tmp_path / "q")})
     p.upsert([_rec(C1, "item-a", _vec(1.0))])
