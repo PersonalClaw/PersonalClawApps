@@ -19,6 +19,7 @@ Qdrant runs in-process over a `tmp_path` folder, so there is no server and nothi
 
 from __future__ import annotations
 
+import importlib.util
 import struct
 import uuid
 
@@ -31,6 +32,10 @@ from personalclaw.knowledge.store import KnowledgeStore
 from personalclaw.vector_stores import registry as vs_registry
 
 DIM = 8
+
+#: See `test_provider.py`'s note: `provider.py` imports `qdrant_client` lazily, so this file
+#: collects without the dependency and then fails at the first engine call instead of skipping.
+HAVE_QDRANT = importlib.util.find_spec("qdrant_client") is not None
 
 
 def _vec(*vals: float) -> list[float]:
@@ -48,6 +53,8 @@ def wired(tmp_path):
     Registering the provider is what core's type handler does when the app is enabled, so this
     fixture is the composition a user gets by turning the app on — not a special test path.
     """
+    if not HAVE_QDRANT:
+        pytest.skip("qdrant-client not installed")
     qdrant = QdrantVectorStore(path=str(tmp_path / "qdrant"), collection="kb")
     store = KnowledgeStore(str(tmp_path / "knowledge.db"))
     vs_registry.register_provider(qdrant.name, qdrant)
@@ -259,3 +266,127 @@ def test_an_unreachable_store_degrades_without_substituting(tmp_path):
     finally:
         vs_registry.unregister_provider(dead.name)
         store.close()
+
+
+# ── #3139: the same-dimension model switch, against the real engine ───────────────────
+#
+# The acceptance proof for the fourth chunk-vector write site. `reembed_stale_chunks` is the
+# only route that rewrites vectors under UNCHANGED chunk ids, and a same-dimension switch is
+# the only shape in which that is invisible: the row COUNTS match, so the local index's
+# reconciliation sees nothing wrong, and RET-4's freshness join reads the LOCAL row — which
+# was just re-stamped with the new model. An external store left alone therefore keeps the
+# PREVIOUS model's numbers under ids core now certifies as fresh, and answers with them.
+#
+# A dimension change would be caught by row-count/dimension reconciliation and would not test
+# this seam, which is why both models below are 8-dim.
+
+#: Two different embedding models at the SAME dimension.
+_MODEL_A = ("all-minilm-l6-v2", "native")
+_MODEL_B = ("bge-small-en", "native")
+
+
+def _bind_embedding_model(monkeypatch, spec) -> None:
+    """Bind the active embedding selection every fingerprint read resolves through.
+
+    `active_fingerprint()` reads `_active_embedding_spec()`, so this is the one place a model
+    switch happens as far as staleness is concerned — the same accessor the product uses.
+    """
+    provider_model = None if spec is None else (spec[1], spec[0])
+    monkeypatch.setattr(
+        "personalclaw.embedding_providers.registry._active_embedding_spec",
+        lambda: provider_model,
+    )
+
+
+class _ModelEmbedder:
+    """An embedding provider that always answers with one model's vector."""
+
+    def __init__(self, vector) -> None:
+        self._vector = list(vector)
+
+    def embed(self, text):
+        return list(self._vector)
+
+    def embed_for_item(self, title, summary, content=None):
+        return list(self._vector)
+
+    def is_available(self):
+        return True
+
+
+def test_a_same_dimension_model_switch_moves_qdrants_vectors_and_the_ranking(
+    wired, monkeypatch, caplog
+):
+    """Bind Qdrant, switch embedding model at the same dimension, re-embed — and Qdrant serves
+    the NEW model's vectors under the same chunk ids, with the ranking moved to match.
+
+    Asserted by querying Qdrant itself in both directions rather than by reading bytes back:
+    after the switch the re-embedded chunk must score ~1.0 against model B's direction and ~0.0
+    against model A's. A store that was never mirrored would score exactly the other way round
+    while every local row claims to be fresh.
+
+    `caplog` is load-bearing, not decoration. `_external_replace_item` wraps its whole body in a
+    blanket `except Exception` logged at WARNING, so a mirror that raises — on a wrong row
+    width, or on the real vendor client — writes nothing and still leaves this suite's
+    ingestion-time assertions green. A warning here means the proof below is vacuous.
+    """
+    store, qdrant = wired
+    a_dir, b_dir = _vec(1.0), _vec(0.0, 1.0)
+
+    _bind_embedding_model(monkeypatch, _MODEL_A)
+    stale = _ingest(store, "Reembedded", "aaa", [a_dir])
+    # A second document already on model B, so the pass has exactly one item in scope and the
+    # ranking assertion has something to outrank.
+    other = _ingest(store, "Untouched", "bbb", [_vec(0.0, 0.0, 1.0)])
+    store.db.execute(
+        "UPDATE chunks SET embedding_model_id = ?, embedding_provider = ? WHERE item_id = ?",
+        (_MODEL_B[0], _MODEL_B[1], other),
+    )
+    store.db.commit()
+
+    (a_chunk,) = [c["id"] for c in store.get_chunks(stale)]
+    before = qdrant.query(b_dir, k=10)
+    assert all(h.similarity < 0.5 for h in before), "nothing points at model B's direction yet"
+    assert qdrant.describe().count == 2
+
+    _bind_embedding_model(monkeypatch, _MODEL_B)
+    assert store.count_stale_chunk_vectors() == 1, "exactly one chunk is on the old model"
+
+    with caplog.at_level("WARNING"):
+        result = store.reembed_stale_chunks(_ModelEmbedder(b_dir))
+
+    swallowed = [
+        r.getMessage() for r in caplog.records if "external vector store" in r.getMessage()
+    ]
+    assert not swallowed, f"the mirror swallowed a failure, so this proof is vacuous: {swallowed}"
+    assert result["reembedded"] == 1 and result["stale_remaining"] == 0
+
+    # 1. The vectors moved, read out of Qdrant in both directions.
+    assert qdrant.describe().count == 2, "an in-place rewrite, not a re-index"
+    assert [c["id"] for c in store.get_chunks(stale)] == [a_chunk], "the chunk id is preserved"
+    hit = next(h for h in qdrant.query(b_dir, k=10) if h.chunk_id == a_chunk)
+    assert hit.similarity > 0.99, "Qdrant now holds model B's vector for that chunk"
+    gone = next(h for h in qdrant.query(a_dir, k=10) if h.chunk_id == a_chunk)
+    assert gone.similarity < 0.01, (
+        "model A's vector is no longer what Qdrant serves for this chunk — this is the "
+        "assertion an unmirrored external store fails while every local row reads as fresh"
+    )
+
+    # 2. The answer moved with them.
+    retriever = HybridRetriever(store, embedder=lambda _q: b_dir)
+    ranked = [iid for iid, _ in (retriever._vector_search("zzz-no-keyword-match", limit=10) or [])]
+    assert ranked[:1] == [stale], f"the external ranking did not move: {ranked}"
+    assert other not in ranked[:1]
+
+
+def test_qdrant_is_installed_so_the_engine_suite_is_not_vacuous():
+    """A missing `qdrant-client` must read as a RED, not as a quiet row of skips — every test
+    above is gated on the `wired` fixture, which skips without it, and a file of skips is
+    indistinguishable from a file of passes in a CI summary. Install the bundle's declared
+    dependencies (`./scripts/test-bundles` does) rather than trusting a green run without them.
+    """
+    assert HAVE_QDRANT, (
+        "qdrant-client is not installed, so every engine assertion in this file was skipped — "
+        "run this bundle through ./scripts/test-bundles, which installs app.json's declared "
+        "pythonDependencies, instead of invoking pytest against a bare environment"
+    )
