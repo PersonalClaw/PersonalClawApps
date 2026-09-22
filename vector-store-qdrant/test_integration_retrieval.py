@@ -65,6 +65,25 @@ def wired(tmp_path):
         store.close()
 
 
+@pytest.fixture()
+def wired_unbound(tmp_path):
+    """Both halves built, NOTHING registered — the state a user is in before enabling the app.
+
+    Separate from `wired` rather than a flag on it, because the ordering is the whole point of
+    the backfill: a corpus ingested while nothing is bound is a corpus the per-item
+    write-through never saw.
+    """
+    if not HAVE_QDRANT:
+        pytest.skip("qdrant-client not installed")
+    qdrant = QdrantVectorStore(path=str(tmp_path / "qdrant"), collection="kb")
+    store = KnowledgeStore(str(tmp_path / "knowledge.db"))
+    try:
+        yield store, qdrant
+    finally:
+        vs_registry.unregister_provider(qdrant.name)
+        store.close()
+
+
 def _ingest(store, title: str, body: str, vectors) -> str:
     """Ingest a document whose chunk line spans are REAL.
 
@@ -377,6 +396,45 @@ def test_a_same_dimension_model_switch_moves_qdrants_vectors_and_the_ranking(
     ranked = [iid for iid, _ in (retriever._vector_search("zzz-no-keyword-match", limit=10) or [])]
     assert ranked[:1] == [stale], f"the external ranking did not move: {ranked}"
     assert other not in ranked[:1]
+
+
+# ── binding over an EXISTING library: the backfill, against the real engine ───────────
+#
+# The write-through mirrors one item at a time as it is ingested, so a store bound AFTER a
+# corpus exists has seen none of it. That state is not loud: a freshly-created Qdrant is
+# perfectly REACHABLE, so the seam's fail-soft WARNING never fires — the chunk arm simply
+# answers nothing, which reads identically to "no matches". Only a backfill closes it, and
+# only a real engine proves the backfill wrote points a query can find.
+
+
+def test_binding_over_an_existing_library_backfills_qdrant(wired_unbound):
+    """Enabling the app over a library that already exists fills the store.
+
+    Asserted against the real engine in both directions: empty-and-reachable before the bind
+    (so the silence is the defect, not an error), and answering a search after it.
+    """
+    store, qdrant = wired_unbound
+    q = _vec(1.0)
+    iid = _ingest(store, "Ingested before binding", "alpha", [q, _vec(0.0, 1.0)])
+    # MEASURED: a never-written Qdrant reports `count=None`, not 0 — it creates the collection
+    # on first write, and describe() says "collection not created yet". That is exactly why a
+    # backfill's cheap skip must treat an unreportable count as "must walk" rather than "in
+    # sync": against this real provider `None == local_chunks` never holds, but a backend that
+    # DID report 0 here would be skipped into permanent emptiness by an `is not None` slip.
+    assert qdrant.describe().count in (0, None), "nothing was mirrored while nothing was bound"
+    assert qdrant.query(q, k=10) == [], "and nothing is retrievable from it"
+
+    vs_registry.register_provider(qdrant.name, qdrant)
+    try:
+        result = store.reindex_external_vector_store()
+        assert result["items"] == 1 and result["chunks"] == 2, result
+        assert qdrant.describe().count == 2
+        assert {h.item_id for h in qdrant.query(q, k=10)} == {iid}
+
+        hits = HybridRetriever(store, embedder=lambda _q: q).search("zzqqxx nothing", limit=5)
+        assert [h["id"] for h in hits] == [iid], "and the backfilled vectors answer a search"
+    finally:
+        vs_registry.unregister_provider(qdrant.name)
 
 
 def test_qdrant_is_installed_so_the_engine_suite_is_not_vacuous():
