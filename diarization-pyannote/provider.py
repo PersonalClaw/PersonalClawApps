@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from typing import Any
 
+from personalclaw.sdk.credentials import resolve_token
 from personalclaw.sdk.diarization import (
     DiarizationModel,
     DiarizationProvider,
@@ -53,7 +53,24 @@ class PyannoteDiarizationProvider(DiarizationProvider, LocalModelProvider):
         return "Diarization (pyannote)"
 
     def _hf_token(self) -> str:
-        return str(self._config.get("hf_token") or os.environ.get("HF_TOKEN") or "").strip()
+        """This app's own setting, else the SHARED SDK cascade (LOCAL-MODEL-MANAGER-V2 §5).
+
+        The second term used to be a private ``os.environ["HF_TOKEN"]`` read, which saw
+        neither the managed credential store nor a ``huggingface-cli login``. It now
+        delegates to :func:`personalclaw.sdk.credentials.resolve_token` — the one shared
+        resolver (credential store → ``HF_TOKEN``/``HUGGING_FACE_HUB_TOKEN`` → the
+        ``huggingface-cli`` token file, preferring a whoami-valid source) — so this provider
+        resolves the token identically to every other HF-touching surface instead of
+        re-deriving a narrower answer.
+
+        The app's declared ``hf_token`` setting stays FIRST because it is the one source
+        nothing else can see: it is persisted to this bundle's ``data/config.json`` and
+        mirrored nowhere — not into the credential store, not into ``os.environ`` — so the
+        cascade is structurally blind to it. Dropping this term would leave the manifest's
+        documented, ``sensitive``-flagged HuggingFace Token field as a dead control that
+        silently ignored whatever the operator pasted into it.
+        """
+        return str(self._config.get("hf_token") or "").strip() or resolve_token()
 
     async def is_available(self) -> bool:
         ok, _ = availability()
@@ -63,8 +80,10 @@ class PyannoteDiarizationProvider(DiarizationProvider, LocalModelProvider):
         has_token = bool(self._hf_token())
         return [DiarizationModel(
             name=_MODEL, size_mb=30, gated=True,
+            # "in app settings" would now be a lie: the token may equally come from the
+            # credential store, the environment, or a `huggingface-cli login`.
             description=("pyannote 3.1 — higher accuracy; needs a HuggingFace token + license "
-                         "acceptance." + ("" if has_token else " (token not set in app settings)")),
+                         "acceptance." + ("" if has_token else " (no HuggingFace token found)")),
             downloaded=self._cached() if has_token else False,
         )]
 
