@@ -376,6 +376,15 @@ boundary is lint-enforced):
 | `channel` | `personalclaw.sdk.channel` `ChannelTransportProvider` + `ChannelDelivery` | messaging channels (inbound + outbound delivery) | `slack-channel` |
 | `action` | `personalclaw.sdk.action` | trigger/schedule action providers | `webhook-action` |
 | `skills` | `personalclaw.sdk.skill` `SkillsMarketplace` | Skills → Browse (read-only search + fetch) | `skills-sh` |
+| `notification` | `personalclaw.sdk.notification` `NotificationDeliveryProvider` | delivery of a notification addressed to somebody this machine cannot reach — a foreign-addressed note is recorded locally, fired nowhere locally, and offered to each backend until one says it addresses them | `dir-notification` |
+
+This table lists the types with a **reference app**. Ten more are registered and
+implementable — `inbox`, `knowledge`, `memory`, `prompt`, `sync`, `sandbox`, `ocr`,
+`trigger`, `trigger_source`, `vector_store` — and three (`task`, `workflow`, `duty_gate`)
+are registered in core with a live handler but have **no SDK submodule yet**, so an app
+cannot implement them without reaching around the lint-enforced boundary. Ask before
+starting one of those three; the fix is to promote the contract to `personalclaw.sdk.*`,
+not to import the core module.
 
 Thin branded model apps can use `personalclaw.sdk.provider_helpers`
 (`register_branded_app`) — a few lines wrapping a protocol client core already

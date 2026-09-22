@@ -1201,8 +1201,19 @@ def create_provider(config: dict[str, Any]) -> BedrockProvider:
     ``system_prompt`` / ``max_tokens`` from the instance settings. No
     credential is resolved — boto3's chain authenticates (G-AUTH).
     """
+    # `max_tokens` is now DECLARED in the manifest schema, which is what makes it settable at
+    # all — the config form renders only declared properties, so before that this read took
+    # `None` forever however the docstring above read. Its declared default is 0, and 0 means
+    # "leave it to the model": a bare `isinstance(v, int)` would pass 0 straight through as a
+    # zero-token ceiling.
     max_tokens_value = config.get("max_tokens")
-    max_tokens = int(max_tokens_value) if isinstance(max_tokens_value, int) else None
+    max_tokens = (
+        int(max_tokens_value)
+        if isinstance(max_tokens_value, int)
+        and not isinstance(max_tokens_value, bool)
+        and max_tokens_value > 0
+        else None
+    )
     return BedrockProvider(
         # Empty when unpinned → resolved from live discovery at start() (no baked id).
         model=config.get("model") or config.get("default_model") or "",
