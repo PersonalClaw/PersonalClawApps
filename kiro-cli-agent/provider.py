@@ -14,6 +14,9 @@ binary (not an npm package), so there is no ``npx`` fallback.
 
 The binary is absent on a generic OSS machine, so the provider registers nothing
 and probes as unavailable there — correct for an internal-only CLI.
+
+kiro-cli sandboxes its own child process, which is why this bundle declares
+``self_sandboxing=True`` — see :data:`SELF_SANDBOXING` for the measurement.
 """
 
 from __future__ import annotations
@@ -38,6 +41,28 @@ _BIN_ENV = "KIRO_CLI_BIN"
 _BIN_NAMES = ["kiro-cli"]
 # kiro-cli enters ACP stdio-protocol mode via the `acp` subcommand.
 _ACP_SUBCOMMAND = ["acp"]
+
+# kiro-cli initializes its OWN OS-level sandbox around the child it execs, and that
+# inner `sandbox_apply` is refused inside the host's generated seatbelt profile. (Not
+# because macOS forbids nesting as such — a bare `(allow default)` profile nests fine;
+# it is the host profile's `deny` rules that forbid it.) Under the host's default
+# `sandbox-exec` wrap the CLI therefore dies during startup instead of speaking ACP:
+#
+#   sandbox initialization failed: Operation not permitted
+#   Error: Failed to spawn child process
+#   Caused by: Invalid argument (os error 22)
+#
+# It writes that to stderr, nothing to stdout, and exits 1 — so the host's only
+# protocol-level symptom was ``handshake failed: ACP stdout EOF``, with no hint that a
+# sandbox was the cause. Measured as a paired control on kiro-cli 2.23.0 / macOS 27.0:
+# the same argv, env, cwd and ``start_new_session`` spawn fails wrapped and completes
+# ``initialize`` unwrapped (349-byte response, empty stderr).
+#
+# Declaring the fact here — not a sandbox level — keeps this vendor-specific and lets
+# the core derive ``sandbox_mode="off"``. The CLI's own sandbox still confines the
+# child, and every ACP tool call still crosses the host's PreToolUse deny gate and
+# four-tier approval, which is where tool authority actually lives.
+SELF_SANDBOXING = True
 
 
 def resolve_command() -> list[str] | None:
@@ -103,5 +128,7 @@ def create_provider(config: dict | None = None):
         model=model,
         extension=EXTENSION,
         login_command=login_command(command),
+        # kiro-cli applies its own OS sandbox; the host's cannot nest around it.
+        self_sandboxing=SELF_SANDBOXING,
     )
     return None
