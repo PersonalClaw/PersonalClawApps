@@ -400,6 +400,26 @@ jobs:
       - name: Every lead sentence fits the Store card
         run: python .github/scripts/check_store_card_copy.py
 
+  publication-hygiene:
+    # Cross-repo rail: this repository is PUBLIC, so `git ls-files` is exactly what every
+    # clone receives — and `git rm` removes a path from the tree but never from history.
+    # That makes the PR the only cheap moment to refuse an unfit path. Catches per-PR
+    # screenshot dumps, scratch/residue names, build output, embedded git worktrees
+    # (`git add -A` stages each as a gitlink pointing at a local absolute path), dotenvs
+    # with real values, oversized binaries, and absolute paths into a real developer's home.
+    # Rides here with the other cross-app sweeps because the `tests` job runs pytest per
+    # bundle and these defects belong to no bundle. The script proves every pattern against
+    # a sample it must catch (and one it must spare) BEFORE trusting a clean scan.
+    # Pure stdlib — no core install needed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Every tracked path is fit to publish
+        run: python .github/scripts/check_publication_hygiene.py
+
   dco:
     # Every commit in a PR must carry a Signed-off-by trailer (DCO — plan 37),
     # same provenance rule as core. Pure-git check, PR-only.
