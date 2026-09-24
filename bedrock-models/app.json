@@ -5,6 +5,7 @@
   "description": "Amazon Bedrock models, authenticated with your own AWS credential chain. No key is stored by PersonalClaw. Chat (Converse API), embedding (Titan/Cohere), image generation (Nova Canvas), video generation (Nova Reel), and speech-to-text. One instance per AWS profile/region.",
   "icon": "Cloud",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "model",
     "llm",

@@ -5,6 +5,7 @@
   "description": "Hand one task to an external A2A agent when a trigger fires. Reaches only hosts the operator has allow-listed under Settings › Security › Network egress.",
   "icon": "Share2",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "action"
   ],

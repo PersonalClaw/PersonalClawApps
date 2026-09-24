@@ -5,6 +5,7 @@
   "description": "Local, in-process text embedding models \u2014 runs on your machine, no API key. Built on sentence-transformers. Provides the embedding capability; bind a model in Settings \u2192 Models. Needs the sentence-transformers/torch package (server or container build).",
   "icon": "Binary",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "model",
     "embedding",

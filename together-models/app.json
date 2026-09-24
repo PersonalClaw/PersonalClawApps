@@ -5,6 +5,7 @@
   "description": "Together AI serverless inference (OpenAI-compatible). Bring your own Together API key.",
   "icon": "Boxes",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "model",
     "llm"

@@ -5,6 +5,7 @@
   "description": "OpenAI chat + embedding models (Chat Completions API). Bring your own OpenAI API key.",
   "icon": "Brain",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "model",
     "llm",

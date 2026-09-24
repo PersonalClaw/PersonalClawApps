@@ -5,6 +5,7 @@
   "description": "Telegram bot integration over the raw Bot API. Pair a chat, converse in DMs, track groups, and receive results with inline approvals.",
   "icon": "Send",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "channel",
     "bundled"

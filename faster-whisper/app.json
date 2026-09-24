@@ -5,6 +5,7 @@
   "description": "Speech-to-text using CTranslate2-optimized Whisper models. Download and manage STT models for voice input.",
   "icon": "Mic",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "model",
     "stt"

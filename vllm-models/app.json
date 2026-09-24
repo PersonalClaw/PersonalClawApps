@@ -5,6 +5,7 @@
   "description": "A local vLLM server (OpenAI-compatible). Point it at your vLLM endpoint; capabilities are model-dependent.",
   "icon": "Cpu",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "model",
     "llm"

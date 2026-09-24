@@ -5,6 +5,7 @@
   "description": "Connect OpenAI-compatible tool servers that expose tools via REST API.",
   "icon": "Wrench",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "tool"
   ],

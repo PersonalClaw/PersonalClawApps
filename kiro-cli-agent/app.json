@@ -5,6 +5,7 @@
   "description": "Run the kiro-cli agent (acp:kiro-cli) over ACP. kiro-cli is an Amazon-internal CLI; this provider activates only when the `kiro-cli` binary is present on the machine, and is unavailable otherwise.",
   "icon": "SquareTerminal",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "agent",
     "acp",
