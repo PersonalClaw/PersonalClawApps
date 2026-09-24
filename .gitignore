@@ -24,6 +24,18 @@ build/
 venv/
 .venv/
 
+# Linked git worktrees (`git worktree add .worktrees/<name>`). Root-anchored because each
+# entry is an EMBEDDED GIT REPOSITORY: `git add -A` stages it as a gitlink pointing at a
+# local absolute path that exists on no other machine, and git says so itself — "Clones of
+# the outer repository will not contain the contents of the embedded repository and will not
+# know how to obtain it." This repo is PUBLIC, so the artefact of the most ordinary
+# contributor reflex there is would be a broken clone for every user.
+/.worktrees/
+
+# Per-user local tool state (`gh` writes .local/state/gh/device-id — a stable installation
+# identifier). Not repo content, and not reproducible on another machine.
+/.local/
+
 # Secrets
 .env
 .env.local
