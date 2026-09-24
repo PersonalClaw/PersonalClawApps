@@ -5,6 +5,7 @@
   "description": "OpenAI-compatible LLM and embedding provider via Ollama. Connect to local or remote Ollama instances for chat and embedding.",
   "icon": "Server",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "model",
     "llm",

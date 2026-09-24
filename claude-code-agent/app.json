@@ -5,6 +5,7 @@
   "description": "Run Anthropic's Claude Code as an agent (acp:claude-code) via the Zed ACP adapter. Claude self-authenticates with your `claude` login; PersonalClaw stores no key. Spawned Claude is hardened: an isolated CLAUDE_CONFIG_DIR strips inherited auto-approve permissions so every tool routes through the host approval gate.",
   "icon": "SquareTerminal",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "agent",
     "acp",

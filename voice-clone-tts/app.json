@@ -5,6 +5,7 @@
   "description": "Cloning-capable text-to-speech beside Piper. Zero-shot voice cloning from a short reference clip, run as an isolated sidecar (torch-heavy diffusion engine). Declares supports_cloning so a clone-kind voice profile routes here instead of being refused.",
   "icon": "AudioLines",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "model",
     "tts"

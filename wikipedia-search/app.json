@@ -5,6 +5,7 @@
   "description": "Keyless encyclopedic search over Wikipedia: ranked articles with intro-extract snippets. No API key \u2014 uses the public MediaWiki API. Links-only (web_fetch an article to read its full body). Best for factual/reference lookups.",
   "icon": "BookMarked",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "search",
     "bundled"

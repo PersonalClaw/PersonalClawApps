@@ -5,6 +5,7 @@
   "description": "POST agent lifecycle events to an HTTP endpoint. Supports method/headers overrides and a templated body.",
   "icon": "Webhook",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "action"
   ],

@@ -5,6 +5,7 @@
   "description": "Slack workspace integration. Monitor channels, respond to mentions, and interact via Slack.",
   "icon": "Slack",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "channel",
     "bundled"

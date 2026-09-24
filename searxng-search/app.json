@@ -5,6 +5,7 @@
   "description": "Self-hosted, no-key web search via a SearXNG meta-search instance. Point it at your own SearXNG URL for private, free web search and links.",
   "icon": "Search",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "search",
     "self-hosted"

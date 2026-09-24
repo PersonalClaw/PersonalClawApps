@@ -5,6 +5,7 @@
   "description": "Sync PersonalClaw state between your machines through a shared or synced folder. That can be a cloud-sync mount, an NFS share, or a mounted USB drive. No credentials, no server: point two machines at the same folder and durability converges. The folder holds shard objects only; secrets are excluded upstream and never touch it.",
   "icon": "FolderSync",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "sync",
     "bundled"

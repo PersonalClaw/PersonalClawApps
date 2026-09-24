@@ -5,6 +5,7 @@
   "description": "Meta Muse Spark chat models via the Meta AI API (OpenAI-compatible). Bring your own Meta AI API key.",
   "author": "PersonalClaw",
   "icon": "Brain",
+  "license": "MIT",
   "tags": [
     "model",
     "llm"

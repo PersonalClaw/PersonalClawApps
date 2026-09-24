@@ -5,6 +5,7 @@
   "description": "Mistral AI models via its OpenAI-compatible endpoint. Bring your own Mistral API key.",
   "icon": "Wind",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "model",
     "llm"

@@ -5,6 +5,7 @@
   "description": "Groq LPU inference (OpenAI-compatible), very low latency. Bring your own Groq API key.",
   "icon": "Zap",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "model",
     "llm"

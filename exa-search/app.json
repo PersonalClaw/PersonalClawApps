@@ -5,6 +5,7 @@
   "description": "Neural/semantic web search: embeddings-ranked results with relevant highlights. Also returns extracted content, plus single-URL content retrieval. Good for discovering non-obvious sources. API key from exa.ai.",
   "icon": "Search",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "search",
     "bundled"

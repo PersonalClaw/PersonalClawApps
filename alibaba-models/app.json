@@ -5,6 +5,7 @@
   "description": "Alibaba Cloud Model Studio (DashScope) \u2014 Qwen chat and embedding models. Image generation too (Qwen-Image, Wan), and more. Select your regional endpoint.",
   "icon": "Cloud",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "model",
     "llm",

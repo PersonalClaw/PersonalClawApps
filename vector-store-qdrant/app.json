@@ -5,6 +5,7 @@
   "description": "Point knowledge vector search at your own Qdrant instead of the built-in sqlite-vec index. Chunk vectors are written to Qdrant as documents are ingested, and Qdrant answers the vector half of hybrid retrieval — FTS5 keyword search, the graph arm and RRF fusion are unchanged. Your documents stay in PersonalClaw's own database; Qdrant holds vectors and chunk ids only. Enable it to bind it; disable it and retrieval returns to the built-in index.",
   "icon": "Database",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "knowledge",
     "vector-store",

@@ -5,6 +5,7 @@
   "description": "DeepSeek chat + reasoner models (OpenAI-compatible). Bring your own DeepSeek API key.",
   "icon": "Waves",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "model",
     "llm"

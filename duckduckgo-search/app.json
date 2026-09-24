@@ -5,6 +5,7 @@
   "description": "Keyless, zero-config web search \u2014 no API key and no self-hosted instance. The out-of-box default so web_search works for everyone; bind a higher-quality provider (Tavily/Exa/\u2026) per use-case in Search to upgrade. Links + snippets only.",
   "icon": "Search",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "search",
     "no-key"

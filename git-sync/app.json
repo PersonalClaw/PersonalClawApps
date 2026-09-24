@@ -5,6 +5,7 @@
   "description": "Sync PersonalClaw state between your machines through a git remote you own. The transport keeps a local working clone and moves durability shard objects as files it commits and pushes, so `git log -p` over the shards is a human-diffable audit history of what the assistant knows — the whole point of this transport. It stays plaintext (never encrypted) so that history stays readable; secrets are excluded upstream and never touch it.",
   "icon": "GitBranch",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "sync",
     "bundled"

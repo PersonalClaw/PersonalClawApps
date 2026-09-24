@@ -5,6 +5,7 @@
   "description": "Image and video generation via FAL's hosted models (FLUX, Kling, Veo and others). Generate images and videos from a prompt; bind a FAL model to the Image Generation or Video Generation use case in Models. Needs a FAL API key (fal.ai).",
   "icon": "Image",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "model",
     "image_gen",

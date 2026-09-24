@@ -5,6 +5,7 @@
   "description": "Deliver a teammate-addressed notification into a shared folder, one JSON file per note. Pairs with Folder Sync or S3 Sync: that folder is how the note actually reaches the other person's machine. Only usernames on the roster you declare are accepted; anything else is declined so another backend can take it.",
   "icon": "FolderInput",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "notification",
     "bundled"

@@ -6,6 +6,7 @@
   "icon": "Sparkles",
   "heroImage": "assets/hero.svg",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "model",
     "llm",

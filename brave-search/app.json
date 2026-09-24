@@ -5,6 +5,7 @@
   "description": "Cheap, broad web search: ranked links with descriptions and a recency filter. Extra snippets come with each result. Links-only (no answer or page content \u2014 web_fetch a result to read it). API key from search.brave.com.",
   "icon": "Search",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "search",
     "bundled"

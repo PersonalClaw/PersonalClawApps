@@ -6,6 +6,7 @@
   "icon": "Store",
   "heroImage": "assets/hero.svg",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "skills",
     "bundled"

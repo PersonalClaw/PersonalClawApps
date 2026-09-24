@@ -5,6 +5,7 @@
   "description": "Sync PersonalClaw state between your machines with rsync over ssh. Any host you can already log into works — a home server, a NAS, a VPS. No object store, no credentials beyond your existing ssh key. Shards are encrypted end-to-end by default, and secrets are excluded upstream so they never reach the host.",
   "icon": "Server",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "sync",
     "bundled"
