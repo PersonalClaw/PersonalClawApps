@@ -5,6 +5,7 @@
   "description": "Any Anthropic-compatible (Messages API) endpoint. Supply the base URL + API key.",
   "icon": "Sparkles",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "model",
     "llm",

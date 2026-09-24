@@ -5,6 +5,7 @@
   "description": "Connect Model Context Protocol (MCP) servers to provide tools via stdio or SSE transport.",
   "icon": "Plug",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "tool"
   ],

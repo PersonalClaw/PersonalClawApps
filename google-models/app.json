@@ -5,6 +5,7 @@
   "description": "Google Gemini models \u2014 bring your own Gemini API key. Chat, embedding, image generation (Imagen / gemini-image), video generation (Veo), and text-to-speech. One instance serves every use case.",
   "icon": "Sparkle",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "model",
     "llm",

@@ -5,6 +5,7 @@
   "description": "Text-to-speech using Piper neural voice models. Download and manage TTS voices for audio output.",
   "icon": "Volume2",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "model",
     "tts"

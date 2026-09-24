@@ -5,6 +5,7 @@
   "description": "Answer-first web search: Sonar answers your query and cites its sources. Answers come directly from live web results. Best when you want a synthesized answer with citations, not just links. API key from perplexity.ai.",
   "icon": "Search",
   "author": "PersonalClaw",
+  "license": "MIT",
   "tags": [
     "search",
     "bundled"
