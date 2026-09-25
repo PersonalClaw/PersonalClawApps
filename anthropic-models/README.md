@@ -17,6 +17,16 @@ It imports only the PersonalClaw **SDK** (never core internals), so core can evo
 without breaking it:
 
 - `personalclaw.sdk.model`
+- `personalclaw.sdk.net` — the guarded `fetch` the connection test probes with, so the
+  operator's egress policy applies to it like any other outbound call.
+
+## Connection test
+
+"Test connection" (Settings → Providers) is **measured**, not inferred: it issues an
+authenticated `GET /v1/models` against the configured Base URL and reports what came
+back. A key Anthropic rejects reads as rejected. The model list the picker offers stays
+curated (see `provider.py`), because excluding invitation-only ids is a decision no
+endpoint can make for us.
 
 ## Install
 
