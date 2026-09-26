@@ -1288,8 +1288,8 @@ def analyze_image(path: Path) -> tuple[list[Finding], dict[str, Any]]:
             recovery_hints=[
                 "Reinstall Design Critique from the Store — Pillow ships with this app, "
                 "not with PersonalClaw itself.",
-                "Restart the gateway after the reinstall (the install reports "
-                "restart_required); the URL review works in the meantime.",
+                "The reinstall needs no restart unless it says one is needed; the URL "
+                "review works in the meantime.",
             ],
         ) from exc
 

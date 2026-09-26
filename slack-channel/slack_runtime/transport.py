@@ -1,8 +1,10 @@
 """SlackTransport — the ChannelTransportProvider that owns the Slack channel.
 
 Outbound + health/test are always available (token-gated). Inbound is driven by
-:meth:`start_inbound`, which the gateway calls once at boot with a
-:class:`~personalclaw.gateway_services.GatewayServices` handle: the transport
+:meth:`start_inbound`, which the gateway calls with a
+:class:`~personalclaw.gateway_services.GatewayServices` handle whenever it starts this
+channel's receiver — at boot, and when the channel is turned on, updated or its
+settings are saved (it stops the previous instance's receiver first): the transport
 builds a :class:`SlackRuntime`, wires the Socket-Mode receiver + interactive
 handlers (which live in this bundle), and connects — with the same
 retry/degrade-gracefully behavior the gateway used to inline.
@@ -90,15 +92,15 @@ class SlackTransport(ChannelTransportProvider):
         # same place the outbound half does (#952).
         self._config = LiveConfig(config if config is not None else {})
         self._runtime: SlackRuntime | None = None
-        #: The ``(bot, app)`` tokens the gateway drove the receiver with at boot — ``None`` until
-        #: it did. Socket Mode keeps the tokens it started with, so this is what tells ``health``
-        #: that tokens saved since have not reached inbound.
+        #: The ``(bot, app)`` tokens the receiver was started with — ``None`` until the gateway
+        #: started it. Socket Mode keeps the tokens it started with, so this is what tells
+        #: ``health`` that tokens saved since have not reached inbound.
         self._inbound_tokens: tuple[str, str] | None = None
         #: True once the Socket-Mode receiver is actually connected. ``health()`` needs the
         #: three-way distinction — connected / tried-and-failed / never driven — because a
-        #: config save re-cycles this provider and builds a FRESH transport that the
-        #: gateway does not re-drive, so "never driven" is a real, reportable state and not
-        #: just a boot-time blink.
+        #: config save re-cycles this provider and builds a FRESH transport, which is "never
+        #: driven" until the gateway starts its receiver (and for good in a process that runs
+        #: no receivers, a CLI), so it is a real, reportable state.
         self._inbound_started: bool = False
         #: Why inbound is not running, when it was driven and failed (``""`` otherwise).
         #: ``health()``/``test()`` report it, so the provider row can no longer show a
@@ -129,7 +131,7 @@ class SlackTransport(ChannelTransportProvider):
     async def disconnect(self) -> None:
         return None
 
-    # ── Inbound: the gateway drives this once at boot ──
+    # ── Inbound: the gateway starts and stops this with the channel ──
     async def start_inbound(self, services: Any) -> None:
         """Build the Slack runtime, wire the socket receiver, connect (retry/degrade)."""
         # Before the runtime reads its owner, and before the token check, so a Slack given its
@@ -286,16 +288,19 @@ class SlackTransport(ChannelTransportProvider):
         if not tokens[0]:
             return {"state": "offline", "detail": "No bot token configured"}
         if self._inbound_tokens is not None and self._inbound_tokens != tokens:
+            # Tokens saved in the running gateway replace this instance and its receiver; ones
+            # changed outside it are what this reports.
             if self._inbound_started:
                 detail = (
                     "Outbound uses the saved tokens; Socket Mode is still connected with the "
-                    "ones it started with. Restart the gateway to move inbound onto the saved "
-                    "tokens."
+                    "ones it started with. Configure → Save, or turning the channel off and on, "
+                    "moves inbound onto the saved tokens."
                 )
             else:
                 detail = (
-                    "Outbound ready, inbound OFFLINE — the Socket-Mode receiver starts with the "
-                    "gateway, so the tokens saved since then take effect on the next restart."
+                    "Outbound ready, inbound OFFLINE — the Socket-Mode receiver was started "
+                    "before these tokens were saved. Configure → Save, or turning the channel "
+                    "off and on, starts it on them."
                 )
             return {"state": "error", "detail": detail}
         if self._inbound_started:
@@ -308,8 +313,8 @@ class SlackTransport(ChannelTransportProvider):
         return {
             "state": "error",
             "detail": (
-                "Outbound ready, inbound NOT STARTED — the gateway drives the Socket-Mode "
-                "receiver once at boot, so saved tokens take effect on the next restart."
+                "Outbound ready, inbound NOT STARTED — the gateway starts the Socket-Mode "
+                "receiver when it turns the channel on, and Configure → Save starts it now."
             ),
         }
 

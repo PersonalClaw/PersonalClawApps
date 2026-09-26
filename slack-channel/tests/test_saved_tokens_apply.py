@@ -1,9 +1,12 @@
 """Tokens saved on the Apps page reach Test, Connect, health and send without a restart.
 
-The registry builds the transport ONCE, from the app store as it is at enable time, and the Apps
-page's Configure → Save (``PUT /api/apps/{name}/config``) writes the store and re-cycles nothing.
+The registry built the transport ONCE, from the app store as it was at enable time, and the Apps
+page's Configure → Save (``PUT /api/apps/{name}/config``) wrote the store and re-cycled nothing.
 The transport resolved its tokens in ``__init__``, so after a successful Save every surface kept
-answering "No bot token configured" until the app was reinstalled or the gateway restarted.
+answering "No bot token configured" until the app was reinstalled or the gateway restarted. A
+save now also rebuilds the transport, and the gateway moves its receiver onto the new instance
+(core #3628); these tests hold one instance, so they also cover what it says when its tokens
+change under it.
 
 Saves here go through core's own route handler, so the test writes exactly what the dashboard
 writes. Nothing opens a socket: ``RealSlackClient`` is replaced wherever a probe would use it.
@@ -107,6 +110,8 @@ async def test_tokens_saved_after_enable_reach_connect_and_health(installed):
     health = await transport.health()
     assert health["state"] != "offline", health
     assert "No bot token" not in health["detail"], health
+    # Never driven (nothing runs its receiver here): honest about inbound, and not a restart.
+    assert "NOT STARTED" in health["detail"] and "restart" not in health["detail"], health
 
 
 @pytest.mark.asyncio
@@ -149,8 +154,9 @@ async def test_a_rotated_token_sends_on_the_new_one_not_the_receivers(installed,
 
 @pytest.mark.asyncio
 async def test_the_boot_reason_does_not_outlive_the_token_it_was_about(installed, fake_client):
-    """Booted with nothing configured, inbound stayed offline for "no Bot Token". After a save that
-    sentence is false; what is true is that the receiver takes the saved tokens at the next start."""
+    """Started with nothing configured, inbound stayed offline for "no Bot Token". After a save that
+    sentence is false; what is true is that the receiver takes the saved tokens at its next start,
+    and a save or a toggle starts it (since core #3628 a restart is not the only thing that does)."""
     transport = _registry_built()
     await transport.start_inbound(_Services())
     assert "no Bot Token" in transport._inbound_offline_reason
@@ -160,9 +166,29 @@ async def test_the_boot_reason_does_not_outlive_the_token_it_was_about(installed
     health = await transport.health()
     assert health["state"] == "error", health
     assert "no Bot Token" not in health["detail"]
-    assert "next restart" in health["detail"], health
+    assert "restart" not in health["detail"], health
+    assert "Configure → Save, or turning the channel off and on" in health["detail"], health
     probe = await transport.test()
-    assert probe["ok"] is False and "next restart" in probe["detail"], probe
+    assert probe["ok"] is False and "restart" not in probe["detail"], probe
+    assert "Configure → Save" in probe["detail"], probe
+
+
+@pytest.mark.asyncio
+async def test_socket_mode_still_on_older_tokens_says_how_to_move_it(installed, fake_client):
+    """Socket Mode keeps the tokens it connected with. Tokens changed under it (here, a save no
+    registry rebuilt it for) reach outbound at once, and the status says how inbound follows."""
+    await _configure_save({"bot_token": "bot-token-old", "app_token": "app-token-old"})
+    transport = _registry_built()
+    transport._inbound_tokens = ("bot-token-old", "app-token-old")
+    transport._inbound_started = True
+
+    await _configure_save({"bot_token": "bot-token-new", "app_token": "app-token-old"})
+
+    health = await transport.health()
+    assert health["state"] == "error", health
+    assert "still connected with the ones it started with" in health["detail"], health
+    assert "restart" not in health["detail"], health
+    assert "Configure → Save, or turning the channel off and on" in health["detail"], health
 
 
 @pytest.mark.asyncio

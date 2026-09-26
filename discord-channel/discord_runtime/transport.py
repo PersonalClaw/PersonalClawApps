@@ -1,8 +1,10 @@
 """DiscordTransport — the ChannelTransportProvider that owns the Discord channel.
 
 Outbound + health/test are token-gated and always available. Inbound is the Gateway
-WebSocket loop started by :meth:`start_inbound`, which the gateway calls once at
-boot with a :class:`GatewayServices` handle. The loop:
+WebSocket loop started by :meth:`start_inbound`, which PersonalClaw's gateway calls
+with a :class:`GatewayServices` handle whenever it starts this channel's receiver: at
+boot, and when the channel is turned on, updated or its settings are saved (it stops
+the previous instance's receiver first). The loop:
 
 1. holds a gateway connection (:class:`DiscordGateway` owns identify/heartbeat/
    resume — see its module docstring for the WS lifecycle);
@@ -12,9 +14,9 @@ boot with a :class:`GatewayServices` handle. The loop:
    fencing, redaction, session linking and the turn itself all happen in core, so
    this transport can't forget any of them; it keeps only the outbound half,
    delivering the verdict's canned reply. Core mirrors agent replies back out
-   through the :class:`DiscordDelivery` this transport registers at boot
-   (the outbound half of the seam). ``INTERACTION_CREATE`` events (button presses) resolve a pending
-   approval in the delivery.
+   through the :class:`DiscordDelivery` this transport registers as its receiver
+   starts (the outbound half of the seam). ``INTERACTION_CREATE`` events (button
+   presses) resolve a pending approval in the delivery.
 
 Two Discord-specific inbound facts shape this file:
 
@@ -82,8 +84,8 @@ class DiscordTransport(ChannelTransportProvider):
         # Kept live, so a Configure → Save reaches the next Test/Connect/health/send (see
         # LiveConfig) instead of the next restart.
         self._config = LiveConfig(config or {})
-        #: The bot token the gateway drove the receiver with at boot (``""`` when it had none) —
-        #: ``None`` until it did. The gateway session keeps the token it started with.
+        #: The bot token the receiver was started with (``""`` when there was none) — ``None``
+        #: until PersonalClaw started it. The gateway session keeps the token it started with.
         self._inbound_token: str | None = None
         self._services: Any = None
         self._api: DiscordAPI | None = None
@@ -132,7 +134,7 @@ class DiscordTransport(ChannelTransportProvider):
     def connected(self) -> bool:
         return bool(self._token())
 
-    # ── Inbound: the gateway drives this once at boot ──
+    # ── Inbound: PersonalClaw's gateway starts and stops this with the channel ──
     async def start_inbound(self, services: Any) -> None:
         # Before the token check, so a channel configured later keeps its owner too.
         adopt_owner_id()
@@ -321,27 +323,33 @@ class DiscordTransport(ChannelTransportProvider):
         if not token:
             return {"state": "offline", "detail": "No bot token configured"}
         if self._inbound_token is None:
-            # A transport the gateway has not driven: enabled or re-built after boot. Its token
-            # is live for outbound; "ready" would claim a gateway session that does not exist.
+            # A transport whose receiver PersonalClaw has not started yet. Its token is live for
+            # outbound; "ready" would claim a gateway session that does not exist. PersonalClaw
+            # starts one on the instance it has whenever the channel changes (turned on, updated,
+            # its settings saved) — and this state is how it tells the channel is configured.
             return {
                 "state": "error",
                 "detail": (
-                    "Outbound ready, inbound NOT STARTED — the Discord gateway session starts "
-                    "with the gateway, so the bot token takes effect on the next restart."
+                    "Outbound ready, inbound NOT STARTED — PersonalClaw starts the Discord "
+                    "gateway session when it turns the channel on, and Configure → Save starts "
+                    "it now."
                 ),
             }
         if self._inbound_token != token:
-            # Saved tokens reach outbound at once, the gateway session only when it starts.
+            # Saved tokens reach outbound at once, the gateway session only when it starts. A
+            # token saved in the running PersonalClaw replaces this instance and its session;
+            # one changed outside it is what this reports.
             if self._gateway_task is not None and not self._gateway_task.done():
                 detail = (
                     "Outbound uses the saved bot token; the Discord gateway session still runs "
-                    "on the one it started with. Restart the gateway to move inbound onto it."
+                    "on the one it started with. Configure → Save, or turning the channel off "
+                    "and on, moves inbound onto it."
                 )
             else:
                 detail = (
-                    "Outbound ready, inbound OFFLINE — the Discord gateway session starts with "
-                    "the gateway, so the bot token saved since then takes effect on the next "
-                    "restart."
+                    "Outbound ready, inbound OFFLINE — the Discord gateway session was started "
+                    "before this bot token was saved. Configure → Save, or turning the channel "
+                    "off and on, starts it on this one."
                 )
             return {"state": "error", "detail": detail}
         return {"state": "ready", "detail": "Bot token configured"}
