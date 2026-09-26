@@ -2,7 +2,9 @@
 
 Outbound + health/test are token-gated and always available. Inbound is a
 ``getUpdates`` long-poll loop started by :meth:`start_inbound`, which the gateway
-calls once at boot with a :class:`GatewayServices` handle. The loop:
+calls with a :class:`GatewayServices` handle whenever it starts this channel's
+receiver: at boot, and when the channel is turned on, updated or its settings are
+saved (it stops the previous instance's receiver first). The loop:
 
 1. long-polls ``getUpdates`` (offset persisted in the app's ``data/`` dir so a
    restart resumes where it left off, never reprocessing an update);
@@ -12,9 +14,9 @@ calls once at boot with a :class:`GatewayServices` handle. The loop:
    redaction, session linking and the turn itself all happen in core, so this
    transport can't forget any of them; it keeps only the outbound half, delivering
    the verdict's canned reply. Core mirrors agent replies back out through the
-   :class:`TelegramDelivery` this transport registers at boot (the outbound half of
-   the seam). ``callback_query`` updates (inline-keyboard button presses) resolve a
-   pending approval in the delivery.
+   :class:`TelegramDelivery` this transport registers as its receiver starts (the
+   outbound half of the seam). ``callback_query`` updates (inline-keyboard button
+   presses) resolve a pending approval in the delivery.
 
 Webhook mode is deferred to EXTERNAL-ACCESS by the plan; long-poll is the whole
 inbound story here.
@@ -77,8 +79,8 @@ class TelegramTransport(ChannelTransportProvider):
         # Kept live, so a Configure → Save reaches the next Test/Connect/health/send (see
         # LiveConfig) instead of the next restart.
         self._config = LiveConfig(config or {})
-        #: The bot token the gateway drove the long-poll receiver with at boot (``""`` when it
-        #: had none) — ``None`` until it did. The receiver keeps the token it started with.
+        #: The bot token the long-poll receiver was started with (``""`` when there was none) —
+        #: ``None`` until the gateway started it. The receiver keeps the token it started with.
         self._inbound_token: str | None = None
         self._services: Any = None
         self._api: TelegramAPI | None = None
@@ -143,7 +145,7 @@ class TelegramTransport(ChannelTransportProvider):
         except OSError:
             logger.debug("telegram: failed to persist poll offset", exc_info=True)
 
-    # ── Inbound: the gateway drives this once at boot ──
+    # ── Inbound: the gateway starts and stops this with the channel ──
     async def start_inbound(self, services: Any) -> None:
         # Before the token check, so a channel configured later keeps its owner too.
         adopt_owner_id()
@@ -332,26 +334,32 @@ class TelegramTransport(ChannelTransportProvider):
         if not token:
             return {"state": "offline", "detail": "No bot token configured"}
         if self._inbound_token is None:
-            # A transport the gateway has not driven: enabled or re-built after boot. Its token
-            # is live for outbound; "ready" would claim a receiver that does not exist.
+            # A transport whose receiver the gateway has not started yet. Its token is live for
+            # outbound; "ready" would claim a receiver that does not exist. The gateway starts
+            # one on the instance it has whenever the channel changes (turned on, updated, its
+            # settings saved) — and this state is how it tells the channel is configured.
             return {
                 "state": "error",
                 "detail": (
-                    "Outbound ready, inbound NOT STARTED — the long-poll receiver starts with "
-                    "the gateway, so the bot token takes effect on the next restart."
+                    "Outbound ready, inbound NOT STARTED — the gateway starts the long-poll "
+                    "receiver when it turns the channel on, and Configure → Save starts it now."
                 ),
             }
         if self._inbound_token != token:
-            # Saved tokens reach outbound at once, the long-poll receiver only when it starts.
+            # Saved tokens reach outbound at once, the long-poll receiver only when it starts. A
+            # token saved in the running gateway replaces this instance and its receiver; one
+            # changed outside it is what this reports.
             if self._poll_task is not None and not self._poll_task.done():
                 detail = (
                     "Outbound uses the saved bot token; the long-poll receiver still runs on "
-                    "the one it started with. Restart the gateway to move inbound onto it."
+                    "the one it started with. Configure → Save, or turning the channel off and "
+                    "on, moves inbound onto it."
                 )
             else:
                 detail = (
-                    "Outbound ready, inbound OFFLINE — the long-poll receiver starts with the "
-                    "gateway, so the bot token saved since then takes effect on the next restart."
+                    "Outbound ready, inbound OFFLINE — the long-poll receiver was started before "
+                    "this bot token was saved. Configure → Save, or turning the channel off and "
+                    "on, starts it on this one."
                 )
             return {"state": "error", "detail": detail}
         return {"state": "ready", "detail": "Bot token configured"}

@@ -60,11 +60,11 @@ class SlackInboxSource(MessageSourceProvider):
         self, config: dict[str, Any] | None = None, client: SlackClientOps | None = None
     ) -> None:
         # The config, kept live exactly as SlackTransport keeps it, and the token resolved
-        # through the same ``load_tokens``: the registry builds this provider once, at enable,
-        # and a Configure → Save re-cycles nothing, so a token read once in ``__init__`` kept
-        # polling with the token it started with (none, on an install configured after
-        # enable) until a restart. One resolution for both providers also means they never
-        # disagree about which workspace this app is bound to.
+        # through the same ``load_tokens``: the registry used to build this provider once, at
+        # enable, with a Configure → Save re-cycling nothing, so a token read once in
+        # ``__init__`` kept polling with the token it started with (none, on an install
+        # configured after enable) until a restart. One resolution for both providers also
+        # means they never disagree about which workspace this app is bound to.
         self._config = LiveConfig(config if config is not None else {})
         # ``client`` is the test seam (MockSlackClient); production passes none.
         self._injected = client

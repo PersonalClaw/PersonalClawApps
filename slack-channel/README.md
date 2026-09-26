@@ -63,9 +63,10 @@ Both tokens are **write-only**: once saved, the form shows `••••••�
 leaves the gateway. Saving other fields keeps the stored tokens; typing a new value
 replaces one.
 
-**Inbound starts at gateway boot**, so tokens saved into a running gateway apply on the
-next restart. Until then the channel row reports the inbound half honestly — "Outbound
-ready, inbound NOT STARTED" — rather than a flat green.
+**Inbound follows the tokens.** The gateway starts the Socket-Mode receiver when it turns
+the channel on, and a Configure → Save moves it onto the saved tokens at once; the channel
+row reads "starting" until Socket Mode is connected. Whenever outbound works and inbound does
+not, the row says so, and what starts it, rather than showing a flat green.
 
 An allowlisted (non-owner) user is authorized for conversation *and* for the commands in
 the "any allowed user" tier — `!stop`, `!title`, `!compact`, `sessions`, and `!dashboard`,

@@ -55,8 +55,10 @@ put them.
 
 ## 3. Start and verify
 
-Restart the gateway. The Socket Mode receiver starts at boot; outbound picks saved
-tokens up without a restart, and the Channels page says so while inbound waits for it:
+Tokens saved on the Configure form reach a running gateway at once: it starts the Socket
+Mode receiver on them, and the Channels page reads "starting" until it is connected. After
+`personalclaw setup`, or with tokens in `.env` or the environment, start the gateway, or
+restart it if it was already running:
 
 ```bash
 personalclaw gateway
@@ -102,12 +104,14 @@ back.
 ## Troubleshooting
 
 - **Bot doesn't respond**: check both tokens are present (`personalclaw
-  doctor`), the gateway was restarted after adding them, and you're either the
-  owner, allowlisted, or in an open channel.
+  doctor`), the Channels page shows Slack connected (tokens added outside the
+  Configure form while the gateway ran need a gateway restart), and you're either
+  the owner, allowlisted, or in an open channel.
 - **Socket Mode errors**: the `xapp-…` token must have the
   `connections:write` scope — regenerate it via the Socket Mode toggle dance in
   step 1.3.
 - **Wrong workspace / Enterprise Grid**: if you set `allowed_enterprise_ids`,
   the connection refuses workspaces outside that list.
-- **Token rotation**: update `.env` (or the Configure form) and restart the
-  gateway.
+- **Token rotation**: save the new token on the Configure form, and the receiver
+  reconnects on it at once. A token rotated in `.env` or the environment needs a
+  gateway restart.

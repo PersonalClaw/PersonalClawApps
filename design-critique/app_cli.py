@@ -47,8 +47,9 @@ def doctor() -> list[DoctorLine]:
                 status="warn",
                 detail=(
                     "Pillow is not importable, so design_critique_image cannot run. "
-                    "Reinstall the app from the Store, then restart the gateway (the "
-                    "install reports restart_required). The URL review is unaffected."
+                    "Reinstall the app from the Store: that installs Pillow where the "
+                    "gateway imports it, with no restart unless the install says one is "
+                    "needed. The URL review is unaffected."
                 ),
             )
         )
