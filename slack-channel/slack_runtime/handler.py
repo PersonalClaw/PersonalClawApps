@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import re
+import sys
 import time
 import uuid
 from collections import OrderedDict
@@ -2096,15 +2097,24 @@ async def handle_message(
 
         # Build message with context injection
         compressed: str | None = None
+        prior_turns: list[dict] | None = None
         # is_new = new ACP agent/dashboard process, NOT new conversation.
         # The Slack thread persists across processes, so we compress its
         # history to bootstrap the fresh session's context window.
         if is_new and not resumed and context_builder and context_builder.conversation_log:
             from personalclaw.sdk.channel import compress_thread_history
 
-            compressed = await compress_thread_history(
-                context_builder.conversation_log, session_key, text, sessions
+            # The thread's own turns before this one, as the MODEL reads them: while a
+            # background summary (bg-compress) still describes the oldest span, it stands in
+            # for that span. Slack has no session buffer to cut the in-flight message from,
+            # and needs none — a turn reaches the log only once it completes
+            # (``save_conversation_turn`` below), so the log never holds the message being
+            # sent. The whole view is handed over: ``compress_thread_history`` keeps its own
+            # window, and a second window here would be a copy of that number to drift.
+            prior_turns = context_builder.conversation_log.history_for_model(
+                session_key, sys.maxsize
             )
+            compressed = await compress_thread_history(prior_turns, session_key, text, sessions)
 
         # After a soft-cancel, ACP agent drops the cancelled turn from its
         # conversation log — but the user+assistant text is persisted to our
@@ -2173,6 +2183,9 @@ async def handle_message(
                 resumed=resumed,
                 user_display_name=user_display_name,
                 compressed_history=compressed,
+                # The same turns the compression read, so a fallback (compression unavailable)
+                # restores from the one source rather than re-reading the log.
+                prior_transcript=prior_turns,
                 action_context=action_context,
                 thread_parent_text=thread_parent_text,
                 blocks_reads=_slack_blocks_reads,
@@ -2781,14 +2794,15 @@ async def _maybe_auto_title_slack(
             finally:
                 sessions.release(BACKGROUND_KEY)
 
-        title = title.split("\n")[0].strip("\"'. \t")
-        title = title.replace("<", "").replace(">", "")  # neutralize Slack mrkdwn links
-        if not title or title.upper() == "SKIP":
+        from slack_runtime.titles import parse_title
+
+        # The title itself — never an echoed "Title:" label, the tag line or a code fence
+        # (core's #3590 rules). "" means the reply held no plausible title: stay untitled and
+        # retry on the next exchange. Redacted inside the parser.
+        title = parse_title(title).replace("<", "").replace(">", "")  # no Slack mrkdwn links
+        if not title:
             _titled_threads.pop(session_key, None)  # allow retry on next exchange
             return
-        title, _ = redact_exfiltration_urls(title)
-        title, _ = redact_credentials(title)
-        title = title[:80]
 
         if _titled_threads.get(session_key) == "manual":
             return  # manual title was set while we were streaming

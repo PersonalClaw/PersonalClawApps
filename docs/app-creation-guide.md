@@ -47,8 +47,9 @@ the Store shows declared permissions as the install-consent surface.
 
 **3 — run its tests.** Use the same per-bundle runner as CI. It installs
 `dependencies.pythonDependencies` from the bundle's `app.json` into the active Python
-environment with `uv`, then runs pytest. Generated apps with no dependencies still run with
-no network, credentials, or gateway:
+environment with `uv` (your test environment — a gateway installs them into
+`<home>/app-python` instead; see [Dependencies](#dependencies)), then runs pytest. Generated
+apps with no dependencies still run with no network, credentials, or gateway:
 
 ```bash
 ./scripts/test-bundles my-tool
@@ -74,17 +75,24 @@ The gateway takes the owner token as a `?token=` **query parameter**. An
 `Authorization: Bearer` header is only accepted for app-scoped narrowing tokens, so using
 one here answers `{"error": "Token required"}`.
 
-**5 — install it from that local path and enable it.**
+**5 — review it, install it from that local path, and enable it.** An install is two
+calls: the review says what the app gets and what the security scanner found, and installs
+nothing; the install carries the review's `consent` digest, so it installs exactly the bytes
+you reviewed (anything else — `"confirm": true` included — answers 409 with a fresh review).
 
 ```bash
+review="$(curl -sS -X POST "$PERSONALCLAW_URL/api/apps/preview?token=$PERSONALCLAW_TOKEN" \
+  -H 'Content-Type: application/json' -d "{\"source\": \"$PWD/my-tool\"}")"
+echo "$review" | python3 -m json.tool      # read it: permissions, jobs, packages, the scan
+consent="$(echo "$review" | python3 -c 'import json, sys; print(json.load(sys.stdin)["consent"])')"
 curl -sS -X POST "$PERSONALCLAW_URL/api/apps?token=$PERSONALCLAW_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d "{\"source\": \"$PWD/my-tool\", \"confirm\": true}"
+  -d "{\"source\": \"$PWD/my-tool\", \"consent\": \"$consent\"}"
 curl -sS -X POST "$PERSONALCLAW_URL/api/apps/my-tool/enable?token=$PERSONALCLAW_TOKEN"
 ```
 
 Prefer clicking? **Store → Add source → local path**, point it at `my-tool`, then install
-and enable. Same install path and same supply-chain scan gate — there is only one.
+and enable. Same review, same supply-chain scan gate, same consent — there is only one path.
 
 **6 — confirm it is live.**
 
@@ -295,19 +303,74 @@ stdio command gets `cwd=<app dir>` injected so it spawns correctly.
 Hooks run only after the security scanner passes. A failing `onInstall` rolls
 the install back.
 
+### CLI steps (`cli.setup` / `cli.doctor`)
+
+```json
+"cli": { "setup": "cli_setup:run", "doctor": "cli_doctor:probe" }
+```
+
+`personalclaw setup` calls the setup function with a `personalclaw.sdk.cli.SetupContext`;
+`personalclaw doctor` calls the doctor function and renders the `DoctorLine`s it returns.
+
+- **Secrets go through `ctx.settings`**, into a setting declared `x-meta.sensitive`:
+  `ctx.settings.update(app, {"bot_token": token})`. Saving keeps the value in the
+  credential store under a key the app owns and writes only a reference into the
+  settings file, and uninstalling the app removes it. `ctx.save_credential(name, value)`
+  writes a shared, plain-named credential that no uninstall can attribute to your app;
+  use it only for a name core itself reads (the owner id, `PERSONALCLAW_OWNER_ID`).
+- **Importing your own code.** Core loads these modules by path from the installed copy
+  and, unlike the gateway's provider loader, does not put the app's directory on
+  `sys.path`. An import of your own package passes your tests (a conftest puts the
+  directory on the path) and fails for the user, whose setup then prints
+  "setup step unavailable". Hold the directory on the path while the import runs:
+
+  ```python
+  import sys
+  from pathlib import Path
+
+  _APP_DIR = str(Path(__file__).resolve().parent)
+  sys.path.insert(0, _APP_DIR)
+  try:
+      from my_app_runtime.settings import load_token
+  finally:
+      sys.path.remove(_APP_DIR)
+  ```
+
+  `.github/tests/test_cli_steps_load.py` loads every app's steps through core's own
+  loader, in a fresh interpreter, and fails on one that cannot be loaded.
+
 ### Dependencies
 
 ```json
 "dependencies": {
-  "pythonDependencies": ["faster-whisper>=1.0"]  // pip specs, installed into the shared venv
+  "pythonDependencies": ["faster-whisper>=1.0"]  // pip specs, installed into <home>/app-python
 }
 ```
 
-Core ships lean — the app that needs a heavy library declares it here. A
-newly-installed dep needs a gateway restart to become importable (the install
-result reports `restart_required`). There is also a `marketplace` block
-(mcp/skills/agents ids with `managedBy: "gateway" | "app"`) for
-marketplace-managed dependencies.
+Core ships lean — the app that needs a heavy library declares it here. The gateway
+pip-installs the specs into `<home>/app-python` (`/data/app-python` in the published
+image, `~/.personalclaw/app-python` on a pip or uv install), never into the environment
+it runs from:
+
+- **Loaded after core's packages.** The directory is appended to the gateway's
+  `sys.path`, so an app can add a module but never shadow one core uses, and pip runs
+  with every distribution the gateway can import pinned — a dependency that needs a
+  different version of one of them fails the install instead of replacing it.
+- **One resolution for every installed app.** Apps share one interpreter, so all of
+  their requirements are resolved together; a conflict between two apps is refused with
+  both named.
+- **Importable in place.** A first install needs no restart. The install result reports
+  `restart_required` only when a package the gateway had already loaded was replaced.
+- **Only the processes core starts for the app see them.** In-process code (your
+  provider), your backend and your worker (started through
+  `personalclaw._app_python_child`), and your setup hooks (on `PYTHONPATH`). A plain
+  `python` your code spawns does NOT: run a declared package's command as
+  `sys.executable -m <module>` with the directory you import it from on the child's
+  `PYTHONPATH` (the `piper-tts` app does this), and don't look for its console script
+  beside the interpreter — pip puts it in `<home>/app-python/bin`.
+
+There is also a `marketplace` block (mcp/skills/agents ids with
+`managedBy: "gateway" | "app"`) for marketplace-managed dependencies.
 
 ### Platform
 
@@ -485,10 +548,13 @@ does for its `label` and `refresh_interval_s`.
 1. Apps page → Store → add the parent directory of your app as a
    **local source** (or `POST /api/apps/local-sources`).
 2. Your app appears in the Store; install it. The install runs the full
-   quarantine → scan → hook → register pipeline.
+   quarantine → scan → consent → hook → register pipeline.
 3. Iterate: repo edits do NOT reach the installed copy at
    `~/.personalclaw/apps/<name>/`. Push changes with
-   `POST /api/apps/<name>/update {"source": "/path/to/my-app", "confirm": true}`.
+   `POST /api/apps/<name>/update {"source": "/path/to/my-app"}`. An edit that changes
+   what the app gets (a grant, a job, a package, a hook, its server or dashboard code)
+   answers 409 with a review instead, and goes through with that review's digest — see
+   [updating](third-party-install.md#what-happens-on-update).
 
 See [third-party-install.md](third-party-install.md) for the user-facing
 install story.

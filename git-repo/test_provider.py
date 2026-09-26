@@ -113,7 +113,7 @@ def _cfg(**over):
 
     base = dict(
         enabled=True, poll_interval_default_secs=1, network_floor_secs=0,
-        max_sources=100, max_items_per_poll=1000, daily_request_budget=288,
+        max_sources=100, max_items_per_poll=1000,
     )
     base.update(over)
     return SourcesConfig(**base)

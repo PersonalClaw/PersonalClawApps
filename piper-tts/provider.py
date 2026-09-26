@@ -16,6 +16,7 @@ in the host sandbox via ``personalclaw.sdk.util.sandbox_wrap_argv``.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import logging
 import os
 import shutil
@@ -66,20 +67,45 @@ def voice_model_path(voice_name: str) -> str:
     return ""
 
 
-def _resolve_piper_binary(configured: str = "") -> str | None:
-    """Return the piper binary path or None. Resolution order: explicit path →
-    ``piper`` on PATH → the console script next to the interpreter (the piper-tts
-    pip extra installs it into the venv bin/) → ``~/piper-venv/bin``."""
+def _declared_piper_command() -> tuple[list[str], dict[str, str]] | None:
+    """Run the ``piper-tts`` package this app declares as ``python -m piper``, or ``None``.
+
+    The gateway installs an app's declared packages into ``<home>/app-python`` and loads them
+    only into its own process (appended to ``sys.path``): a plain Python subprocess does not
+    see them, and pip's ``piper`` console script lands in that directory's ``bin/`` rather than
+    beside the interpreter. So the child is the gateway's own interpreter running the module,
+    with the directory the gateway imports ``piper`` from on ``PYTHONPATH``. That directory
+    comes before site-packages in the child — the trade core makes for an app's setup hooks —
+    which is harmless here: the child runs nothing but piper.
+    """
+    spec = importlib.util.find_spec("piper")
+    locations = list(spec.submodule_search_locations or []) if spec is not None else []
+    if not locations or not (Path(locations[0]) / "__main__.py").is_file():
+        return None
+    packages = str(Path(locations[0]).parent)
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(p for p in (env.get("PYTHONPATH", ""), packages) if p)
+    return [sys.executable, "-m", "piper"], env
+
+
+def _piper_command(configured: str = "") -> tuple[list[str], dict[str, str] | None] | None:
+    """``(argv prefix, child env or None to inherit)`` that runs piper, or ``None``.
+
+    Resolution order: an explicit path → ``piper`` on PATH → the ``piper-tts`` package this app
+    declares (see :func:`_declared_piper_command`) → ``~/piper-venv/bin/piper``.
+    """
     if configured:
         p = os.path.expanduser(configured)
-        return p if os.path.isfile(p) and os.access(p, os.X_OK) else None
+        return ([p], None) if os.path.isfile(p) and os.access(p, os.X_OK) else None
     found = shutil.which("piper")
     if found:
-        return found
-    sibling = os.path.join(os.path.dirname(sys.executable), "piper")
-    for c in (sibling, os.path.expanduser("~/piper-venv/bin/piper")):
-        if os.path.isfile(c) and os.access(c, os.X_OK):
-            return c
+        return [found], None
+    declared = _declared_piper_command()
+    if declared is not None:
+        return declared
+    standalone = os.path.expanduser("~/piper-venv/bin/piper")
+    if os.path.isfile(standalone) and os.access(standalone, os.X_OK):
+        return [standalone], None
     return None
 
 
@@ -94,10 +120,11 @@ async def _synthesize_piper_chunk(
     Piper takes plain text on stdin. ``length_scale`` controls speed (<1 faster). The
     subprocess is wrapped in the host sandbox so a compromised model/binary can't reach
     private filesystem areas."""
-    bin_path = _resolve_piper_binary()
-    if not bin_path:
-        logger.error("piper binary not found")
+    command = _piper_command()
+    if command is None:
+        logger.error("piper not found: no piper on PATH and the piper-tts package is not importable")
         return None
+    prefix, child_env = command
     model = os.path.expanduser(piper_model) if piper_model else ""
     if not model or not os.path.isfile(model):
         logger.error("piper model not found: %r", piper_model)
@@ -110,7 +137,7 @@ async def _synthesize_piper_chunk(
         os.close(fd)
     sandbox_cleanup: str | None = None
     try:
-        cmd: list[str] = [bin_path, "-m", model, "-f", path]
+        cmd: list[str] = [*prefix, "-m", model, "-f", path]
         if length_scale != 1.0:
             cmd += ["--length-scale", str(length_scale)]
         cmd, sandbox_cleanup = sandbox_wrap_argv(cmd, mode="standard")
@@ -119,6 +146,7 @@ async def _synthesize_piper_chunk(
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=child_env,
         )
         try:
             _stdout, stderr = await asyncio.wait_for(
@@ -169,8 +197,8 @@ class PiperTtsProvider(LocalTtsProvider):
 
     async def is_available(self) -> bool:
         # A downloaded voice is useless without the piper runtime; report available
-        # only when the binary resolves.
-        return _resolve_piper_binary() is not None
+        # only when piper resolves.
+        return _piper_command() is not None
 
     def cache_dir(self) -> str:
         """Where downloaded voices land — lets the core download UI track progress."""
@@ -252,7 +280,7 @@ class PiperTtsProvider(LocalTtsProvider):
         )
 
     async def can_synthesize(self, voice: str = "") -> bool:
-        if _resolve_piper_binary() is None:
+        if _piper_command() is None:
             return False
         return bool(voice_model_path(voice)) if voice else True
 

@@ -24,6 +24,9 @@ def _isolate_home(tmp_path_factory, monkeypatch):
     and credential store all resolve under it, never the real home."""
     home = tmp_path_factory.mktemp("pclaw-tg-home")
     monkeypatch.setenv("PERSONALCLAW_HOME", str(home))
+    # A saved token goes through core's credential store, whose reads consult the OS keychain
+    # whenever `keyring` is importable. Keep every test off the real one.
+    monkeypatch.setattr("personalclaw.config.credentials._usable_keyring", lambda: None)
     return home
 
 
@@ -48,6 +51,6 @@ def _reset_settings_cache():
     can't leak into the next)."""
     from telegram_runtime import settings as s
 
-    s._settings = None
+    s._settings = s._settings_store = None
     yield
-    s._settings = None
+    s._settings = s._settings_store = None

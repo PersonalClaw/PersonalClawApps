@@ -442,3 +442,58 @@ async def test_anthropic_shutdown_closes_client(fake_anthropic: types.ModuleType
 
     assert provider._client.closed is True
     assert provider._history == []
+
+
+# ── Per-call sampling settings (best-of-N) ─────────────────────────────
+
+
+def _registry_with(options: dict) -> ProviderRegistry:
+    from provider import ANTHROPIC_CAPABILITY, _factory
+
+    reg = ProviderRegistry()
+    reg.register_type(ANTHROPIC_CAPABILITY, _factory)
+    reg.register_entry(
+        ProviderEntry(
+            name="anthropic-x",
+            type="anthropic",
+            model="claude-3-5-sonnet-20241022",
+            options=options,
+            declared_capabilities=frozenset({Capability.CHAT, Capability.STREAMING}),
+        )
+    )
+    return reg
+
+
+@pytest.mark.asyncio
+async def test_a_per_call_temperature_and_output_budget_reach_the_request(
+    fake_anthropic: types.ModuleType,
+) -> None:
+    """best-of-N builds each candidate with a ``temperature`` build kwarg, and core derives a
+    per-model ``max_tokens``. The factory dropped both, so core reported every candidate as
+    "not sent at its requested temperature" — N paid calls sampling one answer."""
+    provider = _registry_with({"api_key": "sk-ant-test"}).build(
+        "anthropic-x", temperature=0.9, max_tokens=1234
+    )
+    assert provider.sampling_temperature == 0.9  # what core's model-call record reads back
+
+    provider._client.messages = _FakeMessages(stream_events=[_ms_event(input_tokens=1), _message_stop()])
+    _ = [event async for event in provider.stream("hi")]
+
+    sent = provider._client.messages.calls[-1]
+    assert sent["temperature"] == 0.9
+    assert sent["max_tokens"] == 1234
+
+
+def test_a_configured_max_tokens_wins_over_the_per_call_budget(
+    fake_anthropic: types.ModuleType,
+) -> None:
+    provider = _registry_with({"api_key": "sk-ant-test", "max_tokens": 512}).build(
+        "anthropic-x", max_tokens=1234
+    )
+    assert provider._max_tokens == 512
+
+
+def test_no_per_call_temperature_sends_none(fake_anthropic: types.ModuleType) -> None:
+    provider = _registry_with({"api_key": "sk-ant-test"}).build("anthropic-x")
+    assert provider.sampling_temperature is None
+    assert provider._max_tokens == 4096  # the adapter's long-standing default

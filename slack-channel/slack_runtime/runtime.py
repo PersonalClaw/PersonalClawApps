@@ -48,7 +48,9 @@ class SlackRuntime:
 
         # Slack behavioral config comes from the app's OWN store (SlackSettings) —
         # core AppConfig defines no Slack config. get_settings() caches one live
-        # instance; !channel/!config writes call reload_settings() so this stays fresh.
+        # instance and re-reads it whenever the store changes (a Configure save or a
+        # !channel/!config write). The allowlist and channel sets below are copied at
+        # inbound start, so they follow the store from the next start.
         from slack_runtime.settings import load_tokens, reload_settings
 
         settings = reload_settings()
@@ -111,7 +113,7 @@ class SlackRuntime:
 
     @property
     def settings(self) -> "SlackSettings":
-        """The app's live SlackSettings (cached; refreshed by reload_settings())."""
+        """The app's live SlackSettings (cached; re-read whenever the store changes)."""
         from slack_runtime.settings import get_settings
 
         return get_settings()

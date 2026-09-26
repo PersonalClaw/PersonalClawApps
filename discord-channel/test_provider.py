@@ -17,6 +17,8 @@ _APP_DIR = Path(__file__).resolve().parent
 if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
+import pytest  # noqa: E402
+
 from cli_setup import INVITE_PERMISSIONS, invite_url  # noqa: E402
 from discord_runtime.gateway import INTENTS  # noqa: E402
 from discord_runtime.settings import (  # noqa: E402
@@ -25,6 +27,13 @@ from discord_runtime.settings import (  # noqa: E402
     _validate_activation,
 )
 from discord_runtime.transport import DiscordTransport, create_provider  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _scratch_home(tmp_path, monkeypatch):
+    """The transport reads this app's store on every token read, so this root-level file (which
+    ``tests/conftest.py`` does not cover) points the home at a scratch directory."""
+    monkeypatch.setenv("PERSONALCLAW_HOME", str(tmp_path / "home"))
 
 
 def test_discord_capabilities():
@@ -39,11 +48,16 @@ def test_discord_capabilities():
 
 def test_connected_derives_from_shared_creds(monkeypatch):
     """A live integration (token in the SHARED credential store the gateway
-    propagates into the environment) must report ready even when THIS instance's
-    config carries no token — otherwise the Channels surface lies 'offline'."""
+    propagates into the environment) must be seen even when THIS instance's
+    config carries no token — otherwise the Channels surface lies 'offline'.
+
+    Not offline, and ``ready`` only once the receiver runs on that token: a transport the
+    gateway never drove is credentialled but deaf (the #952 lesson Slack learned first)."""
     monkeypatch.setenv(CRED_DISCORD_BOT_TOKEN, "shared.token.value")
     t = DiscordTransport({})  # empty instance config — token only in the environment
     assert t.connected is True
+    assert asyncio.run(t.health())["state"] != "offline"
+    t._inbound_token = "shared.token.value"  # the gateway drove inbound with this token
     assert asyncio.run(t.health())["state"] == "ready"
 
 
@@ -57,7 +71,7 @@ def test_offline_when_no_token_anywhere(monkeypatch):
 def test_instance_config_overrides_shared(monkeypatch):
     monkeypatch.setenv(CRED_DISCORD_BOT_TOKEN, "shared.token.value")
     t = DiscordTransport({"bot_token": "instance.token.value"})
-    assert t._token == "instance.token.value"
+    assert t._token() == "instance.token.value"
 
 
 def test_info_exposes_caps():

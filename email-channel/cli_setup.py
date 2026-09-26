@@ -2,12 +2,15 @@
 
 Registered via ``app.json`` → ``cli.setup: "cli_setup:run"``. The core setup runner
 (``personalclaw.app_cli.run_app_setup_steps``) imports ``run`` and calls it with a
-:class:`personalclaw.sdk.cli.SetupContext` after the core steps. It writes ONLY
-app-owned homes:
+:class:`personalclaw.sdk.cli.SetupContext` after the core steps. Everything it asks for
+goes to this app's ``ProviderSettings``:
 
-- the IMAP/SMTP **passwords** → the shared credential store under this app's own keys
-  ``EMAIL_IMAP_PASS`` / ``EMAIL_SMTP_PASS`` (``ctx.save_credential``);
-- the non-secret hosts/ports/logins/folder/cadence → this app's ``ProviderSettings``.
+- the IMAP/SMTP **passwords** as ``imap_password`` / ``smtp_password``, declared
+  ``x-meta.sensitive``, so the save keeps each in the credential store under a key this
+  app owns and writes only a reference into the settings file. Uninstalling the app
+  removes them. (They used to go to the shared store under the plain names
+  ``EMAIL_IMAP_PASS`` / ``EMAIL_SMTP_PASS``, which outlived the app.);
+- the non-secret hosts/ports/logins/folder/cadence.
 
 Core config.json holds no email config, and who may talk is owned by the core trust seam
 (``personalclaw pair email``), not by this app.
@@ -19,19 +22,33 @@ a typo. Known hosts are offered as presets so the four hostname/port pairs a use
 otherwise look up are already filled in.
 """
 
+import sys
+from pathlib import Path
+
 from personalclaw.sdk.cli import SetupContext
 
-from email_runtime.settings import (
-    CRED_IMAP_PASS,
-    CRED_SMTP_PASS,
-    DEFAULT_IMAP_PORT,
-    DEFAULT_POLL_SECS,
-    DEFAULT_SMTP_PORT,
-    SMTP_SSL,
-    SMTP_STARTTLS,
-    _VALID_ACTIVATIONS,
-    _VALID_SMTP_SECURITY,
-)
+# `personalclaw setup` loads this file by path, and core's loader does not put the app's
+# directory on sys.path the way the gateway's provider loader does, so an import of this app's
+# own package failed there and the step read "unavailable". Hold it on the path while the
+# import runs, as the provider loader does.
+_APP_DIR = str(Path(__file__).resolve().parent)
+sys.path.insert(0, _APP_DIR)
+try:
+    from email_runtime.settings import (
+        CRED_IMAP_PASS,
+        CRED_SMTP_PASS,
+        DEFAULT_IMAP_PORT,
+        DEFAULT_POLL_SECS,
+        DEFAULT_SMTP_PORT,
+        KEY_IMAP_PASSWORD,
+        KEY_SMTP_PASSWORD,
+        SMTP_SSL,
+        SMTP_STARTTLS,
+        _VALID_ACTIVATIONS,
+        _VALID_SMTP_SECURITY,
+    )
+finally:
+    sys.path.remove(_APP_DIR)
 
 _APP = "email-channel"
 
@@ -172,19 +189,22 @@ def _int_or(ctx: SetupContext, prompt: str, default: object) -> int:
 
 def _setup_passwords(ctx: SetupContext) -> None:
     ctx.print("── App passwords (credential store, never app config) ──\n")
-    cur_imap = ctx.get_credential(CRED_IMAP_PASS)
+    # What each password is now: this app's store, then the plain name an earlier release's
+    # setup saved it under. Empty input keeps it where it is.
+    stored = ctx.settings.load(_APP)
+    cur_imap = str(stored.get(KEY_IMAP_PASSWORD) or "") or ctx.get_credential(CRED_IMAP_PASS)
     imap_pass = ctx.input(f"  IMAP app password{' [set]' if cur_imap else ''}: ").strip()
     if imap_pass:
-        ctx.save_credential(CRED_IMAP_PASS, imap_pass)
+        ctx.settings.update(_APP, {KEY_IMAP_PASSWORD: imap_pass})
         ctx.print("  ✅ IMAP password saved.\n")
     elif not cur_imap:
         ctx.print("  ⚠️  No IMAP password — inbound will stay offline until one is set.\n")
 
-    cur_smtp = ctx.get_credential(CRED_SMTP_PASS)
+    cur_smtp = str(stored.get(KEY_SMTP_PASSWORD) or "") or ctx.get_credential(CRED_SMTP_PASS)
     hint = " [set]" if cur_smtp else " [reuse IMAP]"
     smtp_pass = ctx.input(f"  SMTP app password{hint}: ").strip()
     if smtp_pass:
-        ctx.save_credential(CRED_SMTP_PASS, smtp_pass)
+        ctx.settings.update(_APP, {KEY_SMTP_PASSWORD: smtp_pass})
         ctx.print("  ✅ SMTP password saved.\n")
     else:
         ctx.print("  ℹ️  Reusing the IMAP password for SMTP (usual for one app password).\n")

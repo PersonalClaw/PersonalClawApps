@@ -122,15 +122,19 @@ Otherwise, add it yourself:
    → lifecycle pipeline; the Store shows each app's declared permissions and
    crons before you confirm.
 
-Or via the API, per app:
+Or via the API, per app — a review, then an install that carries the review's `consent`
+digest ([the shell recipe](docs/third-party-install.md#installing-from-a-shell)):
 
 ```
-POST /api/apps {"source": "/path/to/apps/<name>"}
+POST /api/apps/preview {"source": "/path/to/apps/<name>"}
+POST /api/apps {"source": "/path/to/apps/<name>", "consent": "<the review's consent>"}
 ```
 
 Note: repo edits do not reach an installed copy (installed apps live at
 `~/.personalclaw/apps/<name>/`). Push changes with
-`POST /api/apps/<name>/update {"source": "/path/to/apps/<name>", "confirm": true}`.
+`POST /api/apps/<name>/update {"source": "/path/to/apps/<name>"}`; an edit that changes
+what the app gets answers 409 with a review and needs its digest
+([updating](docs/third-party-install.md#what-happens-on-update)).
 
 ## Documentation
 

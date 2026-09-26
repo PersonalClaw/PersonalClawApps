@@ -11,7 +11,7 @@ contract and its seven tools appear on the agent tool layer.
 
 From the App Store, add the `apps/` directory as a **local source**, then install
 **Notes** — the install runs through the security scanner and lifecycle exactly like any
-other app. (Or `POST /api/apps {"source": ".../apps/notes"}`.) You need `git` on `PATH` —
+other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).) You need `git` on `PATH` —
 `personalclaw doctor` reports it, and reports it as a **failure**, not a warning, because
 without git there is no note history and the app's central promise is void.
 

@@ -60,6 +60,30 @@ _OWNED_KEYS = (
 )
 
 
+class LiveConfig:
+    """The provider config a transport runs on: the dict it was built with, until this app's store
+    is written — then the store.
+
+    The registry builds a transport from ``ProviderSettings.load`` once, when the app is enabled.
+    The Apps page's Configure → Save writes the store and re-cycles nothing, so a transport that
+    kept its build-time dict answered "No bot token configured" to Test, Connect and the health row
+    over a token the user had just saved. A store that differs from the one this transport last
+    saw was written after it was built, so it wins; a store that has not changed leaves the build
+    dict in charge, which keeps an explicitly constructed transport (the conformance kit's ``{}``)
+    isolated from whatever store the machine holds.
+    """
+
+    def __init__(self, config: dict | None) -> None:
+        self._seen = ProviderSettings.load(_APP)
+        self._config = dict(self._seen if config is None else config)
+
+    def current(self) -> dict:
+        store = ProviderSettings.load(_APP)
+        if store != self._seen:
+            self._seen, self._config = store, dict(store)
+        return self._config
+
+
 def load_tokens(
     config: dict | None = None, creds: dict[str, str] | None = None
 ) -> tuple[str, str]:
@@ -69,6 +93,13 @@ def load_tokens(
     *is* this app's store, ``ProviderSettings.load(_APP)``) → core's credential store
     (``.env`` / keychain / env, passed in as *creds* by whoever holds an ``AppConfig``)
     → the process environment.
+
+    Setup and the Configure form both write the app's store, and saving there keeps each
+    token in the credential store under a key this app owns, which uninstall removes. The
+    plain ``SLACK_BOT_TOKEN`` / ``SLACK_APP_TOKEN`` names are read for an install an
+    earlier release's setup configured and for a token the operator put in the credential
+    store or the environment himself. Setup and doctor resolve through this function too,
+    so the three can never disagree about which token is in effect.
 
     **Why this function exists (#952).** The outbound half (``SlackTransport``) resolved
     these two tokens from the app store, and the inbound half (``SlackRuntime``) resolved
@@ -213,22 +244,30 @@ def persist_list_entry(section: str, id_field: str, target_id: str, *, remove: b
         ProviderSettings.update(_APP, {section: entries})
 
 
-# ── Cached accessor (one live instance; reload after writes) ──
+# ── Cached accessor (one live instance, re-read when the store changes) ──
 
 _current: SlackSettings | None = None
+#: The raw store ``_current`` was built from — the cache is valid only while the store still says this.
+_current_store: dict | None = None
 
 
 def get_settings() -> SlackSettings:
-    """The live SlackSettings instance (loaded once; refresh via reload_settings)."""
-    global _current
-    if _current is None:
-        _current = SlackSettings.load()
+    """The live SlackSettings: cached, and re-read whenever the app's store changed since.
+
+    The Configure form writes the store directly and nothing tells this app it did, so a cache
+    that refreshed only on this app's own writes (``reload_settings``) kept the settings the user
+    had just changed until the gateway restarted."""
+    global _current, _current_store
+    store = ProviderSettings.load(_APP)
+    if _current is None or store != _current_store:
+        _current, _current_store = SlackSettings.load(), store
     return _current
 
 
 def reload_settings() -> SlackSettings:
-    """Re-read the app store (call after a persist_* write so changes take effect)."""
-    global _current
+    """Re-read the app store now (after a persist_* write, so the change takes effect)."""
+    global _current, _current_store
+    _current_store = ProviderSettings.load(_APP)
     _current = SlackSettings.load()
     return _current
 

@@ -3,11 +3,13 @@
 Registered via ``app.json`` → ``cli.setup: "cli_setup:run"``. The core setup runner
 (``personalclaw.app_cli.run_app_setup_steps``) imports ``run`` and calls it with a
 :class:`personalclaw.sdk.cli.SetupContext` after the core steps. This is the
-Discord-specific setup: it reads/writes ONLY app-owned homes — the generic
-credential store (via ``ctx.save_credential``, this app's own ``DISCORD_BOT_TOKEN``
-key) and this app's ``ProviderSettings`` (the application id + DM-activation
-posture). Core config.json holds no Discord config; who may talk is owned by the
-core trust seam.
+Discord-specific setup. The bot token, the application id and the DM-activation
+posture go to this app's ``ProviderSettings``, whose save keeps the token in the
+credential store under a key this app owns (so uninstalling the app removes it; the
+plain ``DISCORD_BOT_TOKEN`` name it used to be saved under outlived the app). The
+owner's Discord user id goes to the shared store under ``PERSONALCLAW_OWNER_ID``,
+which core's gateway reads by that name. Core config.json holds no Discord config;
+who may talk is owned by the core trust seam.
 
 The step ends by printing the OAuth2 invite URL with the permission bits already
 computed, because "invite the bot" is where a Discord setup most often goes wrong:
@@ -15,14 +17,27 @@ a bot with a valid token that was never invited, or invited without Send Message
 looks identical to a broken token from the dashboard.
 """
 
+import sys
+from pathlib import Path
+
 from personalclaw.sdk.channel import CRED_OWNER_ID
 from personalclaw.sdk.cli import SetupContext
 
-from discord_runtime.settings import (
-    ACTIVATION_ALWAYS,
-    CRED_DISCORD_BOT_TOKEN,
-    _VALID_ACTIVATIONS,
-)
+# `personalclaw setup` loads this file by path, and core's loader does not put the app's
+# directory on sys.path the way the gateway's provider loader does, so an import of this app's
+# own package failed there and the step read "unavailable". Hold it on the path while the
+# import runs, as the provider loader does.
+_APP_DIR = str(Path(__file__).resolve().parent)
+sys.path.insert(0, _APP_DIR)
+try:
+    from discord_runtime.settings import (
+        ACTIVATION_ALWAYS,
+        CRED_DISCORD_BOT_TOKEN,
+        _VALID_ACTIVATIONS,
+        load_bot_token,
+    )
+finally:
+    sys.path.remove(_APP_DIR)
 
 _APP = "discord-channel"
 
@@ -65,10 +80,10 @@ def _mask(val: str) -> str:
 
 
 def run(ctx: SetupContext) -> None:
-    """Prompt for the bot token (→ credential store) plus the application id, owner
-    Discord user id and DM activation mode (→ this app's ProviderSettings). Empty
-    input keeps the current value; declining skips the whole step (the channel stays
-    disabled)."""
+    """Prompt for the bot token, application id and DM activation mode (→ this app's
+    ProviderSettings) and the owner's Discord user id (→ the shared credential store).
+    Empty input keeps the current value; declining skips the whole step (the channel
+    stays disabled)."""
     if not _setup_credentials(ctx):
         return
     _setup_activation(ctx)
@@ -95,9 +110,13 @@ def _setup_credentials(ctx: SetupContext) -> bool:
         ctx.print("  ⏭  Skipped. The Discord channel will be disabled.\n")
         return False
 
-    cur_token = ctx.get_credential(CRED_DISCORD_BOT_TOKEN)
+    # The token the channel runs on now (this app's store, then the plain-named key an earlier
+    # release's setup wrote). Enter keeps it.
+    stored = ctx.settings.load(_APP)
+    legacy = {CRED_DISCORD_BOT_TOKEN: ctx.get_credential(CRED_DISCORD_BOT_TOKEN)}
+    cur_token = load_bot_token(stored, legacy)
     cur_owner = ctx.get_credential(CRED_OWNER_ID)
-    cur_app_id = ctx.settings.load(_APP).get("application_id") or ""
+    cur_app_id = stored.get("application_id") or ""
     hint_token = f" [{_mask(cur_token)}]" if cur_token else ""
     hint_owner = f" [{cur_owner}]" if cur_owner else ""
     hint_app = f" [{cur_app_id}]" if cur_app_id else ""
@@ -110,11 +129,12 @@ def _setup_credentials(ctx: SetupContext) -> bool:
         ctx.print("  ⚠️  No token — the Discord channel will be disabled.\n")
         return False
 
-    ctx.save_credential(CRED_DISCORD_BOT_TOKEN, token)
+    update = {"bot_token": token}
+    if app_id:
+        update["application_id"] = app_id
+    ctx.settings.update(_APP, update)
     if owner_id:
         ctx.save_credential(CRED_OWNER_ID, owner_id)
-    if app_id:
-        ctx.settings.update(_APP, {"application_id": app_id})
     ctx.print("  ✅ Credentials saved.\n")
     return True
 

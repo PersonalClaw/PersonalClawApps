@@ -31,7 +31,7 @@ without breaking it:
 
 From the App Store, add the apps directory as a **local source**, then install
 **A2A Agent Call** — the install runs through the security scanner and lifecycle exactly
-like any other app. (Or `POST /api/apps {"source": ".../a2a-action"}`.)
+like any other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).)
 
 ## Egress is deny-by-default
 

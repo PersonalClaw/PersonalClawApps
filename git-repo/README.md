@@ -44,7 +44,7 @@ evolve without breaking it.
 ## Install & use
 
 1. From the **App Store**, add the `apps/` directory as a **local source**, then install
-   **Git Repository** (or `POST /api/apps {"source": ".../git-repo", "confirm": true}`) and
+   **Git Repository** (or [from a shell](../docs/third-party-install.md#installing-from-a-shell)) and
    **enable** it.
 2. Open the app's **Settings** and set **Repository** to the repository you index most — an
    absolute path to a local clone on this machine (e.g. `/Users/you/code/myproject`) or a

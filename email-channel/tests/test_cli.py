@@ -6,10 +6,11 @@ runners call (``cli_setup:run`` with a real :class:`SetupContext`, ``cli_doctor:
 and assert the values actually landed in the app store and the credential store — not
 that the functions merely returned.
 
-The credential store is faked to a dict here (that IS the seam core hands the step:
-``get_credential`` / ``save_credential`` callables), while the app store is the real
-``ProviderSettings`` writing under the tmp ``PERSONALCLAW_HOME``. The doctor's live socket
-probes are patched — this suite never opens a connection.
+The shared credential store the step reaches through its ``get_credential`` /
+``save_credential`` callables is faked to a dict here (a password an earlier setup saved
+lives there), while the app store is the real ``ProviderSettings`` writing under the tmp
+``PERSONALCLAW_HOME`` — so the passwords go through core's real secret routing. The
+doctor's live socket probes are patched — this suite never opens a connection.
 """
 
 from __future__ import annotations
@@ -89,10 +90,13 @@ class TestSetupHappyPath:
         assert stored["poll_secs"] == 90
         assert stored["dm_activation"] == "always"
 
-        # The secret went to the CREDENTIAL store under the app's own key…
-        assert c.creds[CRED_IMAP_PASS] == "imap-app-pw"
-        # …and never into the app store.
-        assert "imap-app-pw" not in str(stored)
+        # The secret is an app setting the runtime reads back…
+        assert stored["imap_password"] == "imap-app-pw"
+        # …whose settings FILE holds only a reference (the value is in the credential store,
+        # under a key this app owns)…
+        assert "imap-app-pw" not in ProviderSettings.config_path(_APP).read_text()
+        # …and not the plain-named key no uninstall can attribute to this app.
+        assert CRED_IMAP_PASS not in c.creds
 
     def test_the_configuration_is_immediately_loadable(self):
         """End to end means the runtime can read back what setup wrote."""
@@ -170,14 +174,28 @@ class TestSetupHappyPath:
         answers[A_SMTP_PASS] = "smtp-only-pw"
         c = Ctx(answers)
         cli_setup.run(c.ctx)
-        assert c.creds[CRED_IMAP_PASS] == "imap-app-pw"
-        assert c.creds[CRED_SMTP_PASS] == "smtp-only-pw"
+        stored = ProviderSettings.load(_APP)
+        assert stored["imap_password"] == "imap-app-pw"
+        assert stored["smtp_password"] == "smtp-only-pw"
+        assert c.creds == {}
 
     def test_a_blank_smtp_password_reuses_the_imap_one(self):
         c = Ctx(_gmail_answers())
         cli_setup.run(c.ctx)
+        assert not ProviderSettings.load(_APP).get("smtp_password")
         assert CRED_SMTP_PASS not in c.creds
         assert "Reusing the IMAP password" in c.transcript
+
+    def test_a_password_an_earlier_setup_saved_is_kept_on_empty_input(self):
+        """An install configured before setup wrote the app store: an empty answer keeps the
+        password the channel runs on rather than asking for it as if none were set."""
+        answers = _gmail_answers()
+        answers[A_IMAP_PASS] = ""
+        c = Ctx(answers)
+        c.creds[CRED_IMAP_PASS] = "legacy-pw"
+        cli_setup.run(c.ctx)
+        assert "No IMAP password" not in c.transcript
+        assert c.creds[CRED_IMAP_PASS] == "legacy-pw"
 
 
 class TestSetupGuidance:
@@ -263,12 +281,13 @@ class TestSetupDeclineAndBadInput:
         cli_setup.run(Ctx(_gmail_answers()).ctx)
         # Second run: confirm, then accept every default.
         c2 = Ctx(["y"])
-        c2.creds[CRED_IMAP_PASS] = "imap-app-pw"
         cli_setup.run(c2.ctx)
         stored = ProviderSettings.load(_APP)
         assert stored["imap_host"] == "imap.gmail.com"
         assert stored["address"] == "bot@gmail.com"
         assert stored["poll_secs"] == 90
+        assert stored["imap_password"] == "imap-app-pw"
+        assert "No IMAP password" not in c2.transcript
 
 
 class TestDoctor:
@@ -346,8 +365,24 @@ class TestDoctor:
         self._configured()
         lines = {line.label: line for line in cli_doctor.probe()}
         assert lines["imap password"].status == "fail"
-        assert CRED_IMAP_PASS in lines["imap password"].detail
+        assert "personalclaw setup" in lines["imap password"].detail
         assert self.imap_calls == []
+
+    def test_a_password_setup_saved_reaches_the_probe(self, monkeypatch):
+        """Setup writes the password to the app store; a doctor that read only the shared
+        credential store reported it missing and never probed."""
+        self._configured()
+        ProviderSettings.update(_APP, {"imap_password": "store-pw"})
+        used: list[str] = []
+
+        def fake_imap(host, port, user, password, folder, *, use_ssl=True):
+            used.append(password)
+            return self.imap_result
+
+        monkeypatch.setattr(cli_doctor, "imap_probe", fake_imap)
+        lines = {line.label: line for line in cli_doctor.probe()}
+        assert lines["imap login+select"].status == "ok"
+        assert used == ["store-pw"]
 
     def test_an_smtp_only_configuration_warns_about_inbound(self):
         ProviderSettings.update(_APP, {"smtp_host": "smtp.test", "smtp_user": "u@test"})

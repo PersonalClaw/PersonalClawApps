@@ -49,7 +49,7 @@ Three things this deliberately does *not* do:
 
 From the App Store, add the `apps/` directory as a **local source**, then install
 **Slack Channel** — the install runs through the security scanner and lifecycle exactly like
-any other app. (Or `POST /api/apps {"source": ".../apps/slack-channel"}`.)
+any other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).)
 
 ## Settings
 

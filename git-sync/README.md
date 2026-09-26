@@ -32,7 +32,7 @@ new agent command surface.
 
 From the App Store, add the `apps/` directory as a **local source**, then install
 **Git Sync** — the install runs through the security scanner and lifecycle exactly like any
-other app. (Or `POST /api/apps {"source": ".../apps/git-sync"}`.) Then set
+other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).) Then set
 `durability.sync_transport` to `git-sync` and configure the settings below.
 
 ## Settings

@@ -227,7 +227,7 @@ async def test_store_tokens_start_inbound_and_outbound_from_one_source(store_onl
     transport = SlackTransport(store)
     assert transport.connected, "outbound did not see the store tokens"
 
-    runtime = SlackRuntime(_Services(), config=transport._config)
+    runtime = SlackRuntime(_Services(), config=transport._config.current())
     assert runtime._bot_token == store["bot_token"]
     assert runtime._app_token == store["app_token"]
     assert runtime._slack_enabled, "inbound did not see the same tokens outbound just did"

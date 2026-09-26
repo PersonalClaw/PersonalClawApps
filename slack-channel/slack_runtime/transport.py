@@ -43,7 +43,7 @@ from slack_runtime.delivery import SlackDelivery
 from slack_runtime.events import SeenCache, init_socket_mode
 from slack_runtime.interactions import init as init_interactions
 from slack_runtime.runtime import SlackRuntime
-from slack_runtime.settings import load_tokens
+from slack_runtime.settings import LiveConfig, load_tokens
 from slack_runtime.writes import SendRefused, live_writes_disabled
 
 # NOT ``__name__``: the app loader execs this ENTRY module under a synthetic name
@@ -84,11 +84,16 @@ def fence_untrusted_inbound(text: str, sender_id: str, *, trusted: bool) -> str:
 
 class SlackTransport(ChannelTransportProvider):
     def __init__(self, config: dict[str, Any] | None = None) -> None:
-        # Keep the config: ``start_inbound`` hands it to the runtime so the INBOUND half
-        # resolves its tokens from the same place the outbound half just did (#952).
-        self._config: dict[str, Any] = config if config is not None else {}
-        self._bot_token, self._app_token = load_tokens(self._config)
+        # The config, kept live: every token read goes through it, so a Configure → Save is seen
+        # by the next Test/Connect/health/send rather than at the next restart. ``start_inbound``
+        # hands the same config to the runtime, so the INBOUND half resolves its tokens from the
+        # same place the outbound half does (#952).
+        self._config = LiveConfig(config if config is not None else {})
         self._runtime: SlackRuntime | None = None
+        #: The ``(bot, app)`` tokens the gateway drove the receiver with at boot — ``None`` until
+        #: it did. Socket Mode keeps the tokens it started with, so this is what tells ``health``
+        #: that tokens saved since have not reached inbound.
+        self._inbound_tokens: tuple[str, str] | None = None
         #: True once the Socket-Mode receiver is actually connected. ``health()`` needs the
         #: three-way distinction — connected / tried-and-failed / never driven — because a
         #: config save re-cycles this provider and builds a FRESH transport that the
@@ -114,8 +119,12 @@ class SlackTransport(ChannelTransportProvider):
     def display_name(self) -> str:
         return "Slack"
 
+    def _tokens(self) -> tuple[str, str]:
+        """``(bot_token, app_token)`` as configured now."""
+        return load_tokens(self._config.current())
+
     async def connect(self) -> bool:
-        return bool(self._bot_token)
+        return bool(self._tokens()[0])
 
     async def disconnect(self) -> None:
         return None
@@ -126,7 +135,8 @@ class SlackTransport(ChannelTransportProvider):
         # Pass this transport's own config through: without it the runtime re-derived the
         # tokens from core's credential store alone and a dashboard-configured install
         # never started inbound (#952).
-        runtime = SlackRuntime(services, config=self._config)
+        runtime = SlackRuntime(services, config=self._config.current())
+        self._inbound_tokens = (runtime._bot_token, runtime._app_token)
         if not runtime._slack_enabled:
             missing = " and ".join(
                 n for n, tok in (("Bot Token", runtime._bot_token), ("App Token", runtime._app_token))
@@ -215,7 +225,8 @@ class SlackTransport(ChannelTransportProvider):
         claim the guard suppressed a write that was never possible. Only a transport
         that WOULD have transmitted reports a refusal.
         """
-        if not self._bot_token:
+        bot_token, _ = self._tokens()
+        if not bot_token:
             return False
         # DISABLE_LIVE_WRITES (§1.4). A chat.postMessage is a live, outward,
         # instantly-human-visible write — the same class core refuses for non-GET egress
@@ -231,7 +242,14 @@ class SlackTransport(ChannelTransportProvider):
             logger.warning("SlackTransport.send refused: %s", refusal)
             return refusal
         try:
-            client = self._runtime.slack if self._runtime and self._runtime.slack else RealSlackClient(self._bot_token)
+            # The receiver's client carries the bot token inbound started with; reuse it unless
+            # the configured token has moved on since, so a rotated token is what sends.
+            reuse = (
+                self._runtime is not None
+                and self._runtime.slack is not None
+                and (self._inbound_tokens is None or self._inbound_tokens[0] == bot_token)
+            )
+            client = self._runtime.slack if reuse else RealSlackClient(bot_token)  # type: ignore[union-attr]
             await client.post_message(
                 channel=message.channel_id,
                 text=message.text,
@@ -244,7 +262,7 @@ class SlackTransport(ChannelTransportProvider):
 
     @property
     def connected(self) -> bool:
-        return bool(self._bot_token)
+        return bool(self._tokens()[0])
 
     async def health(self) -> dict[str, Any]:
         """Readiness for the Channels page / provider row.
@@ -254,9 +272,27 @@ class SlackTransport(ChannelTransportProvider):
         an operator trusts (a green provider row and "connected to Slack") both described
         outbound while the receiver was dead. ``error`` rather than ``offline`` because
         outbound genuinely works — the channel is half-up, not down.
+
+        Tokens are read as configured NOW, and the receiver is compared against the tokens it
+        was started with: saved tokens reach outbound at once but inbound only at the next
+        start, and a boot-time reason ("no Bot Token") must not outlive the token it was about.
         """
-        if not self._bot_token:
+        tokens = self._tokens()
+        if not tokens[0]:
             return {"state": "offline", "detail": "No bot token configured"}
+        if self._inbound_tokens is not None and self._inbound_tokens != tokens:
+            if self._inbound_started:
+                detail = (
+                    "Outbound uses the saved tokens; Socket Mode is still connected with the "
+                    "ones it started with. Restart the gateway to move inbound onto the saved "
+                    "tokens."
+                )
+            else:
+                detail = (
+                    "Outbound ready, inbound OFFLINE — the Socket-Mode receiver starts with the "
+                    "gateway, so the tokens saved since then take effect on the next restart."
+                )
+            return {"state": "error", "detail": detail}
         if self._inbound_started:
             return {"state": "ready", "detail": "Tokens configured, Socket-Mode connected"}
         if self._inbound_offline_reason:
@@ -273,10 +309,11 @@ class SlackTransport(ChannelTransportProvider):
         }
 
     async def test(self) -> dict[str, Any]:
-        if not self._bot_token:
+        bot_token, _ = self._tokens()
+        if not bot_token:
             return {"ok": False, "detail": "No bot token configured"}
         try:
-            client = RealSlackClient(self._bot_token)
+            client = RealSlackClient(bot_token)
             res = await client.auth_test()
             team = (res or {}).get("team") or (res or {}).get("team_id") or "workspace"
         except Exception as e:
