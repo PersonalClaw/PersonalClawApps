@@ -3,7 +3,7 @@
 Covers the EIAT-2 done-when: a restart neither reprocesses nor skips (UID cursor via
 poll's returned dict); a duplicate Message-ID is dropped; an unlisted sender AND an
 empty allowlist both surface ZERO messages and zero events; SEL mail_sender_rejected
-fires per rejection; credentials come only from the SDK credential store.
+fires per rejection; the password is kept in the credential store, never in the settings file.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 
 from mail_inbox_runtime.provider import MailInboxProvider, create_provider
-from mail_inbox_runtime.settings import CRED_MAIL_PASSWORD, _APP
+from mail_inbox_runtime.settings import _APP
 
 from _fakes import FakeImapClient, build_message
 
@@ -19,24 +19,20 @@ FOLDER = "INBOX"
 
 
 def _configure(allow_senders=("*@example.com",), *, password="secret"):
-    """Write app settings (ProviderSettings) + the IMAP password (credential store)."""
+    """Write app settings, the IMAP password included, the way the Configure form does."""
     from personalclaw.sdk.settings import ProviderSettings
 
-    ProviderSettings.update(
-        _APP,
-        {
-            "host": "imap.example.com",
-            "port": 993,
-            "username": "me@example.com",
-            "address": "me@example.com",
-            "folder": FOLDER,
-            "allow_senders": list(allow_senders),
-        },
-    )
+    cfg = {
+        "host": "imap.example.com",
+        "port": 993,
+        "username": "me@example.com",
+        "address": "me@example.com",
+        "folder": FOLDER,
+        "allow_senders": list(allow_senders),
+    }
     if password is not None:
-        from personalclaw.sdk.channel import save_credential
-
-        save_credential(CRED_MAIL_PASSWORD, password)
+        cfg["password"] = password
+    ProviderSettings.update(_APP, cfg)
 
 
 def _provider_with(messages):
@@ -150,14 +146,17 @@ def test_unconfigured_returns_empty():
     assert messages == [] and client.connected is False
 
 
-def test_password_only_from_credential_store_never_settings():
-    """The password must come from the credential store, never ProviderSettings."""
+def test_the_password_setting_is_kept_in_the_credential_store_not_the_settings_file():
+    """The source reads the password it was configured with, and the settings file holds only
+    a reference to it."""
     from personalclaw.sdk.settings import ProviderSettings
 
-    _configure(password=None)
-    # Even if a password were (wrongly) placed in the app settings, it must be ignored.
-    ProviderSettings.update(_APP, {"password": "leaked-in-settings"})
-    assert MailInboxProvider._resolve_password() == ""
+    _configure(password="kept-in-the-credential-store")
+
+    assert MailInboxProvider._resolve_password() == "kept-in-the-credential-store"
+    stored = ProviderSettings.config_path(_APP).read_text()
+    assert "kept-in-the-credential-store" not in stored
+    assert "{{secret:PCSECRET_APP_" in stored
 
 
 def test_create_provider_returns_provider():

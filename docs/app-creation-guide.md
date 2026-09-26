@@ -538,7 +538,10 @@ does for its `label` and `refresh_interval_s`.
 - **Backend apps** ship a `test_server.py` (see `growth`, `minutes`,
   demo-dashboard's platform tests) exercising routes against a temp `DATA_DIR`.
   **Never let a test touch real user state** — monkeypatch the data dir /
-  `PERSONALCLAW_HOME` to `tmp_path`.
+  `PERSONALCLAW_HOME` to `tmp_path`. The repository's `conftest.py` is the floor
+  under that: every test starts with `PERSONALCLAW_HOME` pointing at a scratch
+  directory of its own, so a test that forgets still does not resolve the real home
+  through core. Code that builds `Path.home() / ".personalclaw"` itself is not covered.
 - **End-to-end**: install your app from a local source (below) and drive it in
   the real UI. Set `PERSONALCLAW_SKIP_APP_BACKENDS=1` in unit tests that don't
   want backend subprocesses.

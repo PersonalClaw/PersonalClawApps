@@ -1,14 +1,15 @@
 """The mail-inbox app's `personalclaw setup` step (manifest `cli.setup`).
 
 Registered via ``app.json`` → ``cli.setup: "cli_setup:run"``. The core setup runner
-imports ``run`` and calls it with a :class:`personalclaw.sdk.cli.SetupContext`. This
-writes ONLY app-owned homes:
+imports ``run`` and calls it with a :class:`personalclaw.sdk.cli.SetupContext`. Everything
+it asks for goes to this app's ``ProviderSettings`` (``ctx.settings.update``):
 
-- the IMAP **password** → the shared credential store under this app's own key
-  ``MAIL_INBOX_PASSWORD`` (``ctx.save_credential``) — the ONLY place a secret ever lives;
-- the SMTP **password** → the same store under ``MAIL_INBOX_SMTP_PASSWORD``;
-- the non-secret mailbox/SMTP config + the sender allowlist → this app's
-  ``ProviderSettings`` (``ctx.settings.update``).
+- the IMAP and SMTP **passwords** as ``password`` / ``smtp_password``, declared
+  ``x-meta.sensitive``, so the save keeps each in the credential store under a key this app
+  owns and writes only a reference into the settings file. Uninstalling the app removes
+  them. (They used to go to the shared store under the plain names ``MAIL_INBOX_PASSWORD`` /
+  ``MAIL_INBOX_SMTP_PASSWORD``, which outlived the app.);
+- the non-secret mailbox/SMTP config + the sender allowlist.
 
 Core config.json holds no mail config. Declining the token step leaves the source
 disabled (no password ⇒ the provider never polls).
@@ -31,7 +32,13 @@ from personalclaw.sdk.cli import SetupContext
 _APP_DIR = str(Path(__file__).resolve().parent)
 sys.path.insert(0, _APP_DIR)
 try:
-    from mail_inbox_runtime.settings import CRED_MAIL_PASSWORD, CRED_SMTP_PASSWORD
+    from mail_inbox_runtime.settings import (
+        CRED_MAIL_PASSWORD,
+        CRED_SMTP_PASSWORD,
+        KEY_PASSWORD,
+        KEY_SMTP_PASSWORD,
+        load_passwords,
+    )
 finally:
     sys.path.remove(_APP_DIR)
 
@@ -39,9 +46,9 @@ _APP = "mail-inbox"
 
 
 def run(ctx: SetupContext) -> None:
-    """Prompt for the mailbox connection, password (→ credential store), and the
-    fail-closed sender allowlist (→ ProviderSettings). Empty input keeps the current
-    value; declining skips the whole step (the source stays disabled)."""
+    """Prompt for the mailbox connection, password, and the fail-closed sender allowlist
+    (all → ProviderSettings). Empty input keeps the current value; declining skips the
+    whole step (the source stays disabled)."""
     ctx.print("── Mail Inbox App ──\n")
     ctx.print(
         "  Connect an IMAP mailbox as an inbox source. Use an app-specific password\n"
@@ -86,12 +93,19 @@ def _setup_connection(ctx: SetupContext) -> None:
     ctx.settings.update(_APP, update)
 
 
+def _current_passwords(ctx: SetupContext) -> tuple[str, str]:
+    """``(imap, smtp)`` as the source would read them now: this app's store, then the plain
+    name an earlier release's setup saved each under."""
+    legacy = {k: ctx.get_credential(k) for k in (CRED_MAIL_PASSWORD, CRED_SMTP_PASSWORD)}
+    return load_passwords(ctx.settings.load(_APP), legacy)
+
+
 def _setup_password(ctx: SetupContext) -> None:
-    cur = ctx.get_credential(CRED_MAIL_PASSWORD)
+    cur, _ = _current_passwords(ctx)
     hint = " [set]" if cur else ""
     password = ctx.input(f"  IMAP password / app password{hint}: ").strip()
     if password:
-        ctx.save_credential(CRED_MAIL_PASSWORD, password)
+        ctx.settings.update(_APP, {KEY_PASSWORD: password})
         ctx.print("  ✅ Password saved to the credential store.\n")
     elif not cur:
         ctx.print("  ⚠️  No password — the mail inbox will stay disabled until one is set.\n")
@@ -156,25 +170,24 @@ def _setup_outbound(ctx: SetupContext) -> None:
 
 
 def _setup_smtp_password(ctx: SetupContext) -> None:
-    """Store the SMTP secret under its OWN key.
+    """Store the SMTP secret as its OWN setting.
 
     An empty answer may COPY the IMAP password — most providers issue one app password per
     account, so this is the common case — but it is copied explicitly, on the user's say-so,
     rather than fallen back to silently at run time."""
-    cur = ctx.get_credential(CRED_SMTP_PASSWORD)
+    imap_password, cur = _current_passwords(ctx)
     hint = " [set]" if cur else ""
     password = ctx.input(f"  SMTP password / app password{hint}: ").strip()
     if password:
-        ctx.save_credential(CRED_SMTP_PASSWORD, password)
+        ctx.settings.update(_APP, {KEY_SMTP_PASSWORD: password})
         ctx.print("  ✅ SMTP password saved to the credential store.\n")
         return
     if cur:
         return
-    imap_password = ctx.get_credential(CRED_MAIL_PASSWORD)
     if imap_password:
         answer = ctx.input("  Reuse the IMAP password for SMTP? [y/N]: ").strip().lower()
         if answer in ("y", "yes"):
-            ctx.save_credential(CRED_SMTP_PASSWORD, imap_password)
-            ctx.print("  ✅ Copied the IMAP password to the SMTP credential key.\n")
+            ctx.settings.update(_APP, {KEY_SMTP_PASSWORD: imap_password})
+            ctx.print("  ✅ Copied the IMAP password into the SMTP password.\n")
             return
     ctx.print("  ⚠️  No SMTP password — replies will stay drafts (fail-closed).\n")

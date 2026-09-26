@@ -1,8 +1,8 @@
 """MailInboxSettings — coercion, the app store round-trip, and the fail-closed posture.
 
-Also asserts the secret boundary: the password key lives in the credential store, and
-``MailInboxSettings`` carries no password field at all (secrets never round-trip through
-ProviderSettings).
+Also asserts the secret boundary: ``MailInboxSettings`` carries no password field at all, so
+the behavioral config that gets logged and compared never holds one. The passwords are read
+only through ``load_passwords`` (see ``test_setup_secrets_uninstall.py``).
 """
 
 from __future__ import annotations
@@ -63,9 +63,10 @@ def test_load_roundtrips_app_store():
 
 
 def test_no_password_field_on_settings():
-    # The secret must never be a settings field (it lives only in the credential store).
+    # The behavioral dataclass never carries a secret; load_passwords is the one reader.
     field_names = {f.name for f in dataclasses.fields(MailInboxSettings)}
-    assert "password" not in field_names
+    assert "password" not in field_names and "smtp_password" not in field_names
+    # The plain name an earlier setup saved the IMAP password under, still read.
     assert CRED_MAIL_PASSWORD == "MAIL_INBOX_PASSWORD"
 
 

@@ -6,11 +6,15 @@ Where each value lives, and why (the app/core boundary, provider-boundary.md §2
   NON-secret behavioral config, so they live in this app's own ``ProviderSettings``
   store (``~/.personalclaw/apps/mail-inbox/data/config.json``), NOT in core
   ``config.json``. Core defines no mail config.
-- The IMAP **password** is a SECRET, so it lives ONLY in the shared credential store
-  under this app's own key ``MAIL_INBOX_PASSWORD`` (EIAT guardrail: "credentials come
-  only from the SDK credential store, never app.json/ProviderSettings"). The setup step
-  writes it; the provider reads it back by name. It is never persisted in the settings
-  store, never echoed into a log.
+- The IMAP and SMTP **passwords** are SECRETS. They are the settings ``password`` /
+  ``smtp_password``, declared ``x-meta.sensitive``, so the settings FILE never holds one:
+  :class:`ProviderSettings` keeps each value in the credential store under a key this app
+  owns and writes a reference in its place, and uninstalling the app removes them (the EIAT
+  guardrail, "credentials come only from the credential store", holds for the value). Setup
+  and the Configure form both write them there; :func:`load_passwords` is the one place they
+  are read. Never echoed into a log. (Setup used to save them to the shared store under the
+  plain names ``MAIL_INBOX_PASSWORD`` / ``MAIL_INBOX_SMTP_PASSWORD``, which no uninstall can
+  attribute to this app; those are still read, for an install configured that way.)
 
 The allowlist is the inbound security surface: it is stored here but ENFORCED in the
 provider, fail-closed — an empty/absent allowlist surfaces ZERO messages (§2.7).
@@ -23,13 +27,12 @@ schema, which is what makes it editable from the platform's generated app-settin
 path and this read path on the SAME file (``data/config.json``).
 
 **Outbound (EIAT-3, contract C3)** follows the same split: SMTP host/port/TLS-mode/login
-are non-secret and live here; the SMTP **password** is a second secret under its own
-credential key ``MAIL_INBOX_SMTP_PASSWORD``. It is deliberately NOT the IMAP key — the
-runtime never silently reuses one credential for the other transport. (The setup step may
-COPY the IMAP password into it when the user says so; that is an explicit, visible choice
-rather than a hidden fallback.) ``send_enabled`` defaults to **False**: guardrail 4 means a
-fully configured mailbox with a working SMTP password still only ever composes drafts until
-the user turns sending on.
+are non-secret and live here; the SMTP **password** is a second secret, its own setting. It
+is deliberately NOT the IMAP one — the runtime never silently reuses one credential for the
+other transport. (The setup step may COPY the IMAP password into it when the user says so;
+that is an explicit, visible choice rather than a hidden fallback.) ``send_enabled`` defaults
+to **False**: guardrail 4 means a fully configured mailbox with a working SMTP password still
+only ever composes drafts until the user turns sending on.
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from personalclaw.sdk.channel import AppConfig
 from personalclaw.sdk.settings import ProviderSettings
 
 from mail_inbox_runtime.addresses import (
@@ -57,14 +61,16 @@ logger = logging.getLogger(__name__)
 
 _APP = "mail-inbox"
 
-#: The credential-store key the IMAP password is stored under. App-owned: the setup
-#: step writes it and the runtime reads it back by name (never in ProviderSettings).
-CRED_MAIL_PASSWORD = "MAIL_INBOX_PASSWORD"
+#: The two passwords' settings keys (declared ``x-meta.sensitive``; see the module docstring).
+#: The SMTP one is a SEPARATE secret: the runtime never falls back to the IMAP one, so an unset
+#: outbound credential fails closed (the reply is drafted) instead of quietly authenticating
+#: with the inbound one.
+KEY_PASSWORD = "password"
+KEY_SMTP_PASSWORD = "smtp_password"
 
-#: The credential-store key for the SMTP (outbound) password. A SEPARATE secret: the
-#: runtime never falls back to :data:`CRED_MAIL_PASSWORD`, so an unset outbound credential
-#: fails closed (the reply is drafted) instead of quietly authenticating with the inbound
-#: one.
+#: The plain credential-store names an earlier release's setup saved the passwords under.
+#: Nothing writes them any more; :func:`load_passwords` still reads them.
+CRED_MAIL_PASSWORD = "MAIL_INBOX_PASSWORD"
 CRED_SMTP_PASSWORD = "MAIL_INBOX_SMTP_PASSWORD"
 
 _DEFAULT_PORT = 993
@@ -134,7 +140,8 @@ class MailInboxSettings:
 
     @classmethod
     def load(cls) -> "MailInboxSettings":
-        """Read + coerce the app store (never the credential store)."""
+        """Read + coerce the app store's behavioral config. The passwords are not part of it:
+        :func:`load_passwords` reads them."""
         d = ProviderSettings.load(_APP)
         return cls(
             host=str(d.get("host", "")).strip(),
@@ -173,3 +180,31 @@ def reload_settings() -> MailInboxSettings:
     global _settings
     _settings = MailInboxSettings.load()
     return _settings
+
+
+def load_passwords(
+    config: dict | None = None, creds: dict[str, str] | None = None
+) -> tuple[str, str]:
+    """``(imap_password, smtp_password)`` — THE one resolution order, shared by the source,
+    setup and doctor.
+
+    Each password comes from this app's store (``config``, or the store itself when ``None``),
+    else from the plain name an earlier release's setup saved it under in the shared
+    credential store (``creds``, read from ``AppConfig`` when not given and only when the store
+    leaves a password unset). The SMTP password never falls back to the IMAP one."""
+    src = ProviderSettings.load(_APP) if config is None else config
+    imap_pass = str(src.get(KEY_PASSWORD) or "")
+    smtp_pass = str(src.get(KEY_SMTP_PASSWORD) or "")
+    if not (imap_pass and smtp_pass):
+        shared = _shared_credentials() if creds is None else creds
+        imap_pass = imap_pass or shared.get(CRED_MAIL_PASSWORD, "")
+        smtp_pass = smtp_pass or shared.get(CRED_SMTP_PASSWORD, "")
+    return imap_pass, smtp_pass
+
+
+def _shared_credentials() -> dict[str, str]:
+    try:
+        return AppConfig.load().load_credentials()
+    except Exception:
+        logger.debug("mail-inbox: credential load failed", exc_info=True)
+        return {}

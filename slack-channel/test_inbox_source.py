@@ -23,8 +23,17 @@ _APP_DIR = Path(__file__).resolve().parent
 if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
+import pytest  # noqa: E402
+
 from slack_runtime.client import SlackClientOps  # noqa: E402
 from slack_runtime.inbox_source import SlackInboxSource, create_provider  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _scratch_home(tmp_path, monkeypatch):
+    """The source reads this app's store for its token, so this root-level file (which
+    ``tests/conftest.py`` does not cover) points the home at a scratch directory."""
+    monkeypatch.setenv("PERSONALCLAW_HOME", str(tmp_path / "home"))
 
 
 class StubClient(SlackClientOps):
@@ -127,12 +136,8 @@ def test_source_name_is_the_vendor_neutral_key():
     assert _source().source_name == "slack"
 
 
-def test_token_falls_back_to_the_shared_credential_store(monkeypatch):
-    """Same resolution order as SlackTransport, so the two providers can't disagree
-    about which workspace this app is bound to."""
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-shared")
-    src = SlackInboxSource({}, client=StubClient())
-    assert src._client is not None  # constructed without an instance token
+# Which token the source's client is built with (the app's store, a token saved after enable,
+# the shared credential as the fallback) is proven in tests/test_inbox_source_saved_token.py.
 
 
 # ── poll ──────────────────────────────────────────────────────────────────────

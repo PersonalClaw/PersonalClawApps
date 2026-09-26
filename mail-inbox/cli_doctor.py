@@ -3,9 +3,9 @@
 Registered via ``app.json`` → ``cli.doctor: "cli_doctor:probe"``. The core doctor
 runner imports ``probe`` and calls it (bounded by a timeout + exception guard),
 rendering the returned ``list[DoctorLine]`` as this app's doctor section. It reports
-mailbox connection config, password presence (in the credential store), and — most
-importantly — the fail-closed allowlist posture, so a deliberately-empty inbox is
-diagnosable rather than mysterious. The same applies per prompt-bound address: a row that
+mailbox connection config, whether each password is set (through the resolver the source
+uses), and — most importantly — the fail-closed allowlist posture, so a deliberately-empty
+inbox is diagnosable rather than mysterious. The same applies per prompt-bound address: a row that
 CANNOT fire (no stored prompt, or an empty per-address allowlist) is reported here, because
 "configured and silent" is the one state a user cannot tell from a working one.
 """
@@ -13,7 +13,6 @@ CANNOT fire (no stored prompt, or an empty per-address allowlist) is reported he
 import sys
 from pathlib import Path
 
-from personalclaw.sdk.channel import AppConfig
 from personalclaw.sdk.cli import DoctorLine
 
 # `personalclaw doctor` loads this file by path, and core's loader does not put the app's
@@ -24,11 +23,7 @@ _APP_DIR = str(Path(__file__).resolve().parent)
 sys.path.insert(0, _APP_DIR)
 try:
     from mail_inbox_runtime.outbound import draft_reason
-    from mail_inbox_runtime.settings import (
-        CRED_MAIL_PASSWORD,
-        CRED_SMTP_PASSWORD,
-        MailInboxSettings,
-    )
+    from mail_inbox_runtime.settings import MailInboxSettings, load_passwords
 finally:
     sys.path.remove(_APP_DIR)
 
@@ -48,8 +43,8 @@ def probe() -> list[DoctorLine]:
         DoctorLine("folder", "ok", settings.folder),
     ]
 
-    creds = AppConfig.load().load_credentials()
-    if creds.get(CRED_MAIL_PASSWORD):
+    imap_password, smtp_password = load_passwords()
+    if imap_password:
         lines.append(DoctorLine("password", "ok", "configured (credential store)"))
     else:
         lines.append(
@@ -72,11 +67,11 @@ def probe() -> list[DoctorLine]:
         )
 
     lines.extend(_bound_address_lines(settings))
-    lines.extend(_outbound_lines(settings, creds))
+    lines.extend(_outbound_lines(settings, bool(smtp_password)))
     return lines
 
 
-def _outbound_lines(settings: MailInboxSettings, creds: dict) -> list[DoctorLine]:
+def _outbound_lines(settings: MailInboxSettings, has_smtp_password: bool) -> list[DoctorLine]:
     """The reply posture. "Drafting, not sending" is the DEFAULT and therefore the state a
     user is most likely to mistake for a broken send — so it is reported with the exact
     reason, from the same :func:`draft_reason` the send path calls (one decision, one
@@ -84,7 +79,7 @@ def _outbound_lines(settings: MailInboxSettings, creds: dict) -> list[DoctorLine
     reason = draft_reason(
         send_enabled=settings.send_enabled,
         smtp_ready=settings.smtp_ready,
-        has_credential=bool(creds.get(CRED_SMTP_PASSWORD)),
+        has_credential=has_smtp_password,
     )
     if reason:
         return [DoctorLine("replies", "info", f"DRAFT only — {reason}")]

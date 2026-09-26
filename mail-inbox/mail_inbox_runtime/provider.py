@@ -3,8 +3,8 @@ over SMTP, **drafting by default**.
 
 On each ``poll`` the provider:
 
-1. reads the latest app settings + the IMAP password from the SDK credential store
-   (NEVER from app.json/ProviderSettings — EIAT guardrail);
+1. reads the latest app settings + the IMAP password, whose value ``ProviderSettings`` keeps
+   in the credential store (the settings file holds only a reference — EIAT guardrail);
 2. **fails closed on the allowlist** — an empty/absent ``allow_senders`` surfaces ZERO
    messages and never even connects; the posture is logged once so a silent empty inbox
    is diagnosable (§2.7, guardrail 1);
@@ -61,7 +61,7 @@ _APP_DIR = str(_Path(__file__).resolve().parents[1])
 if _APP_DIR not in _sys.path:
     _sys.path.insert(0, _APP_DIR)
 
-from personalclaw.sdk.channel import AppConfig, atomic_write, sel
+from personalclaw.sdk.channel import atomic_write, sel
 from personalclaw.sdk.inbox import IncomingMessage, MessageSourceProvider
 from personalclaw.sdk.util import app_data_dir
 
@@ -84,12 +84,7 @@ from mail_inbox_runtime.outbound import (
     remember_target,
     save_draft,
 )
-from mail_inbox_runtime.settings import (
-    CRED_MAIL_PASSWORD,
-    CRED_SMTP_PASSWORD,
-    MailInboxSettings,
-    reload_settings,
-)
+from mail_inbox_runtime.settings import MailInboxSettings, load_passwords, reload_settings
 from mail_inbox_runtime.smtp_client import SmtpError, SmtpSender, SmtplibSender
 
 logger = logging.getLogger(__name__)
@@ -128,9 +123,9 @@ class MailInboxProvider(MessageSourceProvider):
     """Polls an IMAP mailbox and surfaces allowlisted mail as inbox items."""
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
-        # config is the per-instance override the loader may pass; mail-inbox keeps ALL
-        # non-secret config in its own ProviderSettings store (read fresh each poll) and
-        # the password in the credential store — so nothing is taken from here.
+        # config is the per-instance override the loader may pass; mail-inbox reads its
+        # settings, passwords included, from its own ProviderSettings store fresh on each
+        # poll and reply — so nothing is taken from here.
         self._posture_logged = False
         self._client_factory = None  # test seam: inject a fake ImapClient factory
         self._sender_factory = None  # test seam: inject a fake SmtpSender factory
@@ -152,29 +147,20 @@ class MailInboxProvider(MessageSourceProvider):
         settings + the platform flag."""
         return True
 
-    # ── credentials (SDK credential store ONLY) ──
+    # ── credentials (one resolver, shared with setup and doctor) ──
     @staticmethod
     def _resolve_password() -> str:
-        """The IMAP password from the shared credential store, by this app's own key.
-        Never read from app.json/ProviderSettings."""
-        try:
-            return AppConfig.load().load_credentials().get(CRED_MAIL_PASSWORD, "")
-        except Exception:
-            logger.debug("mail-inbox: credential load failed", exc_info=True)
-            return ""
+        """The IMAP password, as configured now."""
+        return load_passwords()[0]
 
     @staticmethod
     def _resolve_smtp_password() -> str:
-        """The SMTP password, by its OWN credential-store key.
+        """The SMTP password, its OWN secret.
 
-        No fallback to the IMAP key: an unset outbound credential must fail closed (the
+        No fallback to the IMAP one: an unset outbound credential must fail closed (the
         reply is drafted, and the doctor says why) rather than authenticate a send with a
         secret the user only ever handed over for reading mail."""
-        try:
-            return AppConfig.load().load_credentials().get(CRED_SMTP_PASSWORD, "")
-        except Exception:
-            logger.debug("mail-inbox: SMTP credential load failed", exc_info=True)
-            return ""
+        return load_passwords()[1]
 
     # ── Message-ID dedup belt (persisted, bounded) ──
     def _seen_ids_path(self) -> _Path:
@@ -330,7 +316,7 @@ class MailInboxProvider(MessageSourceProvider):
 
         password = self._resolve_password()
         if not password:
-            logger.warning("mail-inbox: no IMAP password in the credential store — cannot poll")
+            logger.warning("mail-inbox: no IMAP password configured — cannot poll")
             return [], dict(checkpoints)
 
         return await asyncio.to_thread(self._poll_sync, settings, password, dict(checkpoints))

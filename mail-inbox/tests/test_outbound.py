@@ -35,7 +35,7 @@ from mail_inbox_runtime.outbound import (
     reply_subject,
 )
 from mail_inbox_runtime.provider import MailInboxProvider
-from mail_inbox_runtime.settings import CRED_MAIL_PASSWORD, CRED_SMTP_PASSWORD, _APP
+from mail_inbox_runtime.settings import _APP
 from mail_inbox_runtime.smtp_client import SmtpError
 
 from _fakes import FakeImapClient, FakeSmtpSender, build_message
@@ -58,7 +58,6 @@ def _configure(
     """Write a fully configured mailbox + outbound transport. ``send_enabled=None`` OMITS
     the key entirely, which is how a real fresh install looks — the state the shipped
     default has to cover."""
-    from personalclaw.sdk.channel import save_credential
     from personalclaw.sdk.settings import ProviderSettings
 
     cfg = {
@@ -68,18 +67,18 @@ def _configure(
         "address": MAILBOX,
         "folder": FOLDER,
         "allow_senders": ["*@example.com"],
+        "password": "imap-app-password",
         "smtp_host": smtp_host,
         "smtp_port": 587,
         "smtp_security": "starttls",
     }
+    if smtp_password:
+        cfg["smtp_password"] = smtp_password
     if send_enabled is not None:
         cfg["send_enabled"] = send_enabled
     if bound is not None:
         cfg["bound_addresses"] = bound
     ProviderSettings.update(_APP, cfg)
-    save_credential(CRED_MAIL_PASSWORD, "imap-app-password")
-    if smtp_password:
-        save_credential(CRED_SMTP_PASSWORD, smtp_password)
 
 
 def _provider(**kwargs) -> tuple[MailInboxProvider, FakeSmtpSender]:

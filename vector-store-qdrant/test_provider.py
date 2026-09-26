@@ -8,7 +8,8 @@ nothing survives the test, which is what makes it runnable in CI and on a loaded
 What the server (HTTP) mode shares with this and what it does not: every method below is
 byte-identical in both modes — only ``_connect`` branches — so what these tests prove about
 upsert/delete/query/describe semantics holds for a server too.
-``test_a_url_config_builds_a_networked_client`` covers the branch itself without connecting.
+``test_a_url_config_builds_a_networked_client`` covers the branch itself without connecting, and
+``test_api_key.py`` drives it over a real socket against a fake Qdrant that requires an api key.
 What is NOT proven here is a real Qdrant server over the network; see the README.
 
 The claim that matters most for retrieval correctness is
@@ -246,17 +247,25 @@ def test_describe_before_any_write_reports_reachable_without_a_collection(store)
     assert info.backend == "qdrant" and info.collection == "test_chunks"
 
 
-def test_describe_never_raises_and_never_leaks_the_key(monkeypatch, tmp_path):
+def test_describe_never_raises_and_never_leaks_the_key(tmp_path):
     """Unreachable is a report, not an exception — it is rendered in the UI and logged."""
-    monkeypatch.setenv(API_KEY_NAME, "super-secret-value")
-    p = QdrantVectorStore(url="http://127.0.0.1:1/unreachable", collection="c", timeout_secs=1)
+    p = create_provider(
+        {
+            "url": "http://127.0.0.1:1/unreachable",
+            "collection": "c",
+            "timeout_secs": 1,
+            "api_key": "super-secret-value",
+        }
+    )
     info = p.describe()
     assert info.reachable is False
     assert "super-secret-value" not in info.detail
     assert "cannot reach" in info.detail
 
 
-# ── clause 3: config round-trip, and the secret that must NOT be in it ──────────────
+# ── clause 3: config round-trip ──────────────────────────────────────────────────────
+# Where the api key is kept (the credential store, never the settings file) is proven end to end
+# in test_api_key.py, through core's own Configure handler.
 
 
 def test_every_settings_schema_property_round_trips_into_the_provider(tmp_path):
@@ -273,57 +282,28 @@ def test_every_settings_schema_property_round_trips_into_the_provider(tmp_path):
         "settingsSchema"
     ]
     props = set(schema["properties"])
-    assert props == {"url", "collection", "path", "timeout_secs"}
+    assert props == {"url", "collection", "api_key", "path", "timeout_secs"}
 
     p = create_provider(
         {
             "url": "http://example.invalid:6333",
             "collection": "mine",
+            "api_key": "k-round-trip",
             "path": str(tmp_path / "folder"),
             "timeout_secs": 42,
         }
     )
     assert p._url == "http://example.invalid:6333"
     assert p._collection == "mine"
+    assert p._api_key == "k-round-trip"
     assert p._path == str(tmp_path / "folder")
     assert p._timeout == 42
 
     d = create_provider({})
     assert d._url == schema["properties"]["url"]["default"]
     assert d._collection == schema["properties"]["collection"]["default"]
+    assert d._api_key == schema["properties"]["api_key"]["default"]
     assert d._timeout == schema["properties"]["timeout_secs"]["default"]
-
-
-def test_the_api_key_is_not_a_settings_field_and_is_ignored_in_config():
-    """Clause 3, in its falsifiable form.
-
-    The schema declares no key field, so the Configure form cannot write one — and if a config
-    file acquired one anyway (hand-edited, or migrated from another app), the factory must not
-    pick it up. Otherwise a secret would sit in cleartext in
-    ``~/.personalclaw/apps/vector-store-qdrant/data/config.json``.
-    """
-    import json
-    from pathlib import Path
-
-    schema = json.loads((Path(__file__).parent / "app.json").read_text())["provider"][
-        "settingsSchema"
-    ]
-    for field in schema["properties"]:
-        assert "key" not in field and "secret" not in field and "password" not in field
-
-    p = create_provider({"api_key": "leaked-into-config", "url": "http://x:1", "collection": "c"})
-    assert not hasattr(p, "_api_key")
-    assert "leaked-into-config" not in repr(vars(p))
-
-
-def test_the_api_key_comes_from_the_environment_when_no_credential_is_registered(monkeypatch):
-    """The documented fallback: credential store first, env var second, config never."""
-    from provider import _api_key
-
-    monkeypatch.setenv(API_KEY_NAME, "from-env")
-    assert _api_key() == "from-env"
-    monkeypatch.delenv(API_KEY_NAME)
-    assert _api_key() == ""
 
 
 @needs_qdrant
@@ -351,6 +331,11 @@ def test_a_url_config_builds_a_networked_client(monkeypatch, tmp_path):
     p = mod.QdrantVectorStore(url="http://qdrant.internal:6333", collection="c", timeout_secs=7)
     p._connect()
     assert seen == {"url": "http://qdrant.internal:6333", "timeout": 7, "api_key": "k-123"}
+
+    # the api_key setting wins over the environment
+    seen.clear()
+    mod.QdrantVectorStore(url="http://qdrant.internal:6333", api_key="k-setting")._connect()
+    assert seen["api_key"] == "k-setting"
 
     # and with no key set, the kwarg is absent rather than an empty string — Qdrant treats an
     # empty api key as a key and sends the header.

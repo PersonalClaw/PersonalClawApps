@@ -41,6 +41,7 @@ if _APP_DIR not in _sys.path:
 from personalclaw.sdk.inbox import IncomingMessage, MessageSourceProvider
 
 from slack_runtime.client import RealSlackClient, SlackClientOps
+from slack_runtime.settings import LiveConfig, load_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -58,19 +59,30 @@ class SlackInboxSource(MessageSourceProvider):
     def __init__(
         self, config: dict[str, Any] | None = None, client: SlackClientOps | None = None
     ) -> None:
-        cfg = config or {}
-        import os
-
-        # Per-instance config wins; else the shared credential store the gateway
-        # propagates into the environment — the same resolution order as
-        # SlackTransport, so the two providers never disagree about which
-        # workspace this app is bound to.
-        token = cfg.get("bot_token", "") or os.environ.get("SLACK_BOT_TOKEN", "")
+        # The config, kept live exactly as SlackTransport keeps it, and the token resolved
+        # through the same ``load_tokens``: the registry builds this provider once, at enable,
+        # and a Configure → Save re-cycles nothing, so a token read once in ``__init__`` kept
+        # polling with the token it started with (none, on an install configured after
+        # enable) until a restart. One resolution for both providers also means they never
+        # disagree about which workspace this app is bound to.
+        self._config = LiveConfig(config if config is not None else {})
         # ``client`` is the test seam (MockSlackClient); production passes none.
-        self._client: SlackClientOps = client or RealSlackClient(str(token))
+        self._injected = client
+        #: ``(token, client)`` last built, so an unchanged token keeps its client.
+        self._built: tuple[str, SlackClientOps] | None = None
         # Resolved lazily and cached: a display name per Slack user id. Bounded by
         # the number of distinct senders in watched channels.
         self._names: dict[str, str] = {}
+
+    @property
+    def _client(self) -> SlackClientOps:
+        """The Slack client for the bot token configured now, rebuilt when that token changes."""
+        if self._injected is not None:
+            return self._injected
+        token = load_tokens(self._config.current())[0]
+        if self._built is None or self._built[0] != token:
+            self._built = (token, RealSlackClient(token))
+        return self._built[1]
 
     @property
     def source_name(self) -> str:
