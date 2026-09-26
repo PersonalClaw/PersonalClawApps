@@ -5,15 +5,15 @@ runner (``personalclaw.app_cli.run_app_doctor_probes``) imports ``probe`` and ca
 it (bounded by a timeout + exception guard), rendering the returned
 ``list[DoctorLine]`` as this app's doctor section. Checks the token (resolved by
 :func:`discord_runtime.settings.load_bot_token`, the order the channel itself uses),
-the application id in this app's own store, and the owner id, with a pointer to the
+the application id in this app's own store, and Discord's own owner id, with a pointer to the
 Channels-page Test action for the live ``GET /gateway/bot`` hello probe (which the app
 owns, not core's doctor — the same division as Telegram's).
 """
 
-from personalclaw.sdk.channel import CRED_OWNER_ID, AppConfig, ProviderSettings
+from personalclaw.sdk.channel import AppConfig, ProviderSettings, owner_id_credential, owner_id_for
 from personalclaw.sdk.cli import DoctorLine
 
-from discord_runtime.settings import load_bot_token
+from discord_runtime.settings import PROVIDER, load_bot_token
 
 _APP = "discord-channel"
 
@@ -39,11 +39,11 @@ def probe() -> list[DoctorLine]:
             DoctorLine("application id", "warn", "not set — no bot invite URL can be printed")
         )
 
-    owner = creds.get(CRED_OWNER_ID)
+    owner = owner_id_for(PROVIDER)
     if owner:
         lines.append(DoctorLine("owner", "ok", owner))
     else:
-        lines.append(DoctorLine("owner", "warn", "PERSONALCLAW_OWNER_ID not set"))
+        lines.append(DoctorLine("owner", "warn", f"{owner_id_credential(PROVIDER)} not set"))
 
     lines.append(
         DoctorLine(

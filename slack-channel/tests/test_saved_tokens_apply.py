@@ -31,7 +31,8 @@ _BUNDLE = Path(__file__).resolve().parents[1]
 def installed(tmp_path, monkeypatch):
     """A scratch home with this app installed and nothing configured."""
     monkeypatch.setenv("PERSONALCLAW_HOME", str(tmp_path))
-    for key in ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "PERSONALCLAW_OWNER_ID"):
+    owner_keys = ("PERSONALCLAW_OWNER_ID", "PERSONALCLAW_OWNER_ID_SLACK")
+    for key in ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", *owner_keys):
         monkeypatch.delenv(key, raising=False)
     home_app = tmp_path / "apps" / _APP
     home_app.mkdir(parents=True)

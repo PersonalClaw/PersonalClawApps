@@ -780,8 +780,8 @@ def claim_owner(user_id: str) -> bool:
     _owner_id = user_id
     _allowed_users = {user_id}
     try:
-        from personalclaw.sdk.channel import CRED_OWNER_ID, save_credential
-        save_credential(CRED_OWNER_ID, user_id)
+        from personalclaw.sdk.channel import owner_id_credential, save_credential
+        save_credential(owner_id_credential("slack"), user_id)
     except Exception:
         logger.warning("Failed to persist auto-claimed Slack owner", exc_info=True)
     logger.info("Slack owner auto-claimed on first contact: %s", user_id)

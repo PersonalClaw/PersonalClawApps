@@ -23,7 +23,7 @@ from personalclaw.apps import app_manager
 from personalclaw.config import credentials
 from personalclaw.dashboard.handlers.apps import api_app_config_put
 from personalclaw.providers.settings import ProviderSettings
-from personalclaw.sdk.channel import CRED_OWNER_ID, CRED_SLACK_APP_TOKEN, CRED_SLACK_BOT_TOKEN
+from personalclaw.sdk.channel import CRED_SLACK_APP_TOKEN, CRED_SLACK_BOT_TOKEN, owner_id_credential
 from personalclaw.sdk.cli import SetupContext
 
 import cli_doctor
@@ -42,7 +42,7 @@ APP_TOKEN = f"xapp-1-{secrets.token_hex(12)}"
 def home(tmp_path, monkeypatch):
     """The real bundle installed into a scratch home, nothing configured."""
     monkeypatch.setenv("PERSONALCLAW_HOME", str(tmp_path))
-    for key in (CRED_SLACK_BOT_TOKEN, CRED_SLACK_APP_TOKEN, CRED_OWNER_ID):
+    for key in (CRED_SLACK_BOT_TOKEN, CRED_SLACK_APP_TOKEN, owner_id_credential("slack")):
         # setenv first so teardown restores the variable even if the code under test sets it.
         monkeypatch.setenv(key, "")
         monkeypatch.delenv(key)
