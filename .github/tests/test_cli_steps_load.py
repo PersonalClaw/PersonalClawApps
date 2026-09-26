@@ -1,16 +1,16 @@
 """Every app's ``cli.setup`` / ``cli.doctor`` step loads the way ``personalclaw setup`` / ``doctor`` load it.
 
-Core's CLI runner (``personalclaw.app_cli._import_app_callable``) execs the declared module by
-path out of the INSTALLED copy and, unlike the gateway's provider loader, does not put the app's
-directory on ``sys.path``. A step whose module imported the app's own package
-(``telegram_runtime``, ``email_runtime``, a top-level ``provider``) failed there with
-``ModuleNotFoundError``; the runner printed "setup step unavailable" and exited 0. Ten steps across
-five apps were unreachable that way while every app's own suite passed, because each suite's
-conftest puts the app directory on ``sys.path`` before anything is imported.
+Core's CLI runner (``personalclaw.app_cli._import_app_callable``) loads the declared module by path
+out of the INSTALLED copy, holding the app's directory on ``sys.path`` while the step imports and
+while it runs (core #3621) — so a step imports its own package (``telegram_runtime``, a top-level
+``provider``) exactly as the app's provider module does, with no path code of its own. Before that,
+ten steps across five apps failed there with ``ModuleNotFoundError`` while every app's own suite
+passed, because each suite's conftest puts the app directory on ``sys.path`` before anything is
+imported.
 
 So each step is loaded through core's own loader, from a copy placed where an install puts it,
 in a FRESH interpreter: a provider imported earlier in the same process would have cached the
-app's package in ``sys.modules`` and hidden the defect.
+app's package in ``sys.modules`` and hidden a step that cannot load.
 """
 
 from __future__ import annotations
@@ -21,8 +21,6 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-
-import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -75,27 +73,23 @@ def test_every_declared_cli_step_loads_through_cores_loader(tmp_path):
     assert not broken, "core's CLI runner cannot load:\n  " + "\n  ".join(broken)
 
 
-@pytest.mark.parametrize("hold_the_path", [False, True])
-def test_the_check_sees_an_unimportable_sibling_package(tmp_path, hold_the_path):
-    """Positive control: a step importing its own package fails through the loader unless the
-    module holds its directory on the path while it imports — the fix the apps carry."""
+def _probe_step(tmp_path: Path, body: str) -> str:
+    """A one-step probe app whose ``cli_setup`` module is *body*, loaded through core's loader."""
     bundle = tmp_path / "src" / "probe-app"
     (bundle / "probe_runtime").mkdir(parents=True)
     (bundle / "probe_runtime" / "__init__.py").write_text("VALUE = 1\n")
-    if hold_the_path:
-        body = (
-            "import sys\nfrom pathlib import Path\n"
-            "_APP_DIR = str(Path(__file__).resolve().parent)\n"
-            "sys.path.insert(0, _APP_DIR)\n"
-            "try:\n    from probe_runtime import VALUE\nfinally:\n    sys.path.remove(_APP_DIR)\n"
-        )
-    else:
-        body = "from probe_runtime import VALUE\n"
     (bundle / "cli_setup.py").write_text(body + "\ndef run(ctx):\n    return VALUE\n")
+    return _load_error(bundle, "probe-app", "cli_setup:run", tmp_path / "home")
 
-    error = _load_error(bundle, "probe-app", "cli_setup:run", tmp_path / "home")
 
-    if hold_the_path:
-        assert error == ""
-    else:
-        assert "No module named 'probe_runtime'" in error
+def test_a_step_imports_its_own_package_with_no_path_code(tmp_path):
+    """The contract every step above relies on since the apps dropped their own ``sys.path``
+    prologues: core holds the app directory on the path while a step imports."""
+    assert _probe_step(tmp_path, "from probe_runtime import VALUE\n") == ""
+
+
+def test_the_check_sees_a_step_that_cannot_load(tmp_path):
+    """Positive control: an import that resolves nowhere fails through the loader, so the rail
+    above can fail — and names the module that is missing."""
+    error = _probe_step(tmp_path, "from probe_runtime import VALUE\nimport not_installed_anywhere\n")
+    assert "No module named 'not_installed_anywhere'" in error

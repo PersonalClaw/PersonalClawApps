@@ -22,33 +22,21 @@ a typo. Known hosts are offered as presets so the four hostname/port pairs a use
 otherwise look up are already filled in.
 """
 
-import sys
-from pathlib import Path
-
 from personalclaw.sdk.cli import SetupContext
 
-# `personalclaw setup` loads this file by path, and core's loader does not put the app's
-# directory on sys.path the way the gateway's provider loader does, so an import of this app's
-# own package failed there and the step read "unavailable". Hold it on the path while the
-# import runs, as the provider loader does.
-_APP_DIR = str(Path(__file__).resolve().parent)
-sys.path.insert(0, _APP_DIR)
-try:
-    from email_runtime.settings import (
-        CRED_IMAP_PASS,
-        CRED_SMTP_PASS,
-        DEFAULT_IMAP_PORT,
-        DEFAULT_POLL_SECS,
-        DEFAULT_SMTP_PORT,
-        KEY_IMAP_PASSWORD,
-        KEY_SMTP_PASSWORD,
-        SMTP_SSL,
-        SMTP_STARTTLS,
-        _VALID_ACTIVATIONS,
-        _VALID_SMTP_SECURITY,
-    )
-finally:
-    sys.path.remove(_APP_DIR)
+from email_runtime.settings import (
+    CRED_IMAP_PASS,
+    CRED_SMTP_PASS,
+    DEFAULT_IMAP_PORT,
+    DEFAULT_POLL_SECS,
+    DEFAULT_SMTP_PORT,
+    KEY_IMAP_PASSWORD,
+    KEY_SMTP_PASSWORD,
+    SMTP_SSL,
+    SMTP_STARTTLS,
+    _VALID_ACTIVATIONS,
+    _VALID_SMTP_SECURITY,
+)
 
 _APP = "email-channel"
 

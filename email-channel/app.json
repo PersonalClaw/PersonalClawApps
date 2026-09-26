@@ -1,6 +1,6 @@
 {
   "name": "email-channel",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Email Channel",
   "description": "Two-way email channel over stdlib IMAP/SMTP. Converse with your agent by email, replies thread back, and results arrive in the same conversation. No streaming; approvals answer by reply token.",
   "icon": "Mails",

@@ -1,6 +1,6 @@
 {
   "name": "mail-inbox",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Mail Inbox",
   "description": "IMAP mail as an inbox source. Polls a mailbox, surfaces messages from a fail-closed sender allowlist as inbox items, and extracts multipart/HTML/attachment text. Purpose-specific addresses can each carry a stored prompt, so mail to them runs it against the fenced mail body. Replies are composed as threaded drafts and are NOT sent until you turn sending on. Passwords are kept in the credential store, never in the settings file.",
   "icon": "Mail",

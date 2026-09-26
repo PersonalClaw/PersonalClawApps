@@ -44,10 +44,13 @@ with open(out, "wb") as f:
 
 
 @pytest.fixture
-def packages_outside_the_default_path(tmp_path, monkeypatch):
-    """``piper`` installed where the gateway puts an app's packages since core #3605: a
-    directory the gateway appends to its OWN ``sys.path`` and that no plain Python child sees."""
-    site = tmp_path / "app-python" / "site-packages"
+def packages_outside_the_default_path(monkeypatch):
+    """``piper`` installed where the gateway puts an app's packages since core #3605 — this
+    test's ``<home>/app-python``, which is what core's ``app_packages_env`` reads: a directory
+    the gateway appends to its OWN ``sys.path`` and that no plain Python child sees."""
+    from personalclaw.apps.app_python import site_dirs
+
+    site = site_dirs()[0]
     (site / "piper").mkdir(parents=True)
     (site / "piper" / "__init__.py").write_text("", encoding="utf-8")
     (site / "piper" / "__main__.py").write_text(_FAKE_PIPER_MAIN, encoding="utf-8")
@@ -89,8 +92,8 @@ class TestPiperCommand:
 async def test_synthesis_works_when_piper_lives_only_in_the_app_packages(
     tmp_path, packages_outside_the_default_path
 ):
-    """A REAL child process: it can import piper only because the app hands it the directory the
-    gateway imports piper from. Before, the app looked for a ``piper`` console script beside the
+    """A REAL child process: it can import piper only because the app hands it core's app-packages
+    environment. Before #124, the app looked for a ``piper`` console script beside the
     interpreter — where pip no longer puts it — and a plain child could not have imported piper."""
     model = tmp_path / "voice.onnx"
     model.write_bytes(b"m")

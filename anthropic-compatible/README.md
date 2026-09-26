@@ -12,11 +12,23 @@ as a self-contained directory:
 - `app.json` — the manifest (identity, provider/backend/UI declarations, permissions).
 - `provider.py` — the implementation, exposed via `create_provider`.
 - `test_catalog.py`, `test_provider.py` — the app's own tests.
+- `test_wire.py` — proves a call's per-call temperature and output budget reach the request, against
+  a recording endpoint.
 
 It imports only the PersonalClaw **SDK** (never core internals), so core can evolve
 without breaking it:
 
 - `personalclaw.sdk.model`
+
+## Per-call sampling
+
+When core asks one call for its own sampling temperature (best-of-N's ladder) and output budget,
+the request carries both; `test_wire.py` proves it against a recording endpoint. The app
+installs the 0.x `anthropic` SDK (`anthropic>=0.20,<1`), because core's Messages client passes
+the temperature as a keyword argument that the 1.x SDK removed, and on 1.x every such call
+failed before it was sent. Whether an endpoint honours the temperature is its own call;
+Anthropic's newer models refuse a custom one (Opus 4.7 and later and Fable 5 reject any, Sonnet
+5 a non-default one).
 
 ## Install
 

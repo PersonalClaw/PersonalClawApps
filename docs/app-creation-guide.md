@@ -318,26 +318,15 @@ the install back.
   settings file, and uninstalling the app removes it. `ctx.save_credential(name, value)`
   writes a shared, plain-named credential that no uninstall can attribute to your app;
   use it only for a name core itself reads (the owner id, `PERSONALCLAW_OWNER_ID`).
-- **Importing your own code.** Core loads these modules by path from the installed copy
-  and, unlike the gateway's provider loader, does not put the app's directory on
-  `sys.path`. An import of your own package passes your tests (a conftest puts the
-  directory on the path) and fails for the user, whose setup then prints
-  "setup step unavailable". Hold the directory on the path while the import runs:
-
-  ```python
-  import sys
-  from pathlib import Path
-
-  _APP_DIR = str(Path(__file__).resolve().parent)
-  sys.path.insert(0, _APP_DIR)
-  try:
-      from my_app_runtime.settings import load_token
-  finally:
-      sys.path.remove(_APP_DIR)
-  ```
-
-  `.github/tests/test_cli_steps_load.py` loads every app's steps through core's own
-  loader, in a fresh interpreter, and fails on one that cannot be loaded.
+- **Importing your own code.** Core loads these modules by path from the installed copy,
+  the way the gateway loads your provider module, and holds the app's directory on
+  `sys.path` while the step imports and while it runs. Import your own package as a
+  top-level name (`from my_app_runtime.settings import load_token`) with no path code of
+  your own. A step that cannot load makes `personalclaw setup --app <name>` exit 1 with the
+  exception's class and message. `.github/tests/test_cli_steps_load.py` loads every app's
+  steps through core's own loader, in a fresh interpreter, and fails on one that cannot be
+  loaded: your own suite cannot see that, because its conftest puts the directory on the
+  path first.
 
 ### Dependencies
 

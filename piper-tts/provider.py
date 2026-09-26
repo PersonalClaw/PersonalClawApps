@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from personalclaw.sdk.tts import LocalTtsProvider, TtsVoice
-from personalclaw.sdk.util import sandbox_wrap_argv
+from personalclaw.sdk.util import app_packages_env, sandbox_wrap_argv
 
 logger = logging.getLogger(__name__)
 
@@ -67,25 +67,23 @@ def voice_model_path(voice_name: str) -> str:
     return ""
 
 
-def _declared_piper_command() -> tuple[list[str], dict[str, str]] | None:
+def _declared_piper_command() -> tuple[list[str], dict[str, str] | None] | None:
     """Run the ``piper-tts`` package this app declares as ``python -m piper``, or ``None``.
 
     The gateway installs an app's declared packages into ``<home>/app-python`` and loads them
-    only into its own process (appended to ``sys.path``): a plain Python subprocess does not
-    see them, and pip's ``piper`` console script lands in that directory's ``bin/`` rather than
-    beside the interpreter. So the child is the gateway's own interpreter running the module,
-    with the directory the gateway imports ``piper`` from on ``PYTHONPATH``. That directory
-    comes before site-packages in the child — the trade core makes for an app's setup hooks —
-    which is harmless here: the child runs nothing but piper.
+    only into its own process: a plain Python subprocess does not see them, and pip's ``piper``
+    console script lands in that directory's ``bin/`` rather than beside the interpreter. So the
+    child is the gateway's own interpreter running the module, in the environment core publishes
+    for exactly that (``app_packages_env``): the app packages on ``PYTHONPATH``, or ``None`` to
+    inherit the gateway's environment when no app package is installed and ``piper`` is the
+    gateway's own. Those directories come before site-packages in the child, which is harmless
+    here: the child runs nothing but piper.
     """
     spec = importlib.util.find_spec("piper")
     locations = list(spec.submodule_search_locations or []) if spec is not None else []
     if not locations or not (Path(locations[0]) / "__main__.py").is_file():
         return None
-    packages = str(Path(locations[0]).parent)
-    env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(p for p in (env.get("PYTHONPATH", ""), packages) if p)
-    return [sys.executable, "-m", "piper"], env
+    return [sys.executable, "-m", "piper"], app_packages_env()
 
 
 def _piper_command(configured: str = "") -> tuple[list[str], dict[str, str] | None] | None:

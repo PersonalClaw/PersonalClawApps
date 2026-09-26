@@ -19,9 +19,6 @@ is the slack-specific setup that used to live hardcoded in core's ``cli_setup.py
 Core config.json holds no Slack config.
 """
 
-import sys
-from pathlib import Path
-
 from personalclaw.sdk.channel import (
     CRED_OWNER_ID,
     CRED_SLACK_APP_TOKEN,
@@ -29,16 +26,7 @@ from personalclaw.sdk.channel import (
 )
 from personalclaw.sdk.cli import SetupContext
 
-# `personalclaw setup` loads this file by path, and core's loader does not put the app's
-# directory on sys.path the way the gateway's provider loader does, so an import of this app's
-# own package failed there and the step read "unavailable". Hold it on the path while the
-# import runs, as the provider loader does.
-_APP_DIR = str(Path(__file__).resolve().parent)
-sys.path.insert(0, _APP_DIR)
-try:
-    from slack_runtime.settings import load_tokens
-finally:
-    sys.path.remove(_APP_DIR)
+from slack_runtime.settings import load_tokens
 
 _APP = "slack-channel"
 

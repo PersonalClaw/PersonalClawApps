@@ -9,22 +9,10 @@ app owns, not core's doctor). The token is resolved by
 :func:`telegram_runtime.settings.load_bot_token`, the order the channel itself uses.
 """
 
-import sys
-from pathlib import Path
-
 from personalclaw.sdk.channel import CRED_OWNER_ID, AppConfig
 from personalclaw.sdk.cli import DoctorLine
 
-# `personalclaw doctor` loads this file by path, and core's loader does not put the app's
-# directory on sys.path the way the gateway's provider loader does, so an import of this app's
-# own package failed there and the probe read "unavailable". Hold it on the path while the
-# import runs, as the provider loader does.
-_APP_DIR = str(Path(__file__).resolve().parent)
-sys.path.insert(0, _APP_DIR)
-try:
-    from telegram_runtime.settings import load_bot_token
-finally:
-    sys.path.remove(_APP_DIR)
+from telegram_runtime.settings import load_bot_token
 
 
 def probe() -> list[DoctorLine]:
