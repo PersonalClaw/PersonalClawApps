@@ -2,7 +2,7 @@
   "name": "mail-inbox",
   "version": "0.1.0",
   "displayName": "Mail Inbox",
-  "description": "IMAP mail as an inbox source. Polls a mailbox, surfaces messages from a fail-closed sender allowlist as inbox items, and extracts multipart/HTML/attachment text. Purpose-specific addresses can each carry a stored prompt, so mail to them runs it against the fenced mail body. Replies are composed as threaded drafts and are NOT sent until you turn sending on. Credentials live in the credential store, never in app config.",
+  "description": "IMAP mail as an inbox source. Polls a mailbox, surfaces messages from a fail-closed sender allowlist as inbox items, and extracts multipart/HTML/attachment text. Purpose-specific addresses can each carry a stored prompt, so mail to them runs it against the fenced mail body. Replies are composed as threaded drafts and are NOT sent until you turn sending on. Passwords are kept in the credential store, never in the settings file.",
   "icon": "Mail",
   "author": "PersonalClaw",
   "license": "MIT",
@@ -64,6 +64,15 @@
             "help": "IMAP login (usually the full email address)."
           }
         },
+        "password": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "IMAP Password",
+            "help": "An app-specific password (e.g. a Gmail App Password), never your account password. Kept in the credential store, never in the settings file; uninstalling the app removes it.",
+            "sensitive": true
+          }
+        },
         "address": {
           "type": "string",
           "default": "",
@@ -96,7 +105,7 @@
           "default": false,
           "x-meta": {
             "label": "Send Replies (off = draft only)",
-            "help": "OFF by default. While off, every reply is composed as a real threaded draft under the app's data dir (drafts/*.eml) and NOTHING is sent — no SMTP connection is even opened. Turn this on only when you want this app to send mail as you: a sent email is irreversible and leaves your machine. Sending also needs the SMTP settings below and an SMTP password in the credential store, and it is still suppressed while the platform's live-writes guard (PERSONALCLAW_DISABLE_LIVE_WRITES) is set."
+            "help": "OFF by default. While off, every reply is composed as a real threaded draft under the app's data dir (drafts/*.eml) and NOTHING is sent — no SMTP connection is even opened. Turn this on only when you want this app to send mail as you: a sent email is irreversible and leaves your machine. Sending also needs the SMTP settings below, the SMTP password included, and it is still suppressed while the platform's live-writes guard (PERSONALCLAW_DISABLE_LIVE_WRITES) is set."
           }
         },
         "smtp_host": {
@@ -133,7 +142,16 @@
           "default": "",
           "x-meta": {
             "label": "SMTP Username",
-            "help": "SMTP login. Blank reuses the IMAP username (same account). The SMTP PASSWORD is never reused that way — it has its own credential-store key, set via 'personalclaw setup'."
+            "help": "SMTP login. Blank reuses the IMAP username (same account). The SMTP password is never reused that way: it is its own setting, below."
+          }
+        },
+        "smtp_password": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "SMTP Password",
+            "help": "The password replies are sent with. A secret of its own: a blank one is never filled in from the IMAP password, so paste the same app password here if your provider uses one for both. Kept in the credential store, never in the settings file.",
+            "sensitive": true
           }
         },
         "bound_addresses": {
@@ -170,7 +188,7 @@
           "default": [],
           "x-meta": {
             "label": "Prompt-Bound Addresses",
-            "help": "Purpose-specific receiving addresses, each carrying a stored prompt. Mail to one runs that prompt against the mail body, which is always fenced as untrusted data. One JSON object per address: {\"name\": \"Business Travel\", \"address\": \"you+travel@gmail.com\", \"default_prompt\": \"Build my itinerary and add calendar entries.\", \"enabled\": true, \"allow_senders\": [\"*@booking.example.com\"]}. allow_senders NARROWS the Allowed Senders list above — it never widens it, and an EMPTY list fires nothing (fail-closed). No secrets here: the IMAP password lives in the credential store."
+            "help": "Purpose-specific receiving addresses, each carrying a stored prompt. Mail to one runs that prompt against the mail body, which is always fenced as untrusted data. One JSON object per address: {\"name\": \"Business Travel\", \"address\": \"you+travel@gmail.com\", \"default_prompt\": \"Build my itinerary and add calendar entries.\", \"enabled\": true, \"allow_senders\": [\"*@booking.example.com\"]}. allow_senders NARROWS the Allowed Senders list above — it never widens it, and an EMPTY list fires nothing (fail-closed). No secrets here: the passwords are settings of their own, kept in the credential store."
           }
         }
       }

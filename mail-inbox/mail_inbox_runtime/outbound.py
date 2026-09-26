@@ -93,7 +93,7 @@ DRAFT_DRY_RUN = "dry_run requested by the caller"
 DRAFT_LIVE_WRITES_DISABLED = f"{_LIVE_WRITES_ENV} is set — live writes are disabled"
 DRAFT_SEND_DISABLED = "sending is off (send_enabled=false) — draft-by-default"
 DRAFT_NO_SMTP_CONFIG = "SMTP host/login not configured"
-DRAFT_NO_CREDENTIAL = "no SMTP password in the credential store"
+DRAFT_NO_CREDENTIAL = "no SMTP password set"
 SEND_FAILED = "SMTP send failed"
 NO_TARGET = "no known reply target for this channel/thread"
 

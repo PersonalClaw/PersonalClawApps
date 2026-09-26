@@ -46,10 +46,14 @@ the store from your own scripts.
 
 ### Authentication
 
-If your Qdrant requires an api key, set it as the credential **`QDRANT_API_KEY`** — in the
-credential store, or as an environment variable of the same name. It is deliberately **not** a
-settings field: app settings live in a plain-text JSON file under your PersonalClaw home, and a
-secret does not belong there. No key configured is fine and normal for a local Qdrant.
+If your Qdrant requires an api key (a Qdrant Cloud cluster, or a server started with one), put it
+in **Qdrant API Key**. The settings file never holds it: PersonalClaw keeps the key in its
+credential store under a name this app owns, the file keeps only a reference to it, and
+uninstalling the app removes it. Leave the field empty to fall back to the `QDRANT_API_KEY`
+environment variable. No key is fine and normal for a local Qdrant.
+
+The app reads its settings when it is enabled, so a changed key or URL takes effect the next time
+it is: disable and re-enable the app, or restart the gateway.
 
 ### Collections
 
@@ -69,10 +73,11 @@ verify:
   search, and an assertion that Qdrant's returned score equals the cosine similarity
   PersonalClaw would have computed itself to within 1e-6 — which is what lets PersonalClaw keep
   applying its own calibrated similarity floor.
-- **Qdrant over HTTP to a separate server — the same code, not separately proven here.** Both
-  modes share every method; only the client constructor differs, and that branch is tested
-  (including that the api key and timeout reach it) without standing a server up. No test in
-  this bundle has talked to a networked Qdrant.
+- **Qdrant over HTTP to a separate server — the same code, proven against a fake.** Both modes
+  share every method; only the client constructor differs. `test_api_key.py` drives the server
+  mode over a real socket against a fake Qdrant that refuses any request without the right api
+  key: a key saved on Configure reaches every call, and a missing or wrong one is refused. No
+  test in this bundle has talked to a real networked Qdrant.
 - **pgvector and Chroma — not implemented.** The seam they would use
   (`personalclaw.sdk.vector_store`) is published and vendor-neutral, and a pgvector or Chroma
   app is four methods: `upsert`, `delete_item`, `query`, `describe`. They are not in this
