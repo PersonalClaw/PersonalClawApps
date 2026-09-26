@@ -66,6 +66,7 @@ from discord_runtime.settings import (
     ACTIVATION_OFF,
     PROVIDER,
     LiveConfig,
+    adopt_owner_id,
     get_settings,
     load_bot_token,
     reload_settings,
@@ -133,6 +134,8 @@ class DiscordTransport(ChannelTransportProvider):
 
     # ── Inbound: the gateway drives this once at boot ──
     async def start_inbound(self, services: Any) -> None:
+        # Before the token check, so a channel configured later keeps its owner too.
+        adopt_owner_id()
         token = self._token()
         self._inbound_token = token
         if not token:

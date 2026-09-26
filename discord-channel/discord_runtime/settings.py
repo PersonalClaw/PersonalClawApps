@@ -33,7 +33,13 @@ import logging
 import os
 from dataclasses import dataclass
 
-from personalclaw.sdk.channel import ProviderSettings
+from personalclaw.sdk.channel import (
+    AppConfig,
+    ProviderSettings,
+    owner_id_credential,
+    owner_id_for,
+    save_credential,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +83,31 @@ def load_bot_token(config: dict | None = None, creds: dict[str, str] | None = No
         or (creds or {}).get(CRED_DISCORD_BOT_TOKEN, "")
         or os.environ.get(CRED_DISCORD_BOT_TOKEN, "")
     )
+
+
+def adopt_owner_id() -> None:
+    """Store the owner under Discord's own key, once, when only the shared key holds it.
+
+    An earlier release's setup wrote the owner to the one shared ``PERSONALCLAW_OWNER_ID``, and
+    core's ``owner_id_for`` still falls back to it for a channel with no key of its own. Saving
+    that owner under ``owner_id_credential(PROVIDER)`` keeps it when the fallback goes. The owner
+    in effect is the same before and after, so a failed save changes nothing. An install with its
+    own key already, or with no owner at all, is left as it is. Logs the key name, never the id.
+    """
+    key = owner_id_credential(PROVIDER)
+    if AppConfig.load().load_credentials().get(key):
+        return
+    owner = owner_id_for(PROVIDER)
+    if not owner:
+        return
+    try:
+        save_credential(key, owner)
+    except Exception as exc:  # noqa: BLE001 — the fallback still supplies the same owner
+        logger.warning(
+            "%s: could not store the owner under %s (%s)", PROVIDER, key, type(exc).__name__
+        )
+        return
+    logger.info("%s: stored the owner under its own key %s, from the shared key", PROVIDER, key)
 
 
 class LiveConfig:

@@ -115,7 +115,9 @@ and **any other present value — including a typo — turns it on**.
 
 The first person to DM the bot is auto-claimed as the owner, or `personalclaw setup` asks for
 your Slack member id. Either way it is stored as Slack's own owner, `PERSONALCLAW_OWNER_ID_SLACK`,
-so setting up another channel leaves it alone. Use
+so setting up another channel leaves it alone. An install set up by an earlier release kept the
+owner under the shared `PERSONALCLAW_OWNER_ID`; the first time Slack starts, it copies that owner
+to its own key, so the bot keeps its owner rather than waiting for a first sender to claim it. Use
 `/personalclaw @user` to allowlist more users and `/personalclaw #channel` to
 track a channel.
 
