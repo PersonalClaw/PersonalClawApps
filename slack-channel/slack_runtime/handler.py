@@ -54,7 +54,7 @@ from personalclaw.sdk.channel import (
     LLMEvent,
     ModelProvider,
 )
-from personalclaw.sdk.channel import session_restrictions, trust_mode
+from personalclaw.sdk.channel import parse_title, session_restrictions, trust_mode
 from personalclaw.sdk.channel import is_sensitive_path, redact_credentials, redact_exfiltration_urls
 from personalclaw.sdk.channel import sel
 from personalclaw.sdk.channel import SessionManager
@@ -2794,11 +2794,9 @@ async def _maybe_auto_title_slack(
             finally:
                 sessions.release(BACKGROUND_KEY)
 
-        from slack_runtime.titles import parse_title
-
-        # The title itself — never an echoed "Title:" label, the tag line or a code fence
-        # (core's #3590 rules). "" means the reply held no plausible title: stay untitled and
-        # retry on the next exchange. Redacted inside the parser.
+        # The title itself — never an echoed "Title:" label, the tag line or a code fence: core's
+        # own parser, the one the dashboard titles chats with. "" means the reply held no
+        # plausible title: stay untitled and retry on the next exchange. Redacted inside it.
         title = parse_title(title).replace("<", "").replace(">", "")  # no Slack mrkdwn links
         if not title:
             _titled_threads.pop(session_key, None)  # allow retry on next exchange

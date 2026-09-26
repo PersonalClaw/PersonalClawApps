@@ -20,27 +20,15 @@ send is a separate, deliberate act in the app's settings page, because a sent em
 be taken back.
 """
 
-import sys
-from pathlib import Path
-
 from personalclaw.sdk.cli import SetupContext
 
-# `personalclaw setup` loads this file by path, and core's loader does not put the app's
-# directory on sys.path the way the gateway's provider loader does, so an import of this app's
-# own package failed there and the step read "unavailable". Hold it on the path while the
-# import runs, as the provider loader does.
-_APP_DIR = str(Path(__file__).resolve().parent)
-sys.path.insert(0, _APP_DIR)
-try:
-    from mail_inbox_runtime.settings import (
-        CRED_MAIL_PASSWORD,
-        CRED_SMTP_PASSWORD,
-        KEY_PASSWORD,
-        KEY_SMTP_PASSWORD,
-        load_passwords,
-    )
-finally:
-    sys.path.remove(_APP_DIR)
+from mail_inbox_runtime.settings import (
+    CRED_MAIL_PASSWORD,
+    CRED_SMTP_PASSWORD,
+    KEY_PASSWORD,
+    KEY_SMTP_PASSWORD,
+    load_passwords,
+)
 
 _APP = "mail-inbox"
 

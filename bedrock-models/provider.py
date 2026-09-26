@@ -44,6 +44,8 @@ from personalclaw.sdk.model import (
     ProviderEntry,
     ProviderResolutionError,
     get_default_registry,
+    output_cap,
+    per_call_temperature,
 )
 
 logger = logging.getLogger(__name__)
@@ -1230,19 +1232,10 @@ def create_provider(config: dict[str, Any]) -> BedrockProvider:
     ``system_prompt`` / ``max_tokens`` from the instance settings. No
     credential is resolved — boto3's chain authenticates (G-AUTH).
     """
-    # `max_tokens` is now DECLARED in the manifest schema, which is what makes it settable at
-    # all — the config form renders only declared properties, so before that this read took
-    # `None` forever however the docstring above read. Its declared default is 0, and 0 means
-    # "leave it to the model": a bare `isinstance(v, int)` would pass 0 straight through as a
-    # zero-token ceiling.
-    max_tokens_value = config.get("max_tokens")
-    max_tokens = (
-        int(max_tokens_value)
-        if isinstance(max_tokens_value, int)
-        and not isinstance(max_tokens_value, bool)
-        and max_tokens_value > 0
-        else None
-    )
+    # `max_tokens` is DECLARED in the manifest schema, which is what makes it settable at all —
+    # the config form renders only declared properties. Its declared default is 0, and 0 means
+    # "leave it to the model", which `output_cap` reads as unset rather than a zero-token ceiling.
+    max_tokens = output_cap(config.get("max_tokens"), None)
     return BedrockProvider(
         # Empty when unpinned → resolved from live discovery at start() (no baked id).
         model=config.get("model") or config.get("default_model") or "",
@@ -1288,21 +1281,10 @@ def _factory(
     # for (the ``max_tokens`` build kwarg), else the provider default. The schema's declared
     # default is 0, and 0 means "leave it to the model" — the same rule create_provider applies —
     # so it must not pass through as a zero-token ceiling.
-    max_tokens = next(
-        (
-            v for v in (options.get("max_tokens"), kwargs.get("max_tokens"))
-            if isinstance(v, int) and not isinstance(v, bool) and v > 0
-        ),
-        None,
-    )
+    max_tokens = output_cap(options.get("max_tokens"), kwargs.get("max_tokens"))
     # A per-call sampling temperature: best-of-N builds each candidate with the ``temperature``
     # build kwarg. Without it every request samples at the model's default.
-    _temperature = kwargs.get("temperature")
-    temperature = (
-        float(_temperature)
-        if isinstance(_temperature, (int, float)) and not isinstance(_temperature, bool)
-        else None
-    )
+    temperature = per_call_temperature(kwargs)
 
     model_override = kwargs.get("model")
     # Unpinned (no override, no entry.model) → "" → resolved from live discovery at

@@ -1,6 +1,6 @@
 {
   "name": "claude-subscription",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Claude (Subscription)",
   "description": "Claude models over your existing Claude Code sign-in — no API key. Reads the CLI's own credential store read-only.",
   "icon": "Sparkles",
@@ -13,7 +13,7 @@
   ],
   "dependencies": {
     "pythonDependencies": [
-      "anthropic>=0.20"
+      "anthropic>=0.20,<1"
     ]
   },
   "permissions": {

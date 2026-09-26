@@ -106,9 +106,13 @@ jobs:
       - name: Test the per-bundle runner dependency rail
         run: python -m pytest .github/tests/test_bundle_runner.py -q
       - name: Every app's cli.setup / cli.doctor loads the way personalclaw setup / doctor load it
-        # Core's CLI runner execs these by path without the app's directory on sys.path, so a
-        # module importing its own package passes its bundle's tests and is still unreachable.
+        # Each bundle's own suite puts the app directory on sys.path first, so a step that cannot
+        # load from the installed copy still passes there. This loads each one as core does.
         run: python -m pytest .github/tests/test_cli_steps_load.py -q
+      - name: Every chat-model app proves its requests carry the per-call temperature and max_tokens
+        # Each bundle's test_wire.py drives its real SDK client against apps_testkit/model_wire.py;
+        # this refuses a chat-model app that ships without one.
+        run: python -m pytest .github/tests/test_model_apps_prove_the_wire.py -q
       - name: Every app's SDK imports are published and every SDK call binds
         # The static rails in apps_testkit/sdk_contract.py, over every bundle. Only
         # slack-channel's suite ran them, so vector-store-qdrant's CredentialStore() call,

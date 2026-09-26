@@ -11,27 +11,15 @@ shared store under ``PERSONALCLAW_OWNER_ID``, which core's gateway reads by that
 Core config.json holds no Telegram config; who may talk is owned by the core trust seam.
 """
 
-import sys
-from pathlib import Path
-
 from personalclaw.sdk.channel import CRED_OWNER_ID
 from personalclaw.sdk.cli import SetupContext
 
-# `personalclaw setup` loads this file by path, and core's loader does not put the app's
-# directory on sys.path the way the gateway's provider loader does, so an import of this app's
-# own package failed there and the step read "unavailable". Hold it on the path while the
-# import runs, as the provider loader does.
-_APP_DIR = str(Path(__file__).resolve().parent)
-sys.path.insert(0, _APP_DIR)
-try:
-    from telegram_runtime.settings import (
-        ACTIVATION_ALWAYS,
-        CRED_TELEGRAM_BOT_TOKEN,
-        _VALID_ACTIVATIONS,
-        load_bot_token,
-    )
-finally:
-    sys.path.remove(_APP_DIR)
+from telegram_runtime.settings import (
+    ACTIVATION_ALWAYS,
+    CRED_TELEGRAM_BOT_TOKEN,
+    _VALID_ACTIVATIONS,
+    load_bot_token,
+)
 
 _APP = "telegram-channel"
 

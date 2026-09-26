@@ -2,9 +2,9 @@
 
 The auto-title path stored the reply's first line with quotes and dots trimmed, so the labels
 core's #3590 measured on real models reached Slack verbatim: ``Title: Example Site Docs``,
-``TAGS: Planned, Review``, ``Chat title:``, ```` ```python ````. ``slack_runtime.titles`` applies
-core's rules; the parity test below runs it and core's own parser over the same replies on the
-INSTALLED core, so a change to core's rules fails here rather than drifting.
+``TAGS: Planned, Review``, ``Chat title:``, ```` ```python ````. The handler now runs core's own
+parser, ``personalclaw.sdk.channel.parse_title`` — the one the dashboard titles chats with — so
+there is no copy of the rules here to drift from core's.
 """
 
 from __future__ import annotations
@@ -12,76 +12,14 @@ from __future__ import annotations
 import pytest
 from slack_helpers import MockSlackClient
 
-from personalclaw.dashboard.chat_title import _parse_title as core_parse_title
-from personalclaw.llm.base import LLMEvent
-from slack_runtime.titles import parse_title
-
-#: #3590's corpus: every reply its validators recorded, plus the real titles that must survive.
-REPLIES = [
-    "Title: Example Site Docs",
-    "Title: France Capital",
-    "Title: Example Site Docs\nTAGS: Planned, Review",
-    "Title: TYPED-DURING-FAILURE",
-    "TAGS: Planned, Review",
-    "Chat title:",
-    "```python",
-    "```python\ndef reverse(s):\n    return s[::-1]\n```",
-    "Chat title:\nBuild Log Failure Summary",
-    "TAGS: Planned, Review\nExample Docs",
-    "**Title:** Offsite Planning",
-    "**Title**: Offsite Planning",
-    "**Title: Offsite Planning**",
-    "## Title: Offsite Planning",
-    "# Offsite Planning",
-    "Conversation title: Offsite Planning",
-    "Suggested title - Offsite Planning",
-    "Here is a short title for this conversation: Offsite Planning",
-    "Sure! Here's a short title:\n\nOffsite Planning",
-    'Title: "Offsite Planning"',
-    "“Offsite Planning”",
-    "Offsite Planning.",
-    "- Offsite Planning",
-    "```\ncode\n```\nString Reversal",
-    "Learning C#",
-    ".NET Dependency Injection",
-    "__init__ vs __new__",
-    "Movie Titles: Best of 2025",
-    "Title IX Compliance Questions",
-    "A* Search in Python",
-    "Rock 'n' Roll History",
-    "Node.js Streams",
-    "",
-    "   \n  ",
-    "SKIP",
-    "**SKIP**",
-    "user: and another thing",
-    "assistant: sure, here you go",
-    "---",
-    "x" * 61,
-    "Title: see https://example.com/abc for the docs",
-]
+from personalclaw.sdk import channel as sdk_channel
+from personalclaw.sdk.channel import LLMEvent
 
 
-@pytest.mark.parametrize("reply", REPLIES)
-def test_the_app_parses_a_title_exactly_as_core_does(reply):
-    assert parse_title(reply) == core_parse_title(reply)
+def test_the_handler_titles_threads_with_cores_parser():
+    import slack_runtime.handler as h
 
-
-@pytest.mark.parametrize(
-    ("reply", "title"),
-    [
-        ("Title: Example Site Docs\nTAGS: Planned, Review", "Example Site Docs"),
-        ("**Title:** Offsite Planning", "Offsite Planning"),
-        ("Movie Titles: Best of 2025", "Movie Titles: Best of 2025"),
-    ],
-)
-def test_labels_are_stripped_and_real_titles_kept(reply, title):
-    assert parse_title(reply) == title
-
-
-@pytest.mark.parametrize("reply", ["TAGS: Planned, Review", "Chat title:", "```python", "SKIP"])
-def test_scaffolding_alone_is_no_title(reply):
-    assert parse_title(reply) == ""
+    assert h.parse_title is sdk_channel.parse_title
 
 
 # ── the auto-title path ───────────────────────────────────────────────────────

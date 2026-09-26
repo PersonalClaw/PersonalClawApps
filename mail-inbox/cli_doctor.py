@@ -10,22 +10,10 @@ CANNOT fire (no stored prompt, or an empty per-address allowlist) is reported he
 "configured and silent" is the one state a user cannot tell from a working one.
 """
 
-import sys
-from pathlib import Path
-
 from personalclaw.sdk.cli import DoctorLine
 
-# `personalclaw doctor` loads this file by path, and core's loader does not put the app's
-# directory on sys.path the way the gateway's provider loader does, so an import of this app's
-# own package failed there and the probe read "unavailable". Hold it on the path while the
-# imports run, as the provider loader does.
-_APP_DIR = str(Path(__file__).resolve().parent)
-sys.path.insert(0, _APP_DIR)
-try:
-    from mail_inbox_runtime.outbound import draft_reason
-    from mail_inbox_runtime.settings import MailInboxSettings, load_passwords
-finally:
-    sys.path.remove(_APP_DIR)
+from mail_inbox_runtime.outbound import draft_reason
+from mail_inbox_runtime.settings import MailInboxSettings, load_passwords
 
 
 def probe() -> list[DoctorLine]:

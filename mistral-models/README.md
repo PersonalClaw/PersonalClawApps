@@ -12,6 +12,8 @@ as a self-contained directory:
 - `app.json` — the manifest (identity, provider/backend/UI declarations, permissions).
 - `provider.py` — the implementation, exposed via `create_provider`.
 - `test_catalog.py`, `test_provider.py` — the app's own tests.
+- `test_wire.py` — proves a call's per-call temperature and output budget reach the request, against
+  a recording endpoint.
 
 It imports only the PersonalClaw **SDK** (never core internals), so core can evolve
 without breaking it:

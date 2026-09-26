@@ -14,24 +14,12 @@ SMTP port/security mismatch) are invisible to a credential-presence check. Both 
 are blocking socket calls; the doctor runner already bounds them with a timeout.
 """
 
-import sys
-from pathlib import Path
-
 from personalclaw.sdk.channel import AppConfig
 from personalclaw.sdk.cli import DoctorLine
 
-# `personalclaw doctor` loads this file by path, and core's loader does not put the app's
-# directory on sys.path the way the gateway's provider loader does, so an import of this app's
-# own package failed there and the probe read "unavailable". Hold it on the path while the
-# imports run, as the provider loader does.
-_APP_DIR = str(Path(__file__).resolve().parent)
-sys.path.insert(0, _APP_DIR)
-try:
-    from email_runtime.imap_client import probe_login as imap_probe
-    from email_runtime.settings import EmailSettings, load_credentials
-    from email_runtime.smtp_client import probe_login as smtp_probe
-finally:
-    sys.path.remove(_APP_DIR)
+from email_runtime.imap_client import probe_login as imap_probe
+from email_runtime.settings import EmailSettings, load_credentials
+from email_runtime.smtp_client import probe_login as smtp_probe
 
 
 def probe() -> list[DoctorLine]:

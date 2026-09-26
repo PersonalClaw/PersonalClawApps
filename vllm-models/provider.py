@@ -34,6 +34,8 @@ from personalclaw.sdk.model import (
     ProviderResolutionError,
     get_default_registry,
     openai_compatible_list_models,
+    output_cap,
+    per_call_temperature,
 )
 
 logger = logging.getLogger(__name__)
@@ -130,16 +132,6 @@ VLLM_CAPABILITY = ProviderCapability(
 # ── Factory ──────────────────────────────────────────────────────────────
 
 
-def _output_cap(configured: object, per_call: object) -> int | None:
-    """The request's output cap: the operator's configured ``max_tokens``, else the budget core
-    derives for the model it is building for (the ``max_tokens`` build kwarg), else ``None`` —
-    the server's own default. Only a positive int is a cap (``True`` is not; ``0`` is unset)."""
-    for value in (configured, per_call):
-        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-            return value
-    return None
-
-
 def _factory(
     *,
     entry: ProviderEntry,
@@ -191,14 +183,16 @@ def _factory(
         )
     base_url = str(base_url_value)
 
-    max_tokens = _output_cap(options.pop("max_tokens", None), kwargs.get("max_tokens"))
+    # The operator's configured cap, else the budget core derived for this call (the
+    # ``max_tokens`` build kwarg), else none: the server's own default.
+    max_tokens = output_cap(options.pop("max_tokens", None), kwargs.get("max_tokens"))
     # A per-call sampling temperature (best-of-N's ladder, the ``temperature`` build kwarg) wins
     # over the entry's own: the caller asking for THIS temperature is more specific. It rides
     # ``extra_options``, which the client forwards into the request verbatim and reports back
     # as ``sampling_temperature`` — so core can say whether the ladder was really sent.
-    temperature = kwargs.get("temperature")
-    if isinstance(temperature, (int, float)) and not isinstance(temperature, bool):
-        options["temperature"] = float(temperature)
+    temperature = per_call_temperature(kwargs)
+    if temperature is not None:
+        options["temperature"] = temperature
 
     # Pop ``default_model`` (the settingsSchema field the Add-instance flow persists)
     # so it (a) serves as the model fallback and (b) does NOT leak into extra_options
