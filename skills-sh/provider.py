@@ -8,9 +8,9 @@ live skills tree is never this client's job: ``SkillsRegistry.install_guarded``
 scans the fetched payload and writes the exact scanned bytes via the shared
 ``install_skill_files`` chokepoint.
 
-The API key is stored as a credential named ``skills_sh_api_key`` via the SDK
-``CredentialStore`` (also honoured from the matching environment variable). Set it
-once with:
+The API key is read as a credential named ``skills_sh_api_key`` through the SDK
+``CredentialStore`` (also honoured from the matching environment variable). Store it
+in Settings → Secrets under that name, or once with:
 
     personalclaw setup --credential skills_sh_api_key=sk_live_...
 """
@@ -70,13 +70,14 @@ class SkillsShMarketplace(SkillsMarketplace):
         key = os.environ.get("SKILLS_SH_API_KEY", "")
         if key:
             return key
-        # Credential store fallback
+        # Credential store fallback. CredentialStore takes the HOME: given
+        # `config_dir() / "credentials.json"` it looked beneath a file and found nothing, so a
+        # key stored by name (Settings → Secrets, `personalclaw setup --credential`) never
+        # reached this client.
         try:
             from personalclaw.sdk.credentials import CredentialStore
             from personalclaw.sdk.util import config_dir
-            store = CredentialStore(config_dir() / "credentials.json")
-            cred = store.resolve(_CRED_NAME)
-            return cred.secret or None
+            return CredentialStore(config_dir()).resolve(_CRED_NAME).secret or None
         except Exception:
             return None
 

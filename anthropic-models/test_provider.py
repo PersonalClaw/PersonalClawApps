@@ -480,7 +480,11 @@ async def test_a_per_call_temperature_and_output_budget_reach_the_request(
     _ = [event async for event in provider.stream("hi")]
 
     sent = provider._client.messages.calls[-1]
-    assert sent["temperature"] == 0.9
+    # Core sends a sampling option in the request body (``extra_body``), not as an SDK keyword:
+    # ``anthropic`` 1.x removed ``temperature`` from ``messages.stream``, so the keyword raised
+    # TypeError before a request went out (PersonalClaw #3635).
+    assert sent["extra_body"]["temperature"] == 0.9
+    assert "temperature" not in sent
     assert sent["max_tokens"] == 1234
 
 
