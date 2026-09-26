@@ -101,7 +101,8 @@ and **any other present value — including a typo — turns it on**.
 4. Optionally send `/setprivacy` → **Disable** to let the bot read group messages.
 5. Enter the token in the app's Configure form (Settings above), or run
    `personalclaw setup` and paste it when prompted (along with your Telegram user
-   id, used as the owner DM target for approvals).
+   id, used as the owner DM target for approvals). The id is stored as Telegram's own owner,
+   `PERSONALCLAW_OWNER_ID_TELEGRAM`, so setting up another channel leaves it alone.
 
 Once configured, the transport long-polls `getUpdates`. Trust is enforced by the
 core seam: an unknown DM sender gets a canned pairing-needed reply (run

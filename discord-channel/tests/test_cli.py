@@ -5,14 +5,16 @@ entry points core's runners call (``cli_setup:run`` with a real
 :class:`SetupContext`, ``cli_doctor:probe``) and assert the values actually landed in
 the app store — not that the functions merely returned. The shared credential store
 the step reaches through its ``get_credential`` / ``save_credential`` callables is
-faked to a dict here (the owner id lives there, and so does a token an earlier setup
-saved), while the app store is the real ``ProviderSettings`` writing under the tmp
-``PERSONALCLAW_HOME`` — so the bot token goes through core's real secret routing."""
+faked to a dict here (setup saves the owner id through it, and a token an earlier setup
+saved is read through it), while the app store is the real ``ProviderSettings`` writing
+under the tmp ``PERSONALCLAW_HOME`` — so the bot token goes through core's real secret
+routing. The owner setup offers to keep is read the way the channel reads it,
+``owner_id_for("discord")``, from the real store."""
 
 from __future__ import annotations
 
 import pytest
-from personalclaw.sdk.channel import CRED_OWNER_ID, ProviderSettings, save_credential
+from personalclaw.sdk.channel import ProviderSettings, owner_id_credential, save_credential
 from personalclaw.sdk.cli import SetupContext
 
 import cli_doctor
@@ -27,9 +29,11 @@ from cli_setup import (
     PERM_VIEW_CHANNEL,
     invite_url,
 )
-from discord_runtime.settings import CRED_DISCORD_BOT_TOKEN
+from discord_runtime.settings import CRED_DISCORD_BOT_TOKEN, PROVIDER
 
 _APP = "discord-channel"
+#: Discord's own owner key; setup writes it, and nothing here writes the shared one.
+_OWNER_KEY = owner_id_credential(PROVIDER)
 
 
 class Ctx:
@@ -67,7 +71,7 @@ class TestSetupHappyPath:
         assert "MTIz.tok.secret" not in ProviderSettings.config_path(_APP).read_text()
         # not under the plain name no uninstall can attribute to this app
         assert CRED_DISCORD_BOT_TOKEN not in c.creds
-        assert c.creds[CRED_OWNER_ID] == "42"
+        assert c.creds == {_OWNER_KEY: "42"}
 
     def test_prints_the_invite_url_with_the_real_application_id(self):
         c = Ctx(["y", "tok", "12345", "42", "always"])
@@ -85,13 +89,13 @@ class TestSetupHappyPath:
     def test_empty_input_keeps_existing_values(self):
         c = Ctx(["y", "tok", "111", "42", "always"])
         cli_setup.run(c.ctx)
+        save_credential(_OWNER_KEY, c.creds[_OWNER_KEY])  # what the real runner persisted
         # Re-run answering nothing: the previous values must survive.
         c2 = Ctx(["y", "", "", "", ""])
-        c2.creds = dict(c.creds)
         cli_setup.run(c2.ctx)
         assert ProviderSettings.load(_APP)["bot_token"] == "tok"
         assert ProviderSettings.load(_APP)["application_id"] == "111"
-        assert c2.creds[CRED_OWNER_ID] == "42"
+        assert c2.creds[_OWNER_KEY] == "42"
 
     def test_a_token_an_earlier_setup_saved_is_kept_on_empty_input(self):
         """An install configured before setup wrote the app store: Enter keeps the token the
@@ -183,7 +187,7 @@ class TestDoctor:
 
     def test_configured_reports_ok_for_each_field(self):
         save_credential(CRED_DISCORD_BOT_TOKEN, "tok")
-        save_credential(CRED_OWNER_ID, "42")
+        save_credential(_OWNER_KEY, "42")
         ProviderSettings.save(_APP, {"application_id": "12345"})
         status = {line.label: line.status for line in cli_doctor.probe()}
         assert status["token"] == "ok"

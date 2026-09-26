@@ -51,6 +51,7 @@ from personalclaw.sdk.channel import (
     ChannelMessage,
     ChannelTransportProvider,
     OutboundMessage,
+    owner_id_for,
 )
 
 # Import ALL runtime deps at MODULE level (not lazily inside methods): the loader
@@ -63,6 +64,7 @@ from discord_runtime.gateway import DEFAULT_GATEWAY_URL, DiscordGateway
 from discord_runtime.inbound_tap import publish as publish_inbound
 from discord_runtime.settings import (
     ACTIVATION_OFF,
+    PROVIDER,
     LiveConfig,
     get_settings,
     load_bot_token,
@@ -72,7 +74,6 @@ from discord_runtime.writes import SendRefused, live_writes_disabled
 
 logger = logging.getLogger(__name__)
 
-PROVIDER = "discord"
 
 
 class DiscordTransport(ChannelTransportProvider):
@@ -143,11 +144,14 @@ class DiscordTransport(ChannelTransportProvider):
 
         # Register outbound delivery on the gateway + dashboard. Core delivers every
         # channel result through this ONE provider-agnostic ChannelDelivery handle —
-        # it never sees the Discord API client.
-        owner_id = self._resolve_owner_id(services)
+        # it never sees the Discord API client. Filed under PROVIDER, the name core reads this
+        # channel's owner by, so the owner core DMs is the one below.
+        # Discord's OWN owner: an id stored for this channel. The one shared key every channel
+        # used to write could hold another platform's user id.
+        owner_id = owner_id_for(PROVIDER)
         self._delivery = DiscordDelivery(self._api, owner_id)
         if hasattr(services, "register_channel_delivery"):
-            services.register_channel_delivery(self._delivery)
+            services.register_channel_delivery(self._delivery, provider=PROVIDER)
         if getattr(services, "dashboard_state", None) is not None:
             services.dashboard_state.channel_delivery = self._delivery
 
@@ -174,16 +178,6 @@ class DiscordTransport(ChannelTransportProvider):
         except Exception:
             logger.warning("discord: GET /gateway/bot failed — using the default gateway URL")
             return DEFAULT_GATEWAY_URL
-
-    @staticmethod
-    def _resolve_owner_id(services: Any) -> str:
-        from personalclaw.sdk.channel import CRED_OWNER_ID
-
-        try:
-            creds = services.config.load_credentials()
-            return creds.get(CRED_OWNER_ID, "") or getattr(services, "owner_id", "")
-        except Exception:
-            return getattr(services, "owner_id", "")
 
     async def stop_inbound(self) -> None:
         if self._gateway is not None:

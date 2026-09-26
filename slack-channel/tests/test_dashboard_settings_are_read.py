@@ -43,6 +43,8 @@ from pathlib import Path
 
 import pytest
 
+from personalclaw.sdk.channel import owner_id_credential
+
 import slack_runtime.enterprise as enterprise
 import slack_runtime.handler as H
 from slack_runtime.runtime import SlackRuntime
@@ -152,11 +154,20 @@ def test_every_settings_field_is_read_outside_settings_py(field_name):
 def store_only_home(tmp_path, monkeypatch):
     """An isolated home whose app store is the ONLY place the tokens exist."""
     monkeypatch.setenv("PERSONALCLAW_HOME", str(tmp_path))
-    for key in ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "PERSONALCLAW_OWNER_ID"):
+    for key in ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "PERSONALCLAW_OWNER_ID", _OWN_OWNER_KEY):
         monkeypatch.delenv(key, raising=False)
     cfg_path = tmp_path / "apps" / "slack-channel" / "data" / "config.json"
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     return cfg_path
+
+
+#: Slack's own owner key, the one ``owner_id_for("slack")`` reads first.
+_OWN_OWNER_KEY = owner_id_credential("slack")
+
+
+def _own_owner(monkeypatch, owner: str) -> None:
+    """Slack's owner as a container passes it: its own key, in the environment."""
+    monkeypatch.setenv(_OWN_OWNER_KEY, owner)
 
 
 def _write_store(cfg_path: Path, **values) -> dict:
@@ -166,24 +177,20 @@ def _write_store(cfg_path: Path, **values) -> dict:
 
 
 class _Services:
-    """GatewayServices stand-in: the config handle + owner_id, no live services."""
+    """GatewayServices stand-in: the config handle, no live services. The owner is not on it:
+    Slack reads its own (``owner_id_for("slack")``), which a test sets with ``_own_owner``."""
 
     sessions = ctx_builder = conv_log = consolidator = None
     subagent_mgr = channel_history = dashboard_state = None
 
-    def __init__(self, owner_id: str = "") -> None:
+    def __init__(self) -> None:
         from personalclaw.sdk.channel import AppConfig
 
         self._cfg = AppConfig.load()
-        self._owner = owner_id
 
     @property
     def config(self):
         return self._cfg
-
-    @property
-    def owner_id(self) -> str:
-        return self._owner
 
     async def deliver_channel_inbound(self, provider, msg, *, is_dm=True):
         raise AssertionError("not driven by this test")
@@ -251,7 +258,7 @@ async def test_start_inbound_hands_the_store_to_the_runtime(store_only_home, mon
     monkeypatch.setattr("slack_runtime.events.validate_enterprise", lambda *a, **k: False)
 
     transport = SlackTransport(store)
-    await transport.start_inbound(_Services("U_OWNER"))
+    await transport.start_inbound(_Services())
 
     assert transport._runtime is not None, (
         "start_inbound bailed at the token gate although the store holds both tokens — the "
@@ -298,7 +305,7 @@ async def test_health_says_not_started_before_the_gateway_drives_inbound(store_o
 # ── #953: the allowlist the dashboard writes is the allowlist that is enforced ──
 
 
-def test_allowed_users_from_the_store_are_authorized(store_only_home):
+def test_allowed_users_from_the_store_are_authorized(store_only_home, monkeypatch):
     """The three people an operator lists must actually be authorized.
 
     Before #953 this whole test failed twice over: the runtime seeded ``_allowed_users``
@@ -312,7 +319,8 @@ def test_allowed_users_from_the_store_are_authorized(store_only_home):
             {"slack_id": "U_CAROL", "name": "Carol"},
         ],
     )
-    runtime = SlackRuntime(_Services("U_OWNER"), config={})
+    _own_owner(monkeypatch, "U_OWNER")
+    runtime = SlackRuntime(_Services(), config={})
     assert runtime._allowed_users == {"U_ALICE", "U_BOB", "U_CAROL", "U_OWNER"}
 
     H.set_owner_id("U_OWNER")
@@ -321,10 +329,11 @@ def test_allowed_users_from_the_store_are_authorized(store_only_home):
         assert H.is_allowed_user(uid), f"{uid} is on the operator's allowlist and was refused"
 
 
-def test_an_id_absent_from_the_store_is_refused(store_only_home):
+def test_an_id_absent_from_the_store_is_refused(store_only_home, monkeypatch):
     """Deny-by-default: only ids the operator wrote down are authorized."""
     _write_store(store_only_home, allowed_users=[{"slack_id": "U_ALICE"}])
-    runtime = SlackRuntime(_Services("U_OWNER"), config={})
+    _own_owner(monkeypatch, "U_OWNER")
+    runtime = SlackRuntime(_Services(), config={})
     H.set_owner_id("U_OWNER")
     H.set_allowed_users(runtime._allowed_users)
     assert H.is_allowed_user("U_STRANGER") is False
@@ -339,7 +348,7 @@ def test_an_empty_allowlist_and_no_owner_authorizes_nobody(store_only_home):
     ids an operator explicitly listed; with nothing listed there is nothing to widen.
     """
     _write_store(store_only_home)
-    runtime = SlackRuntime(_Services(""), config={})
+    runtime = SlackRuntime(_Services(), config={})
     assert runtime._allowed_users == set()
 
     H.set_owner_id("")
@@ -360,7 +369,7 @@ def test_open_channels_still_authorizes_nobody(store_only_home):
     without a deliberate decision, and so the census claim stays true.
     """
     _write_store(store_only_home, open_channels=["C_OPEN"])
-    runtime = SlackRuntime(_Services(""), config={})
+    runtime = SlackRuntime(_Services(), config={})
     assert runtime._open_channels == {"C_OPEN"}, "the field is read; only the gate is inert"
 
     H.set_open_channels(runtime._open_channels)

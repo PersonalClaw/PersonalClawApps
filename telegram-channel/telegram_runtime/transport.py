@@ -43,6 +43,7 @@ from personalclaw.sdk.channel import (
     ChannelMessage,
     ChannelTransportProvider,
     OutboundMessage,
+    owner_id_for,
 )
 
 # Import ALL runtime deps at MODULE level (not lazily inside methods): the loader
@@ -54,6 +55,7 @@ from telegram_runtime.delivery import TelegramDelivery
 from telegram_runtime.inbound_tap import publish as publish_inbound
 from telegram_runtime.settings import (
     ACTIVATION_OFF,
+    PROVIDER,
     LiveConfig,
     get_settings,
     load_bot_token,
@@ -63,7 +65,6 @@ from telegram_runtime.writes import SendRefused, live_writes_disabled
 
 logger = logging.getLogger(__name__)
 
-PROVIDER = "telegram"
 # The update types we ask Telegram for — everything else (edited messages, polls,
 # channel posts) is noise for a DM/group bot and just inflates the poll payload.
 ALLOWED_UPDATES = ["message", "callback_query"]
@@ -154,11 +155,14 @@ class TelegramTransport(ChannelTransportProvider):
 
         # Register outbound delivery on the gateway + dashboard. Core delivers every
         # channel result through this ONE provider-agnostic ChannelDelivery handle —
-        # it never sees the Telegram API client.
-        owner_id = self._resolve_owner_id(services)
+        # it never sees the Telegram API client. Filed under PROVIDER, the name core reads this
+        # channel's owner by, so the owner core DMs is the one below.
+        # Telegram's OWN owner: an id stored for this channel. The one shared key every channel
+        # used to write could hold another platform's user id.
+        owner_id = owner_id_for(PROVIDER)
         self._delivery = TelegramDelivery(self._api, owner_id)
         if hasattr(services, "register_channel_delivery"):
-            services.register_channel_delivery(self._delivery)
+            services.register_channel_delivery(self._delivery, provider=PROVIDER)
         if getattr(services, "dashboard_state", None) is not None:
             services.dashboard_state.channel_delivery = self._delivery
 
@@ -166,16 +170,6 @@ class TelegramTransport(ChannelTransportProvider):
         self._stopping = False
         self._poll_task = asyncio.ensure_future(self._poll_loop())
         logger.info("TelegramTransport: long-poll inbound started (offset=%d)", self._offset)
-
-    @staticmethod
-    def _resolve_owner_id(services: Any) -> str:
-        from personalclaw.sdk.channel import CRED_OWNER_ID
-
-        try:
-            creds = services.config.load_credentials()
-            return creds.get(CRED_OWNER_ID, "") or getattr(services, "owner_id", "")
-        except Exception:
-            return getattr(services, "owner_id", "")
 
     async def stop_inbound(self) -> None:
         self._stopping = True

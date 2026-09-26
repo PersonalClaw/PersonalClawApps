@@ -24,7 +24,7 @@ if str(_APP_DIR) not in sys.path:
 #: PERSONALCLAW_HOME is NOT sufficient isolation on its own: a credential written by
 #: one test stays visible to the next through the process environment, and a
 #: "missing credential" assertion silently passes on the previous test's value.
-_CREDENTIAL_KEYS = ("DISCORD_BOT_TOKEN", "PERSONALCLAW_OWNER_ID")
+_CREDENTIAL_KEYS = ("DISCORD_BOT_TOKEN", "PERSONALCLAW_OWNER_ID", "PERSONALCLAW_OWNER_ID_DISCORD")
 
 
 @pytest.fixture(autouse=True)

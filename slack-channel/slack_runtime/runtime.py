@@ -23,7 +23,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from personalclaw.sdk.channel import CRED_OWNER_ID
+from personalclaw.sdk.channel import owner_id_for
 
 from slack_runtime.client import RealSlackClient
 
@@ -44,7 +44,9 @@ class SlackRuntime:
         cfg = services.config
 
         creds = cfg.load_credentials()
-        self._owner_id: str = creds.get(CRED_OWNER_ID, "") or services.owner_id
+        # Slack's OWN owner: a member id stored for this channel. The one shared key every
+        # channel used to write could hold another platform's user id.
+        self._owner_id: str = owner_id_for("slack")
 
         # Slack behavioral config comes from the app's OWN store (SlackSettings) —
         # core AppConfig defines no Slack config. get_settings() caches one live

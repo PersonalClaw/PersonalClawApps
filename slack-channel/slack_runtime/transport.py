@@ -169,10 +169,12 @@ class SlackTransport(ChannelTransportProvider):
 
         # Register outbound delivery on the gateway + the dashboard. Core delivers
         # through this ONE provider-agnostic ChannelDelivery handle (text, attachments,
-        # streaming, identity lookups, approvals) — it never sees the Slack client.
+        # streaming, identity lookups, approvals) — it never sees the Slack client. Filed under
+        # "slack", the name core reads this channel's owner by (``owner_id_for("slack")``, the
+        # owner the runtime holds).
         delivery = SlackDelivery(runtime.slack, runtime._owner_id)
         if hasattr(services, "register_channel_delivery"):
-            services.register_channel_delivery(delivery)
+            services.register_channel_delivery(delivery, provider="slack")
         if getattr(services, "dashboard_state", None) is not None:
             services.dashboard_state.channel_delivery = delivery
 

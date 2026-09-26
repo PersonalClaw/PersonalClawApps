@@ -23,12 +23,12 @@ from personalclaw.apps import app_manager
 from personalclaw.config import credentials
 from personalclaw.dashboard.handlers.apps import api_app_config_put
 from personalclaw.providers.settings import ProviderSettings
-from personalclaw.sdk.channel import CRED_OWNER_ID
+from personalclaw.sdk.channel import owner_id_credential
 from personalclaw.sdk.cli import SetupContext
 
 import cli_doctor
 import cli_setup
-from discord_runtime.settings import CRED_DISCORD_BOT_TOKEN
+from discord_runtime.settings import CRED_DISCORD_BOT_TOKEN, PROVIDER
 from discord_runtime.transport import create_provider
 
 _APP = "discord-channel"
@@ -41,7 +41,7 @@ TOKEN = f"MTIz.{secrets.token_hex(12)}"
 @pytest.fixture
 def home(_isolate_home, monkeypatch):
     """The real bundle installed into the isolated home, nothing configured."""
-    for key in (CRED_DISCORD_BOT_TOKEN, CRED_OWNER_ID):
+    for key in (CRED_DISCORD_BOT_TOKEN, owner_id_credential(PROVIDER)):
         # setenv first so teardown restores the variable even if the code under test sets it.
         monkeypatch.setenv(key, "")
         monkeypatch.delenv(key)

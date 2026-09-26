@@ -39,6 +39,11 @@ logger = logging.getLogger(__name__)
 
 _APP = "discord-channel"
 
+#: The channel's provider name: what inbound is delivered to core under, and what its owner
+#: is keyed by (``owner_id_credential(PROVIDER)``). Here, not in the transport, so the setup
+#: and doctor steps read it without importing the transport.
+PROVIDER = "discord"
+
 #: The plain credential-store / environment name of the bot token. Setup no longer writes
 #: it — a name no uninstall can attribute to this app outlived the app — but it is still
 #: read: an earlier release's setup stored the token there, and a container passes it in

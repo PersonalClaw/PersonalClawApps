@@ -113,7 +113,9 @@ and **any other present value — including a typo — turns it on**.
 4. Enter both tokens in the app's Configure form (Settings above), or run
    `personalclaw setup` and paste them when prompted.
 
-The first person to DM the bot is auto-claimed as the owner. Use
+The first person to DM the bot is auto-claimed as the owner, or `personalclaw setup` asks for
+your Slack member id. Either way it is stored as Slack's own owner, `PERSONALCLAW_OWNER_ID_SLACK`,
+so setting up another channel leaves it alone. Use
 `/personalclaw @user` to allowlist more users and `/personalclaw #channel` to
 track a channel.
 

@@ -1,6 +1,6 @@
 {
   "name": "discord-channel",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Discord Channel",
   "description": "Discord bot integration over the raw Gateway WebSocket + REST API. Pair a DM, converse in servers, and receive results with approval buttons.",
   "icon": "MessagesSquare",

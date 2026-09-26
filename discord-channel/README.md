@@ -125,7 +125,9 @@ and **any other present value — including a typo — turns it on**.
 5. Run `personalclaw setup` and paste the token, application id and your own Discord
    user id (enable Settings → Advanced → **Developer Mode**, then right-click your
    name → **Copy User ID**). The setup step then prints the **OAuth2 invite URL**
-   with the permission bits already computed — open it and pick a server.
+   with the permission bits already computed — open it and pick a server. Your user id is
+   stored as Discord's own owner, `PERSONALCLAW_OWNER_ID_DISCORD`, so setting up another
+   channel leaves it alone.
 6. Track the channels you want the bot active in from the Channels page.
 
 The invite requests exactly the permissions the code exercises: View Channels, Send

@@ -317,7 +317,13 @@ the install back.
   credential store under a key the app owns and writes only a reference into the
   settings file, and uninstalling the app removes it. `ctx.save_credential(name, value)`
   writes a shared, plain-named credential that no uninstall can attribute to your app;
-  use it only for a name core itself reads (the owner id, `PERSONALCLAW_OWNER_ID`).
+  use it only for a name core itself reads. A channel's owner id is one: save it under
+  `owner_id_credential(<provider>)` (`PERSONALCLAW_OWNER_ID_<PROVIDER>`) and read it back
+  with `owner_id_for(<provider>)`, both from `personalclaw.sdk.channel`. `<provider>` is the
+  name the transport files its delivery under,
+  `services.register_channel_delivery(delivery, provider=<provider>)`, and core reads the
+  owner by that name to reach them on your channel. Each channel keeps its own, because a
+  user id means nothing on another platform.
 - **Importing your own code.** Core loads these modules by path from the installed copy,
   the way the gateway loads your provider module, and holds the app's directory on
   `sys.path` while the step imports and while it runs. Import your own package as a

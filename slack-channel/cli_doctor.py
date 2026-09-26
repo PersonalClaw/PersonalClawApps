@@ -11,10 +11,11 @@ the app owns, not core's doctor).
 Token presence is read through :func:`slack_runtime.settings.load_tokens`, the same
 resolution the channel runs on. Setup and the Configure form write the tokens to this
 app's store, so a check of the shared credential store alone would report a working
-channel as "not configured".
+channel as "not configured". The owner is Slack's own (``owner_id_for("slack")``), the one the
+channel checks.
 """
 
-from personalclaw.sdk.channel import CRED_OWNER_ID, AppConfig
+from personalclaw.sdk.channel import AppConfig, owner_id_credential, owner_id_for
 from personalclaw.sdk.cli import DoctorLine
 
 from slack_runtime.settings import load_tokens
@@ -32,11 +33,11 @@ def probe() -> list[DoctorLine]:
             )
         ]
     lines = [DoctorLine("tokens", "ok", "configured")]
-    owner = creds.get(CRED_OWNER_ID)
+    owner = owner_id_for("slack")
     if owner:
         lines.append(DoctorLine("owner", "ok", owner))
     else:
-        lines.append(DoctorLine("owner", "warn", "PERSONALCLAW_OWNER_ID not set"))
+        lines.append(DoctorLine("owner", "warn", f"{owner_id_credential('slack')} not set"))
     lines.append(
         DoctorLine("workspace", "info", "use the Channels page → Slack → Test to verify the token")
     )
