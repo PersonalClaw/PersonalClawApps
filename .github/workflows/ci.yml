@@ -104,6 +104,10 @@ jobs:
           uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC" pytest pytest-asyncio
       - name: Test the per-bundle runner dependency rail
         run: python -m pytest .github/tests/test_bundle_runner.py -q
+      - name: Every app's cli.setup / cli.doctor loads the way personalclaw setup / doctor load it
+        # Core's CLI runner execs these by path without the app's directory on sys.path, so a
+        # module importing its own package passes its bundle's tests and is still unreachable.
+        run: python -m pytest .github/tests/test_cli_steps_load.py -q
       - name: Run each bundle's tests (per-bundle)
         # The repository runner is the single definition shared by CI and local use:
         # it discovers tested app bundles, installs each manifest's declared

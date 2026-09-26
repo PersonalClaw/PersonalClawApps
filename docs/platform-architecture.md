@@ -37,11 +37,16 @@ updates.
 3. **SkillScanner gate** (`supply_chain.py`): the staged content is scanned at a
    trust tier derived from origin (`builtin` → advisory-only, `registry` →
    official, `local`/`external` → community, the full gate). Verdicts:
-   - `clean` — proceeds.
-   - `warning` — install stops with `needs_consent` (the API returns **409**);
-     re-submitting with `confirm: true` proceeds.
-   - `dangerous` — **terminal refusal, non-overridable**. `confirm` does NOT
-     bypass it.
+   - `clean` / `warning` — proceeds to consent; a warning's findings are part of
+     the review the owner consents over.
+   - `dangerous` — **terminal refusal, non-overridable**. No consent bypasses it.
+
+   **Consent** (every install, whatever the verdict): `POST /api/apps/preview`
+   returns what installing grants and runs (`apps/disclosure.py`), the scan, and a
+   `consent` digest of the staged bytes. `POST /api/apps {source, consent}` commits
+   only while the staged bundle still has that digest; without it — `confirm: true`
+   included — the answer is **409** with a fresh review and nothing is committed. An
+   update needs consent only when it changes what the app gets or scans with warnings.
 4. **Platform gate**: an app with `platform.installMode: "client"` or whose
    `platform.os` list excludes this server's OS is NOT installed; the result
    carries `needs_client_install` + the manifest's copy-paste `clientInstall`
@@ -50,10 +55,17 @@ updates.
 5. **Commit**: staged tree moves to `~/.personalclaw/apps/<name>/`; the `data/`
    dir is created before any hook runs.
 6. **Python dependencies**: declared `dependencies.pythonDependencies` are
-   pip-installed into the shared core venv (600s cap; core ships lean, the app
-   brings its heavy libs). If anything new was actually installed, the result
-   carries `restart_required: true` — the running gateway can't import a module
-   set it didn't start with.
+   pip-installed into `<home>/app-python` — one `--prefix` directory shared by every
+   installed app, never the environment the gateway runs from (600s cap; core ships
+   lean, the app brings its heavy libs). Every distribution the gateway can import is
+   pinned, and every installed app's requirements resolve in the same pip run, so a
+   conflict with core or with another app is refused with both named. The directory is
+   appended to the gateway's `sys.path` (an app adds modules, never shadows core's), so
+   a first install is importable in place; the result carries `restart_required: true`
+   only when a package the gateway had already loaded was replaced. Runs before the
+   `onInstall` hook so the hook can import them; a failure rolls the commit back and
+   collects what pip left. Uninstall collects every package no remaining app reaches,
+   and at boot the gateway reinstalls whatever a new image's Python left missing.
 7. **`setup.onInstall` hook**: a timeout-bounded shell subprocess (60s) in the
    app dir. Runs only after the scanner gate passed. A failing hook rolls the
    commit back (app dir removed).
@@ -88,10 +100,14 @@ Every lifecycle action is audited to the Security Event Log.
 An app that declares `backend.entryPoint` gets an isolated **subprocess**, not an
 in-process mount (`apps/backend_runtime.py`):
 
-- **Launcher**: `backend.type` selects it — `python`/`asgi` → the core venv's
+- **Launcher**: `backend.type` selects it — `python`/`asgi` → the gateway's own
   Python, `node` → `node`; empty auto-detects from the entry suffix (`.py`,
-  `.js`/`.mjs`/`.cjs`). The entry point must resolve INSIDE the app dir
-  (containment check).
+  `.js`/`.mjs`/`.cjs`). A Python backend of an app that declares
+  `pythonDependencies` starts through `personalclaw._app_python_child`, which appends
+  `<home>/app-python` after the interpreter's own packages exactly as the gateway
+  does (not `PYTHONPATH`, which would put them ahead of the stdlib). Any other Python
+  process — one your code spawns, a cron script — does not see app packages. The
+  entry point must resolve INSIDE the app dir (containment check).
 - **Port**: `backend.port: "auto"` (the default) binds an OS-assigned free
   localhost port. The chosen port is handed to the process via the **`PORT`**
   env var — the conventional contract; the backend must listen on it.

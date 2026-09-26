@@ -54,8 +54,9 @@ from telegram_runtime.delivery import TelegramDelivery
 from telegram_runtime.inbound_tap import publish as publish_inbound
 from telegram_runtime.settings import (
     ACTIVATION_OFF,
-    CRED_TELEGRAM_BOT_TOKEN,
+    LiveConfig,
     get_settings,
+    load_bot_token,
     reload_settings,
 )
 from telegram_runtime.writes import SendRefused, live_writes_disabled
@@ -71,12 +72,12 @@ _OFFSET_FILE = "poll_offset.json"
 
 class TelegramTransport(ChannelTransportProvider):
     def __init__(self, config: dict[str, Any] | None = None) -> None:
-        import os
-
-        cfg = config or {}
-        # Per-instance config wins; else the shared credential store the gateway
-        # propagates into the environment under this app's own key.
-        self._token = cfg.get("bot_token", "") or os.environ.get(CRED_TELEGRAM_BOT_TOKEN, "")
+        # Kept live, so a Configure → Save reaches the next Test/Connect/health/send (see
+        # LiveConfig) instead of the next restart.
+        self._config = LiveConfig(config or {})
+        #: The bot token the gateway drove the long-poll receiver with at boot (``""`` when it
+        #: had none) — ``None`` until it did. The receiver keeps the token it started with.
+        self._inbound_token: str | None = None
         self._services: Any = None
         self._api: TelegramAPI | None = None
         self._delivery: TelegramDelivery | None = None
@@ -101,8 +102,13 @@ class TelegramTransport(ChannelTransportProvider):
             edits=True, rich_text=True, typing_indicator=False, max_text_len=4096,
         )
 
+    def _token(self) -> str:
+        """The bot token as configured now: per-instance config wins; else the plain-named token
+        the gateway exports into the environment (see :func:`load_bot_token`)."""
+        return load_bot_token(self._config.current())
+
     async def connect(self) -> bool:
-        return bool(self._token)
+        return bool(self._token())
 
     async def disconnect(self) -> None:
         if self._api is not None:
@@ -110,7 +116,7 @@ class TelegramTransport(ChannelTransportProvider):
 
     @property
     def connected(self) -> bool:
-        return bool(self._token)
+        return bool(self._token())
 
     # ── offset persistence (resume the long-poll across restarts) ──
     def _offset_path(self) -> _Path:
@@ -137,12 +143,14 @@ class TelegramTransport(ChannelTransportProvider):
 
     # ── Inbound: the gateway drives this once at boot ──
     async def start_inbound(self, services: Any) -> None:
-        if not self._token:
+        token = self._token()
+        self._inbound_token = token
+        if not token:
             logger.info("TelegramTransport: no bot token — inbound stays offline")
             return
         self._services = services
         reload_settings()
-        self._api = HTTPTelegramAPI(self._token)
+        self._api = HTTPTelegramAPI(token)
 
         # Register outbound delivery on the gateway + dashboard. Core delivers every
         # channel result through this ONE provider-agnostic ChannelDelivery handle —
@@ -290,7 +298,8 @@ class TelegramTransport(ChannelTransportProvider):
         claim the guard suppressed a write that was never possible. Only a transport
         that WOULD have transmitted reports a refusal.
         """
-        if not self._token:
+        token = self._token()
+        if not token:
             return False
         # DISABLE_LIVE_WRITES (§1.4). A Telegram message is a live, outward,
         # instantly-human-visible write with no undo — the same class core refuses for
@@ -301,11 +310,14 @@ class TelegramTransport(ChannelTransportProvider):
             refusal = SendRefused(channel=PROVIDER, target=message.channel_id)
             logger.warning("TelegramTransport.send refused: %s", refusal)
             return refusal
+        # The receiver's client carries the token inbound started with; borrow it unless the
+        # configured token has moved on since, so a rotated token is what sends.
+        borrowed = self._api is not None and self._inbound_token in (None, token)
+        api = self._api if borrowed else HTTPTelegramAPI(token)
         try:
-            api = self._api or HTTPTelegramAPI(self._token)
             from telegram_runtime.format import to_markdown_v2
 
-            await api.send_message(
+            await api.send_message(  # type: ignore[union-attr]
                 message.channel_id, to_markdown_v2(message.text),
                 parse_mode="MarkdownV2",
                 reply_to_message_id=int(message.thread_id) if message.thread_id.isdigit() else None,
@@ -314,24 +326,57 @@ class TelegramTransport(ChannelTransportProvider):
         except Exception as exc:
             logger.warning("TelegramTransport.send failed: %s", exc)
             return False
+        finally:
+            if not borrowed:
+                await api.close()  # type: ignore[union-attr]
 
     async def health(self) -> dict[str, Any]:
-        if not self._token:
+        token = self._token()
+        if not token:
             return {"state": "offline", "detail": "No bot token configured"}
+        if self._inbound_token is None:
+            # A transport the gateway has not driven: enabled or re-built after boot. Its token
+            # is live for outbound; "ready" would claim a receiver that does not exist.
+            return {
+                "state": "error",
+                "detail": (
+                    "Outbound ready, inbound NOT STARTED — the long-poll receiver starts with "
+                    "the gateway, so the bot token takes effect on the next restart."
+                ),
+            }
+        if self._inbound_token != token:
+            # Saved tokens reach outbound at once, the long-poll receiver only when it starts.
+            if self._poll_task is not None and not self._poll_task.done():
+                detail = (
+                    "Outbound uses the saved bot token; the long-poll receiver still runs on "
+                    "the one it started with. Restart the gateway to move inbound onto it."
+                )
+            else:
+                detail = (
+                    "Outbound ready, inbound OFFLINE — the long-poll receiver starts with the "
+                    "gateway, so the bot token saved since then takes effect on the next restart."
+                )
+            return {"state": "error", "detail": detail}
         return {"state": "ready", "detail": "Bot token configured"}
 
     async def test(self) -> dict[str, Any]:
-        if not self._token:
+        token = self._token()
+        if not token:
             return {"ok": False, "detail": "No bot token configured"}
-        api = HTTPTelegramAPI(self._token)
+        api = HTTPTelegramAPI(token)
         try:
             me = await api.get_me()
             uname = me.get("username") or me.get("first_name") or "bot"
-            return {"ok": True, "detail": f"Authenticated as @{uname}"}
         except Exception as exc:
             return {"ok": False, "detail": f"getMe failed: {exc}"}
         finally:
             await api.close()
+        # The channel contract: test() is not ok whenever health() is not ready. Derived from
+        # health() rather than re-decided, so the two cannot drift.
+        health = await self.health()
+        if health["state"] != "ready":
+            return {"ok": False, "detail": f"Authenticated as @{uname}, but {health['detail']}"}
+        return {"ok": True, "detail": f"Authenticated as @{uname}"}
 
 
 def create_provider(config: dict[str, Any] | None = None) -> "TelegramTransport":

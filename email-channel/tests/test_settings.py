@@ -185,10 +185,17 @@ class TestCredentialBoundary:
 
 
 class TestSettingsCache:
-    def test_get_settings_caches_and_reload_refreshes(self):
+    def test_get_settings_caches_while_the_store_is_unchanged(self):
+        ProviderSettings.update(_APP, {"folder": "First"})
+        first = get_settings()
+        assert first.folder == "First"
+        assert get_settings() is first  # one live instance, not a re-parse per read
+
+    def test_get_settings_follows_a_store_written_behind_its_back(self):
+        """The Configure form writes the store directly and nothing tells this app it did — so
+        the cache is keyed on the store, not on this app's own ``reload_settings`` calls."""
         ProviderSettings.update(_APP, {"folder": "First"})
         assert get_settings().folder == "First"
         ProviderSettings.update(_APP, {"folder": "Second"})
-        assert get_settings().folder == "First"  # cached (a deliberate process singleton)
-        assert reload_settings().folder == "Second"
         assert get_settings().folder == "Second"
+        assert reload_settings().folder == "Second"

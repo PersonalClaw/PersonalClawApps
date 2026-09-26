@@ -119,6 +119,9 @@ StructuredOutput = type(ProviderCapability.__dataclass_fields__["structured_outp
 #: spelled the same on both sides of the bridge.
 _FORMAT_FIELD = "format"
 _OUTPUT_TYPE_KEY = "output_type"
+#: The request-body object ollama reads its sampling parameters from (``temperature``,
+#: ``top_p``, ``num_ctx``, …). A sampling parameter at the top level of the body is ignored.
+_WIRE_OPTIONS = "options"
 
 #: The unschema'd JSON mode ollama accepts in place of a schema object.
 _JSON_MODE = "json"
@@ -361,6 +364,15 @@ class OllamaProvider(ModelProvider):
         # Flipped True the first time the server rejects a tools request for
         # this model, so subsequent complete() turns skip the doomed first try.
         self._tools_unsupported: bool = False
+
+    @property
+    def sampling_temperature(self) -> float | None:
+        """The ``options.temperature`` every request from this instance carries, if any."""
+        wire = self._extra_options.get(_WIRE_OPTIONS)
+        value = wire.get("temperature") if isinstance(wire, dict) else None
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value)
 
     # ── Local-model management (the uniform download-surface contract) ─────────
     #
@@ -833,6 +845,19 @@ def _factory(
         options.pop(_FORMAT_FIELD, None)
         options.pop(_OUTPUT_TYPE_KEY, None)
         options.update(_requested)
+
+    # A per-call sampling TEMPERATURE arrives the same way (best-of-N needs N genuinely different
+    # samples), and on ollama's wire it is not a top-level field: it lives in the request's
+    # ``options`` object. Dropped here, every best-of-N candidate carried only the model and the
+    # messages, so N calls sampled one answer N times. The per-call value wins over an entry-level
+    # one: the caller asking for THIS temperature is more specific.
+    _temperature = kwargs.get("temperature")
+    if isinstance(_temperature, (int, float)) and not isinstance(_temperature, bool):
+        _wire = options.get(_WIRE_OPTIONS)
+        options[_WIRE_OPTIONS] = {
+            **(_wire if isinstance(_wire, dict) else {}),
+            "temperature": float(_temperature),
+        }
 
     logger.debug("Ollama factory: model=%r endpoint=%r", model, endpoint)
     return OllamaProvider(

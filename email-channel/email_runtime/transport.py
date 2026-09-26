@@ -78,6 +78,7 @@ from email_runtime.mime import parse_inbound, strip_quoted_reply
 from email_runtime.settings import (
     ACTIVATION_OFF,
     EmailSettings,
+    LiveConfig,
     get_settings,
     load_credentials,
     load_raw_settings,
@@ -99,10 +100,10 @@ _MAX_BACKOFF = 900.0
 
 class EmailTransport(ChannelTransportProvider):
     def __init__(self, config: dict[str, Any] | None = None) -> None:
-        cfg = config or {}
-        # Per-instance config wins for the non-secret connection fields; the persisted
-        # app store is the normal source (read at start_inbound via reload_settings).
-        self._config = dict(cfg)
+        # Per-instance config wins for the non-secret connection fields until the app store is
+        # written after this transport was built — then the store does (see LiveConfig), so a
+        # Configure → Save reaches the next Test/Connect/health/send.
+        self._config = LiveConfig(config or {})
         self._services: Any = None
         self._delivery: EmailDelivery | None = None
         self._poll_task: asyncio.Task | None = None
@@ -154,14 +155,21 @@ class EmailTransport(ChannelTransportProvider):
     def _settings(self) -> EmailSettings:
         """Live settings with any per-instance config overlaid.
 
-        The registry builds this provider with the app store's dict, and a user editing the
-        Configure form writes that same store — so the overlay only matters for a test or a
-        second instance handed an explicit dict. Both routes go through
-        :meth:`EmailSettings.from_dict`, so instance config gets the SAME coercion the
-        stored config does — an overlaid port or cadence can't skip validation."""
-        if not self._config:
-            return get_settings()
-        return EmailSettings.from_dict({**load_raw_settings(), **self._config})
+        The registry builds this provider with the app store's dict; the overlay is that dict
+        only until the store is written again (a Configure save), after which it IS the store,
+        so a saved host or port reaches the next probe. It otherwise matters only for a test or
+        a second instance handed an explicit dict. Everything goes through
+        :meth:`EmailSettings.from_dict`, so instance config gets the SAME coercion the stored
+        config does — an overlaid port or cadence can't skip validation."""
+        return EmailSettings.from_dict(self._raw_settings())
+
+    def _raw_settings(self) -> dict:
+        return {**load_raw_settings(), **self._config.current()}
+
+    def _passwords(self) -> tuple[str, str]:
+        """``(imap, smtp)`` from the same overlay :meth:`_settings` reads, so a password saved
+        on the Configure form reaches the next probe or send together with the host it is for."""
+        return load_credentials(self._raw_settings())
 
     async def connect(self) -> bool:
         settings = self._settings()
@@ -530,7 +538,7 @@ class EmailTransport(ChannelTransportProvider):
         reports a refusal.
         """
         settings = self._settings()
-        _, smtp_pass = load_credentials()
+        _, smtp_pass = self._passwords()
         if not (settings.outbound_configured and smtp_pass):
             return False
         # DISABLE_LIVE_WRITES (§1.4). An SMTP hand-off is the least reversible write
@@ -555,7 +563,7 @@ class EmailTransport(ChannelTransportProvider):
         settings = self._settings()
         if not settings.inbound_configured and not settings.outbound_configured:
             return {"state": "offline", "detail": "No IMAP/SMTP configuration"}
-        imap_pass, smtp_pass = load_credentials()
+        imap_pass, smtp_pass = self._passwords()
         missing = []
         if settings.inbound_configured and not imap_pass:
             missing.append("IMAP password")
@@ -579,7 +587,7 @@ class EmailTransport(ChannelTransportProvider):
         each hide behind a green login on the other protocol. Both probes block, so both
         run in a thread executor."""
         settings = self._settings()
-        imap_pass, smtp_pass = load_credentials()
+        imap_pass, smtp_pass = self._passwords()
         results: list[str] = []
         ok = True
 

@@ -92,7 +92,7 @@ Three things this deliberately does *not* do:
 
 From the App Store, add the apps directory as a **local source**, then install **Email
 Channel** — the install runs through the security scanner and lifecycle exactly like any
-other app. (Or `POST /api/apps {"source": ".../email-channel"}`.)
+other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).)
 
 ## Mailbox setup
 
@@ -114,15 +114,18 @@ other app. (Or `POST /api/apps {"source": ".../email-channel"}`.)
 | Key | Label | Notes |
 |---|---|---|
 | `imap_host` / `imap_port` / `imap_user` / `imap_use_ssl` | IMAP | Inbound. 993 + SSL by default. |
+| `imap_password` | IMAP App Password | Write-only. An app password, never your account password. |
 | `folder` | Folder | Polled **read-only** — your mail is never marked read. |
 | `smtp_host` / `smtp_port` / `smtp_user` / `smtp_security` | SMTP | Outbound. 587 + STARTTLS by default. |
+| `smtp_password` | SMTP App Password | Write-only. Blank reuses the IMAP one (one app password usually covers both). |
 | `address` | Mailbox Address | Sends as, receives at, and anchors the self-message filter. Defaults to the IMAP login. |
 | `poll_secs` | Poll Interval | 60s default, clamped to 10–3600. |
 | `dm_activation` | Inbound Activation | `always`, or `off` to keep outbound delivery only. |
 
-Secrets are **not** settings: the IMAP/SMTP passwords live in the shared credential store
-under this app's own `EMAIL_IMAP_PASS` / `EMAIL_SMTP_PASS` keys. A blank
-`EMAIL_SMTP_PASS` reuses the IMAP one (one app password usually covers both).
+The two passwords never sit in the settings file: each is kept in the credential store
+under a key this app owns, the file holds only a reference, and uninstalling the app
+removes them. Passwords an earlier release's setup saved under `EMAIL_IMAP_PASS` /
+`EMAIL_SMTP_PASS` are still used while the settings are empty.
 
 ## The live-writes kill switch
 

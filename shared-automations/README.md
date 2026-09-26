@@ -99,7 +99,7 @@ A row with a bad cron expression stays visible and inert rather than vanishing.
 
 From the App Store, add the apps directory as a **local source**, then install **Shared
 Automations** — the install runs through the security scanner and lifecycle like any other
-app. (Or `POST /api/apps {"source": ".../apps/shared-automations"}`.) Then set the file path
+app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).) Then set the file path
 below. To try it immediately, point `path` at a copy of `team-automations.example.json`.
 
 ## Settings

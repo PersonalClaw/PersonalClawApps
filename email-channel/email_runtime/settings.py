@@ -7,10 +7,14 @@ Where each value lives, and why (the app/core boundary, ``provider-boundary.md``
   cadence** are NON-secret behavioral config, so they live in this app's own
   ``ProviderSettings`` store (``~/.personalclaw/apps/email-channel/data/config.json``),
   NOT in core ``config.json``. Core defines no email config.
-- The IMAP and SMTP **passwords** are SECRETS, so they live ONLY in the shared
-  credential store under this app's own keys ``EMAIL_IMAP_PASS`` / ``EMAIL_SMTP_PASS``.
-  The setup step writes them; the runtime reads them back by name. They are never
-  persisted in the settings store and never logged.
+- The IMAP and SMTP **passwords** are SECRETS. They are the settings ``imap_password`` /
+  ``smtp_password``, declared ``x-meta.sensitive``, so the settings FILE never holds one:
+  :class:`ProviderSettings` keeps each value in the credential store under a key this app
+  owns and writes a reference in its place, and uninstalling the app removes them. Setup
+  and the Configure form both write them there; :func:`load_credentials` is the one place
+  they are read. Never logged. (Setup used to save them to the shared store under the
+  plain names ``EMAIL_IMAP_PASS`` / ``EMAIL_SMTP_PASS``, which no uninstall can attribute
+  to this app; those are still read, for an install configured that way.)
 
 Who is allowed to talk is owned by the **core sender-trust seam** (``channel_trust``,
 provider ``"email"``), so this app keeps NO allowlist of its own — that is the whole
@@ -18,11 +22,10 @@ point of CE-1. (The sibling ``mail-inbox`` app has an app-local allowlist becaus
 an *inbox source*, not a channel; a channel binds to the seam.)
 
 The plan's credential keys are ``EMAIL_IMAP_{HOST,USER,PASS,PORT}`` /
-``EMAIL_SMTP_{...}``. Only the two ``*_PASS`` keys are actually secret, so only those
-two live in the credential store; host/user/port live in the app store where the user
-can see and edit them in the Configure form. Putting a hostname in the credential store
-would claim a secrecy it does not have and hide it from the UI. The names are kept
-verbatim from the plan so the documented key vocabulary matches on disk.
+``EMAIL_SMTP_{...}``. Only the two passwords are actually secret, so only those two live
+in the credential store; host/user/port live in the app store where the user can see and
+edit them in the Configure form. Putting a hostname in the credential store would claim a
+secrecy it does not have and hide it from the UI.
 """
 
 from __future__ import annotations
@@ -36,8 +39,12 @@ logger = logging.getLogger(__name__)
 
 _APP = "email-channel"
 
-#: Credential-store keys for the two real secrets. App-owned: the setup step writes
-#: them and the runtime reads them back by name (never from ProviderSettings).
+#: The two passwords' settings keys (declared ``x-meta.sensitive``; see the module docstring).
+KEY_IMAP_PASSWORD = "imap_password"
+KEY_SMTP_PASSWORD = "smtp_password"
+
+#: The plain credential-store names an earlier release's setup saved the passwords under.
+#: Nothing writes them any more; :func:`load_credentials` still reads them.
 CRED_IMAP_PASS = "EMAIL_IMAP_PASS"
 CRED_SMTP_PASS = "EMAIL_SMTP_PASS"
 
@@ -75,6 +82,29 @@ _VALID_ACTIVATIONS = frozenset({ACTIVATION_ALWAYS, ACTIVATION_OFF})
 
 def _validate_activation(value: str) -> str:
     return value if value in _VALID_ACTIVATIONS else ACTIVATION_ALWAYS
+
+
+class LiveConfig:
+    """The provider config a transport runs on: the dict it was built with, until this app's store
+    is written — then the store.
+
+    The registry builds a transport from ``ProviderSettings.load`` once, when the app is enabled.
+    The Apps page's Configure → Save writes the store and re-cycles nothing, so a transport that
+    overlaid its build-time dict on the store kept probing and sending with the host, port and
+    user it was built with. A store that differs from the one this transport last saw was written
+    after it was built, so it wins; an unchanged store leaves the build dict in charge, which
+    keeps an explicitly constructed transport isolated from whatever store the machine holds.
+    """
+
+    def __init__(self, config: dict | None) -> None:
+        self._seen = ProviderSettings.load(_APP)
+        self._config = dict(self._seen if config is None else config)
+
+    def current(self) -> dict:
+        store = ProviderSettings.load(_APP)
+        if store != self._seen:
+            self._seen, self._config = store, dict(store)
+        return self._config
 
 
 def _validate_smtp_security(value: str) -> str:
@@ -167,23 +197,30 @@ class EmailSettings:
         return cls.from_dict(ProviderSettings.load(_APP))
 
 
-# One cached live instance, mirroring the telegram/discord/mail-inbox apps: build once,
-# refresh on write via reload_settings().
+# One cached live instance, mirroring the telegram/discord apps: re-read whenever the store
+# changes.
 _settings: EmailSettings | None = None
+#: The raw store ``_settings`` was built from — the cache is valid only while the store says this.
+_settings_store: dict | None = None
 
 
 def get_settings() -> EmailSettings:
-    """The app's live settings (cached; refreshed by :func:`reload_settings`)."""
-    global _settings
-    if _settings is None:
-        _settings = EmailSettings.load()
+    """The app's live settings: cached, and re-read whenever the app's store changed since.
+
+    The Configure form writes the store directly and nothing tells this app it did, so a cache
+    refreshed only by :func:`reload_settings` kept a saved change until the gateway restarted."""
+    global _settings, _settings_store
+    store = ProviderSettings.load(_APP)
+    if _settings is None or store != _settings_store:
+        _settings, _settings_store = EmailSettings.from_dict(store), store
     return _settings
 
 
 def reload_settings() -> EmailSettings:
     """Force a re-read of the app store and refresh the cached instance."""
-    global _settings
-    _settings = EmailSettings.load()
+    global _settings, _settings_store
+    _settings_store = ProviderSettings.load(_APP)
+    _settings = EmailSettings.from_dict(_settings_store)
     return _settings
 
 
@@ -192,20 +229,36 @@ def load_raw_settings() -> dict:
     return ProviderSettings.load(_APP)
 
 
-def load_credentials() -> tuple[str, str]:
-    """``(imap_password, smtp_password)`` from the shared credential store.
+def load_credentials(
+    config: dict | None = None, creds: dict[str, str] | None = None
+) -> tuple[str, str]:
+    """``(imap_password, smtp_password)`` — THE one resolution order, shared by the
+    transport, setup and doctor.
+
+    Each password comes from this app's store (``config``, or the store itself when
+    ``None``), else from the plain name an earlier release's setup saved it under in the
+    shared credential store (``creds``, read from ``AppConfig`` when not given and only
+    when the store leaves a password unset).
 
     An empty SMTP password falls back to the IMAP one: at Gmail/Fastmail/iCloud a
     single app password authenticates BOTH protocols, so asking for it twice is the
     kind of friction that ends in a half-configured channel. A separate SMTP secret is
     still honored when the user sets one (some corporate relays differ)."""
+    src = load_raw_settings() if config is None else config
+    imap_pass = str(src.get(KEY_IMAP_PASSWORD) or "")
+    smtp_pass = str(src.get(KEY_SMTP_PASSWORD) or "")
+    if not (imap_pass and smtp_pass):
+        shared = _shared_credentials() if creds is None else creds
+        imap_pass = imap_pass or shared.get(CRED_IMAP_PASS, "")
+        smtp_pass = smtp_pass or shared.get(CRED_SMTP_PASS, "")
+    return imap_pass, smtp_pass or imap_pass
+
+
+def _shared_credentials() -> dict[str, str]:
     from personalclaw.sdk.channel import AppConfig
 
     try:
-        creds = AppConfig.load().load_credentials()
+        return AppConfig.load().load_credentials()
     except Exception:
         logger.debug("email: credential load failed", exc_info=True)
-        return "", ""
-    imap_pass = creds.get(CRED_IMAP_PASS, "")
-    smtp_pass = creds.get(CRED_SMTP_PASS, "") or imap_pass
-    return imap_pass, smtp_pass
+        return {}

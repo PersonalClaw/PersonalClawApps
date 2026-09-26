@@ -27,45 +27,36 @@ channels you choose, and streams agent responses into threads.
 
 ## 2. Configure the tokens
 
-The tokens are credentials, stored in PersonalClaw's credential store
-(`~/.personalclaw/.env`) under the keys `SLACK_BOT_TOKEN` and
-`SLACK_APP_TOKEN` — the keys core exposes to the app as `CRED_SLACK_BOT_TOKEN`
-/ `CRED_SLACK_APP_TOKEN`. Three equivalent ways:
+The tokens are credentials. Setup and the Configure form both save them as this
+app's `bot_token` / `app_token` settings, which keep each value in PersonalClaw's
+credential store (the OS keychain when you enabled it, else `~/.personalclaw/.env`
+at `0600`) under a key the app owns. The settings file holds only a reference, and
+uninstalling the app removes both tokens.
 
 **Interactive setup (recommended):**
 
 ```bash
-personalclaw setup
+personalclaw setup --app slack-channel
 ```
 
-The wizard's "Slack Channel App Credentials" step prompts for the App Token,
-Bot Token, and (optionally) your Slack Member ID, and writes them to
-`~/.personalclaw/.env` with `0600` permissions.
+The "Slack Channel App Credentials" step prompts for the App Token, Bot Token, and
+(optionally) your Slack Member ID. (A plain `personalclaw setup` runs the same step
+after core's own.)
 
-**Headless / scripted:** append the keys to `~/.personalclaw/.env` directly
-(one `KEY=VALUE` per line):
+**The Configure form:** Apps → Slack Channel → Configure has the same `bot_token` /
+`app_token` fields.
 
-```bash
-cat >> ~/.personalclaw/.env <<'EOF'
-SLACK_APP_TOKEN=xapp-...
-SLACK_BOT_TOKEN=xoxb-...
-EOF
-chmod 600 ~/.personalclaw/.env
-```
-
-(Non-interactive `personalclaw setup --mode/--provider/--credential` flags exist
-for deployment scripting, but the Slack pair is simplest to write to `.env`
-directly.)
-
-**Per-instance app config:** the app's Configure form (Apps → Slack Channel →
-Configure) has `bot_token` / `app_token` fields. A value set there wins over the
-`.env` credentials for that instance; leave them empty to fall back to `.env`.
-
-Environment variables of the same names override `.env` values.
+**Headless / containers:** when those settings are empty, the app reads
+`SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` (the names core exposes as
+`CRED_SLACK_BOT_TOKEN` / `CRED_SLACK_APP_TOKEN`) from the credential store and then
+the process environment, so a container can pass them as environment variables.
+Tokens supplied that way are not the app's: uninstalling it leaves them where you
+put them.
 
 ## 3. Start and verify
 
-Restart the gateway (backend changes and new credentials load at boot):
+Restart the gateway. The Socket Mode receiver starts at boot; outbound picks saved
+tokens up without a restart, and the Channels page says so while inbound waits for it:
 
 ```bash
 personalclaw gateway

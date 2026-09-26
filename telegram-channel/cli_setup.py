@@ -3,20 +3,35 @@
 Registered via ``app.json`` → ``cli.setup: "cli_setup:run"``. The core setup
 runner (``personalclaw.app_cli.run_app_setup_steps``) imports ``run`` and calls it
 with a :class:`personalclaw.sdk.cli.SetupContext` after the core steps. This is the
-Telegram-specific setup: it reads/writes ONLY app-owned homes — the generic
-credential store (via ``ctx.save_credential``, this app's own ``TELEGRAM_BOT_TOKEN``
-key) and this app's ``ProviderSettings`` (the DM-activation posture). Core
-config.json holds no Telegram config; who may talk is owned by the core trust seam.
+Telegram-specific setup. The bot token and the DM-activation posture go to this app's
+``ProviderSettings``, whose save keeps the token in the credential store under a key
+this app owns (so uninstalling the app removes it; the plain ``TELEGRAM_BOT_TOKEN`` name
+it used to be saved under outlived the app). The owner's Telegram user id goes to the
+shared store under ``PERSONALCLAW_OWNER_ID``, which core's gateway reads by that name.
+Core config.json holds no Telegram config; who may talk is owned by the core trust seam.
 """
+
+import sys
+from pathlib import Path
 
 from personalclaw.sdk.channel import CRED_OWNER_ID
 from personalclaw.sdk.cli import SetupContext
 
-from telegram_runtime.settings import (
-    ACTIVATION_ALWAYS,
-    CRED_TELEGRAM_BOT_TOKEN,
-    _VALID_ACTIVATIONS,
-)
+# `personalclaw setup` loads this file by path, and core's loader does not put the app's
+# directory on sys.path the way the gateway's provider loader does, so an import of this app's
+# own package failed there and the step read "unavailable". Hold it on the path while the
+# import runs, as the provider loader does.
+_APP_DIR = str(Path(__file__).resolve().parent)
+sys.path.insert(0, _APP_DIR)
+try:
+    from telegram_runtime.settings import (
+        ACTIVATION_ALWAYS,
+        CRED_TELEGRAM_BOT_TOKEN,
+        _VALID_ACTIVATIONS,
+        load_bot_token,
+    )
+finally:
+    sys.path.remove(_APP_DIR)
 
 _APP = "telegram-channel"
 
@@ -26,9 +41,10 @@ def _mask(val: str) -> str:
 
 
 def run(ctx: SetupContext) -> None:
-    """Prompt for the BotFather token (→ credential store) and DM activation mode
-    (→ this app's ProviderSettings). Empty input keeps the current value; declining
-    skips the whole step (the channel stays disabled)."""
+    """Prompt for the BotFather token and DM activation mode (→ this app's
+    ProviderSettings) and the owner's user id (→ the shared credential store). Empty
+    input keeps the current value; declining skips the whole step (the channel stays
+    disabled)."""
     _setup_token(ctx)
     _setup_activation(ctx)
 
@@ -48,7 +64,10 @@ def _setup_token(ctx: SetupContext) -> None:
         ctx.print("  ⏭  Skipped. The Telegram channel will be disabled.\n")
         return
 
-    cur_token = ctx.get_credential(CRED_TELEGRAM_BOT_TOKEN)
+    # The token the channel runs on now (this app's store, then the plain-named key an earlier
+    # release's setup wrote). Enter keeps it.
+    legacy = {CRED_TELEGRAM_BOT_TOKEN: ctx.get_credential(CRED_TELEGRAM_BOT_TOKEN)}
+    cur_token = load_bot_token(ctx.settings.load(_APP), legacy)
     cur_owner = ctx.get_credential(CRED_OWNER_ID)
     hint_token = f" [{_mask(cur_token)}]" if cur_token else ""
     hint_owner = f" [{cur_owner}]" if cur_owner else ""
@@ -60,7 +79,7 @@ def _setup_token(ctx: SetupContext) -> None:
         ctx.print("  ⚠️  No token — the Telegram channel will be disabled.\n")
         return
 
-    ctx.save_credential(CRED_TELEGRAM_BOT_TOKEN, token)
+    ctx.settings.update(_APP, {"bot_token": token})
     if owner_id:
         ctx.save_credential(CRED_OWNER_ID, owner_id)
     ctx.print("  ✅ Credentials saved.\n")

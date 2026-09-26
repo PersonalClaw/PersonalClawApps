@@ -12,7 +12,7 @@ day"*; the store answers *"which automations exist"*.
 ## Install
 
 From the App Store, add the `apps/` directory as a **local source**, then install
-**Companion**. (Or `POST /api/apps {"source": ".../apps/companion"}`.) There is nothing else
+**Companion**. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).) There is nothing else
 to install — no binary, no credential, no network. After installing, turn on the surface you
 want: nothing happens until you do.
 

@@ -12,10 +12,22 @@ user told "no writer" before their first brief is a user who does not lose one.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 from personalclaw.sdk.cli import DoctorLine, SetupContext
 from personalclaw.sdk.documents import available_formats
 
-from provider import DECK_FORMAT, DOCUMENT_FORMATS
+# `personalclaw setup` / `doctor` load this file by path, and core's loader does not put the
+# app's directory on sys.path the way the gateway's provider loader does, so the import of this
+# app's own provider module failed there and both steps read "unavailable". Hold it on the path
+# while the import runs, as the provider loader does.
+_APP_DIR = str(Path(__file__).resolve().parent)
+sys.path.insert(0, _APP_DIR)
+try:
+    from provider import DECK_FORMAT, DOCUMENT_FORMATS
+finally:
+    sys.path.remove(_APP_DIR)
 
 LABEL = "Docs & Slides"
 

@@ -3,10 +3,11 @@
 The atom's bar is "setup/doctor configure end to end", so these tests drive the real
 entry points core's runners call (``cli_setup:run`` with a real
 :class:`SetupContext`, ``cli_doctor:probe``) and assert the values actually landed in
-the app store — not that the functions merely returned. The credential store is
-faked to a dict here (that IS the seam core hands the step: ``get_credential`` /
-``save_credential`` callables), while the app store is the real
-``ProviderSettings`` writing under the tmp ``PERSONALCLAW_HOME``."""
+the app store — not that the functions merely returned. The shared credential store
+the step reaches through its ``get_credential`` / ``save_credential`` callables is
+faked to a dict here (the owner id lives there, and so does a token an earlier setup
+saved), while the app store is the real ``ProviderSettings`` writing under the tmp
+``PERSONALCLAW_HOME`` — so the bot token goes through core's real secret routing."""
 
 from __future__ import annotations
 
@@ -57,13 +58,16 @@ class TestSetupHappyPath:
         c = Ctx(["y", "MTIz.tok.secret", "998877665544332211", "42", "mention"])
         cli_setup.run(c.ctx)
 
-        # the secret went to the credential store under the app's OWN key
-        assert c.creds[CRED_DISCORD_BOT_TOKEN] == "MTIz.tok.secret"
-        assert c.creds[CRED_OWNER_ID] == "42"
-        # the non-secrets went to the app's own store, never core config.json
+        # everything but the owner id went to the app's own store, never core config.json
         stored = ProviderSettings.load(_APP)
+        assert stored["bot_token"] == "MTIz.tok.secret"
         assert stored["application_id"] == "998877665544332211"
         assert stored["dm_activation"] == "mention"
+        # ...and the token is not in the settings file itself, only a reference to it
+        assert "MTIz.tok.secret" not in ProviderSettings.config_path(_APP).read_text()
+        # not under the plain name no uninstall can attribute to this app
+        assert CRED_DISCORD_BOT_TOKEN not in c.creds
+        assert c.creds[CRED_OWNER_ID] == "42"
 
     def test_prints_the_invite_url_with_the_real_application_id(self):
         c = Ctx(["y", "tok", "12345", "42", "always"])
@@ -85,8 +89,18 @@ class TestSetupHappyPath:
         c2 = Ctx(["y", "", "", "", ""])
         c2.creds = dict(c.creds)
         cli_setup.run(c2.ctx)
-        assert c2.creds[CRED_DISCORD_BOT_TOKEN] == "tok"
+        assert ProviderSettings.load(_APP)["bot_token"] == "tok"
         assert ProviderSettings.load(_APP)["application_id"] == "111"
+        assert c2.creds[CRED_OWNER_ID] == "42"
+
+    def test_a_token_an_earlier_setup_saved_is_kept_on_empty_input(self):
+        """An install configured before setup wrote the app store: Enter keeps the token the
+        channel runs on (and saves it to the app store like a typed one) instead of answering
+        "No token" as if none were set."""
+        c = Ctx(["y", "", "", "", ""])
+        c.creds[CRED_DISCORD_BOT_TOKEN] = "legacy.tok"
+        cli_setup.run(c.ctx)
+        assert ProviderSettings.load(_APP)["bot_token"] == "legacy.tok"
 
     def test_unknown_activation_keeps_the_current_value(self):
         c = Ctx(["y", "tok", "1", "42", "sideways"])
@@ -107,13 +121,14 @@ class TestSetupDeclinePaths:
         c = Ctx(["y", "", "", ""])
         cli_setup.run(c.ctx)
         assert c.creds == {}
+        assert ProviderSettings.load(_APP) == {}
         assert "No token" in c.transcript
 
     def test_no_application_id_still_saves_the_token(self):
         """The app id is optional — the runtime never needs it."""
         c = Ctx(["y", "tok", "", "42", "always"])
         cli_setup.run(c.ctx)
-        assert c.creds[CRED_DISCORD_BOT_TOKEN] == "tok"
+        assert ProviderSettings.load(_APP)["bot_token"] == "tok"
         assert "no invite URL" in c.transcript
 
 
@@ -158,6 +173,13 @@ class TestDoctor:
         assert len(lines) == 1
         assert lines[0].status == "info"
         assert "not configured" in lines[0].detail
+
+    def test_a_token_setup_saved_reports_configured(self):
+        """Setup writes the token to the app store; a doctor that looked only at the shared
+        credential store called that working channel "not configured"."""
+        cli_setup.run(Ctx(["y", "tok", "12345", "42", "always"]).ctx)
+        status = {line.label: line.status for line in cli_doctor.probe()}
+        assert status["token"] == "ok"
 
     def test_configured_reports_ok_for_each_field(self):
         save_credential(CRED_DISCORD_BOT_TOKEN, "tok")

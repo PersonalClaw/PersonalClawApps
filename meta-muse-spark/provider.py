@@ -63,6 +63,16 @@ _MODELS = [
 ]
 
 
+def _output_cap(configured: object, per_call: object) -> int | None:
+    """The request's output cap: the operator's configured ``max_tokens``, else the budget core
+    derives for the model it is building for (the ``max_tokens`` build kwarg), else ``None`` —
+    the endpoint's own default. Only a positive int is a cap (``True`` is not; ``0`` is unset)."""
+    for value in (configured, per_call):
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return None
+
+
 def _factory(
     *,
     entry: ProviderEntry,
@@ -93,6 +103,14 @@ def _factory(
             cred = Credential(name="meta", kind="api_key", secret=inline_key, source="file")
 
     base_url = str(options.pop("base_url", META_BASE_URL))
+    max_tokens = _output_cap(options.pop("max_tokens", None), kwargs.get("max_tokens"))
+    # A per-call sampling temperature (best-of-N's ladder, the ``temperature`` build kwarg) wins
+    # over the entry's own: the caller asking for THIS temperature is more specific. It rides
+    # ``extra_options``, which the client forwards into the request verbatim and reports back
+    # as ``sampling_temperature`` — so core can say whether the ladder was really sent.
+    temperature = kwargs.get("temperature")
+    if isinstance(temperature, (int, float)) and not isinstance(temperature, bool):
+        options["temperature"] = float(temperature)
 
     _model_override = kwargs.get("model")
     model = str(_model_override) if _model_override else (entry.model or "muse-spark-1.1")
@@ -101,7 +119,7 @@ def _factory(
         model=model,
         credential=cred,
         base_url=base_url,
-        max_tokens=None,
+        max_tokens=max_tokens,
         extra_options=options,
     )
 

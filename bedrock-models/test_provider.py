@@ -831,3 +831,71 @@ async def test_complete_sends_the_cache_point_on_the_wire_and_reports_cache_read
     assert len(done) == 1
     assert done[0].cache_read_tokens == 4096
     assert done[0].cache_creation_tokens == 0
+
+
+# ── Per-call sampling settings (best-of-N) + the served window ─────────
+
+
+def _bedrock_built(options: dict, **build_kwargs: Any):
+    from personalclaw.llm.registry import ProviderEntry
+    from provider import _factory
+
+    entry = ProviderEntry(name="bedrock", type="bedrock", model="m", options=options)
+    return _factory(entry=entry, **build_kwargs)
+
+
+@pytest.mark.asyncio
+async def test_a_per_call_temperature_and_output_budget_reach_inference_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """best-of-N builds each candidate with a ``temperature`` build kwarg and core derives a
+    per-model ``max_tokens``; Converse takes both in ``inferenceConfig``. The factory dropped
+    both, so core reported every candidate "not sent at its requested temperature"."""
+    client = _install_fake_boto3(monkeypatch, [_text_event("ok"), _usage_event(10, 2)])
+    provider = _bedrock_built({"region": "us-west-2"}, temperature=0.8, max_tokens=2048)
+    assert provider.sampling_temperature == 0.8
+
+    await provider.start()
+    _ = [ev async for ev in provider.stream("hi")]
+
+    assert client.last_request["inferenceConfig"] == {"maxTokens": 2048, "temperature": 0.8}
+
+
+def test_a_configured_max_tokens_wins_and_the_declared_zero_is_not_a_cap() -> None:
+    from provider import _DEFAULT_MAX_TOKENS
+
+    assert _bedrock_built({"max_tokens": 512}, max_tokens=2048)._max_tokens == 512
+    # The schema's declared default is 0 ("leave it to the model"): never a zero-token ceiling.
+    assert _bedrock_built({"max_tokens": 0}, max_tokens=2048)._max_tokens == 2048
+    assert _bedrock_built({"max_tokens": 0})._max_tokens == _DEFAULT_MAX_TOKENS
+
+
+@pytest.mark.asyncio
+async def test_extended_thinking_drops_the_custom_temperature(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Thinking on Anthropic-on-Bedrock rejects a custom temperature, so a reasoning turn sends
+    none; the output cap still goes."""
+    client = _install_fake_boto3(monkeypatch, [_usage_event(10, 2)])
+    provider = _bedrock_built({}, temperature=0.8, max_tokens=2048)
+    await provider.start()
+
+    _ = [ev async for ev in provider.complete([{"role": "user", "content": "q"}], reasoning_effort="high")]
+
+    assert client.last_request["inferenceConfig"] == {"maxTokens": 2048}
+
+
+@pytest.mark.asyncio
+async def test_no_per_call_temperature_sends_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _install_fake_boto3(monkeypatch, [_text_event("ok"), _usage_event(10, 2)])
+    provider = _bedrock_built({})
+    assert provider.sampling_temperature is None
+    await provider.start()
+    _ = [ev async for ev in provider.stream("hi")]
+    assert "temperature" not in client.last_request["inferenceConfig"]
+
+
+@pytest.mark.asyncio
+async def test_the_served_window_is_left_to_the_resolver() -> None:
+    """Bedrock publishes no served window (``GetFoundationModel`` carries no token limits and
+    Converse reports usage, not the limit), so the provider answers "cannot say" and core's
+    resolver takes the declared window, then the catalog card, then the table."""
+    assert await _bedrock_built({}).served_context_window() is None

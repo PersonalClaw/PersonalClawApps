@@ -57,6 +57,15 @@
             "help": "IMAP login, usually the full email address."
           }
         },
+        "imap_password": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "IMAP App Password",
+            "help": "An app password from your mail provider, never your account password. Kept in the credential store and removed when you uninstall this app.",
+            "sensitive": true
+          }
+        },
         "imap_use_ssl": {
           "type": "boolean",
           "default": true,
@@ -95,6 +104,15 @@
           "x-meta": {
             "label": "SMTP Username",
             "help": "SMTP login, usually the full email address."
+          }
+        },
+        "smtp_password": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "SMTP App Password",
+            "help": "Leave empty to reuse the IMAP app password, which is what one app password does at Gmail, Fastmail and iCloud. Kept in the credential store and removed when you uninstall this app.",
+            "sensitive": true
           }
         },
         "smtp_security": {

@@ -12,7 +12,7 @@ log on your machine. Nothing is ever posted back to the PR.
 
 From the App Store, add the `apps/` directory as a **local source**, then install
 **Code Review** — the install runs through the security scanner and lifecycle exactly like
-any other app. (Or `POST /api/apps {"source": ".../apps/code-review"}`.) You need the
+any other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).) You need the
 [GitHub CLI](https://cli.github.com) on `PATH` and `gh auth login` done —
 `personalclaw doctor` reports both.
 

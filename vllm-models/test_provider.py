@@ -451,3 +451,45 @@ async def test_vllm_stream_inherits_openai_translation(
     assert len(complete_events) == 1
     assert complete_events[0].input_tokens == 5
     assert complete_events[0].output_tokens == 2
+
+
+# ── Per-call sampling settings (best-of-N) ─────────────────────────────
+
+
+def _vllm_registry_with(options: dict) -> ProviderRegistry:
+    from provider import VLLM_CAPABILITY, _factory
+
+    reg = ProviderRegistry()
+    reg.register_type(VLLM_CAPABILITY, _factory)
+    reg.register_entry(
+        ProviderEntry(
+            name="vllm-x",
+            type="vllm",
+            model="meta-llama/Llama-3.1-8B-Instruct",
+            options={"base_url": "http://localhost:8000/v1", **options},
+            declared_capabilities=frozenset({Capability.CHAT, Capability.STREAMING}),
+        )
+    )
+    return reg
+
+
+@pytest.mark.asyncio
+async def test_a_per_call_temperature_and_output_budget_reach_the_request(
+    fake_openai: types.ModuleType,
+) -> None:
+    provider = _vllm_registry_with({}).build("vllm-x", temperature=1.1, max_tokens=700)
+    assert provider.sampling_temperature == 1.1
+
+    completions = _FakeChatCompletions(
+        chunks=[_FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(content="ok"), finish_reason="stop")])]
+    )
+    provider._client.chat = _FakeChat(completions)
+    _ = [event async for event in provider.stream("hi")]
+
+    assert completions.calls[-1]["temperature"] == 1.1
+    assert completions.calls[-1]["max_tokens"] == 700
+
+
+def test_a_configured_max_tokens_wins_over_the_per_call_budget(fake_openai: types.ModuleType) -> None:
+    provider = _vllm_registry_with({"max_tokens": 128}).build("vllm-x", max_tokens=700)
+    assert provider._max_tokens == 128

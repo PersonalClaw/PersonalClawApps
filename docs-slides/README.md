@@ -79,7 +79,7 @@ traversal target does not exist.
 ## Install
 
 From the App Store, add this `apps/` directory as a **local source**, then install
-**Docs & Slides**. (Or `POST /api/apps {"source": ".../docs-slides"}`.) Nothing to
+**Docs & Slides**. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).) Nothing to
 configure — `personalclaw doctor` reports which formats your build can render.
 
 ## Settings

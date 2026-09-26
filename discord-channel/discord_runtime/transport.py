@@ -63,8 +63,9 @@ from discord_runtime.gateway import DEFAULT_GATEWAY_URL, DiscordGateway
 from discord_runtime.inbound_tap import publish as publish_inbound
 from discord_runtime.settings import (
     ACTIVATION_OFF,
-    CRED_DISCORD_BOT_TOKEN,
+    LiveConfig,
     get_settings,
+    load_bot_token,
     reload_settings,
 )
 from discord_runtime.writes import SendRefused, live_writes_disabled
@@ -76,12 +77,12 @@ PROVIDER = "discord"
 
 class DiscordTransport(ChannelTransportProvider):
     def __init__(self, config: dict[str, Any] | None = None) -> None:
-        import os
-
-        cfg = config or {}
-        # Per-instance config wins; else the shared credential store the gateway
-        # propagates into the environment under this app's own key.
-        self._token = cfg.get("bot_token", "") or os.environ.get(CRED_DISCORD_BOT_TOKEN, "")
+        # Kept live, so a Configure → Save reaches the next Test/Connect/health/send (see
+        # LiveConfig) instead of the next restart.
+        self._config = LiveConfig(config or {})
+        #: The bot token the gateway drove the receiver with at boot (``""`` when it had none) —
+        #: ``None`` until it did. The gateway session keeps the token it started with.
+        self._inbound_token: str | None = None
         self._services: Any = None
         self._api: DiscordAPI | None = None
         self._delivery: DiscordDelivery | None = None
@@ -113,8 +114,13 @@ class DiscordTransport(ChannelTransportProvider):
             max_text_len=DISCORD_MAX_TEXT,
         )
 
+    def _token(self) -> str:
+        """The bot token as configured now: per-instance config wins; else the plain-named token
+        the gateway exports into the environment (see :func:`load_bot_token`)."""
+        return load_bot_token(self._config.current())
+
     async def connect(self) -> bool:
-        return bool(self._token)
+        return bool(self._token())
 
     async def disconnect(self) -> None:
         if self._api is not None:
@@ -122,16 +128,18 @@ class DiscordTransport(ChannelTransportProvider):
 
     @property
     def connected(self) -> bool:
-        return bool(self._token)
+        return bool(self._token())
 
     # ── Inbound: the gateway drives this once at boot ──
     async def start_inbound(self, services: Any) -> None:
-        if not self._token:
+        token = self._token()
+        self._inbound_token = token
+        if not token:
             logger.info("DiscordTransport: no bot token — inbound stays offline")
             return
         self._services = services
         reload_settings()
-        self._api = HTTPDiscordAPI(self._token)
+        self._api = HTTPDiscordAPI(token)
 
         # Register outbound delivery on the gateway + dashboard. Core delivers every
         # channel result through this ONE provider-agnostic ChannelDelivery handle —
@@ -144,7 +152,7 @@ class DiscordTransport(ChannelTransportProvider):
             services.dashboard_state.channel_delivery = self._delivery
 
         self._gateway = DiscordGateway(
-            self._token,
+            token,
             gateway_url=await self._discover_gateway_url(),
             on_message=self._on_message_create,
             on_interaction=self._on_interaction_create,
@@ -283,7 +291,8 @@ class DiscordTransport(ChannelTransportProvider):
         claim the guard suppressed a write that was never possible. Only a transport
         that WOULD have transmitted reports a refusal.
         """
-        if not self._token:
+        token = self._token()
+        if not token:
             return False
         # DISABLE_LIVE_WRITES (§1.4). A Discord message is a live, outward,
         # instantly-human-visible write — the same class core refuses for non-GET egress
@@ -295,21 +304,49 @@ class DiscordTransport(ChannelTransportProvider):
             refusal = SendRefused(channel=PROVIDER, target=message.channel_id)
             logger.warning("DiscordTransport.send refused: %s", refusal)
             return refusal
-        api = self._api or HTTPDiscordAPI(self._token)
+        # The receiver's client carries the token inbound started with; borrow it unless the
+        # configured token has moved on since, so a rotated token is what sends.
+        borrowed = self._api is not None and self._inbound_token in (None, token)
+        api = self._api if borrowed else HTTPDiscordAPI(token)
         try:
             for part in split_message(message.text):
-                await api.create_message(message.channel_id, part)
+                await api.create_message(message.channel_id, part)  # type: ignore[union-attr]
             return True
         except Exception as exc:
             logger.warning("DiscordTransport.send failed: %s", exc)
             return False
         finally:
-            if api is not self._api:
-                await api.close()
+            if not borrowed:
+                await api.close()  # type: ignore[union-attr]
 
     async def health(self) -> dict[str, Any]:
-        if not self._token:
+        token = self._token()
+        if not token:
             return {"state": "offline", "detail": "No bot token configured"}
+        if self._inbound_token is None:
+            # A transport the gateway has not driven: enabled or re-built after boot. Its token
+            # is live for outbound; "ready" would claim a gateway session that does not exist.
+            return {
+                "state": "error",
+                "detail": (
+                    "Outbound ready, inbound NOT STARTED — the Discord gateway session starts "
+                    "with the gateway, so the bot token takes effect on the next restart."
+                ),
+            }
+        if self._inbound_token != token:
+            # Saved tokens reach outbound at once, the gateway session only when it starts.
+            if self._gateway_task is not None and not self._gateway_task.done():
+                detail = (
+                    "Outbound uses the saved bot token; the Discord gateway session still runs "
+                    "on the one it started with. Restart the gateway to move inbound onto it."
+                )
+            else:
+                detail = (
+                    "Outbound ready, inbound OFFLINE — the Discord gateway session starts with "
+                    "the gateway, so the bot token saved since then takes effect on the next "
+                    "restart."
+                )
+            return {"state": "error", "detail": detail}
         return {"state": "ready", "detail": "Bot token configured"}
 
     async def test(self) -> dict[str, Any]:
@@ -319,9 +356,10 @@ class DiscordTransport(ChannelTransportProvider):
         the token authenticates AND a gateway session is available (it returns the
         remaining session-start budget, which is what actually stops a bot from
         connecting once it's exhausted)."""
-        if not self._token:
+        token = self._token()
+        if not token:
             return {"ok": False, "detail": "No bot token configured"}
-        api = HTTPDiscordAPI(self._token)
+        api = HTTPDiscordAPI(token)
         try:
             info = await api.get_gateway_bot()
             limit = info.get("session_start_limit") or {}
@@ -329,11 +367,16 @@ class DiscordTransport(ChannelTransportProvider):
             detail = f"Gateway reachable at {info.get('url', '?')}"
             if remaining is not None:
                 detail += f" ({remaining} session starts remaining)"
-            return {"ok": True, "detail": detail}
         except Exception as exc:
             return {"ok": False, "detail": f"GET /gateway/bot failed: {exc}"}
         finally:
             await api.close()
+        # The channel contract: test() is not ok whenever health() is not ready. Derived from
+        # health() rather than re-decided, so the two cannot drift.
+        health = await self.health()
+        if health["state"] != "ready":
+            return {"ok": False, "detail": f"{detail}, but {health['detail']}"}
+        return {"ok": True, "detail": detail}
 
 
 def create_provider(config: dict[str, Any] | None = None) -> "DiscordTransport":
