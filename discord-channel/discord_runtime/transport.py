@@ -112,10 +112,14 @@ class DiscordTransport(ChannelTransportProvider):
         #   edits            → DiscordDelivery streaming PATCHes the message
         #   rich_text        → Discord renders standard markdown natively
         # Discord caps a message body at 2000 chars.
+        # owner_pairing → DMs cross core's guarded door, where the owner's code from the
+        #                  Configure page is redeemed; the delivery reads the owner at each use
+        # dm_thread_is_channel → a DM message's thread is its channel id (see
+        #                  _to_channel_message), so a handed-off chat continues in the DM
         return ChannelCapabilities(
             inbound=True, threads=True, attachments=True, reactions=True,
             edits=True, rich_text=True, typing_indicator=True,
-            max_text_len=DISCORD_MAX_TEXT,
+            max_text_len=DISCORD_MAX_TEXT, owner_pairing=True, dm_thread_is_channel=True,
         )
 
     def _token(self) -> str:
@@ -150,11 +154,9 @@ class DiscordTransport(ChannelTransportProvider):
         # Register outbound delivery on the gateway + dashboard. Core delivers every
         # channel result through this ONE provider-agnostic ChannelDelivery handle —
         # it never sees the Discord API client. Filed under PROVIDER, the name core reads this
-        # channel's owner by, so the owner core DMs is the one below.
-        # Discord's OWN owner: an id stored for this channel. The one shared key every channel
-        # used to write could hold another platform's user id.
-        owner_id = owner_id_for(PROVIDER)
-        self._delivery = DiscordDelivery(self._api, owner_id)
+        # channel's owner by. The delivery reads Discord's OWN owner each time it needs it, so an
+        # owner paired from the Configure page while this receiver runs is the one it prompts.
+        self._delivery = DiscordDelivery(self._api, lambda: owner_id_for(PROVIDER))
         if hasattr(services, "register_channel_delivery"):
             services.register_channel_delivery(self._delivery, provider=PROVIDER)
         if getattr(services, "dashboard_state", None) is not None:

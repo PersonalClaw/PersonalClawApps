@@ -101,9 +101,14 @@ class TelegramTransport(ChannelTransportProvider):
         # Honest: streaming is edit-based (not native chunk append), rich text is
         # MarkdownV2 (a limited subset), threads are reply-chains. Telegram caps a
         # message at 4096 chars.
+        # owner_pairing: DMs cross core's guarded door, where the owner's code from the Configure
+        # page is redeemed, and the delivery reads the owner each time it needs it.
+        # dm_thread_is_channel: every DM message carries its chat id as its thread (see
+        # _to_channel_message), so a chat handed off to Telegram continues in the DM.
         return ChannelCapabilities(
             inbound=True, threads=True, attachments=True, reactions=False,
             edits=True, rich_text=True, typing_indicator=False, max_text_len=4096,
+            owner_pairing=True, dm_thread_is_channel=True,
         )
 
     def _token(self) -> str:
@@ -161,11 +166,9 @@ class TelegramTransport(ChannelTransportProvider):
         # Register outbound delivery on the gateway + dashboard. Core delivers every
         # channel result through this ONE provider-agnostic ChannelDelivery handle —
         # it never sees the Telegram API client. Filed under PROVIDER, the name core reads this
-        # channel's owner by, so the owner core DMs is the one below.
-        # Telegram's OWN owner: an id stored for this channel. The one shared key every channel
-        # used to write could hold another platform's user id.
-        owner_id = owner_id_for(PROVIDER)
-        self._delivery = TelegramDelivery(self._api, owner_id)
+        # channel's owner by. The delivery reads Telegram's OWN owner each time it needs it, so an
+        # owner paired from the Configure page while this receiver runs is the one it prompts.
+        self._delivery = TelegramDelivery(self._api, lambda: owner_id_for(PROVIDER))
         if hasattr(services, "register_channel_delivery"):
             services.register_channel_delivery(self._delivery, provider=PROVIDER)
         if getattr(services, "dashboard_state", None) is not None:
