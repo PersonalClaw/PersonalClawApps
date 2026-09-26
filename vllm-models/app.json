@@ -1,6 +1,6 @@
 {
   "name": "vllm-models",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "vLLM",
   "description": "A local vLLM server (OpenAI-compatible). Point it at your vLLM endpoint; capabilities are model-dependent.",
   "icon": "Cpu",

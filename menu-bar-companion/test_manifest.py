@@ -76,7 +76,7 @@ def test_permissions_are_exactly_the_minimum_this_app_uses():
     assert perms.network is False, "it talks to your own gateway, not out to the internet"
     assert perms.cron is False
     assert perms.agent is False
-    assert perms.memory == ""
+    assert perms.memory is False
     assert perms.mcpTools == []
     assert perms.appMessaging == []
     assert perms.storageShared is False

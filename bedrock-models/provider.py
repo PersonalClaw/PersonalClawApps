@@ -44,6 +44,8 @@ from personalclaw.sdk.model import (
     ProviderEntry,
     ProviderResolutionError,
     get_default_registry,
+    output_cap,
+    per_call_temperature,
 )
 
 logger = logging.getLogger(__name__)
@@ -588,6 +590,7 @@ class BedrockProvider(ModelProvider):
         profile_name: str | None = None,
         system_prompt: str | None = None,
         max_tokens: int | None = None,
+        temperature: float | None = None,
     ) -> None:
         # NO credential parameter — boto3's chain authenticates (G-AUTH).
         # Empty ⇒ resolve from live discovery at start() (no hardcoded default id).
@@ -598,11 +601,41 @@ class BedrockProvider(ModelProvider):
         # Always send an output cap (see _DEFAULT_MAX_TOKENS): omitting it lets
         # Converse truncate large tool-call JSON mid-stream.
         self._max_tokens = max_tokens if max_tokens is not None else _DEFAULT_MAX_TOKENS
+        #: The sampling temperature every request carries, or ``None`` for the model default.
+        self._temperature = temperature
         self._client: Any = None
         # Converse message shape: [{"role": "user"|"assistant",
         #                           "content": [{"text": "..."}]}]
         self._history: list[dict[str, Any]] = []
         self._last_context_pct: float = 0.0
+
+    @property
+    def sampling_temperature(self) -> float | None:
+        """The ``inferenceConfig.temperature`` a :meth:`stream` request carries, if any.
+
+        :meth:`complete` with a reasoning effort turns extended thinking on, which takes no custom
+        temperature and drops it — a per-turn fact about the native loop, which one-shot sampling
+        (the caller that reads this back) never takes."""
+        return self._temperature
+
+    def _inference_config(self, *, thinking: bool = False) -> dict[str, Any]:
+        """Converse's ``inferenceConfig``: the output cap always, the sampling temperature when
+        one was asked for — except with extended thinking on, which rejects a custom one."""
+        config: dict[str, Any] = {"maxTokens": self._max_tokens}
+        if self._temperature is not None and not thinking:
+            config["temperature"] = self._temperature
+        return config
+
+    # ── Context window ────────────────────────────────────────────────
+    #
+    # ``served_context_window()`` is deliberately NOT overridden, so it answers ``None`` ("this
+    # provider cannot say") and core's resolver falls back to the binding's declared
+    # ``context_window``, then the model's catalog card, then the shared window table. Bedrock
+    # publishes no served window to read: the control plane's ``GetFoundationModel`` returns
+    # ``FoundationModelDetails`` (modalities, lifecycle, inference types, streaming support)
+    # with no token limits, and Converse reports token USAGE, never the limit it was served
+    # against. Answering from the same table the resolver already consults would claim a served
+    # measurement this provider never made.
 
     # ── Lifecycle ─────────────────────────────────────────────────────
 
@@ -679,11 +712,10 @@ class BedrockProvider(ModelProvider):
         request: dict[str, Any] = {
             "modelId": self._model_id,
             "messages": self._history,
+            "inferenceConfig": self._inference_config(),
         }
         if self._system_prompt:
             request["system"] = [{"text": self._system_prompt}]
-        if self._max_tokens is not None:
-            request["inferenceConfig"] = {"maxTokens": self._max_tokens}
 
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[Any] = asyncio.Queue()
@@ -794,8 +826,6 @@ class BedrockProvider(ModelProvider):
             request["system"] = [{"text": self._system_prompt}]
         if tools:
             request["toolConfig"] = _translate_tools(tools, tool_name_fwd)
-        if self._max_tokens is not None:
-            request["inferenceConfig"] = {"maxTokens": self._max_tokens}
 
         # Extended thinking (Anthropic-on-Bedrock): map reasoning effort via
         # additionalModelRequestFields. Newer Claude models (Opus 4.x on Bedrock)
@@ -805,6 +835,7 @@ class BedrockProvider(ModelProvider):
         # and fall back on the ValidationException path is avoided by using the
         # documented adaptive form. "" = no thinking (model default).
         _eff = (reasoning_effort or "").strip()
+        request["inferenceConfig"] = self._inference_config(thinking=bool(_eff))
         if _eff:
             request["additionalModelRequestFields"] = {
                 "thinking": {"type": "adaptive"},
@@ -1201,19 +1232,10 @@ def create_provider(config: dict[str, Any]) -> BedrockProvider:
     ``system_prompt`` / ``max_tokens`` from the instance settings. No
     credential is resolved — boto3's chain authenticates (G-AUTH).
     """
-    # `max_tokens` is now DECLARED in the manifest schema, which is what makes it settable at
-    # all — the config form renders only declared properties, so before that this read took
-    # `None` forever however the docstring above read. Its declared default is 0, and 0 means
-    # "leave it to the model": a bare `isinstance(v, int)` would pass 0 straight through as a
-    # zero-token ceiling.
-    max_tokens_value = config.get("max_tokens")
-    max_tokens = (
-        int(max_tokens_value)
-        if isinstance(max_tokens_value, int)
-        and not isinstance(max_tokens_value, bool)
-        and max_tokens_value > 0
-        else None
-    )
+    # `max_tokens` is DECLARED in the manifest schema, which is what makes it settable at all —
+    # the config form renders only declared properties. Its declared default is 0, and 0 means
+    # "leave it to the model", which `output_cap` reads as unset rather than a zero-token ceiling.
+    max_tokens = output_cap(config.get("max_tokens"), None)
     return BedrockProvider(
         # Empty when unpinned → resolved from live discovery at start() (no baked id).
         model=config.get("model") or config.get("default_model") or "",
@@ -1255,8 +1277,14 @@ def _factory(
     profile = str(profile_value) if profile_value else None
     system_value = options.get("system_prompt")
     system_prompt = str(system_value) if system_value else None
-    max_tokens_value = options.get("max_tokens")
-    max_tokens = int(max_tokens_value) if isinstance(max_tokens_value, int) else None
+    # The operator's configured cap, else the budget core derives for the model it is building
+    # for (the ``max_tokens`` build kwarg), else the provider default. The schema's declared
+    # default is 0, and 0 means "leave it to the model" — the same rule create_provider applies —
+    # so it must not pass through as a zero-token ceiling.
+    max_tokens = output_cap(options.get("max_tokens"), kwargs.get("max_tokens"))
+    # A per-call sampling temperature: best-of-N builds each candidate with the ``temperature``
+    # build kwarg. Without it every request samples at the model's default.
+    temperature = per_call_temperature(kwargs)
 
     model_override = kwargs.get("model")
     # Unpinned (no override, no entry.model) → "" → resolved from live discovery at
@@ -1269,6 +1297,7 @@ def _factory(
         profile_name=profile,
         system_prompt=system_prompt,
         max_tokens=max_tokens,
+        temperature=temperature,
     )
 
 

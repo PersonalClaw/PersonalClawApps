@@ -1,6 +1,6 @@
 {
   "name": "piper-tts",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Piper TTS",
   "description": "Text-to-speech using Piper neural voice models. Download and manage TTS voices for audio output.",
   "icon": "Volume2",

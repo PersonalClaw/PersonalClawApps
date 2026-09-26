@@ -42,7 +42,7 @@ Then ask for an image in chat. The artifact lands in Artifacts like any other.
 From the App Store, add the apps directory as a **local source**, then install
 **Local Image Generation** — the install runs through the security scanner and
 lifecycle exactly like any other app. (Or
-`POST /api/apps {"source": ".../local-image-gen"}`.)
+[install it from a shell](../docs/third-party-install.md#installing-from-a-shell).)
 
 ## Settings
 

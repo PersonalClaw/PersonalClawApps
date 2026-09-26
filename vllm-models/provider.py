@@ -34,6 +34,8 @@ from personalclaw.sdk.model import (
     ProviderResolutionError,
     get_default_registry,
     openai_compatible_list_models,
+    output_cap,
+    per_call_temperature,
 )
 
 logger = logging.getLogger(__name__)
@@ -181,8 +183,16 @@ def _factory(
         )
     base_url = str(base_url_value)
 
-    max_tokens_value = options.pop("max_tokens", None)
-    max_tokens = int(max_tokens_value) if isinstance(max_tokens_value, int) else None
+    # The operator's configured cap, else the budget core derived for this call (the
+    # ``max_tokens`` build kwarg), else none: the server's own default.
+    max_tokens = output_cap(options.pop("max_tokens", None), kwargs.get("max_tokens"))
+    # A per-call sampling temperature (best-of-N's ladder, the ``temperature`` build kwarg) wins
+    # over the entry's own: the caller asking for THIS temperature is more specific. It rides
+    # ``extra_options``, which the client forwards into the request verbatim and reports back
+    # as ``sampling_temperature`` — so core can say whether the ladder was really sent.
+    temperature = per_call_temperature(kwargs)
+    if temperature is not None:
+        options["temperature"] = temperature
 
     # Pop ``default_model`` (the settingsSchema field the Add-instance flow persists)
     # so it (a) serves as the model fallback and (b) does NOT leak into extra_options

@@ -82,9 +82,10 @@ jobs:
     # are installed. Undeclared vendor SDKs remain absent, so model apps still stub
     # SDKs they deliberately do not declare.
     runs-on: ubuntu-latest
-    # No PERSONALCLAW_HOME: the app tests resolve state via Path.home() directly
-    # (not config_dir()), and setting a global home would defeat the Path.home()/HOME
-    # patches these tests rely on — the same mismatch documented in the core test job.
+    # No job-level PERSONALCLAW_HOME: one home shared by every test defeats the
+    # Path.home()/HOME patches some tests isolate themselves with, the same mismatch
+    # documented in the core test job. The repository's conftest.py gives each test a
+    # scratch home of its own instead, so no run resolves the real ~/.personalclaw.
     env:
       PERSONALCLAW_SKIP_APP_BACKENDS: "1"
     steps:
@@ -104,6 +105,22 @@ jobs:
           uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC" pytest pytest-asyncio
       - name: Test the per-bundle runner dependency rail
         run: python -m pytest .github/tests/test_bundle_runner.py -q
+      - name: Every app's cli.setup / cli.doctor loads the way personalclaw setup / doctor load it
+        # Each bundle's own suite puts the app directory on sys.path first, so a step that cannot
+        # load from the installed copy still passes there. This loads each one as core does.
+        run: python -m pytest .github/tests/test_cli_steps_load.py -q
+      - name: Every chat-model app proves its requests carry the per-call temperature and max_tokens
+        # Each bundle's test_wire.py drives its real SDK client against apps_testkit/model_wire.py;
+        # this refuses a chat-model app that ships without one.
+        run: python -m pytest .github/tests/test_model_apps_prove_the_wire.py -q
+      - name: Every app's SDK imports are published and every SDK call binds
+        # The static rails in apps_testkit/sdk_contract.py, over every bundle. Only
+        # slack-channel's suite ran them, so vector-store-qdrant's CredentialStore() call,
+        # missing the home it requires, failed on every connect with nothing to name it.
+        run: python -m pytest .github/tests/test_sdk_calls_bind.py -q
+      - name: Every test runs against a scratch PersonalClaw home
+        # conftest.py gives every test its own; pytest.ini makes pytest load it however it starts.
+        run: python -m pytest .github/tests/test_scratch_home.py -q
       - name: Run each bundle's tests (per-bundle)
         # The repository runner is the single definition shared by CI and local use:
         # it discovers tested app bundles, installs each manifest's declared

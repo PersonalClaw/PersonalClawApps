@@ -49,8 +49,11 @@ Full contract: [`docs/app-creation-guide.md`](docs/app-creation-guide.md) and
 ## Validate as a user
 
 Add your app directory as a local Store source, install it in a real gateway, and
-drive it in the UI before opening the PR. Push edits to a running gateway with
-`POST /api/apps/<name>/update {source, confirm:true}`.
+drive it in the UI before opening the PR. From a shell an install is a review and then
+an install that carries the review's `consent` digest
+([docs/third-party-install.md](docs/third-party-install.md#installing-from-a-shell)).
+Push edits to a running gateway with `POST /api/apps/<name>/update {source}`; one that
+changes what the app gets needs the same review and digest.
 
 ## DCO
 

@@ -28,7 +28,7 @@ from mail_inbox_runtime.addresses import (
     match_bound_address,
 )
 from mail_inbox_runtime.provider import MailInboxProvider
-from mail_inbox_runtime.settings import CRED_MAIL_PASSWORD, MailInboxSettings, _APP
+from mail_inbox_runtime.settings import MailInboxSettings, _APP
 
 from _fakes import FakeImapClient, build_message
 
@@ -48,22 +48,18 @@ def _configure(
     """Write the app settings the way the platform's config PUT does (same file)."""
     from personalclaw.sdk.settings import ProviderSettings
 
-    ProviderSettings.update(
-        _APP,
-        {
-            "host": "imap.example.com",
-            "port": 993,
-            "username": "me@example.com",
-            "address": "me@example.com",
-            "folder": FOLDER,
-            "allow_senders": list(allow_senders),
-            "bound_addresses": list(bound_addresses or []),
-        },
-    )
+    cfg = {
+        "host": "imap.example.com",
+        "port": 993,
+        "username": "me@example.com",
+        "address": "me@example.com",
+        "folder": FOLDER,
+        "allow_senders": list(allow_senders),
+        "bound_addresses": list(bound_addresses or []),
+    }
     if password is not None:
-        from personalclaw.sdk.channel import save_credential
-
-        save_credential(CRED_MAIL_PASSWORD, password)
+        cfg["password"] = password
+    ProviderSettings.update(_APP, cfg)
 
 
 def _travel_row(**over):
@@ -480,10 +476,11 @@ def test_config_round_trips_through_the_settings_surface():
         "bound_addresses": [_travel_row()],
     }
     assert validate_config(values, schema) == []
-    # No secret field is declared — the IMAP password is credential-store-only.
-    assert not [
+    # The only secrets are the two passwords, which the masking keeps write-only. The address
+    # table is not one of them, so the settings page shows it back as it was saved.
+    assert [
         k for k, p in schema["properties"].items() if (p.get("x-meta") or {}).get("sensitive")
-    ]
+    ] == ["password", "smtp_password"]
 
     ProviderSettings.save(_APP, values)
     loaded = MailInboxSettings.load()

@@ -1,6 +1,6 @@
 {
   "name": "docs-slides",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Docs & Slides",
   "description": "Turn a brief into a real PowerPoint deck (.pptx) or a compiled document (.docx/.pdf). You can open and send the result. Write the brief as ordinary markdown — '## ' per slide for a deck, headings and lists for a document — and the document writers PersonalClaw already ships render the file. Nothing leaves your machine and nothing is written outside this app's own data directory.",
   "icon": "Presentation",

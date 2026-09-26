@@ -133,8 +133,15 @@ class TestCapabilities:
 
     @pytest.mark.asyncio
     async def test_health_reflects_token(self):
-        assert (await TelegramTransport({"bot_token": "x"}).health())["state"] == "ready"
+        driven = TelegramTransport({"bot_token": "x"})
+        driven._inbound_token = "x"  # the gateway drove inbound with this token
+        assert (await driven.health())["state"] == "ready"
         assert (await TelegramTransport({}).health())["state"] == "offline"
+
+    @pytest.mark.asyncio
+    async def test_health_says_not_started_before_the_gateway_drives_inbound(self):
+        health = await TelegramTransport({"bot_token": "x"}).health()
+        assert health["state"] == "error" and "NOT STARTED" in health["detail"], health
 
 
 class TestChannelMessageMapping:

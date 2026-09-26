@@ -50,6 +50,15 @@
             "help": "The Qdrant collection to hold chunk vectors. Created on first use with the dimension of whatever embedding model you have bound. Use a fresh name rather than an existing collection — this app deletes and rewrites the points it owns."
           }
         },
+        "api_key": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Qdrant API Key",
+            "help": "Only if your Qdrant requires one, such as a Qdrant Cloud cluster or a server started with an api key. Not used with a local folder. Leave empty to fall back to the QDRANT_API_KEY environment variable.",
+            "sensitive": true
+          }
+        },
         "path": {
           "type": "string",
           "default": "",

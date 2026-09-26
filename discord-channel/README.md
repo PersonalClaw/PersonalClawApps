@@ -53,8 +53,11 @@ anywhere in the bundle, tests included.
 
 Who may talk (allowlist, pairing) and which server channels are tracked are owned by
 the **core sender-trust seam** (`channel_trust`, provider `"discord"`) — this app
-keeps no allowlist of its own. The bot token is a secret in the shared credential
-store under this app's own `DISCORD_BOT_TOKEN` key. The **application id** is *not* a
+keeps no allowlist of its own. The bot token is a secret: setup and the Configure form
+save it as the app's `bot_token` setting, which keeps the value in the credential store
+under a key this app owns (the settings file holds only a reference), and uninstalling
+the app removes it. With the setting empty, a `DISCORD_BOT_TOKEN` in the credential
+store or the environment is used instead. The **application id** is *not* a
 secret (Discord prints it publicly and it appears in every invite URL), so it lives
 in the app's own settings where you can see and edit it.
 
@@ -85,7 +88,7 @@ Three things this deliberately does *not* do:
 
 From the App Store, add the `apps/` directory as a **local source**, then install
 **Discord Channel** — the install runs through the security scanner and lifecycle
-exactly like any other app. (Or `POST /api/apps {"source": ".../apps/discord-channel"}`.)
+exactly like any other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).)
 
 ## Settings
 
@@ -122,7 +125,11 @@ and **any other present value — including a typo — turns it on**.
 5. Run `personalclaw setup` and paste the token, application id and your own Discord
    user id (enable Settings → Advanced → **Developer Mode**, then right-click your
    name → **Copy User ID**). The setup step then prints the **OAuth2 invite URL**
-   with the permission bits already computed — open it and pick a server.
+   with the permission bits already computed — open it and pick a server. Your user id is
+   stored as Discord's own owner, `PERSONALCLAW_OWNER_ID_DISCORD`, so setting up another
+   channel leaves it alone. An install set up by an earlier release kept the owner under the
+   shared `PERSONALCLAW_OWNER_ID`; the first time Discord starts, it copies that owner to its
+   own key.
 6. Track the channels you want the bot active in from the Channels page.
 
 The invite requests exactly the permissions the code exercises: View Channels, Send

@@ -16,11 +16,14 @@ TWO MODES, ONE CLIENT CALL PATH. ``qdrant-client`` talks to a server over HTTP w
 method below is identical in both; only the constructor differs. The local folder is how you
 try this without installing anything, and it is what the test suite drives.
 
-CREDENTIALS. The api key is NOT a settings field. It is resolved from the credential store
-(``QDRANT_API_KEY``), falling back to the environment variable of the same name — so it never
-lands in ``~/.personalclaw/apps/vector-store-qdrant/data/config.json``, which is a plain JSON
-file this app's own Configure form writes. The URL, collection, folder and timeout do live
-there: they are configuration, not secrets.
+CREDENTIALS. The api key is the ``api_key`` setting, declared ``x-meta.sensitive``, so
+``ProviderSettings`` keeps its value in the credential store under a key this app owns and
+writes only a ``{{secret:…}}`` reference into
+``~/.personalclaw/apps/vector-store-qdrant/data/config.json``; uninstalling the app removes it.
+The factory receives the resolved value in ``config``, exactly as it receives the URL. An empty
+field falls back to the ``QDRANT_API_KEY`` environment variable. (The key used to be read through
+``CredentialStore()``, called without the home it requires: the ``TypeError`` was swallowed on
+every connect, so the credential store was never read and only the environment was consulted.)
 
 IDS. Qdrant point ids must be an unsigned integer or a UUID, and PersonalClaw chunk ids are
 32-char hex (``uuid4().hex``). They are converted to canonical UUID form for the id and ALSO
@@ -35,7 +38,6 @@ import os
 import uuid
 from collections.abc import Sequence
 
-from personalclaw.sdk.credentials import CredentialStore
 from personalclaw.sdk.vector_store import (
     VectorHit,
     VectorRecord,
@@ -45,33 +47,13 @@ from personalclaw.sdk.vector_store import (
 
 logger = logging.getLogger("vector_store_qdrant")
 
-#: The credential-store entry (and env var) the api key is read from. One name, so a user who
-#: set it as an env var and a user who registered it in the credential store are configuring
-#: the same thing.
+#: The environment variable an empty ``api_key`` setting falls back to.
 API_KEY_NAME = "QDRANT_API_KEY"
 
 #: Qdrant's own name for cosine distance. Cosine and not dot/euclid because core's
 #: `_VECTOR_MIN_SIMILARITY` floor is calibrated on cosine similarity, and Qdrant returns a
 #: COSINE metric score directly for this distance — no conversion, so nothing can drift.
 _DISTANCE = "Cosine"
-
-
-def _api_key() -> str:
-    """The api key, from the credential store first and the environment second.
-
-    Never from the app's config file. A missing key is not an error: a local Qdrant with no
-    auth is the common case, and Qdrant simply accepts the unauthenticated request.
-    """
-    try:
-        cred = CredentialStore().resolve(API_KEY_NAME)
-    except KeyError:
-        pass  # not registered — fall through to the environment
-    except Exception as exc:  # noqa: BLE001 - a credential read must not break provider build
-        logger.warning("could not read credential %s: %s", API_KEY_NAME, exc)
-    else:
-        if cred.secret:
-            return str(cred.secret)
-    return os.environ.get(API_KEY_NAME, "")
 
 
 def _point_id(chunk_id: str) -> str:
@@ -100,11 +82,13 @@ class QdrantVectorStore(VectorStoreProvider):
         collection: str = "personalclaw_knowledge",
         path: str = "",
         timeout_secs: int = 10,
+        api_key: str = "",
     ) -> None:
         self._url = (url or "").strip()
         self._path = os.path.expanduser((path or "").strip())
         self._collection = (collection or "personalclaw_knowledge").strip()
         self._timeout = max(1, int(timeout_secs or 10))
+        self._api_key = (api_key or "").strip()
         self._client = None
         #: Dimension of the collection as it exists. Learned from the first upsert (or from a
         #: describe of a collection that already exists), because the embedding model — and
@@ -128,7 +112,9 @@ class QdrantVectorStore(VectorStoreProvider):
             # Embedded: Qdrant's engine in-process over a local folder. No server, no socket.
             self._client = QdrantClient(path=self._path)
         else:
-            key = _api_key()
+            # No key is not an error: a local Qdrant with no auth is the common case, and it
+            # accepts the unauthenticated request.
+            key = self._api_key or os.environ.get(API_KEY_NAME, "")
             self._client = QdrantClient(
                 url=self._url,
                 timeout=self._timeout,
@@ -282,8 +268,8 @@ class QdrantVectorStore(VectorStoreProvider):
 def create_provider(config: dict | None = None) -> QdrantVectorStore:
     """Factory named by ``app.json``'s ``provider.implementation``.
 
-    *config* is the app's own ``data/config.json``. The api key is deliberately not read from
-    it — see :func:`_api_key`.
+    *config* is the app's settings as ``ProviderSettings.load`` returns them: the ``api_key``
+    field holds the key itself, resolved from the credential store.
     """
     cfg = config or {}
     return QdrantVectorStore(
@@ -291,4 +277,5 @@ def create_provider(config: dict | None = None) -> QdrantVectorStore:
         collection=str(cfg.get("collection", "personalclaw_knowledge")),
         path=str(cfg.get("path", "")),
         timeout_secs=int(cfg.get("timeout_secs", 10) or 10),
+        api_key=str(cfg.get("api_key", "") or ""),
     )

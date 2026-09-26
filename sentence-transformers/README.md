@@ -23,11 +23,11 @@ without breaking it:
 
 From the App Store, add the `apps/` directory as a **local source**, then install
 **Sentence Transformers (local embeddings)** — the install runs through the security scanner and lifecycle exactly like
-any other app. (Or `POST /api/apps {"source": ".../apps/sentence-transformers"}`.)
+any other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).)
 
 ## Setup notes
 
-Needs the `sentence-transformers` Python package (declared as an app dependency; installed into the shared venv at install time — a fresh dependency requires a gateway restart). Models run fully locally; no API key.
+Needs the `sentence-transformers` Python package (declared as an app dependency; the gateway installs it into `<home>/app-python` at install time, importable without a restart). Models run fully locally; no API key.
 
 ## License
 

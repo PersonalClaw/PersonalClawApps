@@ -10,24 +10,25 @@ installs through the same scanner-gated lifecycle as any third-party app.
 
 ## What's here
 
-**69 app bundles**, one `app.json` each. 65 contribute a capability provider and
+**68 app bundles**, one `app.json` each. 64 contribute a capability provider and
 4 contribute none. Five contribute more than one — `companion` (a `tool` and a
 `trigger`) and each of the four channel apps (a `channel` plus a
 `trigger_source`, and `slack-channel` an `inbox` as well) — so the lists below
-count **providers, not bundles**, and those five appear once per provider. 71
-providers over 65 bundles, plus the 4 provider-less bundles, is 75 entries over
-69 bundles; that is the whole gap between the headline and the sum of the counts.
+count **providers, not bundles**, and those five appear once per provider. 70
+providers over 64 bundles, plus the 4 provider-less bundles, is 74 entries over
+68 bundles; that is the whole gap between the headline and the sum of the counts.
 
 Nobody has to keep that true by hand: the `readme-census` CI job
 (`.github/scripts/check_readme_census.py`) checks the headline, every count
 below, and every bundle name against the tree, so a new app cannot land
 unlisted.
 
-- **Model providers** (`model`, 24) — branded APIs (`anthropic-models`,
+- **Model providers** (`model`, 23) — branded APIs (`anthropic-models`,
   `openai-models`, `bedrock-models`, `google-models`, `deepseek-models`,
   `groq-models`, `mistral-models`, `together-models`, `alibaba-models`,
   `openrouter-models`, `meta-muse-spark`), generic endpoints
-  (`anthropic-compatible`, `openai-compatible`, `vllm-models`, `ollama-models`),
+  (`anthropic-compatible`, `openai-compatible`, `vllm-models`; Ollama ships with
+  PersonalClaw itself),
   subscription sign-in
   (`claude-subscription` — rides the Claude Code CLI's own login, no API key),
   and local inference (`faster-whisper` STT, `piper-tts` TTS plus
@@ -122,15 +123,19 @@ Otherwise, add it yourself:
    → lifecycle pipeline; the Store shows each app's declared permissions and
    crons before you confirm.
 
-Or via the API, per app:
+Or via the API, per app — a review, then an install that carries the review's `consent`
+digest ([the shell recipe](docs/third-party-install.md#installing-from-a-shell)):
 
 ```
-POST /api/apps {"source": "/path/to/apps/<name>"}
+POST /api/apps/preview {"source": "/path/to/apps/<name>"}
+POST /api/apps {"source": "/path/to/apps/<name>", "consent": "<the review's consent>"}
 ```
 
 Note: repo edits do not reach an installed copy (installed apps live at
 `~/.personalclaw/apps/<name>/`). Push changes with
-`POST /api/apps/<name>/update {"source": "/path/to/apps/<name>", "confirm": true}`.
+`POST /api/apps/<name>/update {"source": "/path/to/apps/<name>"}`; an edit that changes
+what the app gets answers 409 with a review and needs its digest
+([updating](docs/third-party-install.md#what-happens-on-update)).
 
 ## Documentation
 

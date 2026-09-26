@@ -1,6 +1,6 @@
 {
   "name": "bedrock-models",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Amazon Bedrock",
   "description": "Amazon Bedrock models, authenticated with your own AWS credential chain. No key is stored by PersonalClaw. Chat (Converse API), embedding (Titan/Cohere), image generation (Nova Canvas), video generation (Nova Reel), and speech-to-text. One instance per AWS profile/region.",
   "icon": "Cloud",

@@ -40,25 +40,27 @@ GET/POST/DELETE /api/apps/local-sources    # local directories
    install so you can review what you're granting (pay attention to
    `network: true`, which is disclosed but not technically enforced — see the
    [permission table](platform-architecture.md#permission-enforcement)).
-2. Click **Install**. Equivalent API:
-
-   ```
-   POST /api/apps {"source": "<local path or git URL>", "confirm": false}
-   ```
+2. Click **Install**. The Store shows what the app gets — its permissions, each
+   scheduled job and whether installing turns it on, Python packages, its own server
+   process, install hooks and MCP servers — together with the security scan, and
+   installs nothing until you confirm. Through the API that is two calls: see
+   [Installing from a shell](#installing-from-a-shell).
 
 3. The pipeline runs: **quarantine staging → manifest validation → security
-   scan → (consent) → pip deps → onInstall hook → registration → backend
+   scan → consent → pip deps → onInstall hook → registration → backend
    start**. Nothing from the source touches the live tree until the gate passes.
 
 ### The scan gate
 
-Third-party content is scanned at the **community** trust tier (the full gate):
+Third-party content is scanned at the **community** trust tier (the full gate).
+Every install needs your consent, whatever the scan says; the verdict decides what the
+review shows and whether consent can install it at all:
 
 | Verdict | What happens |
 |---|---|
-| `clean` | Installs. |
-| `warning` | Install stops (HTTP 409, `needs_consent: true`) with the findings listed. The UI shows a consent dialog; confirming re-submits with `confirm: true`. |
-| `dangerous` | **Refused, terminally.** No consent flag overrides it. |
+| `clean` | The review shows what the app gets; it installs when you consent. |
+| `warning` | The review lists the findings too; consenting installs it anyway. |
+| `dangerous` | **Refused, terminally.** No consent overrides it. |
 
 This gate is where the install pipeline sits in PersonalClaw's overall trust model
 (the "install pipeline ↔ sources" boundary). For the full picture — including the
@@ -72,21 +74,60 @@ the gate, and never auto-forced for an unattended/agent-initiated install.
 
 ### Other install outcomes
 
-- `restart_required: true` — the app declared Python dependencies that were
-  newly installed; restart the gateway so it can import them.
+- `restart_required: true` — installing the app's Python dependencies replaced a
+  package the gateway had already loaded; restart the gateway so it loads the new
+  version. A first install of a package is importable without a restart.
 - `needs_client_install` (HTTP 200) — the app declares
   `installMode: "client"` or doesn't support the server's OS; the response
   carries a copy-paste one-liner to run on YOUR machine. Nothing was installed
   on the server, and the one-liner is never auto-executed.
 - `already installed` — use update instead.
 
+## Installing from a shell
+
+An install is two calls. `POST /api/apps/preview {"source": …}` stages and scans the
+source and answers with what installing it grants and runs, the scan, and a `consent`
+digest of those exact bytes; it installs nothing. `POST /api/apps {"source": …,
+"consent": …}` installs only while the source still has the bytes that digest names. A
+request without it — including one carrying `"confirm": true` — answers **409** with a
+fresh review, and so does a source that changed after you reviewed it.
+
+The gateway takes the owner token as a `?token=` query parameter (`personalclaw token`
+prints a URL carrying it; see the [app creation guide](app-creation-guide.md) for turning
+that into `PERSONALCLAW_URL` and `PERSONALCLAW_TOKEN`). From the app's own directory:
+
+```bash
+name="$(python3 -c 'import json; print(json.load(open("app.json"))["name"])')"
+review="$(curl -sS -X POST "$PERSONALCLAW_URL/api/apps/preview?token=$PERSONALCLAW_TOKEN" \
+  -H 'Content-Type: application/json' -d "{\"source\": \"$PWD\"}")"
+echo "$review" | python3 -m json.tool      # read it: permissions, jobs, packages, the scan
+consent="$(echo "$review" | python3 -c 'import json, sys; print(json.load(sys.stdin)["consent"])')"
+curl -sS -X POST "$PERSONALCLAW_URL/api/apps?token=$PERSONALCLAW_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d "{\"source\": \"$PWD\", \"consent\": \"$consent\"}"
+curl -sS -X POST "$PERSONALCLAW_URL/api/apps/$name/enable?token=$PERSONALCLAW_TOKEN"
+```
+
+Keep the review out of the app's directory: a new file there makes it different bytes,
+and the install answers with a fresh review instead.
+
 ## What happens on update
 
 Updates re-fetch the source and run the SAME scan gate (mutable content gets
-re-scanned every time — a now-dangerous update never lands):
+re-scanned every time — a now-dangerous update never lands). An update that changes
+nothing the app gets and scans clean goes through on the plain call:
 
 ```
-POST /api/apps/{name}/update {"source": "<path or URL>", "confirm": true}
+POST /api/apps/{name}/update {"source": "<path or URL>"}
+```
+
+One that changes what the app gets (a grant, a scheduled job, a package, a hook, its
+server or its dashboard code), or scans with warnings, answers **409** with the review —
+what it adds and drops — and commits only with that review's digest:
+
+```
+POST /api/apps/preview {"source": "<path or URL>", "name": "<name>"}
+POST /api/apps/{name}/update {"source": "<path or URL>", "consent": "<the review's consent>"}
 ```
 
 The swap is atomic with rollback: your app's `data/` directory (its config and

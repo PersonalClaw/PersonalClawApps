@@ -15,7 +15,7 @@ contract and its nine tools appear on the agent tool layer.
 ## Install
 
 From the App Store, add the `apps/` directory as a **local source**, then install **Ops**.
-(Or `POST /api/apps {"source": ".../apps/ops"}`.) Nothing else is required to install: with
+(Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).) Nothing else is required to install: with
 no spool folder and no runbooks it comes up idle and says so. To make it useful, point your
 monitor at the spool folder and write your first runbook — `personalclaw doctor` reports
 both, plus how the remediation gate is set.

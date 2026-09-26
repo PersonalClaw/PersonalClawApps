@@ -346,7 +346,8 @@ class TestHandlerFetchesThreadParent:
         set_allowed_users([{"slack_id": "U001"}])
         slack = MockSlackClient()
         slack._fetch_message_result = "cron output here"
-        sessions = cast("SessionManager", FakeSessionManager())
+        sm = FakeSessionManager()
+        sessions = cast("SessionManager", sm)
         builder = _make_builder(tmp_path)
         from personalclaw.history import ConversationLog
 
@@ -366,6 +367,12 @@ class TestHandlerFetchesThreadParent:
             context_builder=builder,
         )
         assert ("fetch_message", {"channel": "C123", "ts": "9999.0001"}) not in slack.actions
+        # The skip must be BECAUSE the history is in context — not because the turn crashed
+        # before the fetch. A crash skips it too, which is how this test stayed green while
+        # every fresh runtime over a thread raised TypeError (core #3599).
+        sent = sm._provider.last_message
+        assert sent is not None, "the turn never reached the model"
+        assert "hello" in sent and "hi there" in sent
 
     @pytest.mark.asyncio
     async def test_truncates_long_parent_text(self, tmp_path):

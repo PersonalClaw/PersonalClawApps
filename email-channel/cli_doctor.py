@@ -18,7 +18,7 @@ from personalclaw.sdk.channel import AppConfig
 from personalclaw.sdk.cli import DoctorLine
 
 from email_runtime.imap_client import probe_login as imap_probe
-from email_runtime.settings import CRED_IMAP_PASS, CRED_SMTP_PASS, EmailSettings
+from email_runtime.settings import EmailSettings, load_credentials
 from email_runtime.smtp_client import probe_login as smtp_probe
 
 
@@ -32,9 +32,7 @@ def probe() -> list[DoctorLine]:
             )
         ]
 
-    creds = AppConfig.load().load_credentials()
-    imap_pass = creds.get(CRED_IMAP_PASS, "")
-    smtp_pass = creds.get(CRED_SMTP_PASS, "") or imap_pass
+    imap_pass, smtp_pass = load_credentials(None, AppConfig.load().load_credentials())
 
     lines: list[DoctorLine] = [
         DoctorLine("mailbox", "ok", settings.mailbox_address or "(unset)"),
@@ -59,8 +57,7 @@ def _imap_lines(settings: EmailSettings, password: str) -> list[DoctorLine]:
             DoctorLine("imap", "ok", where),
             DoctorLine(
                 "imap password", "fail",
-                f"missing from the credential store ({CRED_IMAP_PASS}) — run "
-                "'personalclaw setup'",
+                "not set — run 'personalclaw setup' or set it on the Apps page (Configure)",
             ),
         ]
     ok, detail = imap_probe(
@@ -82,7 +79,7 @@ def _smtp_lines(settings: EmailSettings, password: str) -> list[DoctorLine]:
             DoctorLine("smtp", "ok", where),
             DoctorLine(
                 "smtp password", "fail",
-                f"missing from the credential store ({CRED_SMTP_PASS} or {CRED_IMAP_PASS})",
+                "not set, and no IMAP password to reuse — run 'personalclaw setup'",
             ),
         ]
     ok, detail = smtp_probe(

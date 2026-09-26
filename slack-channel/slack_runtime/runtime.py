@@ -23,7 +23,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from personalclaw.sdk.channel import CRED_OWNER_ID
+from personalclaw.sdk.channel import owner_id_for
 
 from slack_runtime.client import RealSlackClient
 
@@ -44,11 +44,15 @@ class SlackRuntime:
         cfg = services.config
 
         creds = cfg.load_credentials()
-        self._owner_id: str = creds.get(CRED_OWNER_ID, "") or services.owner_id
+        # Slack's OWN owner: a member id stored for this channel. The one shared key every
+        # channel used to write could hold another platform's user id.
+        self._owner_id: str = owner_id_for("slack")
 
         # Slack behavioral config comes from the app's OWN store (SlackSettings) —
         # core AppConfig defines no Slack config. get_settings() caches one live
-        # instance; !channel/!config writes call reload_settings() so this stays fresh.
+        # instance and re-reads it whenever the store changes (a Configure save or a
+        # !channel/!config write). The allowlist and channel sets below are copied at
+        # inbound start, so they follow the store from the next start.
         from slack_runtime.settings import load_tokens, reload_settings
 
         settings = reload_settings()
@@ -111,7 +115,7 @@ class SlackRuntime:
 
     @property
     def settings(self) -> "SlackSettings":
-        """The app's live SlackSettings (cached; refreshed by reload_settings())."""
+        """The app's live SlackSettings (cached; re-read whenever the store changes)."""
         from slack_runtime.settings import get_settings
 
         return get_settings()

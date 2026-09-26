@@ -53,7 +53,7 @@ real delivery.
 
 From the App Store, add the `apps/` directory as a **local source**, then install **Folder
 Notification Drop** — the install runs through the security scanner and lifecycle exactly
-like any other app. (Or `POST /api/apps {"source": ".../apps/dir-notification"}`.) Then set
+like any other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).) Then set
 the two settings below.
 
 ## Settings

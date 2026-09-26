@@ -49,7 +49,7 @@ Three things this deliberately does *not* do:
 
 From the App Store, add the `apps/` directory as a **local source**, then install
 **Slack Channel** — the install runs through the security scanner and lifecycle exactly like
-any other app. (Or `POST /api/apps {"source": ".../apps/slack-channel"}`.)
+any other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).)
 
 ## Settings
 
@@ -113,7 +113,11 @@ and **any other present value — including a typo — turns it on**.
 4. Enter both tokens in the app's Configure form (Settings above), or run
    `personalclaw setup` and paste them when prompted.
 
-The first person to DM the bot is auto-claimed as the owner. Use
+The first person to DM the bot is auto-claimed as the owner, or `personalclaw setup` asks for
+your Slack member id. Either way it is stored as Slack's own owner, `PERSONALCLAW_OWNER_ID_SLACK`,
+so setting up another channel leaves it alone. An install set up by an earlier release kept the
+owner under the shared `PERSONALCLAW_OWNER_ID`; the first time Slack starts, it copies that owner
+to its own key, so the bot keeps its owner rather than waiting for a first sender to claim it. Use
 `/personalclaw @user` to allowlist more users and `/personalclaw #channel` to
 track a channel.
 

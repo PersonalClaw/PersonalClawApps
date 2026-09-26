@@ -29,7 +29,7 @@ outbox retry loop all live above it in the core durability layer.
 
 From the App Store, add the `apps/` directory as a **local source**, then install
 **Folder Sync** — the install runs through the security scanner and lifecycle exactly
-like any other app. (Or `POST /api/apps {"source": ".../apps/dir-sync"}`.) Then set
+like any other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).) Then set
 `durability.sync_transport` to `dir-sync` and configure the sync folder below.
 
 ## Settings

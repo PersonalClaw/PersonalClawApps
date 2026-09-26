@@ -24,7 +24,8 @@ Two rules this module exists to keep, and never blur:
 Storage: the table lives in this app's own ``ProviderSettings`` store under
 ``bound_addresses`` (``~/.personalclaw/apps/mail-inbox/data/config.json``), declared in
 ``app.json`` so the platform's generated app-settings page renders and validates it. No
-secrets live here — the IMAP password is credential-store-only (see ``settings.py``).
+secrets live here — the passwords are settings of their own, kept in the credential store
+(see ``settings.py``).
 """
 
 from __future__ import annotations

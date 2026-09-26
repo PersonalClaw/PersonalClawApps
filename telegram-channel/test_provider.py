@@ -17,12 +17,21 @@ _APP_DIR = Path(__file__).resolve().parent
 if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
+import pytest  # noqa: E402
+
 from telegram_runtime.settings import (  # noqa: E402
     CRED_TELEGRAM_BOT_TOKEN,
     TelegramSettings,
     _validate_activation,
 )
 from telegram_runtime.transport import TelegramTransport, create_provider  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _scratch_home(tmp_path, monkeypatch):
+    """The transport reads this app's store on every token read, so this root-level file (which
+    ``tests/conftest.py`` does not cover) points the home at a scratch directory."""
+    monkeypatch.setenv("PERSONALCLAW_HOME", str(tmp_path / "home"))
 
 
 def test_telegram_capabilities():
@@ -34,11 +43,16 @@ def test_telegram_capabilities():
 
 def test_connected_derives_from_shared_creds(monkeypatch):
     """A live integration (token in the SHARED credential store the gateway
-    propagates into the environment) must report ready even when THIS instance's
-    config carries no token — otherwise the Channels surface lies 'offline'."""
+    propagates into the environment) must be seen even when THIS instance's
+    config carries no token — otherwise the Channels surface lies 'offline'.
+
+    Not offline, and ``ready`` only once the receiver runs on that token: a transport the
+    gateway never drove is credentialled but deaf (the #952 lesson Slack learned first)."""
     monkeypatch.setenv(CRED_TELEGRAM_BOT_TOKEN, "123:shared")
     t = TelegramTransport({})  # empty instance config — token only in the environment
     assert t.connected is True
+    assert asyncio.run(t.health())["state"] != "offline"
+    t._inbound_token = "123:shared"  # the gateway drove inbound with this token
     assert asyncio.run(t.health())["state"] == "ready"
 
 
@@ -52,7 +66,7 @@ def test_offline_when_no_token_anywhere(monkeypatch):
 def test_instance_config_overrides_shared(monkeypatch):
     monkeypatch.setenv(CRED_TELEGRAM_BOT_TOKEN, "123:shared")
     t = TelegramTransport({"bot_token": "456:instance"})
-    assert t._token == "456:instance"
+    assert t._token() == "456:instance"
 
 
 def test_info_exposes_caps():

@@ -167,8 +167,15 @@ class TestCapabilities:
 
     @pytest.mark.asyncio
     async def test_health_reflects_token(self):
-        assert (await DiscordTransport({"bot_token": "x"}).health())["state"] == "ready"
+        driven = DiscordTransport({"bot_token": "x"})
+        driven._inbound_token = "x"  # the gateway drove inbound with this token
+        assert (await driven.health())["state"] == "ready"
         assert (await DiscordTransport({}).health())["state"] == "offline"
+
+    @pytest.mark.asyncio
+    async def test_health_says_not_started_before_the_gateway_drives_inbound(self):
+        health = await DiscordTransport({"bot_token": "x"}).health()
+        assert health["state"] == "error" and "NOT STARTED" in health["detail"], health
 
 
 class TestChannelMessageMapping:
@@ -481,10 +488,32 @@ class TestGatewayHelloProbe:
                 return None
 
         monkeypatch.setattr("discord_runtime.transport.HTTPDiscordAPI", API)
-        result = await DiscordTransport({"bot_token": "TEST"}).test()
+        transport = DiscordTransport({"bot_token": "TEST"})
+        transport._inbound_token = "TEST"  # the gateway drove inbound with this token
+        result = await transport.test()
         assert result["ok"] is True
         assert "wss://gateway.discord.gg" in result["detail"]
         assert "998 session starts remaining" in result["detail"]
+
+    @pytest.mark.asyncio
+    async def test_a_good_probe_on_an_undriven_transport_is_not_ok(self, monkeypatch):
+        """The contract: test() is not ok while health() is not ready — the token works, but no
+        gateway session is listening yet."""
+
+        class API:
+            def __init__(self, *a, **k):
+                pass
+
+            async def get_gateway_bot(self):
+                return {"url": "wss://gateway.discord.gg", "session_start_limit": {"remaining": 998}}
+
+            async def close(self):
+                return None
+
+        monkeypatch.setattr("discord_runtime.transport.HTTPDiscordAPI", API)
+        result = await DiscordTransport({"bot_token": "TEST"}).test()
+        assert result["ok"] is False
+        assert "wss://gateway.discord.gg" in result["detail"] and "NOT STARTED" in result["detail"]
 
     @pytest.mark.asyncio
     async def test_reports_a_bad_token(self, monkeypatch):

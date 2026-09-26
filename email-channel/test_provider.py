@@ -47,9 +47,9 @@ def _isolate_home(tmp_path, monkeypatch):
         monkeypatch.delenv(key, raising=False)
     from email_runtime import settings as s
 
-    s._settings = None
+    s._settings = s._settings_store = None
     yield
-    s._settings = None
+    s._settings = s._settings_store = None
 
 
 def test_email_capabilities():

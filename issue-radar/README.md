@@ -19,7 +19,7 @@ and no network permission with which to invent one.
 
 From the App Store, add the `apps/` directory as a **local source**, then install
 **Issue Radar** — the install runs through the security scanner and lifecycle exactly like
-any other app. (Or `POST /api/apps {"source": ".../apps/issue-radar"}`.) You need the
+any other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).) You need the
 [GitHub CLI](https://cli.github.com) with `gh auth login` done to triage GitHub, and/or the
 [GitLab CLI](https://gitlab.com/gitlab-org/cli) with `glab auth login` for GitLab. Neither
 is required — `personalclaw doctor` reports each one's state, and a missing CLI for a host
@@ -27,13 +27,18 @@ you do not use is information, not a failure.
 
 As an aside, the same install can be driven from a shell against a running gateway — the
 gateway takes the owner token as a `?token=` query parameter (`personalclaw token` prints a
-URL carrying it), not an `Authorization` header:
+URL carrying it), not an `Authorization` header. It is two calls: a review of what the app
+gets, then an install that carries the review's `consent` digest:
 
 ```bash
-curl -X POST "$PERSONALCLAW_URL/api/apps?token=$PERSONALCLAW_TOKEN" \
+review="$(curl -sS -X POST "$PERSONALCLAW_URL/api/apps/preview?token=$PERSONALCLAW_TOKEN" \
+  -H 'Content-Type: application/json' -d "{\"source\": \"$PWD\"}")"
+echo "$review" | python3 -m json.tool      # read it: permissions, jobs, packages, the scan
+consent="$(echo "$review" | python3 -c 'import json, sys; print(json.load(sys.stdin)["consent"])')"
+curl -sS -X POST "$PERSONALCLAW_URL/api/apps?token=$PERSONALCLAW_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"source": "'"$PWD"'", "confirm": true}'
-curl -X POST "$PERSONALCLAW_URL/api/apps/issue-radar/enable?token=$PERSONALCLAW_TOKEN"
+  -d "{\"source\": \"$PWD\", \"consent\": \"$consent\"}"
+curl -sS -X POST "$PERSONALCLAW_URL/api/apps/issue-radar/enable?token=$PERSONALCLAW_TOKEN"
 ```
 
 ## The four tools

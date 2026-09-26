@@ -30,14 +30,19 @@ mail is irreversible and leaves your machine, so it is off by default. See
 - **Replies, drafted by default.** A reply is composed as a properly threaded message
   (`In-Reply-To` + `References`) and written to disk as a real `.eml`. Nothing is sent
   until you turn sending on — see [Replies](#replies-draft-by-default).
-- **Credentials never touch app config.** The IMAP password lives only in the shared
-  credential store under the app's own key (`MAIL_INBOX_PASSWORD`), and the SMTP password
-  under its own separate key (`MAIL_INBOX_SMTP_PASSWORD`). Host, folder, and
-  the allowlist are non-secret settings persisted in the app's own store.
+- **Passwords never touch the settings file.** The IMAP and SMTP passwords are settings of
+  their own (**IMAP Password**, **SMTP Password**), declared sensitive: PersonalClaw keeps each
+  value in its credential store under a name this app owns, the settings file holds only a
+  reference, and uninstalling the app removes both. The SMTP password is a separate secret; the
+  IMAP one is never used to send unless you copy it over yourself. Host, folder, and the
+  allowlist are non-secret settings persisted in the app's own store. (An install that an
+  earlier release's setup configured, with the passwords under `MAIL_INBOX_PASSWORD` /
+  `MAIL_INBOX_SMTP_PASSWORD`, keeps working; the app's own settings win once set.)
 
 ## Setup
 
-Run `personalclaw setup` after installing; the app's setup step prompts for:
+Run `personalclaw setup` after installing, or fill in **Apps → Mail Inbox → Configure**; the
+setup step prompts for:
 
 - **IMAP host / port / username** — e.g. `imap.gmail.com` / `993` / your full address.
 - **Password** — use an **app-specific password** (e.g. a Gmail App Password), never
@@ -46,8 +51,7 @@ Run `personalclaw setup` after installing; the app's setup step prompts for:
   `alerts@*.example.com, calendar-notification@google.com`.
 
 - **SMTP for replies** (optional) — host / port / TLS mode / username, plus an SMTP
-  password stored under its own credential key. Configuring it does **not** start sending;
-  see below.
+  password, a secret of its own. Configuring it does **not** start sending; see below.
 
 `personalclaw doctor` reports the connection, whether the password is set, the allowlist
 posture (including a warning when it is empty and therefore surfacing nothing), and the
@@ -126,7 +130,7 @@ injected text stays inside the fence as data.
    sender does nothing at all.
 
 Nothing in this table is a secret, so nothing here is masked: this app's credentials are
-the IMAP and SMTP passwords, and both live in the credential store, never in app config.
+the IMAP and SMTP passwords, settings of their own that are kept in the credential store.
 
 ## Replies (draft-by-default)
 
@@ -145,7 +149,7 @@ What happens on a reply:
 2. It is **written to disk** at `~/.personalclaw/apps/mail-inbox/data/drafts/*.eml` — a
    real RFC822 file you can open in any mail client, edit, and send yourself.
 3. It is **sent** only if *every* one of these holds: `send_enabled` is on, the SMTP
-   settings are complete, an SMTP password is in the credential store, the caller did not
+   settings are complete, an SMTP password is set, the caller did not
    ask for a dry run, and the platform's `PERSONALCLAW_DISABLE_LIVE_WRITES` guard is not
    set. Otherwise it stays a draft and the reason is recorded — in the log, in the
    security event log, and in `personalclaw doctor`.

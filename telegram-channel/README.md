@@ -35,8 +35,11 @@ core can evolve without breaking it:
 
 Who may talk (allowlist, pairing) and which groups are tracked are owned by the
 **core sender-trust seam** (`channel_trust`, provider `"telegram"`) — this app keeps
-no allowlist of its own. The bot token is a secret in the shared credential store
-under this app's own `TELEGRAM_BOT_TOKEN` key.
+no allowlist of its own. The bot token is a secret: setup and the Configure form save it
+as the app's `bot_token` setting, which keeps the value in the credential store under a
+key this app owns (the settings file holds only a reference), and uninstalling the app
+removes it. With the setting empty, a `TELEGRAM_BOT_TOKEN` in the credential store or
+the environment is used instead.
 
 ## Automations from inbound traffic
 
@@ -65,7 +68,7 @@ Three things this deliberately does *not* do:
 
 From the App Store, add the `apps/` directory as a **local source**, then install
 **Telegram Channel** — the install runs through the security scanner and lifecycle
-exactly like any other app. (Or `POST /api/apps {"source": ".../apps/telegram-channel"}`.)
+exactly like any other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).)
 
 ## Settings
 
@@ -98,7 +101,10 @@ and **any other present value — including a typo — turns it on**.
 4. Optionally send `/setprivacy` → **Disable** to let the bot read group messages.
 5. Enter the token in the app's Configure form (Settings above), or run
    `personalclaw setup` and paste it when prompted (along with your Telegram user
-   id, used as the owner DM target for approvals).
+   id, used as the owner DM target for approvals). The id is stored as Telegram's own owner,
+   `PERSONALCLAW_OWNER_ID_TELEGRAM`, so setting up another channel leaves it alone. An install
+   set up by an earlier release kept the owner under the shared `PERSONALCLAW_OWNER_ID`; the
+   first time Telegram starts, it copies that owner to its own key.
 
 Once configured, the transport long-polls `getUpdates`. Trust is enforced by the
 core seam: an unknown DM sender gets a canned pairing-needed reply (run

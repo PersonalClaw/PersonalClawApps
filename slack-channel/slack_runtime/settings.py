@@ -24,9 +24,13 @@ from dataclasses import dataclass, field
 from personalclaw.sdk.channel import (
     CRED_SLACK_APP_TOKEN,
     CRED_SLACK_BOT_TOKEN,
+    AppConfig,
     ProviderSettings,
     atomic_write,
     config_path,
+    owner_id_credential,
+    owner_id_for,
+    save_credential,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,6 +64,30 @@ _OWNED_KEYS = (
 )
 
 
+class LiveConfig:
+    """The provider config a transport runs on: the dict it was built with, until this app's store
+    is written — then the store.
+
+    The registry builds a transport from ``ProviderSettings.load`` once, when the app is enabled.
+    The Apps page's Configure → Save writes the store and re-cycles nothing, so a transport that
+    kept its build-time dict answered "No bot token configured" to Test, Connect and the health row
+    over a token the user had just saved. A store that differs from the one this transport last
+    saw was written after it was built, so it wins; a store that has not changed leaves the build
+    dict in charge, which keeps an explicitly constructed transport (the conformance kit's ``{}``)
+    isolated from whatever store the machine holds.
+    """
+
+    def __init__(self, config: dict | None) -> None:
+        self._seen = ProviderSettings.load(_APP)
+        self._config = dict(self._seen if config is None else config)
+
+    def current(self) -> dict:
+        store = ProviderSettings.load(_APP)
+        if store != self._seen:
+            self._seen, self._config = store, dict(store)
+        return self._config
+
+
 def load_tokens(
     config: dict | None = None, creds: dict[str, str] | None = None
 ) -> tuple[str, str]:
@@ -69,6 +97,13 @@ def load_tokens(
     *is* this app's store, ``ProviderSettings.load(_APP)``) → core's credential store
     (``.env`` / keychain / env, passed in as *creds* by whoever holds an ``AppConfig``)
     → the process environment.
+
+    Setup and the Configure form both write the app's store, and saving there keeps each
+    token in the credential store under a key this app owns, which uninstall removes. The
+    plain ``SLACK_BOT_TOKEN`` / ``SLACK_APP_TOKEN`` names are read for an install an
+    earlier release's setup configured and for a token the operator put in the credential
+    store or the environment himself. Setup and doctor resolve through this function too,
+    so the three can never disagree about which token is in effect.
 
     **Why this function exists (#952).** The outbound half (``SlackTransport``) resolved
     these two tokens from the app store, and the inbound half (``SlackRuntime``) resolved
@@ -95,6 +130,32 @@ def load_tokens(
         or os.environ.get(CRED_SLACK_APP_TOKEN, "")
     )
     return bot, app
+
+
+def adopt_owner_id() -> None:
+    """Store the owner under Slack's own key, once, when only the shared key holds it.
+
+    An earlier release's setup and first-contact claim wrote the owner to the one shared
+    ``PERSONALCLAW_OWNER_ID``, and core's ``owner_id_for`` still falls back to it for a channel
+    with no key of its own. Saving that owner under ``owner_id_credential("slack")`` keeps it
+    when the fallback goes. That matters more here than on any other channel: a Slack runtime
+    with no owner starts in first-contact claim mode, so without its own key the install would
+    become the first sender's. The owner in effect is the same before and after, so a failed
+    save changes nothing, and nothing here clears or blanks an owner. An install with its own
+    key already, or with no owner at all, is left as it is. Logs the key name, never the id.
+    """
+    key = owner_id_credential("slack")
+    if AppConfig.load().load_credentials().get(key):
+        return
+    owner = owner_id_for("slack")
+    if not owner:
+        return
+    try:
+        save_credential(key, owner)
+    except Exception as exc:  # noqa: BLE001 — the fallback still supplies the same owner
+        logger.warning("slack: could not store the owner under %s (%s)", key, type(exc).__name__)
+        return
+    logger.info("slack: stored the owner under its own key %s, from the shared key", key)
 
 
 @dataclass
@@ -213,22 +274,30 @@ def persist_list_entry(section: str, id_field: str, target_id: str, *, remove: b
         ProviderSettings.update(_APP, {section: entries})
 
 
-# ── Cached accessor (one live instance; reload after writes) ──
+# ── Cached accessor (one live instance, re-read when the store changes) ──
 
 _current: SlackSettings | None = None
+#: The raw store ``_current`` was built from — the cache is valid only while the store still says this.
+_current_store: dict | None = None
 
 
 def get_settings() -> SlackSettings:
-    """The live SlackSettings instance (loaded once; refresh via reload_settings)."""
-    global _current
-    if _current is None:
-        _current = SlackSettings.load()
+    """The live SlackSettings: cached, and re-read whenever the app's store changed since.
+
+    The Configure form writes the store directly and nothing tells this app it did, so a cache
+    that refreshed only on this app's own writes (``reload_settings``) kept the settings the user
+    had just changed until the gateway restarted."""
+    global _current, _current_store
+    store = ProviderSettings.load(_APP)
+    if _current is None or store != _current_store:
+        _current, _current_store = SlackSettings.load(), store
     return _current
 
 
 def reload_settings() -> SlackSettings:
-    """Re-read the app store (call after a persist_* write so changes take effect)."""
-    global _current
+    """Re-read the app store now (after a persist_* write, so the change takes effect)."""
+    global _current, _current_store
+    _current_store = ProviderSettings.load(_APP)
     _current = SlackSettings.load()
     return _current
 

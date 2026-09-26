@@ -15,6 +15,8 @@ as a self-contained directory:
 - `app.json` — the manifest (identity, provider declaration, permissions).
 - `provider.py` — the implementation, exposed via `create_provider`.
 - `test_catalog.py`, `test_provider.py` — the app's own tests.
+- `test_wire.py` — proves a call's per-call temperature and output budget reach the request, against
+  a recording endpoint.
 
 It imports only the PersonalClaw **SDK** (never core internals), so core can evolve
 without breaking it:
@@ -28,7 +30,7 @@ without breaking it:
 
 From the App Store, add the `apps/` directory as a **local source**, then install
 **OpenRouter** — the install runs through the security scanner and lifecycle exactly
-like any other app. (Or `POST /api/apps {"source": ".../apps/openrouter-models"}`.)
+like any other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).)
 
 ## Settings
 

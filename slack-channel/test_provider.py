@@ -17,7 +17,16 @@ _APP_DIR = Path(__file__).resolve().parent
 if str(_APP_DIR) not in sys.path:
     sys.path.insert(0, str(_APP_DIR))
 
+import pytest  # noqa: E402
+
 from slack_runtime.transport import SlackTransport, create_provider  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _scratch_home(tmp_path, monkeypatch):
+    """The transport reads this app's store on every token read, so this root-level file (which
+    ``tests/conftest.py`` does not cover) points the home at a scratch directory."""
+    monkeypatch.setenv("PERSONALCLAW_HOME", str(tmp_path / "home"))
 
 
 def test_slack_capabilities():
@@ -57,7 +66,7 @@ def test_instance_config_overrides_shared(monkeypatch):
     """A user-supplied per-instance token wins over the shared store."""
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-shared")
     t = SlackTransport({"bot_token": "xoxb-instance"})
-    assert t._bot_token == "xoxb-instance"
+    assert t._tokens()[0] == "xoxb-instance"
 
 
 def test_slack_info_exposes_caps():

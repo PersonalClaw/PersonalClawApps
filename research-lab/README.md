@@ -15,18 +15,24 @@ it synthesizes everything into one markdown report on your machine.
 
 From the App Store, add the `apps/` directory as a **local source**, then install
 **Research Lab** — the install runs through the security scanner and lifecycle exactly like
-any other app. (Or `POST /api/apps {"source": ".../apps/research-lab"}`.) Enabling the app
+any other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).) Enabling the app
 registers the provider and reconciles the cron; disabling it removes both.
 
 Prefer a shell? Against a running gateway — which takes the owner token as a `?token=`
 query parameter (`personalclaw token` prints a URL carrying it), not an `Authorization`
-header:
+header. It is two calls: a review of what the app gets (Research Lab's includes the
+hourly job, and whether installing turns it on), then an install that carries the
+review's `consent` digest:
 
 ```bash
-curl -X POST "$PERSONALCLAW_URL/api/apps?token=$PERSONALCLAW_TOKEN" \
+review="$(curl -sS -X POST "$PERSONALCLAW_URL/api/apps/preview?token=$PERSONALCLAW_TOKEN" \
+  -H 'Content-Type: application/json' -d "{\"source\": \"$PWD\"}")"
+echo "$review" | python3 -m json.tool      # read it: permissions, jobs, packages, the scan
+consent="$(echo "$review" | python3 -c 'import json, sys; print(json.load(sys.stdin)["consent"])')"
+curl -sS -X POST "$PERSONALCLAW_URL/api/apps?token=$PERSONALCLAW_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"source": "'"$PWD"'", "confirm": true}'
-curl -X POST "$PERSONALCLAW_URL/api/apps/research-lab/enable?token=$PERSONALCLAW_TOKEN"
+  -d "{\"source\": \"$PWD\", \"consent\": \"$consent\"}"
+curl -sS -X POST "$PERSONALCLAW_URL/api/apps/research-lab/enable?token=$PERSONALCLAW_TOKEN"
 ```
 
 ## The five tools

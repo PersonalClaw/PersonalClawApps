@@ -35,8 +35,11 @@ PersonalClaw gateway via the platform's typed provider contracts. Full contract:
 ## Validate as a user
 
 Add the app dir as a local Store source, install it in a real gateway, drive it
-in the UI. Push edits to a running gateway via
-`POST /api/apps/<name>/update {source, confirm:true}`.
+in the UI. From a shell an install is two calls — `POST /api/apps/preview {source}`,
+then `POST /api/apps {source, consent}` with the review's digest; `confirm: true` gets
+a 409 ([docs/third-party-install.md](docs/third-party-install.md#installing-from-a-shell)).
+Push edits to a running gateway via `POST /api/apps/<name>/update {source}`; one that
+changes what the app gets needs the same review and digest.
 
 ## Git / PR rules
 

@@ -1047,9 +1047,11 @@ async def _publish_home_tab(orch: "GatewayServices", user_id: str) -> None:
 
         version_text = f"📦 PersonalClaw v{__version__}"
         update_info = get_update_info()
-        remote_ver = update_info.get("remote_version")
-        if update_info.get("available") and remote_ver is not None:
-            version_text += f"  •  🆕 v{remote_ver} available — open Dashboard to update"
+        # ``latest`` is the field core's update check writes (it once wrote ``remote_version``,
+        # which this read long after core stopped sending it — so the notice never showed).
+        latest = update_info.get("latest")
+        if update_info.get("available") and latest:
+            version_text += f"  •  🆕 v{latest} available — open Dashboard to update"
         version_text = redact_credentials(redact_exfiltration_urls(version_text)[0])[0]
         blocks.append({"type": "divider"})
         blocks.append(

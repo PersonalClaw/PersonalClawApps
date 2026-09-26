@@ -103,3 +103,55 @@ def test_create_provider_without_any_key_raises(
     """No config key + no env key is a configuration error, not a silent client."""
     with pytest.raises(CredentialMissing):
         prov.create_provider({})
+
+
+# ── Per-call sampling settings (best-of-N) ───────────────────────────────────
+
+
+class _Stream:
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
+class _Completions:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def create(self, **kwargs: Any) -> _Stream:
+        self.calls.append(kwargs)
+        return _Stream()
+
+
+def _meta_built(options: dict, **build_kwargs: Any):
+    from personalclaw.llm.registry import ProviderEntry
+
+    entry = ProviderEntry(name="meta-x", type="meta", model="muse-spark-1.1", options=options)
+    return prov._factory(entry=entry, **build_kwargs)
+
+
+@pytest.mark.asyncio
+async def test_a_per_call_temperature_and_output_budget_reach_the_request(
+    fake_openai: types.ModuleType, no_env_key: None
+) -> None:
+    """The factory hard-wired ``max_tokens=None`` and dropped the ``temperature`` build kwarg,
+    so best-of-N sampled N copies of one answer at the endpoint's default."""
+    provider = _meta_built({"api_key": "mk-test"}, temperature=0.6, max_tokens=321)
+    assert provider.sampling_temperature == 0.6
+
+    completions = _Completions()
+    provider._client.chat = types.SimpleNamespace(completions=completions)
+    _ = [event async for event in provider.stream("hi")]
+
+    assert completions.calls[-1]["temperature"] == 0.6
+    assert completions.calls[-1]["max_tokens"] == 321
+
+
+def test_no_per_call_settings_leave_the_endpoint_defaults(
+    fake_openai: types.ModuleType, no_env_key: None
+) -> None:
+    provider = _meta_built({"api_key": "mk-test"})
+    assert provider.sampling_temperature is None
+    assert provider._max_tokens is None

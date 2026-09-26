@@ -4,18 +4,32 @@ Registered via ``app.json`` → ``cli.setup: "cli_setup:run"``. The core setup
 runner (``personalclaw.app_cli.run_app_setup_steps``) imports ``run`` and calls
 it with a :class:`personalclaw.sdk.cli.SetupContext` after the core steps. This
 is the slack-specific setup that used to live hardcoded in core's ``cli_setup.py``
-(plan 32 PROVIDER-BOUNDARY-COMPLETION moved it here) — it reads/writes ONLY
-app-owned homes: the generic credential store (via ``ctx.save_credential``, the
-same ``SLACK_*`` keys the runtime reads) and this app's ``ProviderSettings`` (the
-slash-command name). Core config.json holds no Slack config.
+(plan 32 PROVIDER-BOUNDARY-COMPLETION moved it here). Where each answer goes:
+
+- the Bot and App tokens → this app's ``ProviderSettings`` (``bot_token`` / ``app_token``,
+  the fields the Apps page's Configure form writes too). Saving them there keeps each value
+  in the credential store under a key THIS APP owns and puts only a reference in the
+  settings file, so uninstalling the app removes them. They used to go to the shared store
+  under the plain names ``SLACK_BOT_TOKEN`` / ``SLACK_APP_TOKEN``, which no uninstall can
+  attribute to an app, so both tokens outlived the app;
+- the owner's Slack member id → the credential store under Slack's OWN owner key,
+  ``owner_id_credential("slack")`` (``PERSONALCLAW_OWNER_ID_SLACK``), which core reads to reach the
+  owner on Slack. Every channel used to write the one shared ``PERSONALCLAW_OWNER_ID``, so setting
+  up a second channel replaced Slack's owner with an id from another platform;
+- the slash-command name → this app's ``ProviderSettings``.
+
+Core config.json holds no Slack config.
 """
 
 from personalclaw.sdk.channel import (
-    CRED_OWNER_ID,
     CRED_SLACK_APP_TOKEN,
     CRED_SLACK_BOT_TOKEN,
+    owner_id_credential,
+    owner_id_for,
 )
 from personalclaw.sdk.cli import SetupContext
+
+from slack_runtime.settings import load_tokens
 
 _APP = "slack-channel"
 
@@ -25,9 +39,10 @@ def _mask(val: str) -> str:
 
 
 def run(ctx: SetupContext) -> None:
-    """Prompt for Slack tokens + owner ID (→ credential store) and the slash
-    command name (→ this app's ProviderSettings). Empty input keeps the current
-    value; declining skips the whole step (the channel stays disabled)."""
+    """Prompt for the Slack tokens and the slash command name (→ this app's
+    ProviderSettings) and the owner ID (→ Slack's own owner key in the credential store).
+    Empty input keeps the current value; declining skips the whole step (the channel stays
+    disabled)."""
     _setup_tokens(ctx)
     _setup_slash_command(ctx)
 
@@ -45,9 +60,13 @@ def _setup_tokens(ctx: SetupContext) -> None:
         ctx.print("  ⏭  Skipped. The Slack channel will be disabled.\n")
         return
 
-    cur_app = ctx.get_credential(CRED_SLACK_APP_TOKEN)
-    cur_bot = ctx.get_credential(CRED_SLACK_BOT_TOKEN)
-    cur_owner = ctx.get_credential(CRED_OWNER_ID)
+    # The tokens the channel runs on now, by the runtime's own resolution: this app's store,
+    # then the plain-named keys an earlier release's setup wrote. Enter keeps that value.
+    legacy = {k: ctx.get_credential(k) for k in (CRED_SLACK_BOT_TOKEN, CRED_SLACK_APP_TOKEN)}
+    cur_bot, cur_app = load_tokens(ctx.settings.load(_APP), legacy)
+    # Slack's own owner, or the shared one an earlier release wrote (core falls back to it).
+    # Enter keeps it, which stores it under Slack's own key from here on.
+    cur_owner = owner_id_for("slack")
 
     hint_app = f" [{_mask(cur_app)}]" if cur_app else ""
     hint_bot = f" [{_mask(cur_bot)}]" if cur_bot else ""
@@ -61,10 +80,9 @@ def _setup_tokens(ctx: SetupContext) -> None:
         ctx.print("  ⚠️  Missing tokens — the Slack channel will be disabled.\n")
         return
 
-    ctx.save_credential(CRED_SLACK_APP_TOKEN, app_token)
-    ctx.save_credential(CRED_SLACK_BOT_TOKEN, bot_token)
+    ctx.settings.update(_APP, {"app_token": app_token, "bot_token": bot_token})
     if owner_id:
-        ctx.save_credential(CRED_OWNER_ID, owner_id)
+        ctx.save_credential(owner_id_credential("slack"), owner_id)
     ctx.print("  ✅ Credentials saved.\n")
 
 

@@ -79,7 +79,7 @@ the machine.
 
 From the App Store, add the `apps/` directory as a **local source**, then install
 **Lima Sandbox** — the install runs through the security scanner and lifecycle exactly like any
-other app. (Or `POST /api/apps {"source": ".../apps/lima-sandbox"}`.) Enable it, point
+other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).) Enable it, point
 `instance` at your running Lima instance, and the isolated tier becomes selectable wherever a
 sandbox tier is chosen.
 

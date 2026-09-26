@@ -363,3 +363,56 @@ async def test_openai_shutdown_closes_client(fake_openai: types.ModuleType) -> N
 
     assert provider._client.closed is True
     assert provider._history == []
+
+
+# ── Per-call sampling settings (best-of-N) ─────────────────────────────
+
+
+def _registry_with(options: dict) -> ProviderRegistry:
+    from provider import OPENAI_CAPABILITY, _factory
+
+    reg = ProviderRegistry()
+    reg.register_type(OPENAI_CAPABILITY, _factory)
+    reg.register_entry(
+        ProviderEntry(
+            name="openai-x",
+            type="openai",
+            model="gpt-4o-mini",
+            options=options,
+            declared_capabilities=frozenset({Capability.CHAT, Capability.STREAMING}),
+        )
+    )
+    return reg
+
+
+@pytest.mark.asyncio
+async def test_a_per_call_temperature_and_output_budget_reach_the_request(
+    fake_openai: types.ModuleType,
+) -> None:
+    """best-of-N builds each candidate with a ``temperature`` build kwarg, and core derives a
+    per-model ``max_tokens``. The factory dropped both, so core reported every candidate as
+    "not sent at its requested temperature"."""
+    provider = _registry_with({"api_key": "sk-test"}).build(
+        "openai-x", temperature=0.7, max_tokens=900
+    )
+    assert provider.sampling_temperature == 0.7
+
+    completions = _FakeChatCompletions(
+        chunks=[_FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(content="ok"), finish_reason="stop")])]
+    )
+    provider._client.chat = _FakeChat(completions)
+    _ = [event async for event in provider.stream("hi")]
+
+    assert completions.calls[-1]["temperature"] == 0.7
+    assert completions.calls[-1]["max_tokens"] == 900
+
+
+def test_a_configured_max_tokens_wins_over_the_per_call_budget(fake_openai: types.ModuleType) -> None:
+    provider = _registry_with({"api_key": "sk-test", "max_tokens": 256}).build("openai-x", max_tokens=900)
+    assert provider._max_tokens == 256
+
+
+def test_no_per_call_settings_leave_the_endpoint_defaults(fake_openai: types.ModuleType) -> None:
+    provider = _registry_with({"api_key": "sk-test"}).build("openai-x")
+    assert provider.sampling_temperature is None
+    assert provider._max_tokens is None
