@@ -135,7 +135,7 @@ class TestFalImageProvider:
     async def test_no_key_raises(self, monkeypatch):
         monkeypatch.delenv("FAL_KEY", raising=False)
         monkeypatch.delenv("FAL_API_KEY", raising=False)
-        monkeypatch.setattr("provider._resolve_fal_key", lambda: "")
+        monkeypatch.setattr("provider._resolve_fal_key", lambda: ("", ""))
         prov = FalImageProvider(api_key="")
         with pytest.raises(ImageGenError):
             await prov.generate("x")
@@ -149,7 +149,7 @@ class TestFalImageProvider:
 
     @pytest.mark.asyncio
     async def test_is_available_reflects_key(self, monkeypatch):
-        monkeypatch.setattr("provider._resolve_fal_key", lambda: "")
+        monkeypatch.setattr("provider._resolve_fal_key", lambda: ("", ""))
         assert await FalImageProvider(api_key="").is_available() is False
         assert await FalImageProvider(api_key="k").is_available() is True
 
@@ -236,7 +236,7 @@ class TestFalVideoProvider:
 
     @pytest.mark.asyncio
     async def test_is_available_reflects_key(self, monkeypatch):
-        monkeypatch.setattr("provider._resolve_fal_key", lambda: "")
+        monkeypatch.setattr("provider._resolve_fal_key", lambda: ("", ""))
         assert await FalVideoProvider(api_key="").is_available() is False
         assert await FalVideoProvider(api_key="k").is_available() is True
 
@@ -305,11 +305,59 @@ class TestFalFactory:
             "personalclaw.sdk.settings.ProviderSettings.load",
             staticmethod(lambda name: {"api_key": "card-key"}),
         )
-        assert fal._resolve_fal_key() == "card-key"
+        assert fal._resolve_fal_key() == ("card-key", "")
 
         monkeypatch.setattr(
             "personalclaw.sdk.settings.ProviderSettings.load",
             staticmethod(lambda name: {}),
         )
         monkeypatch.setenv("FAL_KEY", "env-key")
-        assert fal._resolve_fal_key() == "env-key"
+        assert fal._resolve_fal_key() == ("env-key", "")
+
+
+class TestARefusedCardKey:
+    """A card key core refuses to read for this app says why, instead of "No FAL API key".
+
+    Core resolves a ``{{secret:…}}`` in an app's settings only against the app's own keys
+    (PersonalClaw #3626), so a card holding ``{{secret:MY_FAL_KEY}}``, a key saved in Settings →
+    Secrets, is refused with a sentence naming the reference. ``_resolve_fal_key`` swallowed it,
+    so the user was told to configure a key they had configured. Real core, no stub of the check.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _card_with_a_foreign_reference(self, monkeypatch):
+        from personalclaw.sdk.util import config_dir
+
+        data = config_dir() / "apps" / "fal-image" / "data"
+        data.mkdir(parents=True, exist_ok=True)
+        (data / "config.json").write_text(json.dumps({"api_key": "{{secret:MY_FAL_KEY}}"}))
+        monkeypatch.delenv("FAL_KEY", raising=False)
+        monkeypatch.delenv("FAL_API_KEY", raising=False)
+
+    @staticmethod
+    def _assert_the_refusal(message: str) -> None:
+        assert "{{secret:MY_FAL_KEY}}" in message and "different owner" in message, message
+        assert "No FAL API key configured" not in message
+
+    @pytest.mark.asyncio
+    async def test_an_image_says_why_the_key_was_refused(self):
+        with pytest.raises(ImageGenError) as refused:
+            await FalImageProvider(api_key="").generate("x")
+        self._assert_the_refusal(str(refused.value))
+
+    @pytest.mark.asyncio
+    async def test_a_video_says_why_the_key_was_refused(self):
+        with pytest.raises(VideoGenError) as refused:
+            await FalVideoProvider(api_key="").generate("x")
+        self._assert_the_refusal(str(refused.value))
+
+    @pytest.mark.asyncio
+    async def test_it_is_unavailable_and_says_nothing_until_asked(self):
+        assert await FalImageProvider(api_key="").is_available() is False
+        assert await FalVideoProvider(api_key="").is_available() is False
+
+    def test_a_key_in_the_environment_still_works(self, monkeypatch):
+        import provider as fal
+
+        monkeypatch.setenv("FAL_KEY", "env-key")
+        assert fal._resolve_fal_key() == ("env-key", "")
