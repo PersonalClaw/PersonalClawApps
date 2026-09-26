@@ -24,9 +24,13 @@ from dataclasses import dataclass, field
 from personalclaw.sdk.channel import (
     CRED_SLACK_APP_TOKEN,
     CRED_SLACK_BOT_TOKEN,
+    AppConfig,
     ProviderSettings,
     atomic_write,
     config_path,
+    owner_id_credential,
+    owner_id_for,
+    save_credential,
 )
 
 logger = logging.getLogger(__name__)
@@ -126,6 +130,32 @@ def load_tokens(
         or os.environ.get(CRED_SLACK_APP_TOKEN, "")
     )
     return bot, app
+
+
+def adopt_owner_id() -> None:
+    """Store the owner under Slack's own key, once, when only the shared key holds it.
+
+    An earlier release's setup and first-contact claim wrote the owner to the one shared
+    ``PERSONALCLAW_OWNER_ID``, and core's ``owner_id_for`` still falls back to it for a channel
+    with no key of its own. Saving that owner under ``owner_id_credential("slack")`` keeps it
+    when the fallback goes. That matters more here than on any other channel: a Slack runtime
+    with no owner starts in first-contact claim mode, so without its own key the install would
+    become the first sender's. The owner in effect is the same before and after, so a failed
+    save changes nothing, and nothing here clears or blanks an owner. An install with its own
+    key already, or with no owner at all, is left as it is. Logs the key name, never the id.
+    """
+    key = owner_id_credential("slack")
+    if AppConfig.load().load_credentials().get(key):
+        return
+    owner = owner_id_for("slack")
+    if not owner:
+        return
+    try:
+        save_credential(key, owner)
+    except Exception as exc:  # noqa: BLE001 — the fallback still supplies the same owner
+        logger.warning("slack: could not store the owner under %s (%s)", key, type(exc).__name__)
+        return
+    logger.info("slack: stored the owner under its own key %s, from the shared key", key)
 
 
 @dataclass

@@ -127,7 +127,9 @@ and **any other present value — including a typo — turns it on**.
    name → **Copy User ID**). The setup step then prints the **OAuth2 invite URL**
    with the permission bits already computed — open it and pick a server. Your user id is
    stored as Discord's own owner, `PERSONALCLAW_OWNER_ID_DISCORD`, so setting up another
-   channel leaves it alone.
+   channel leaves it alone. An install set up by an earlier release kept the owner under the
+   shared `PERSONALCLAW_OWNER_ID`; the first time Discord starts, it copies that owner to its
+   own key.
 6. Track the channels you want the bot active in from the Channels page.
 
 The invite requests exactly the permissions the code exercises: View Channels, Send

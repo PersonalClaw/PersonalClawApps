@@ -43,7 +43,7 @@ from slack_runtime.delivery import SlackDelivery
 from slack_runtime.events import SeenCache, init_socket_mode
 from slack_runtime.interactions import init as init_interactions
 from slack_runtime.runtime import SlackRuntime
-from slack_runtime.settings import LiveConfig, load_tokens
+from slack_runtime.settings import LiveConfig, adopt_owner_id, load_tokens
 from slack_runtime.writes import SendRefused, live_writes_disabled
 
 # NOT ``__name__``: the app loader execs this ENTRY module under a synthetic name
@@ -132,6 +132,9 @@ class SlackTransport(ChannelTransportProvider):
     # ── Inbound: the gateway drives this once at boot ──
     async def start_inbound(self, services: Any) -> None:
         """Build the Slack runtime, wire the socket receiver, connect (retry/degrade)."""
+        # Before the runtime reads its owner, and before the token check, so a Slack given its
+        # tokens later keeps its owner too instead of starting in first-contact claim mode.
+        adopt_owner_id()
         # Pass this transport's own config through: without it the runtime re-derived the
         # tokens from core's credential store alone and a dashboard-configured install
         # never started inbound (#952).

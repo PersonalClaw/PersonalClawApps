@@ -4,13 +4,16 @@ Slack, Telegram and Discord all wrote the owner's user id under the one shared
 ``PERSONALCLAW_OWNER_ID``. Setting up a second channel replaced the first one's owner with an id
 from another platform, and every channel DMed and trusted whichever platform's id was saved last.
 Core keys an owner per channel now (``owner_id_credential``, read with ``owner_id_for``), and
-Telegram writes and reads its own. Driven through the real setup step, doctor probe and transport,
-against the real credential store in this test's home.
+Telegram writes and reads its own. An install from an earlier release, with the owner only under
+the shared key, moves it to Telegram's own key the first time the channel starts. Driven through
+the real setup step, doctor probe and transport, against the real credential store in this
+test's home.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import secrets
 from types import SimpleNamespace
 
@@ -23,6 +26,7 @@ from personalclaw.sdk.cli import SetupContext
 
 import cli_doctor
 import cli_setup
+import telegram_runtime.settings as settings_mod
 import telegram_runtime.transport as transport_mod
 from telegram_runtime.settings import CRED_TELEGRAM_BOT_TOKEN
 from telegram_runtime.transport import create_provider
@@ -119,28 +123,78 @@ async def _what_the_transport_registers(monkeypatch) -> tuple[str, str]:
         await transport.stop_inbound()
 
 
+def _adoption_log(caplog) -> list[str]:
+    """What the adoption logged: the lines from the module that stores the owner."""
+    return [r.getMessage() for r in caplog.records if r.name == settings_mod.__name__]
+
+
 @pytest.mark.asyncio
-async def test_the_transport_files_its_delivery_under_telegrams_own_owner(monkeypatch):
+async def test_the_transport_files_its_delivery_under_telegrams_own_owner(monkeypatch, caplog):
     """Core files the delivery under "telegram" and reads Telegram's own owner by it, and the
-    handle DMs that owner, not the Slack id under the shared key."""
+    handle DMs that owner, not the Slack id under the shared key. Its own key is left alone."""
+    caplog.set_level(logging.INFO)
     monkeypatch.setenv(CRED_TELEGRAM_BOT_TOKEN, TOKEN)
     credentials.save_credential(_SHARED, _SLACK_OWNER)
     credentials.save_credential(_OWN, "424242")
 
     assert await _what_the_transport_registers(monkeypatch) == ("telegram", "424242")
+    assert credentials.get_credential(_OWN) == "424242"
+    assert _adoption_log(caplog) == [], "an install with its own key was migrated again"
 
 
-@pytest.mark.asyncio
-async def test_an_install_from_an_earlier_release_keeps_its_owner(monkeypatch):
-    """Only the shared key, holding this bot's owner, as an earlier setup left it. Core falls
-    back to it, so the doctor and the transport still see the owner, and running setup again
-    with Enter keeps it and stores it under Telegram's own key."""
+def test_setup_keeps_an_earlier_releases_owner_under_the_own_key(monkeypatch):
+    """Only the shared key, holding this bot's owner, as an earlier setup left it, and no start
+    since. Core falls back to it, so the doctor still sees the owner, and running setup with Enter
+    stores it under Telegram's own key."""
     monkeypatch.setenv(CRED_TELEGRAM_BOT_TOKEN, TOKEN)
     credentials.save_credential(_SHARED, "424242")
 
     assert {line.label: line.detail for line in cli_doctor.probe()}["owner"] == "424242"
-    assert await _what_the_transport_registers(monkeypatch) == ("telegram", "424242")
 
     _run_setup(["y", "", "", ""])
 
     assert credentials.get_credential(_OWN) == "424242"
+
+
+@pytest.mark.asyncio
+async def test_an_install_from_an_earlier_release_adopts_its_owner_once(monkeypatch, caplog):
+    """The first start stores the owner the shared key holds under Telegram's own key, so it
+    outlives core's fallback. The next start finds it there and writes nothing, the owner the
+    channel DMs never changes, and the log names the key, never the id."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.setenv(CRED_TELEGRAM_BOT_TOKEN, TOKEN)
+    credentials.save_credential(_SHARED, "424242")
+
+    for _gateway_start in range(2):
+        assert await _what_the_transport_registers(monkeypatch) == ("telegram", "424242")
+        assert credentials.get_credential(_OWN) == "424242"
+
+    logged = _adoption_log(caplog)
+    assert len(logged) == 1, f"stored {len(logged)} times: {logged}"
+    assert _OWN in logged[0] and "424242" not in logged[0]
+    assert credentials.get_credential(_SHARED) == "424242", "the shared key was changed"
+
+
+@pytest.mark.asyncio
+async def test_a_channel_without_a_token_adopts_its_owner_too():
+    """Inbound stays offline without a token and the owner is still stored, so a token saved
+    later starts a channel that already knows its owner."""
+    credentials.save_credential(_SHARED, "424242")
+
+    await create_provider({}).start_inbound(object())  # no token: returns before using services
+
+    assert credentials.get_credential(_OWN) == "424242"
+
+
+@pytest.mark.asyncio
+async def test_an_install_with_no_owner_starts_as_before(monkeypatch, caplog):
+    """No owner anywhere: the channel starts with no owner to DM, as it always has, and stores
+    and logs nothing about one."""
+    caplog.set_level(logging.INFO)
+    monkeypatch.setenv(CRED_TELEGRAM_BOT_TOKEN, TOKEN)
+
+    assert await _what_the_transport_registers(monkeypatch) == ("telegram", "")
+
+    assert credentials.get_credential(_OWN) == ""
+    assert credentials.get_credential(_SHARED) == ""
+    assert _adoption_log(caplog) == []

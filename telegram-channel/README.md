@@ -102,7 +102,9 @@ and **any other present value — including a typo — turns it on**.
 5. Enter the token in the app's Configure form (Settings above), or run
    `personalclaw setup` and paste it when prompted (along with your Telegram user
    id, used as the owner DM target for approvals). The id is stored as Telegram's own owner,
-   `PERSONALCLAW_OWNER_ID_TELEGRAM`, so setting up another channel leaves it alone.
+   `PERSONALCLAW_OWNER_ID_TELEGRAM`, so setting up another channel leaves it alone. An install
+   set up by an earlier release kept the owner under the shared `PERSONALCLAW_OWNER_ID`; the
+   first time Telegram starts, it copies that owner to its own key.
 
 Once configured, the transport long-polls `getUpdates`. Trust is enforced by the
 core seam: an unknown DM sender gets a canned pairing-needed reply (run
