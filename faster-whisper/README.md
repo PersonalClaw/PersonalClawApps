@@ -37,6 +37,13 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 Transcription is biased by your Vocabulary/Lexicon terms within Whisper's prompt budget. Models download on demand and are managed (download/delete) from Settings → Models.
 
+Models download into the PersonalClaw home (`models/stt`). A model already in the Hugging Face
+folder other tools share (`$HF_HOME`, or `~/.cache/huggingface`) is used in place, without a
+download, once you turn that folder on in **Settings → Security → Outside PersonalClaw's
+home**. PersonalClaw only reads it: nothing is downloaded to, changed in or deleted from that
+folder, so Delete removes the home's copy only, and the model's row says when it is read from
+there.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

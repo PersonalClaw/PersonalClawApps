@@ -13,8 +13,39 @@ def command_hint_block(command: str, description: str) -> dict:
     }
 
 
-def dashboard_link_block(url: str, link_mins: int, session_mins: int) -> list[dict]:
-    """Section with clickable dashboard link and expiry info."""
+def duration_words(secs: int) -> str:
+    """``45 minutes`` / ``2 hours`` / ``24 hours`` / ``7 days``: *secs* in the largest unit it is
+    a whole number of, and never in days below two, so the gateway's 24-hour link window reads as
+    the 24 hours it is. A link's lifetime is always whole minutes, because ``parse_duration``
+    reads only whole minutes, hours and days."""
+    secs = max(0, int(secs))
+    if secs >= 2 * 86400 and secs % 86400 == 0:
+        count, unit = secs // 86400, "day"
+    elif secs >= 3600 and secs % 3600 == 0:
+        count, unit = secs // 3600, "hour"
+    else:
+        count, unit = max(1, round(secs / 60)), "minute"
+    return f"{count} {unit}{'' if count == 1 else 's'}"
+
+
+def link_lifetime_text(ttl_secs: int, link_window_secs: int) -> str:
+    """How long a dashboard sign-in link lasts, the way the gateway mints it.
+
+    Two different times. A link can be OPENED only until the sooner of the gateway's link window
+    and the sign-in's own lifetime, and the sign-in it starts ends its lifetime after the link is
+    MADE, not after it is opened. The old ``Click within {window}m · session lasts {ttl}m`` got
+    the first wrong: a one-hour link said "Click within 1440m" and stopped opening after 60, and
+    a week-long one said "session lasts 10080m".
+    """
+    open_for = min(int(link_window_secs), int(ttl_secs))
+    return (
+        f"⏱ Open it within {duration_words(open_for)} · the sign-in ends "
+        f"{duration_words(ttl_secs)} from now"
+    )
+
+
+def dashboard_link_block(url: str, ttl_secs: int, link_window_secs: int) -> list[dict]:
+    """Section with the clickable dashboard link and how long it lasts."""
     return [
         {
             "type": "section",
@@ -22,7 +53,7 @@ def dashboard_link_block(url: str, link_mins: int, session_mins: int) -> list[di
                 "type": "mrkdwn",
                 "text": (
                     f"🔗 <{url}|*Open Dashboard*>\n"
-                    f"⏱ Click within {link_mins}m · session lasts {session_mins}m"
+                    f"{link_lifetime_text(ttl_secs, link_window_secs)}"
                 ),
             },
         },

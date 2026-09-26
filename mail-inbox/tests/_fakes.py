@@ -11,17 +11,38 @@ from email.message import EmailMessage
 
 class FakeImapClient:
     """An in-memory IMAP client: maps folder → {uid: raw_bytes}. Implements the narrow
-    ImapClient protocol the provider depends on (connect/fetch_uids_since/fetch_message/
-    close), so a test injects it via ``provider._client_factory``."""
+    ImapClient protocol the provider depends on (connect/newest_uid/fetch_uids_since/
+    fetch_message/close), so a test injects it via ``provider._client_factory``.
 
-    def __init__(self, messages: dict[str, dict[int, bytes]]) -> None:
+    ``fail_connect`` makes ``connect`` raise the provider's ``ImapError``, the way a refused
+    login, an unreachable server or an untrusted certificate does. ``uidvalidity`` is what
+    ``select_folder`` reports (0: the server did not say), and a test changes it to renumber
+    the folder."""
+
+    UNREACHABLE = "the IMAP server imap.example.com:993 is unreachable (fake)"
+
+    def __init__(self, messages: dict[str, dict[int, bytes]], *, uidvalidity: int = 0) -> None:
         self._messages = messages
         self.connected = False
         self.closed = False
         self.fetch_calls: list[int] = []
+        self.newest_calls: list[str] = []
+        self.fail_connect = False
+        self.uidvalidity = uidvalidity
 
     def connect(self) -> None:
+        if self.fail_connect:
+            from mail_inbox_runtime.imap_client import ImapError
+
+            raise ImapError(self.UNREACHABLE)
         self.connected = True
+
+    def select_folder(self, folder: str) -> int:
+        return self.uidvalidity
+
+    def newest_uid(self, folder: str) -> int:
+        self.newest_calls.append(folder)
+        return max(self._messages.get(folder, {}), default=0)
 
     def fetch_uids_since(self, folder: str, last_uid: int) -> list[int]:
         return sorted(u for u in self._messages.get(folder, {}) if u > last_uid)

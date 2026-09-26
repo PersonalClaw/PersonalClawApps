@@ -24,6 +24,10 @@ and a test pin that mapping.
 subject and the correspondent. An outbound reply sets ``In-Reply-To`` to the last id and
 ``References`` to the chain, then records its own id — so the third message in a
 conversation references both prior ones, in order, and a mail client shows one thread.
+
+**Core masks every text it hands this handle**, keys and exfiltration URLs included, the
+subject's words as well as the body and the HTML alternative, before any method here is
+called, so nothing here masks it again.
 """
 
 from __future__ import annotations
@@ -36,12 +40,7 @@ from email.message import EmailMessage
 from typing import Any
 from urllib.parse import quote
 
-from personalclaw.sdk.channel import (
-    atomic_write,
-    is_tracked_channel,
-    redact_credentials,
-    redact_exfiltration_urls,
-)
+from personalclaw.sdk.channel import atomic_write, is_tracked_channel
 from personalclaw.sdk.util import app_data_dir
 
 from email_runtime.mime import build_outbound, build_references, reply_subject
@@ -62,16 +61,6 @@ _APPROVAL_TIMEOUT = 7200
 APPROVE_WORD = "APPROVE"
 DENY_WORD = "DENY"
 _TOKEN_BYTES = 4  # 8 hex chars — short enough to retype, wide enough not to collide
-
-
-def _safe(text: str) -> str:
-    """Redact before anything reaches the wire (exfil URLs, then credentials).
-
-    Every delivery path funnels through here — an unredacted path is the whole class of
-    bug this centralization prevents."""
-    body, _ = redact_exfiltration_urls(text or "")
-    body, _ = redact_credentials(body)
-    return body
 
 
 class ThreadState:
@@ -203,6 +192,9 @@ class EmailDelivery:
         # keyed by the uppercase reply token; the transport matches an inbound body
         # against these to resolve an approval.
         self._pending: dict[str, _PendingApproval] = {}
+        #: Why the most recent send failed, or "" when it went out (or none was tried). The
+        #: channel's health reads it: SMTP holds no connection, so the last send IS its state.
+        self.send_failure = ""
 
     # ── thread bookkeeping (the transport feeds inbound; sends feed themselves) ──
 
@@ -230,13 +222,16 @@ class EmailDelivery:
         """Hand one built message to SMTP in a thread executor. Never raises."""
         try:
             await asyncio.to_thread(self._sender.send, msg)
-            return True
         except SmtpError as exc:
             logger.warning("email: send failed: %s", exc)
+            self.send_failure = str(exc)
             return False
-        except Exception:
+        except Exception as exc:
             logger.warning("email: unexpected send failure", exc_info=True)
+            self.send_failure = f"an unexpected error ({exc.__class__.__name__}); the log has it"
             return False
+        self.send_failure = ""
+        return True
 
     async def _deliver(
         self, channel: str, thread_ts: str, subject: str, body: str, *,
@@ -259,8 +254,8 @@ class EmailDelivery:
         subj = subject or (reply_subject(state.subject) if state else "PersonalClaw")
 
         msg = build_outbound(
-            from_addr=self._from, to_addr=to_addr, subject=subj, body=_safe(body),
-            html_body=_safe(html_body) if html_body else "",
+            from_addr=self._from, to_addr=to_addr, subject=subj, body=body or "",
+            html_body=html_body,
             in_reply_to=in_reply_to, references=references, attachments=attachments,
         )
         if not await self._send(msg):
@@ -346,7 +341,7 @@ class EmailDelivery:
         options as anything else would promise a button that does not exist."""
         from personalclaw.sdk.channel import extract_options
 
-        body, options = extract_options(_safe(text))
+        body, options = extract_options(text)
         if options:
             listed = "\n".join(f"  {i + 1}. {opt}" for i, opt in enumerate(options))
             body = f"{body}\n\nReply with one of:\n{listed}"
@@ -474,7 +469,7 @@ class EmailDelivery:
             return None
 
         request_id = str(getattr(event, "request_id", ""))
-        title = _safe(str(getattr(event, "title", "")))
+        title = str(getattr(event, "title", ""))
         token = secrets.token_hex(_TOKEN_BYTES).upper()
         pending = _PendingApproval(request_id, token, channel)
         self._pending[token] = pending

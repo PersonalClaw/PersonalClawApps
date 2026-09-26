@@ -8,11 +8,13 @@ converse in servers, and receive results with approval buttons.
 the messaging channels alongside the dashboard, Slack and Telegram.
 
 > **Read this first: enable the MESSAGE CONTENT intent.** It is a *privileged*
-> intent, off by default, and without it Discord delivers every message with an
-> **empty `content`**. The bot connects, shows as online, receives events — and
-> ignores everything you say. This is the single most common reason a Discord bot
-> looks broken. Developer Portal → your application → **Bot** → **Privileged Gateway
-> Intents** → enable **Message Content Intent**.
+> intent, off by default. This app asks for it when it connects, and Discord refuses
+> the gateway session of a bot that asks for a privileged intent it has not been given
+> (close code 4014, disallowed intents): the bot never comes online and hears nothing.
+> This is the single most common reason a new Discord bot looks broken, and the Discord
+> row on Settings → Providers says so. Developer Portal → your application → **Bot** →
+> **Privileged Gateway Intents** → enable **Message Content Intent**, then turn the
+> channel off and on.
 
 ## What this is
 
@@ -34,6 +36,12 @@ ships as a self-contained directory:
     outbound `send`.
   - `delivery.py` — the `ChannelDelivery` the gateway delivers results through
     (message splitting, throttled edit-streaming, button approvals, reactions).
+    A turn's progress message keeps only its task lines when the turn ends, each
+    task's line updated in place, and is removed when it only ever said "Thinking…":
+    the reply is a message of its own. An approval prompt too long for one message
+    is split like a reply, its buttons on the last part.
+    Only the owner's press answers an approval: in a tracked channel everyone in it
+    sees the buttons, and anyone else's press is refused and logged.
   - `settings.py` — the app's own DM-activation / application-id config + the
     credential key.
 - `cli_setup.py` / `cli_doctor.py` — the app's `personalclaw setup` / `doctor` hooks.
@@ -43,7 +51,10 @@ It imports core **only** via the PersonalClaw **SDK** (never core internals), so
 core can evolve without breaking it:
 
 - `personalclaw.sdk.channel` — transport ABC, `ChannelMessage`, the sender-trust
-  seam (`guard_inbound`), redaction, `run_chat`, `ProviderSettings`.
+  seam (`guard_inbound`), `run_chat`, `ProviderSettings`.
+
+Core masks every text it hands the delivery handle (keys and exfiltration URLs), so the app
+masks nothing itself.
 - `personalclaw.sdk.cli` — `SetupContext` / `DoctorLine`.
 
 Both wire protocols are implemented directly against libraries that are **already
@@ -84,6 +95,14 @@ Three things this deliberately does *not* do:
 - **Prose never lands in `meta`.** `meta` is matched, not narrated, and core does not fence
   it — so an author's chosen `global_name` is not there.
 
+## Results from your schedules
+
+A schedule can send its results here too. In the schedule's Advanced → Notify channel, pick
+Discord, then **You, in a direct message** or **A chat or channel** with the channel's id, a
+long number (with Developer Mode on, right-click the channel and pick Copy Channel ID). Your
+DMs need Discord to know who you are, its owner. Discord checks the id when you save and says
+what's wrong if it can't send there.
+
 ## Install
 
 From the App Store, add the `apps/` directory as a **local source**, then install
@@ -121,7 +140,7 @@ and **any other present value — including a typo — turns it on**.
 2. **General Information** → copy the **Application ID**.
 3. **Bot** → **Reset Token** → copy the token (shown once).
 4. **Bot** → **Privileged Gateway Intents** → enable **MESSAGE CONTENT INTENT**.
-   (See the warning at the top — skip this and the bot receives empty messages.)
+   (See the warning at the top — skip this and Discord refuses the bot's gateway session.)
 5. Run `personalclaw setup` and paste the token, application id and your own Discord
    user id (enable Settings → Advanced → **Developer Mode**, then right-click your
    name → **Copy User ID**). The setup step then prints the **OAuth2 invite URL**
@@ -130,7 +149,17 @@ and **any other present value — including a typo — turns it on**.
    channel leaves it alone. An install set up by an earlier release kept the owner under the
    shared `PERSONALCLAW_OWNER_ID`; the first time Discord starts, it copies that owner to its
    own key.
+
+   Set up in the dashboard instead? Settings → Providers → Discord Channel → Configure →
+   **Pair as owner** shows an 8-digit code. Send it to the bot in a direct message within ten
+   minutes, and the bot answers that you are its owner — no user id to look up, and no restart.
 6. Track the channels you want the bot active in from the Channels page.
+
+The Discord row on Settings → Providers reads the gateway session, not just the token. When
+Discord refuses the session it stops for good and the row says why, with what to do: a
+rejected token (401, or close code 4004) is fixed by saving a working token in Configure, a
+missing privileged intent (4014) in the Developer Portal. A connection that drops and is being
+resumed reads as reconnecting until the session is back.
 
 The invite requests exactly the permissions the code exercises: View Channels, Send
 Messages, Send Messages in Threads, Add Reactions, Attach Files, Read Message

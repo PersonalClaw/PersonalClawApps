@@ -236,7 +236,7 @@ class TestProviderSidecarPath:
         p = create_provider({})
         p._runner = _FakeRunner(crash=sdk_sidecar.SidecarCrashed("signal_9", generation=2))
         with patch("provider._detect_engine", return_value="omnivoice"):
-            out = await p.synthesize("hello")
+            out = await p.synthesize("hello", voice="omnivoice-zeroshot")
         assert out is None  # degraded, not raised — the gateway stays up
         assert p.last_crash_reason == "sidecar_crashed:signal_9"
 
@@ -246,8 +246,22 @@ class TestProviderSidecarPath:
         p = create_provider({})
         p._runner = _FakeRunner(crash=sdk_sidecar.SidecarWorkerError("engine_api_mismatch: no clone"))
         with patch("provider._detect_engine", return_value="omnivoice"):
-            assert await p.synthesize("hello") is None
+            assert await p.synthesize("hello", voice="omnivoice-zeroshot") is None
         assert p.last_crash_reason == ""  # alive-but-refused is NOT a crash
+
+    @pytest.mark.asyncio
+    async def test_a_call_that_names_no_voice_is_refused_before_the_engine_loads(
+        self, tmp_path, monkeypatch
+    ):
+        """Like chat, a call names its voice (the text-to-speech binding's model). One that names
+        none used to load the weights folder's root in its place."""
+        monkeypatch.setenv("PERSONALCLAW_HOME", str(tmp_path))
+        p = create_provider({})
+        runner = _FakeRunner()
+        p._runner = runner
+        with patch("provider._detect_engine", return_value="omnivoice"):
+            assert await p.synthesize("hello") is None
+        assert runner.calls == []
 
 
 # ── resumable download: interrupted fetch survives ─────────────────────────────

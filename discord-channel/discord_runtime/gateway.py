@@ -18,7 +18,11 @@ vendor library, so the whole lifecycle lives here:
    ``{token, session_id, seq}``; Discord replays what we missed. **INVALID_SESSION
    (op 9)** means the resume was refused — its ``d`` is a boolean saying whether the
    session is still resumable at all — so wait the documented 1–5s and IDENTIFY
-   fresh. **RECONNECT (op 7)** is Discord asking us to reconnect-and-resume.
+   fresh. **RECONNECT (op 7)** is Discord asking us to reconnect-and-resume;
+7. a close with one of :data:`FATAL_CLOSE_CODES` is not a drop but a refusal — a
+   rejected token (4004), a privileged intent the bot is not allowed (4014) — so
+   the loop stops there and keeps the code for the transport's health, instead of
+   IDENTIFYing again with what Discord just refused.
 
 The trap this module exists to contain is the **zombied connection**: TCP can stay
 open while the gateway has stopped processing us, so heartbeats go out and no ACK
@@ -74,6 +78,12 @@ INTENT_MESSAGE_CONTENT = 1 << 15
 #: 33281, a bot that silently never receives a DM and so can never be paired.
 INTENTS = INTENT_GUILDS | INTENT_GUILD_MESSAGES | INTENT_DIRECT_MESSAGES | INTENT_MESSAGE_CONTENT
 
+#: The close codes Discord says not to reconnect after ("Gateway Close Event Codes", Reconnect:
+#: false): 4004 authentication failed, 4010 invalid shard, 4011 sharding required, 4012 invalid API
+#: version, 4013 invalid intents, 4014 disallowed intents. Reconnecting repeats the refusal, and a
+#: client that keeps IDENTIFYing with a refused token is what Discord rate-limits and bans.
+FATAL_CLOSE_CODES = frozenset({4004, 4010, 4011, 4012, 4013, 4014})
+
 # Discord's documented wait before re-IDENTIFYing after INVALID_SESSION (1-5s).
 # Fixed rather than random so a test can assert it; the jitter Discord asks for is
 # about spreading a fleet's reconnects, and one self-hosted bot is not a fleet.
@@ -125,31 +135,73 @@ class DiscordGateway:
         self.heartbeat_interval = 0.0
         self._ack_pending = False
         self.zombie_reconnects = 0
+        #: The close code Discord sent on the connection being read (``None``: no close frame).
+        self._close_code: int | None = None
+        #: Whether this connection got its session (READY or RESUMED).
+        self._established = False
+        # ── what the session is doing, for the transport's health ──
+        #: The FATAL_CLOSE_CODES member that ended the loop for good, else ``None``.
+        self.fatal_close_code: int | None = None
+        #: Why the last connection ended or failed while the loop reconnects — ``""`` once a
+        #: session is established again.
+        self.last_drop = ""
 
     # ── the outer loop ──
 
     async def run(self) -> None:
-        """Connect (and re-connect) until :meth:`stop`. Degrades, never crashes.
+        """Connect (and re-connect) until :meth:`stop`, or until Discord refuses the session.
 
         One iteration = one WS connection. Which handshake it performs is decided by
         the resume state carried over: a live ``session_id`` means RESUME against
-        ``resume_gateway_url``, otherwise a fresh IDENTIFY against the base URL."""
+        ``resume_gateway_url``, otherwise a fresh IDENTIFY against the base URL.
+
+        How a connection ended decides what happens next. A :data:`FATAL_CLOSE_CODES` close ends
+        the loop and is kept in ``fatal_close_code``. A connection that had its session reconnects
+        at once, so the resume loses nothing; one that failed, or closed before READY or RESUMED,
+        waits out a growing back-off first. It used to reconnect at once after any close, so a
+        refused token was an IDENTIFY loop. Every other ending is kept in ``last_drop`` until a
+        session is back."""
         backoff = 1.0
         while not self._stopping:
             url = self.resume_url if self.session_id else self._gateway_url
             try:
                 await self._run_once(url)
-                backoff = 1.0
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                self.last_drop = f"the connection failed ({type(exc).__name__})"
                 logger.warning(
                     "discord gateway: connection error (%s) — reconnecting in %ss", exc, backoff
                 )
                 await self._sleep(backoff)
                 backoff = min(backoff * 2, MAX_RECONNECT_BACKOFF)
+                continue
             finally:
                 await self._cancel_heartbeat()
+            if self._stopping:
+                return
+            code = self._close_code
+            if code in FATAL_CLOSE_CODES:
+                self.fatal_close_code = code
+                logger.error(
+                    "discord gateway: Discord closed the session with %d — not reconnecting", code
+                )
+                return
+            # "closed", not "Discord closed": the code can be one this client sent itself (4000 on
+            # a zombie connection) and Discord echoed.
+            self.last_drop = (
+                f"the connection closed (close code {code})" if code else "the connection dropped"
+            )
+            if self._established:
+                backoff = 1.0
+            else:
+                logger.warning(
+                    "discord gateway: closed before a session was established — reconnecting in "
+                    "%ss",
+                    backoff,
+                )
+                await self._sleep(backoff)
+                backoff = min(backoff * 2, MAX_RECONNECT_BACKOFF)
 
     async def stop(self) -> None:
         """Stop the loop and close the socket (idempotent)."""
@@ -159,11 +211,15 @@ class DiscordGateway:
 
     async def _run_once(self, url: str) -> None:
         """Hold ONE connection: HELLO → handshake → read frames until it closes."""
+        self._close_code = None
+        self._established = False
         self._ws = await self._connect(self._connect_url(url))
         self._ack_pending = False
         try:
             hello = await self._recv()
-            if hello is None or hello.get("op") != OP_HELLO:
+            if hello is None:
+                return  # closed before HELLO: `run` reads how, from the close code
+            if hello.get("op") != OP_HELLO:
                 raise RuntimeError(f"expected HELLO (op {OP_HELLO}), got {hello}")
             self.heartbeat_interval = float(hello.get("d", {}).get("heartbeat_interval", 41250)) / 1000.0
             self._heartbeat_task = asyncio.ensure_future(self._heartbeat_loop())
@@ -204,6 +260,9 @@ class DiscordGateway:
         except (asyncio.CancelledError, GeneratorExit):
             raise
         except Exception as exc:
+            # websockets' ConnectionClosed carries the close frame Discord sent: its code is how
+            # Discord says why, and `run` decides from it whether to come back at all.
+            self._close_code = getattr(getattr(exc, "rcvd", None), "code", None)
             logger.debug("discord gateway: recv ended: %s", exc)
             return None
         if raw is None:
@@ -363,6 +422,10 @@ class DiscordGateway:
         if not isinstance(data, dict):
             logger.warning("discord gateway: %s dispatch with non-object payload dropped", event)
             return
+        if event in ("READY", "RESUMED"):
+            # The session is up: whatever ended the last connection is over.
+            self._established = True
+            self.last_drop = ""
         try:
             if event == "READY":
                 self.session_id = str(data.get("session_id", ""))

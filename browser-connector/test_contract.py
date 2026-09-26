@@ -145,3 +145,40 @@ def test_app_json_validates_and_round_trips() -> None:
     assert app_manifest.from_dict(parsed.to_dict()).to_dict() == parsed.to_dict()
     assert parsed.validate() == [], "app.json must be a valid manifest"
     assert parsed.name == "browser-connector"
+
+
+# ── the client install goes into the PersonalClaw home ──────────────────────────────────────
+
+
+def _client_install() -> dict:
+    return json.loads((HERE / "app.json").read_text(encoding="utf-8"))["platform"]["clientInstall"]
+
+
+def _sh(script: str, env: dict[str, str]) -> str:
+    import subprocess
+
+    return subprocess.run(
+        ["/bin/sh", "-c", script], env=env, capture_output=True, text=True, check=True
+    ).stdout
+
+
+@pytest.mark.parametrize(
+    "pclaw_home, expected",
+    [
+        ("/srv/pclaw", "/srv/pclaw/apps/browser-connector"),
+        (None, "/home/me/.personalclaw/apps/browser-connector"),
+    ],
+)
+def test_the_client_install_goes_into_the_personalclaw_home(pclaw_home, expected) -> None:
+    """The one-liner and the step after it name the same folder: ``$PERSONALCLAW_HOME`` when
+    PersonalClaw runs on a home of its own, else ``~/.personalclaw``. It used to be
+    ``$HOME/.personalclaw`` whatever the home was. Only the ``DEST`` assignment is run (the
+    clone would reach the network); the postInstall step is an echo and runs whole."""
+    env = {"HOME": "/home/me", "PATH": "/usr/bin:/bin"}
+    if pclaw_home:
+        env["PERSONALCLAW_HOME"] = pclaw_home
+    ci = _client_install()
+    assignment = re.search(r'DEST="[^"]*"', ci["shell"])
+    assert assignment, ci["shell"]
+    assert _sh(f'{assignment.group(0)}; printf %s "$DEST"', env) == expected
+    assert f"{expected}/browser-connector/extension" in _sh(ci["postInstall"], env)

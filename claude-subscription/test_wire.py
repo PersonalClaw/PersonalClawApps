@@ -24,9 +24,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the repo root: apps_testkit
 
 from apps_testkit.model_wire import (  # noqa: E402
+    LISTED,
     MODEL,
     REPLY,
     RecordingModelServer,
+    blank_model_expected,
+    blank_model_report,
     form_options,
     one_call,
     sampling_sent,
@@ -41,6 +44,12 @@ TOKEN = "TESTONLY-wire-subscription-token"
 
 @pytest.fixture
 def server(monkeypatch, tmp_path):
+    _signed_in(monkeypatch, tmp_path)
+    with RecordingModelServer() as recording:
+        yield recording
+
+
+def _signed_in(monkeypatch, tmp_path) -> None:
     """A Claude Code sign-in under a redirected ``HOME`` — this app's only credential. ``~`` is
     tmp and ``CLAUDE_CONFIG_DIR`` is unset, so the operator's real store is out of reach."""
     store = tmp_path / "home" / ".claude" / ".credentials.json"
@@ -51,8 +60,14 @@ def server(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    with RecordingModelServer() as recording:
-        yield recording
+    # The sign-in is outside the PersonalClaw home: core reads it once the owner allows it in
+    # Settings → Security → Outside PersonalClaw's home, which writes this.
+    pc_home = tmp_path / "pc-home"
+    pc_home.mkdir()
+    monkeypatch.setenv("PERSONALCLAW_HOME", str(pc_home))
+    (pc_home / "config.json").write_text(
+        json.dumps({"security": {"outside_home": [f"sign-in:{provider.CREDENTIAL_SOURCE}"]}})
+    )
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -88,3 +103,29 @@ async def test_the_sign_in_is_what_authenticates_the_call(server):
     [call] = server.calls()
     headers = call["headers"]
     assert headers.get("x-api-key") == TOKEN or headers.get("authorization") == f"Bearer {TOKEN}"
+
+
+# ── A call no model is chosen for ─────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def listing(monkeypatch, tmp_path):
+    """Signed in, against an endpoint that lists only a model nobody chose (``LISTED``)."""
+    _signed_in(monkeypatch, tmp_path)
+    with RecordingModelServer(models=(LISTED,)) as recording:
+        yield recording
+
+
+@pytest.mark.asyncio
+async def test_no_model_chosen_is_refused_and_the_default_model_is_named(listing):
+    """Saved with its Default Model empty and called with nothing bound, an instance is sent no
+    call, and the app's curated default (``SPEC.default_model``) is not picked in its place. With
+    a Default Model, both calls name it."""
+    report = await blank_model_report(
+        app_dir=APP_DIR,
+        entry_type="claude_subscription",
+        factory=provider._factory,
+        create_provider=provider.create_provider,
+        server=listing,
+    )
+    assert report == blank_model_expected(APP_DIR)

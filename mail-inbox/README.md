@@ -12,13 +12,30 @@ mail is irreversible and leaves your machine, so it is off by default. See
 ## What it does
 
 - **Polls IMAP** (`IMAP4_SSL` by default) for messages newer than a persisted UID
-  cursor, so a restart never reprocesses or skips mail. A duplicate `Message-ID` is
-  dropped as a second belt.
+  cursor, so a restart never reprocesses or skips mail. PersonalClaw's inbox polls it
+  while the app is enabled, and each mail is an Inbox row of kind *email*. A duplicate
+  `Message-ID` is dropped as a second belt. The first poll of a mailbox (or of a folder
+  you switch to) starts after its newest message: the mail already there is not surfaced,
+  so it fires none of your inbox automations. What arrives after it is. A folder the
+  server renumbered (its `UIDVALIDITY` changed, after a restore or a migration) starts
+  after its newest message again, since a cursor in the old numbering would skip or
+  replay it. Email Channel does the same.
+- **Says why when it cannot read the mailbox.** A poll that fails (the server unreachable
+  or not answering within 60 seconds, its certificate refused, the login refused, a setting
+  missing) fails with a sentence, and the Inbox shows it under Mail Inbox's name: *Mail
+  Inbox can't be read: the IMAP server … refused the login for …* The next poll tries
+  again from where this one would have started.
+- **Verifies the server before it gets the password.** IMAP and SMTP both check the
+  server's certificate and host name against this machine's certificate authorities, plus
+  the one **CA Certificate File** names. Nothing turns the check off. With **Use SSL** off,
+  the IMAP connection is upgraded with STARTTLS before the login, checked the same way,
+  and a server that does not offer STARTTLS is refused without the password being sent.
+  There is no setting that sends it in the clear.
 - **Fail-closed sender allowlist.** Only senders matching your allow-glob patterns are
   ever surfaced. An **empty allowlist surfaces nothing at all** — never "everything".
   This is the security posture, not a bug: an unknown sender can never trigger anything.
-  The posture is logged at startup so a deliberately-empty inbox is diagnosable, and
-  every rejection records a `mail_sender_rejected` security event.
+  An empty allowlist fails the poll with a sentence that says so, which the Inbox shows,
+  and every rejection records a `mail_sender_rejected` security event.
 - **Extracts readable text.** Prefers `text/plain`; sanitizes HTML-only mail to visible
   text (dropping `<script>`/`<style>`); and pulls text from PDF/DOCX/PPTX attachments
   through the platform's own document readers.
@@ -52,11 +69,15 @@ setup step prompts for:
 
 - **SMTP for replies** (optional) — host / port / TLS mode / username, plus an SMTP
   password, a secret of its own. Configuring it does **not** start sending; see below.
+- **CA Certificate File** (optional) — the PEM certificate of the authority your mail
+  server's certificate comes from, when it is not a public one (a company relay, a home
+  server). Trusted in addition to this machine's authorities, for IMAP and SMTP alike.
 
-`personalclaw doctor` reports the connection, whether the password is set, the allowlist
-posture (including a warning when it is empty and therefore surfacing nothing), and the
-reply posture — `DRAFT only` with the exact reason, or a **warning** when replies are
-going out live.
+`personalclaw doctor` reports the connection, what the server's certificate is checked
+against (and a CA Certificate File that cannot be loaded), whether the password is set,
+the allowlist posture (including a warning when it is empty and therefore surfacing
+nothing), and the reply posture — `DRAFT only` with the exact reason, or a **warning**
+when replies are going out live.
 
 ### Gmail example
 
@@ -152,7 +173,10 @@ What happens on a reply:
    settings are complete, an SMTP password is set, the caller did not
    ask for a dry run, and the platform's `PERSONALCLAW_DISABLE_LIVE_WRITES` guard is not
    set. Otherwise it stays a draft and the reason is recorded — in the log, in the
-   security event log, and in `personalclaw doctor`.
+   security event log, and in `personalclaw doctor`. Pressing **Send** on the Inbox row
+   says it too: *Mail Inbox didn't send the reply: Send Replies is off, so it kept the
+   reply as a draft.* The row stays open, with your text as its draft; only a reply that
+   was sent marks it handled.
 
 In every draft case **no SMTP connection is opened and no sender object is even
 constructed**, so a dry run cannot put a byte on the wire.
@@ -164,13 +188,18 @@ Every outcome is audited as a security event — `mail_reply_drafted`, `mail_rep
 `In-Reply-To`, never the reply text and never a credential.
 
 **Replies are fail-closed on the recipient.** `send_reply(channel_id, text, thread_ts)`
-carries no address, so the app records how to answer each message while polling it. If a
-reply names a channel or thread it has no record of, it is **refused** — nothing is
-composed and nothing is sent. Answering the wrong person is worse than not answering.
+carries no address, so the app records how to answer each message while polling it, and a
+reply names the mail it answers by its `Message-ID` (PersonalClaw's Inbox keeps it on the
+row and hands it back). A reply that names no mail, or a mail it has no record of, is
+**refused** — nothing is composed and nothing is sent. It used to fall back to the latest
+mail on the same address, and every mail arrives on the same address, so a reply could go
+to whoever wrote last. Answering the wrong person is worse than not answering.
 
-TLS is verified, not attempted: in `starttls` mode a failed upgrade **aborts** the send
-rather than continuing in the clear, so an app password is never put on a plaintext
-socket. SMTP error text is scrubbed of the password before it reaches a log.
+TLS is verified, not attempted: the server's certificate and host name are checked before
+the login, and in `starttls` mode a failed upgrade **aborts** the send rather than
+continuing in the clear, so an app password is never put on a plaintext socket or handed
+to a server nothing vouches for. SMTP error text is scrubbed of the password before it
+reaches a log.
 
 ## Security
 
@@ -190,7 +219,8 @@ python -m pytest mail-inbox -q
 ```
 
 Tests run against core installed from the repo with no live mail server: the IMAP client
-and the SMTP sender are both injected as in-memory fakes, and the sender-trust /
+and the SMTP sender are both injected as in-memory fakes (the certificate tests complete
+real TLS handshakes with throwaway servers on 127.0.0.1), and the sender-trust /
 security-log surfaces are the real core seams writing into an isolated tmp home. **No test
 sends real mail** — the outbound tests assert on the captured `EmailMessage` and on the
 `.eml` written to a tmp home, and `sender.sent == []` is how "nothing left the machine" is

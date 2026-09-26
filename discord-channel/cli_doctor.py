@@ -43,7 +43,13 @@ def probe() -> list[DoctorLine]:
     if owner:
         lines.append(DoctorLine("owner", "ok", owner))
     else:
-        lines.append(DoctorLine("owner", "warn", f"{owner_id_credential(PROVIDER)} not set"))
+        lines.append(
+            DoctorLine(
+                "owner", "warn",
+                f"{owner_id_credential(PROVIDER)} not set — pair one in the dashboard "
+                "(Settings → Providers → Discord Channel → Configure → Pair as owner)",
+            )
+        )
 
     lines.append(
         DoctorLine(

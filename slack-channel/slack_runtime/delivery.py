@@ -4,6 +4,10 @@ All Slack rendering (mrkdwn conversion, Block Kit ack buttons, message splitting
 timing footers, the interactive approval prompt + owner-response wait) lives HERE,
 so core delivers with plain text + structured intent and never imports Slack code.
 The Slack transport registers an instance onto the orchestrator at start_inbound.
+
+Core masks every text it hands this handle, keys and exfiltration URLs included, before
+any method here is called, so nothing here masks it again. The Slack handler's own
+replies, which do not come through core, keep their own masking.
 """
 
 from __future__ import annotations
@@ -11,8 +15,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Any
-
-from personalclaw.sdk.channel import redact_credentials, redact_exfiltration_urls
 
 from slack_runtime.client import RealSlackClient
 from slack_runtime.format import (
@@ -70,10 +72,7 @@ class SlackDelivery:
         unfurl_links: bool | None = None, unfurl_media: bool | None = None,
         reply_broadcast: bool | None = None,
     ) -> str:
-        body = to_slack_mrkdwn(text)
-        body, _ = redact_exfiltration_urls(body)
-        body, _ = redact_credentials(body)
-        parts = split_message(body)
+        parts = split_message(to_slack_mrkdwn(text))
         last = ""
         for i, part in enumerate(parts):
             # Link/broadcast hints apply to the first message only; continuation
@@ -93,7 +92,7 @@ class SlackDelivery:
         thread_ts: str = "", unfurl_links: bool = True, unfurl_media: bool = True,
         reply_broadcast: bool = False,
     ) -> str:
-        # payload is Slack Block Kit (already sanitized by the caller); post as blocks.
+        # payload is Slack Block Kit, masked by core like every text it hands a channel.
         return await self._client.post_blocks(
             channel, payload, fallback_text,
             thread_ts=thread_ts or None,
@@ -104,9 +103,7 @@ class SlackDelivery:
     async def deliver_cron_result(
         self, channel: str, job_name: str, job_id: str, text: str, thread_ts: str = ""
     ) -> str:
-        redacted, _ = redact_exfiltration_urls(text)
-        redacted, _ = redact_credentials(redacted)
-        post_text = f"⏰ *Cron: {job_name}*\n\n{to_slack_mrkdwn(redacted)}"
+        post_text = f"⏰ *Cron: {job_name}*\n\n{to_slack_mrkdwn(text)}"
         parts = split_message(post_text, limit=_CRON_MSG_LIMIT)
         blocks = [
             {"type": "section", "text": {"type": "mrkdwn", "text": parts[0]}},
@@ -129,10 +126,7 @@ class SlackDelivery:
         from slack_runtime.format import build_options_blocks
         from personalclaw.sdk.channel import extract_options
 
-        body = to_slack_mrkdwn(text)
-        body, _ = redact_exfiltration_urls(body)
-        body, _ = redact_credentials(body)
-        body, options = extract_options(body)
+        body, options = extract_options(to_slack_mrkdwn(text))
         for part in split_message(body):
             await self._client.post_message(channel, part, thread_ts or None)
         if options:
@@ -143,9 +137,7 @@ class SlackDelivery:
     async def deliver_subagent_reply(
         self, channel: str, text: str, thread_ts: str = "", elapsed_secs: float = 0.0
     ) -> None:
-        reply_text, _ = redact_exfiltration_urls(to_slack_mrkdwn(text))
-        reply_text, _ = redact_credentials(reply_text)
-        for part in split_message(reply_text):
+        for part in split_message(to_slack_mrkdwn(text)):
             await self._client.post_message(channel, part, thread_ts or None)
         try:
             from slack_runtime.handler import build_timing_footer
@@ -274,9 +266,7 @@ class SlackDelivery:
             return None
 
         blocks = _build_approval_blocks(event, is_dm=is_dm, source=source)
-        title_safe, _ = redact_exfiltration_urls(event.title)
-        title_safe, _ = redact_credentials(title_safe)
-        fallback = f"🔐 [{source}] Approve: {title_safe}?"
+        fallback = f"🔐 [{source}] Approve: {event.title}?"
         # The notification preview is the FIRST thing the owner reads, and often the only
         # thing (a lock screen shows no blocks). Same composed line as the block, so the
         # push and the prompt can never say different things about the blast radius.
@@ -303,7 +293,7 @@ class SlackDelivery:
         status = "✅ Approved" if outcome == "approved" else "🚫 Rejected"
         try:
             await self._client.update_message(
-                channel, approval_ts, text=f"🔐 *{title_safe}* — {status}"
+                channel, approval_ts, text=f"🔐 *{event.title}* — {status}"
             )
         except Exception:
             pass

@@ -114,6 +114,10 @@ class MailInboxSettings:
     smtp_port: int = DEFAULT_SMTP_PORT
     smtp_security: str = SMTP_STARTTLS
     smtp_username: str = ""
+    #: A PEM file of the certificate authority a private mail server's certificate comes from,
+    #: trusted in addition to the system's (``mail_inbox_runtime.tls``). Empty trusts the
+    #: system's alone. There is deliberately no setting that turns verification off.
+    tls_ca_file: str = ""
 
     @property
     def receiving_address(self) -> str:
@@ -159,6 +163,7 @@ class MailInboxSettings:
             smtp_port=_coerce_port(d.get("smtp_port", DEFAULT_SMTP_PORT), DEFAULT_SMTP_PORT),
             smtp_security=_coerce_security(d.get("smtp_security", SMTP_STARTTLS)),
             smtp_username=str(d.get("smtp_username", "")).strip(),
+            tls_ca_file=str(d.get("tls_ca_file", "") or "").strip(),
         )
 
 

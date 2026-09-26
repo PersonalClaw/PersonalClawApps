@@ -24,6 +24,16 @@ Three IMAP facts shape this file:
 ``UIDVALIDITY`` is checked on select: when a server renumbers a mailbox (a restore, a
 migration) every UID becomes meaningless, and a cursor kept across that boundary would
 skip the whole mailbox. The client reports the value so the transport can reset.
+
+**The server is verified before it is trusted with the password.** ``IMAP4_SSL`` is given
+:func:`~email_runtime.tls.client_context` (system CAs, host name checked, plus the
+``tls_ca_file`` setting's authority), where it used to build a context that checks
+nothing. With ``imap_use_ssl`` off, the plain connection is upgraded with STARTTLS through
+the same context before the login, and a server that does not offer STARTTLS is refused
+with the password unsent: it used to be sent in the clear, and no setting sends it that way
+now. A connection failure is raised as an :class:`ImapError` whose ``kind`` says which
+stage failed — ``tls``, ``unreachable`` or ``auth`` — and whose text is the sentence the
+channel's health shows.
 """
 
 from __future__ import annotations
@@ -31,7 +41,10 @@ from __future__ import annotations
 import imaplib
 import logging
 import re
+import ssl
 from typing import Protocol
+
+from email_runtime.tls import CaFileError, client_context, describe_failure
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +61,32 @@ _UIDVALIDITY_RE = re.compile(rb"UIDVALIDITY\s+(\d+)", re.IGNORECASE)
 
 
 class ImapError(Exception):
-    """Any IMAP transport/auth/protocol failure. The caller degrades, never crashes."""
+    """Any IMAP transport/auth/protocol failure. The caller degrades, never crashes.
+
+    ``kind`` names the stage: ``tls`` (the certificate or the handshake), ``unreachable``
+    (the host did not answer), ``auth`` (the login was refused) or ``protocol`` (a command
+    after login failed)."""
+
+    def __init__(self, message: str, *, kind: str = "protocol") -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
+def _exists(data: object) -> int | None:
+    """The message count a SELECT answered (``imaplib`` returns ``[b"<EXISTS>"]``)."""
+    raw = data[0] if isinstance(data, (list, tuple)) and data else None
+    try:
+        return int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _server_text(exc: BaseException) -> str:
+    """What the server said, as text: ``imaplib`` raises its reply as bytes."""
+    raw = exc.args[0] if exc.args else exc
+    if isinstance(raw, (bytes, bytearray)):
+        return bytes(raw).decode("utf-8", errors="replace")
+    return str(raw)
 
 
 class ImapClient(Protocol):
@@ -57,6 +95,8 @@ class ImapClient(Protocol):
     def connect(self) -> None: ...
 
     def select_folder(self, folder: str) -> int: ...
+
+    def newest_uid(self, folder: str) -> int: ...
 
     def fetch_uids_since(self, folder: str, last_uid: int) -> list[int]: ...
 
@@ -71,33 +111,85 @@ class Imap4Client:
     Every public method is BLOCKING and must be called from a thread executor."""
 
     def __init__(
-        self, host: str, port: int, username: str, password: str, *, use_ssl: bool = True
+        self, host: str, port: int, username: str, password: str, *, use_ssl: bool = True,
+        ca_file: str = "",
     ) -> None:
         self._host = host
         self._port = port
         self._username = username
         self._password = password
         self._use_ssl = use_ssl
+        self._ca_file = ca_file
         self._conn: imaplib.IMAP4 | None = None
 
     def connect(self) -> None:
-        """Open the connection and log in. Raises :class:`ImapError` on any failure."""
+        """Open the connection, verify the server, and log in.
+
+        Raises :class:`ImapError` on any failure, its ``kind`` naming the stage. The
+        certificate is checked in the handshake (implicit TLS, or STARTTLS with
+        ``imap_use_ssl`` off), so a server that fails it, or cannot upgrade, never sees the
+        login."""
+        conn = self._open()
         try:
-            conn: imaplib.IMAP4 = (
-                imaplib.IMAP4_SSL(self._host, self._port, timeout=IMAP_TIMEOUT_SECS)
-                if self._use_ssl
-                else imaplib.IMAP4(self._host, self._port, timeout=IMAP_TIMEOUT_SECS)
-            )
             conn.login(self._username, self._password)
-        except (imaplib.IMAP4.error, OSError) as exc:
-            raise ImapError(f"IMAP connect/login failed: {exc}") from exc
+        except imaplib.IMAP4.error as exc:
+            _logout_quietly(conn)
+            raise ImapError(
+                f"the IMAP server {self._host}:{self._port} refused the login for "
+                f"{self._username} ({_server_text(exc)})",
+                kind="auth",
+            ) from exc
+        except OSError as exc:
+            _logout_quietly(conn)
+            raise ImapError(self._describe(exc), kind="unreachable") from exc
         self._conn = conn
+
+    def _open(self) -> imaplib.IMAP4:
+        """A connection the password may be sent on: implicit TLS, or plain IMAP upgraded
+        with STARTTLS. Nothing else is returned, so nothing else is logged in on."""
+        try:
+            if self._use_ssl:
+                return imaplib.IMAP4_SSL(
+                    self._host, self._port, ssl_context=client_context(self._ca_file),
+                    timeout=IMAP_TIMEOUT_SECS,
+                )
+            conn = imaplib.IMAP4(self._host, self._port, timeout=IMAP_TIMEOUT_SECS)
+        except (imaplib.IMAP4.error, OSError) as exc:
+            raise ImapError(self._describe(exc), kind=_stage(exc)) from exc
+        where = f"the IMAP server {self._host}:{self._port}"
+        if "STARTTLS" not in conn.capabilities:
+            _logout_quietly(conn)
+            raise ImapError(
+                f"{where} doesn't offer STARTTLS, so the password was not sent: with IMAP SSL "
+                "off, the connection must be upgraded to TLS before the login. Turn IMAP SSL "
+                "on (usually port 993), or use a server that offers STARTTLS",
+                kind="tls",
+            )
+        try:
+            conn.starttls(ssl_context=client_context(self._ca_file))
+        except OSError as exc:  # the certificate refused, the handshake failed, a CA file bad
+            _logout_quietly(conn)
+            raise ImapError(self._describe(exc), kind=_stage(exc)) from exc
+        except imaplib.IMAP4.error as exc:
+            _logout_quietly(conn)
+            raise ImapError(
+                f"{where} could not upgrade the connection with STARTTLS "
+                f"({_server_text(exc)}), so the password was not sent",
+                kind="tls",
+            ) from exc
+        return conn
 
     def select_folder(self, folder: str) -> int:
         """Select *folder* read-only and return its ``UIDVALIDITY`` (0 if unreported).
 
         ``readonly=True``: polling must never set ``\\Seen`` or otherwise mutate the
         user's mailbox — the mail is still unread in their client after we answer it."""
+        self._select_readonly(folder)
+        return self._read_uidvalidity(folder)
+
+    def _select_readonly(self, folder: str) -> int | None:
+        """SELECT *folder* read-only; return how many messages it holds (its ``EXISTS``),
+        or None when the answer does not say."""
         if self._conn is None:
             raise ImapError("not connected")
         try:
@@ -106,7 +198,7 @@ class Imap4Client:
             raise ImapError(f"IMAP select {folder!r} failed: {exc}") from exc
         if typ != "OK":
             raise ImapError(f"IMAP select {folder!r} failed: {typ}")
-        return self._read_uidvalidity(folder)
+        return _exists(data)
 
     def _read_uidvalidity(self, folder: str) -> int:
         """``UIDVALIDITY`` for the selected folder via ``STATUS``, or 0 if unavailable.
@@ -132,6 +224,32 @@ class Imap4Client:
                 except ValueError:
                     return 0
         return 0
+
+    def _describe(self, exc: BaseException) -> str:
+        return describe_failure(exc, protocol="IMAP", host=self._host, port=self._port)
+
+    def newest_uid(self, folder: str) -> int:
+        """The highest UID in *folder*, or 0 when it is empty.
+
+        ``UID SEARCH UID *``: RFC 3501's ``*`` is the largest UID in use, so the answer is
+        one number however large the mailbox is. The transport starts a first connection
+        after it, so mail that was already there is never answered. An empty folder has no
+        UID in use, and servers answer ``*`` there differently (some with BAD, which
+        ``imaplib`` raises), so a folder whose SELECT reports no message is 0 without a
+        search — a new, empty mailbox must be able to start."""
+        if self._select_readonly(folder) == 0:
+            return 0
+        assert self._conn is not None
+        try:
+            typ, data = self._conn.uid("SEARCH", None, "UID *")
+        except (imaplib.IMAP4.error, OSError) as exc:
+            raise ImapError(f"IMAP UID SEARCH failed: {exc}") from exc
+        if typ != "OK" or not data or not data[0]:
+            return 0
+        raw = data[0]
+        text = raw.decode("ascii", errors="replace") if isinstance(raw, bytes) else str(raw)
+        uids = [int(tok) for tok in text.split() if tok.isdigit()]
+        return max(uids, default=0)
 
     def fetch_uids_since(self, folder: str, last_uid: int) -> list[int]:
         """UIDs in *folder* strictly greater than *last_uid*, ascending.
@@ -197,15 +315,32 @@ class Imap4Client:
             logger.debug("email: IMAP logout error", exc_info=True)
 
 
+def _stage(exc: BaseException) -> str:
+    """Which stage a connection attempt that raised *exc* failed at (:class:`ImapError`)."""
+    if isinstance(exc, (ssl.SSLError, CaFileError)):
+        return "tls"
+    if isinstance(exc, OSError):
+        return "unreachable"
+    return "protocol"  # it answered, and not as an IMAP server greets
+
+
+def _logout_quietly(conn: imaplib.IMAP4) -> None:
+    try:
+        conn.logout()
+    except (imaplib.IMAP4.error, OSError):
+        logger.debug("email: IMAP logout after a failed login", exc_info=True)
+
+
 def probe_login(
-    host: str, port: int, username: str, password: str, folder: str, *, use_ssl: bool = True
+    host: str, port: int, username: str, password: str, folder: str, *, use_ssl: bool = True,
+    ca_file: str = "",
 ) -> tuple[bool, str]:
     """The doctor/Test probe: connect + login + SELECT the folder. BLOCKING.
 
     This is the plan's ``probe = login+select``: a login alone proves the credential but
     not that the folder we poll exists, and a wrong folder name is the second most
     common misconfiguration after a wrong password."""
-    client = Imap4Client(host, port, username, password, use_ssl=use_ssl)
+    client = Imap4Client(host, port, username, password, use_ssl=use_ssl, ca_file=ca_file)
     try:
         client.connect()
         client.select_folder(folder)

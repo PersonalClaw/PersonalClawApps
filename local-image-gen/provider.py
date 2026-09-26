@@ -18,8 +18,8 @@ Three things it deliberately does NOT do:
   one SEL-audited ``_image_generate`` dispatch; this file contains no tool, no
   route, and no audit call of its own.
 * **It does not reach the public internet.** The endpoint is operator-configured,
-  so it is guarded by a loopback/private-only egress policy (see
-  :data:`_LOCAL_ONLY`) before any request is made. A "local" backend pointed at a
+  so it is guarded by a loopback-only egress policy (see :data:`_LOCAL_ONLY`)
+  before any request is made. A "local" backend pointed at a
   public host would be an SSRF primitive wearing a local backend's name.
 
 Licence discipline: the *recommended* default is a genuinely OSI-permissive
@@ -534,10 +534,14 @@ class LocalComfyImageProvider(ImageGenProvider):
 
         try:
             installed = await self.installed_checkpoints()
+        except _AddressRefused:
+            raise
         except ImageGenError as e:
             raise ImageGenError(
-                f"The local image runtime is not reachable at {self._endpoint}, so "
-                f"{wanted!r} cannot be used yet. Start ComfyUI and try again. ({e})"
+                f"ComfyUI is not reachable at {self._endpoint}, so {wanted!r} cannot be used "
+                "yet. PersonalClaw does not install or start ComfyUI: start it yourself, or "
+                "set the address it listens on in this app's Configure page, then try again. "
+                f"({e})"
             ) from e
 
         for name in installed:
@@ -727,6 +731,15 @@ def _image_refs(outputs: Any) -> list[dict[str, str]]:
     return refs
 
 
+class _AddressRefused(ImageGenError):
+    """The egress policy turned the configured address down.
+
+    That is the whole answer, so callers pass it on as it is rather than wrapping it in
+    "ComfyUI is not reachable", which would send someone whose ComfyUI is running on
+    another machine off to start it again.
+    """
+
+
 async def _guarded_fetch(url: str, **kw: Any) -> Any:
     """``fetch`` under :data:`_LOCAL_ONLY`, with egress refusals explained.
 
@@ -738,9 +751,9 @@ async def _guarded_fetch(url: str, **kw: Any) -> Any:
     try:
         return await fetch(url, policy=_LOCAL_ONLY, **kw)
     except EgressBlocked as e:
-        raise ImageGenError(
-            f"Refused to reach {url!r}: the local image backend may only talk to an "
-            f"address on this machine or private network. ({e})"
+        raise _AddressRefused(
+            f"Refused to reach {url!r}: this app only talks to ComfyUI on this machine, at "
+            f"a loopback address such as http://127.0.0.1:8188. ({e})"
         ) from e
     except ImageGenError:
         raise

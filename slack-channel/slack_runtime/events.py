@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Coroutine
 
 import aiohttp
+from slack_sdk.errors import SlackApiError
 from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
 from slack_sdk.socket_mode.websockets import SocketModeClient as WSSocketModeClient
@@ -72,6 +73,40 @@ if TYPE_CHECKING:
     from personalclaw.sdk.channel import GatewayServices
 
 logger = logging.getLogger(__name__)
+
+
+class SocketModeReceiver(WSSocketModeClient):
+    """The Slack SDK's Socket Mode client, keeping why it last failed to connect.
+
+    The SDK reconnects on its own (``monitor_current_session``, every ``ping_interval``) and only
+    LOGS a failure, so the transport could see that Socket Mode was not connected but not why.
+    ``connect_error`` is Slack's own error code when ``apps.connections.open`` refused
+    (``invalid_auth`` for a revoked App Token), else the failure's type. Never its text: that
+    can carry the socket URL and its one-time ticket. ``""`` once a connection is made.
+    """
+
+    connect_error = ""
+
+    async def issue_new_wss_url(self) -> str:
+        try:
+            return await super().issue_new_wss_url()
+        except SlackApiError as exc:
+            try:
+                self.connect_error = str(exc.response["error"] or "") or type(exc).__name__
+            except (KeyError, TypeError):
+                self.connect_error = type(exc).__name__
+            raise
+
+    async def connect(self) -> None:
+        try:
+            await super().connect()
+        except SlackApiError:
+            raise  # `issue_new_wss_url` kept Slack's answer
+        except Exception as exc:
+            self.connect_error = type(exc).__name__
+            raise
+        self.connect_error = ""
+
 
 _skills_loader: SkillsLoader | None = None
 
@@ -190,8 +225,12 @@ def _build_help_text(cmd_name: str = "personalclaw") -> str:
 async def _handle_dashboard(
     orch: "GatewayServices", caller_id: str, args: str, respond: Callable
 ) -> None:
-    """Generate presigned dashboard link and DM to caller."""
-    from personalclaw.sdk.channel import LINK_WINDOW_SECS, MAX_SESSION_TTL_SECS
+    """Generate presigned dashboard link and DM to caller.
+
+    A lifetime longer than the gateway allows is answered with the gateway's own sentence
+    (``send_dashboard_link`` relays ``generate_token``'s refusal), never quietly shortened.
+    """
+    from personalclaw.sdk.channel import LINK_WINDOW_SECS
     from slack_runtime.blocks import dashboard_link_block
 
     ttl = 3600
@@ -202,11 +241,14 @@ async def _handle_dashboard(
             return
         ttl = parsed
 
-    session_ttl = min(ttl, MAX_SESSION_TTL_SECS)
     assert orch.slack is not None
-    url = await send_dashboard_link(orch.slack, caller_id, session_ttl)
+    try:
+        url = await send_dashboard_link(orch.slack, caller_id, ttl)
+    except ValueError as exc:
+        await respond(f"❌ {exc}")
+        return
     if url:
-        blks = dashboard_link_block(url, LINK_WINDOW_SECS // 60, session_ttl // 60)
+        blks = dashboard_link_block(url, ttl, LINK_WINDOW_SECS)
         await respond("🔗 Dashboard link sent to your DMs.", blocks=blks)
     else:
         await respond("❌ Failed to send dashboard link.")
@@ -242,9 +284,7 @@ async def _handle_agent(
         await respond(f"❌ Unknown agent `{name}`. Pick one below:")
 
     # Show selector dropdown
-    from pathlib import Path
-
-    agents_dir = Path.home() / ".personalclaw" / "agents"
+    agents_dir = config_dir() / "agents"
     jsons = sorted(agents_dir.glob("*.json")) if agents_dir.is_dir() else []
     agent_names = sorted(f.stem for f in jsons)
     current = _get_default_agent() or ""
@@ -417,11 +457,10 @@ def _get_agent_names() -> list[str]:
     (``sensitive_path_blocked``) is emitted so the attempt is observable.
     """
     import json
-    from pathlib import Path
 
     from personalclaw.sdk.channel import safe_read_file
 
-    agents_dir = Path.home() / ".personalclaw" / "agents"
+    agents_dir = config_dir() / "agents"
     if not agents_dir.is_dir():
         return []
     names = []
@@ -496,9 +535,8 @@ async def _handle_sessions(
 ) -> None:
     """List last 10 sessions as task_card blocks with resume buttons."""
     import json
-    from pathlib import Path
 
-    sess_dir = Path.home() / ".personalclaw" / "sessions"
+    sess_dir = config_dir() / "sessions"
     if not sess_dir.exists():
         await respond("_No recent sessions._")
         return
@@ -680,7 +718,7 @@ def init_socket_mode(orch: "GatewayServices", seen: SeenCache) -> None:
         return
 
     web_client = AsyncWebClient(token=orch._bot_token)
-    orch._socket_client = WSSocketModeClient(
+    orch._socket_client = SocketModeReceiver(
         app_token=orch._app_token,
         web_client=web_client,
     )

@@ -33,13 +33,16 @@ A standalone PersonalClaw app bundle. It ships as a self-contained directory:
   `email_runtime.transport:create_provider`).
 - `email_runtime/` — the implementation:
   - `imap_client.py` — the blocking IMAP mechanics behind a narrow protocol: UID-only
-    commands, read-only `SELECT`, `BODY.PEEK[]`, `UIDVALIDITY`, and the `_MAXLINE`
-    ceiling raised at import.
+    commands, read-only `SELECT`, `BODY.PEEK[]`, `UIDVALIDITY`, the folder's newest UID,
+    and the `_MAXLINE` ceiling raised at import.
   - `smtp_client.py` — the blocking SMTP mechanics: STARTTLS/SSL/plain, with **no
     plaintext fallback** (a failed upgrade aborts the send).
+  - `tls.py` — the one TLS context every IMAP and SMTP connection uses, and the sentence
+    a connection that fails reports.
   - `mime.py` — inbound parse (RFC-2047 header decoding, `text/plain` preference, HTML
-    stripped to text, quoted-history trimming, `parseaddr`-only sender addresses) and
-    outbound build (`Message-ID` / `In-Reply-To` / `References`).
+    stripped to text, quoted-history trimming, `parseaddr`-only sender addresses, and the
+    RFC 3834 check for mail a program sent) and outbound build (`Message-ID` /
+    `In-Reply-To` / `References`).
   - `transport.py` — the IMAP poll loop, the self-message filter, trust-seam
     integration, code-in-reply pairing, and session routing.
   - `delivery.py` — the `ChannelDelivery` the gateway delivers results through, plus the
@@ -53,10 +56,13 @@ It imports core **only** via the PersonalClaw **SDK** (never core internals), so
 evolve without breaking it:
 
 - `personalclaw.sdk.channel` — the transport ABC, `ChannelMessage`, the sender-trust seam
-  (`guard_inbound`, `redeem_pairing_code`, `is_tracked_channel`), redaction, `run_chat`,
+  (`guard_inbound`, `redeem_pairing_code`, `is_tracked_channel`), `run_chat`,
   `ProviderSettings`, `AppConfig`, `atomic_write`.
 - `personalclaw.sdk.util` — `app_data_dir` (the UID cursor + thread state).
 - `personalclaw.sdk.cli` — `SetupContext` / `DoctorLine`.
+
+Core masks every text it hands the delivery handle (keys and exfiltration URLs), the words of a
+subject included, so the app masks nothing itself.
 
 **No vendor SDK and no new dependencies:** `imaplib`, `smtplib` and `email` are stdlib.
 The manifest declares no `pythonDependencies`.
@@ -113,11 +119,12 @@ other app. (Or [install it from a shell](../docs/third-party-install.md#installi
 
 | Key | Label | Notes |
 |---|---|---|
-| `imap_host` / `imap_port` / `imap_user` / `imap_use_ssl` | IMAP | Inbound. 993 + SSL by default. |
+| `imap_host` / `imap_port` / `imap_user` / `imap_use_ssl` | IMAP | Inbound. 993 + SSL by default. With IMAP SSL off (usually 143), the connection is upgraded with STARTTLS before the login. |
 | `imap_password` | IMAP App Password | Write-only. An app password, never your account password. |
 | `folder` | Folder | Polled **read-only** — your mail is never marked read. |
 | `smtp_host` / `smtp_port` / `smtp_user` / `smtp_security` | SMTP | Outbound. 587 + STARTTLS by default. |
 | `smtp_password` | SMTP App Password | Write-only. Blank reuses the IMAP one (one app password usually covers both). |
+| `tls_ca_file` | CA Certificate File | Optional. The PEM certificate of the authority your mail server's certificate comes from, when it is not a public one (a company relay, a home server). Trusted in addition to this machine's authorities. |
 | `address` | Mailbox Address | Sends as, receives at, and anchors the self-message filter. Defaults to the IMAP login. |
 | `poll_secs` | Poll Interval | 60s default, clamped to 10–3600. |
 | `dm_activation` | Inbound Activation | `always`, or `off` to keep outbound delivery only. |
@@ -126,6 +133,27 @@ The two passwords never sit in the settings file: each is kept in the credential
 under a key this app owns, the file holds only a reference, and uninstalling the app
 removes them. Passwords an earlier release's setup saved under `EMAIL_IMAP_PASS` /
 `EMAIL_SMTP_PASS` are still used while the settings are empty.
+
+## Connecting
+
+- **The server is verified before it gets the password.** IMAP, implicit-TLS SMTP and
+  STARTTLS all check the server's certificate and host name against this machine's
+  certificate authorities, plus the one **CA Certificate File** names. Nothing turns the
+  check off: a server nothing vouches for is refused, and the channel's status says
+  which server, why, and that the password was not sent. With **IMAP SSL** off, the IMAP
+  connection is upgraded with STARTTLS before the login, and a server that does not offer
+  STARTTLS is refused the same way: the password is never sent in the clear.
+- **A first connection starts after the newest message.** The mail already in the folder
+  when you set the channel up is never answered; mail that arrives after it is. The same
+  happens when the server renumbers the folder (`UIDVALIDITY` changes).
+- **Mail a program sent is never answered** (RFC 3834): `Auto-Submitted` other than `no`,
+  an empty `Return-Path`, `Precedence: bulk` / `list` / `junk`, mailing-list headers, and
+  no-reply or daemon senders. Such mail gets no reply, no turn and no notification. An
+  allowed correspondent's automated mail still reaches your automations.
+- **The status is what the connections last did.** It reads ready while the receiver runs,
+  its last poll read the folder and the last send went out. Otherwise it names what failed
+  (a refused login, an untrusted certificate, an unreachable server), and Test agrees
+  with it. A poll that fails waits longer before each retry, up to 15 minutes.
 
 ## The live-writes kill switch
 
@@ -152,8 +180,8 @@ and **any other present value — including a typo — turns it on**.
 Who may talk is owned by the **core sender-trust seam** (`channel_trust`, provider
 `email`) — this app keeps no allowlist of its own.
 
-1. An unknown address gets one canned reply asking for a pairing code (and you get one
-   owner notification, deduped for 24h).
+1. An unknown address gets one canned reply asking for a pairing code, and you get one
+   owner notification: both at most once a day per address, however often it writes.
 2. Run `personalclaw pair email` for an 8-digit code (TTL 10 min, single use).
 3. They **reply with the code anywhere in the body** — quoting and signatures are fine.
 4. From then on they converse; each thread gets its own session.
@@ -185,7 +213,13 @@ channel cannot stream". Both halves are asserted together in
 Approvals arrive as a **reply token**: the prompt mail carries `APPROVE <token>` /
 `DENY <token>`, and only a reply from an already-allowed sender can resolve one. Both the
 verb and the token must be present, and an explicit `DENY` wins over a body containing
-both.
+both. A chat that started in this mailbox is asked here first; *Settings → Notifications →
+Send approvals to* decides for the rest.
+
+Notifications can reach the mailbox too. A notification rule with the **Channel DM** target
+sends its note to the owner on the first connected channel that reaches them, in name order,
+so here when Email is that channel (`deliver_text`); a schedule's or heartbeat's result for
+the owner is sent the same way, through `deliver_notification`.
 
 ## Deferred, on purpose
 
@@ -197,10 +231,6 @@ both.
   registration, and no browser round-trip in a headless gateway. OAuth2 would add a
   per-provider registration story and a refresh-token lifecycle before it improved
   anything; when a provider we care about drops app passwords, it becomes worth building.
-- **Digest delivery target.** `deliver_notification` is the hook the notification
-  rules use for a `channel_dm` / digest target; the core rules engine's `channel_dm`
-  target has no dispatcher wired yet, so nothing in this app needs to change when it
-  lands.
 
 ## License
 

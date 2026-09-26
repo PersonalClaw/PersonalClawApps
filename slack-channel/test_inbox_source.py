@@ -102,6 +102,11 @@ def _source(**kw):
     return SlackInboxSource({"bot_token": "xoxb-test"}, client=StubClient(**kw))
 
 
+#: A channel this source polled before, empty then: where the steady-state tests start. A
+#: channel's first poll (no cursor at all) only records where it is — see the tests below.
+_POLLED_BEFORE = {"C1": "0"}
+
+
 # ── manifest ──────────────────────────────────────────────────────────────────
 
 
@@ -148,7 +153,7 @@ def test_poll_maps_messages_and_advances_the_checkpoint():
         history={"C1": [_msg("1700000001.000100"), _msg("1700000002.000200", text="second")]},
         users={"U_ALICE": {"real_name": "Alice Example"}},
     )
-    msgs, cursors = asyncio.run(src.poll(["C1"], {}, "U_ME"))
+    msgs, cursors = asyncio.run(src.poll(["C1"], _POLLED_BEFORE, "U_ME"))
 
     assert [m.id for m in msgs] == ["1700000001.000100", "1700000002.000200"]  # oldest-first
     assert [m.text for m in msgs] == ["hello", "second"]
@@ -193,7 +198,7 @@ def test_poll_skips_bot_own_and_authorless_messages_but_still_advances():
             ]
         }
     )
-    msgs, cursors = asyncio.run(src.poll(["C1"], {}, "U_ME"))
+    msgs, cursors = asyncio.run(src.poll(["C1"], _POLLED_BEFORE, "U_ME"))
 
     assert [m.text for m in msgs] == ["real"]
     assert cursors["C1"] == "1700000004.000400"
@@ -216,7 +221,7 @@ def test_poll_keeps_the_old_checkpoint_when_a_channel_errors():
 
 def test_poll_carries_thread_id_and_marks_dms():
     src = _source(history={"D9": [_msg("1700000001.000100", thread_ts="1700000000.000000")]})
-    msgs, _ = asyncio.run(src.poll(["D9"], {}, "U_ME"))
+    msgs, _ = asyncio.run(src.poll(["D9"], {"D9": "0"}, "U_ME"))
     assert msgs[0].thread_id == "1700000000.000000"
     assert msgs[0].is_dm is True  # D-prefixed channel
 
@@ -232,7 +237,7 @@ def test_poll_ignores_a_malformed_ts_for_the_cursor():
             ]
         }
     )
-    msgs, cursors = asyncio.run(src.poll(["C1"], {}, "U_ME"))
+    msgs, cursors = asyncio.run(src.poll(["C1"], _POLLED_BEFORE, "U_ME"))
     # The malformed message still surfaces (timestamp 0.0), but never wins the cursor.
     assert {m.id for m in msgs} == {"not-a-ts", "1700000001.000100"}
     assert cursors["C1"] == "1700000001.000100"
@@ -247,9 +252,81 @@ def test_send_reply_posts_into_the_thread():
     assert src._client.posts == [("C1", "ack", "1700000000.000000")]
 
 
-def test_send_reply_returns_false_on_failure():
+def test_send_reply_says_why_slack_did_not_take_it():
+    """Falsy, and its ``str()`` is what core's inbox shows the owner who pressed Send."""
     src = _source()
-    assert asyncio.run(src.send_reply("C_BAD", "ack")) is False
+    result = asyncio.run(src.send_reply("C_BAD", "ack"))
+    assert not result
+    assert str(result) == "Slack refused it in C_BAD (cannot post)."
+
+
+# ── a channel's first poll, and a poll that reads nothing (ledgers 250, 279, 280) ──
+
+
+def test_a_channels_first_poll_surfaces_none_of_its_backlog():
+    """Every message surfaced raises an inbox event, so a newly watched channel's history
+    would fire the owner's inbox automations at once. It records where the channel is."""
+    src = _source(history={"C1": [_msg("1700000001.000100"), _msg("1700000002.000200")]})
+    msgs, cursors = asyncio.run(src.poll(["C1"], {}, "U_ME"))
+    assert msgs == []
+    assert cursors == {"C1": "1700000002.000200"}
+    assert src._client.history_calls == [("C1", "0", 1)], "it read more than where it is"
+
+    src._client._history["C1"].append(_msg("1700000003.000300", text="after"))
+    msgs, _ = asyncio.run(src.poll(["C1"], cursors, "U_ME"))
+    assert [m.text for m in msgs] == ["after"]
+
+
+def test_an_empty_channels_first_poll_starts_at_the_beginning():
+    src = _source(history={"C1": []})
+    msgs, cursors = asyncio.run(src.poll(["C1"], {}, "U_ME"))
+    assert msgs == [] and cursors == {"C1": "0"}
+    src._client._history["C1"].append(_msg("1700000001.000100", text="first"))
+    msgs, _ = asyncio.run(src.poll(["C1"], cursors, "U_ME"))
+    assert [m.text for m in msgs] == ["first"]
+
+
+def test_a_newly_watched_channel_starts_on_its_own():
+    src = _source(history={"C1": [_msg("1700000001.000100")], "C2": [_msg("1700000005.000500")]})
+    msgs, cursors = asyncio.run(
+        src.poll(["C1", "C2"], {"C1": "1700000000.000000"}, "U_ME")
+    )
+    assert [m.channel_id for m in msgs] == ["C1"]
+    assert cursors == {"C1": "1700000001.000100", "C2": "1700000005.000500"}
+
+
+def test_a_poll_that_reads_no_channel_says_why():
+    """It returned nothing and logged at debug, so a revoked token read like a quiet
+    workspace. Core shows the sentence as this source's health."""
+    from slack_runtime.inbox_source import SlackUnreadable
+
+    src = _source(fail_channels=["C1", "C2"])
+    with pytest.raises(SlackUnreadable) as failed:
+        asyncio.run(src.poll(["C1", "C2"], {"C1": "0", "C2": "0"}, "U_ME"))
+    assert str(failed.value) == (
+        "none of the watched Slack channels could be read: C1 (slack api down), "
+        "C2 (slack api down)"
+    )
+
+
+def test_one_channel_failing_is_a_warning_and_the_rest_arrive(caplog):
+    import logging
+
+    src = _source(history={"C_OK": [_msg("1700000005.000500")]}, fail_channels=["C_ERR"])
+    with caplog.at_level(logging.WARNING, logger="slack_runtime.inbox_source"):
+        msgs, _ = asyncio.run(src.poll(["C_OK", "C_ERR"], {"C_OK": "0", "C_ERR": "0"}, "U_ME"))
+    assert [m.channel_id for m in msgs] == ["C_OK"]
+    assert "channel C_ERR could not be read (slack api down)" in caplog.text
+
+
+def test_slacks_own_word_for_a_failure_is_the_reason():
+    from slack_runtime.inbox_source import _slack_reason
+
+    class _ApiError(Exception):
+        response = {"ok": False, "error": "not_in_channel"}
+
+    assert _slack_reason(_ApiError("The request to the Slack API failed.\n...")) == "not_in_channel"
+    assert _slack_reason(RuntimeError("boom")) == "boom"
 
 
 def test_add_reaction_reports_success_and_failure():

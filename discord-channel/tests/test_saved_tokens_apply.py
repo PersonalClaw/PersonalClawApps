@@ -1,24 +1,30 @@
 """A bot token saved on the Apps page reaches Test, Connect, health and send without a restart.
 
-The same defect Slack and Telegram carried: the registry builds the transport once, at enable, and
-the Apps page's Configure → Save (``PUT /api/apps/{name}/config``) writes the store and re-cycles
-nothing, while the transport read its token in ``__init__``.
+The same defect Slack and Telegram carried: the registry built the transport once, at enable, and
+the Apps page's Configure → Save (``PUT /api/apps/{name}/config``) wrote the store and re-cycled
+nothing, while the transport read its token in ``__init__``. A save now also rebuilds the
+transport, and PersonalClaw moves its receiver onto the new instance (core #3628); these tests
+hold one instance, so they also cover what it says when its token changes under it.
 
-Saves go through core's own route handler; ``HTTPDiscordAPI`` is replaced so nothing opens a
-socket.
+Saves go through core's own routes, served on a loopback test server and made the way the page
+makes them: read the settings, then save over the revision that read reported. ``HTTPDiscordAPI``
+is replaced so nothing reaches Discord.
 """
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 from pathlib import Path
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 
 import discord_runtime.transport as transport_mod
 from discord_runtime.settings import CRED_DISCORD_BOT_TOKEN, get_settings
 from discord_runtime.transport import create_provider
-from personalclaw.dashboard.handlers.apps import api_app_config_put
+from personalclaw.dashboard.handlers.apps import register_app_routes
 from personalclaw.providers.settings import ProviderSettings
 from personalclaw.sdk.channel import OutboundMessage
 
@@ -37,16 +43,19 @@ def installed(_isolate_home, monkeypatch):
 
 
 async def _configure_save(values: dict) -> None:
-    """The Apps page's Configure → Save: core's PUT /api/apps/{name}/config handler."""
-
-    class _Request(dict):
-        match_info = {"name": _APP}
-
-        async def json(self):
-            return values
-
-    resp = await api_app_config_put(_Request())
-    assert resp.status == 200, resp.text
+    """The Apps page's Configure → Save, over core's own routes: read the settings, then save
+    ``values`` over the revision that read reported. The save replaces the whole file, so it
+    names the copy it replaces (``If-Match``), as the page does."""
+    app = web.Application()
+    register_app_routes(app)
+    async with TestClient(TestServer(app)) as client:
+        read = await client.get(f"/api/apps/{_APP}/config")
+        assert read.status == 200, await read.text()
+        revision = (await read.json())["revision"]
+        resp = await client.put(
+            f"/api/apps/{_APP}/config", json=values, headers={"If-Match": f'"{revision}"'}
+        )
+        assert resp.status == 200, await resp.text()
 
 
 class _FakeAPI:
@@ -94,8 +103,9 @@ async def test_a_token_saved_after_enable_reaches_connect_and_health(installed):
     assert await transport.connect() is True
     health = await transport.health()
     assert health["state"] != "offline" and "No bot token" not in health["detail"], health
-    # Never driven by the gateway (built at enable, after boot): honest about inbound.
+    # Never driven (nothing runs its receiver here): honest about inbound.
     assert "NOT STARTED" in health["detail"], health
+    assert "restart" not in health["detail"], health
 
 
 @pytest.mark.asyncio
@@ -134,7 +144,11 @@ async def test_a_rotated_token_sends_on_the_new_one_not_the_receivers(installed,
 
 
 @pytest.mark.asyncio
-async def test_a_token_saved_after_boot_says_inbound_starts_on_the_next_restart(installed, fake_api):
+async def test_a_token_saved_after_the_receiver_started_says_how_inbound_takes_it(
+    installed, fake_api
+):
+    """Started without a token, the gateway session never connected. The way to start it on the
+    saved one is a save or a toggle: since core #3628 a restart is not the only thing that does."""
     transport = _registry_built()
     await transport.start_inbound(object())  # no token: returns before touching services
 
@@ -142,9 +156,32 @@ async def test_a_token_saved_after_boot_says_inbound_starts_on_the_next_restart(
 
     health = await transport.health()
     assert health["state"] == "error", health
-    assert "next restart" in health["detail"], health
+    assert "restart" not in health["detail"], health
+    assert "Configure → Save, or turning the channel off and on" in health["detail"], health
     probe = await transport.test()
-    assert probe["ok"] is False and "next restart" in probe["detail"], probe
+    assert probe["ok"] is False and "restart" not in probe["detail"], probe
+    assert "Configure → Save" in probe["detail"], probe
+
+
+@pytest.mark.asyncio
+async def test_a_session_still_on_an_older_token_says_how_to_move_it(installed, fake_api):
+    """The Discord gateway session keeps the token it started with. A token changed under it (here,
+    a save no registry rebuilt it for) reaches outbound at once, and the status says how inbound
+    follows."""
+    await _configure_save({"bot_token": "old.token.value"})
+    transport = _registry_built()
+    transport._inbound_token = "old.token.value"
+    transport._gateway_task = asyncio.get_running_loop().create_future()  # a session still up
+    try:
+        await _configure_save({"bot_token": "new.token.value"})
+
+        health = await transport.health()
+        assert health["state"] == "error", health
+        assert "still runs on the one it started with" in health["detail"], health
+        assert "restart" not in health["detail"], health
+        assert "Configure → Save, or turning the channel off and on" in health["detail"], health
+    finally:
+        transport._gateway_task.cancel()
 
 
 @pytest.mark.asyncio

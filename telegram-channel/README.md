@@ -21,7 +21,16 @@ ships as a self-contained directory:
   - `transport.py` — the `getUpdates` long-poll inbound loop + outbound `send`.
   - `delivery.py` — the `ChannelDelivery` the gateway delivers results through
     (MarkdownV2 rendering, throttled edit-streaming, inline-keyboard approvals).
-  - `format.py` — the MarkdownV2 escaper (the classic Telegram footgun, contained).
+    A turn's progress message keeps only its task lines when the turn ends, each
+    task's line updated in place, and is removed when it only ever said "Thinking…":
+    the reply is a message of its own. An approval prompt too long for one message
+    is split like a reply, its buttons on the last part.
+    Only the owner's press answers an approval: in a tracked group every member sees
+    the buttons, and anyone else's press is refused and logged.
+  - `format.py` — the MarkdownV2 escaper (the classic Telegram footgun, contained), and
+    the splitter that cuts a long reply into messages BEFORE rendering them, so every
+    part is MarkdownV2 Telegram accepts and a code block stays code on both sides of a
+    cut. A part Telegram still refuses goes out as plain text rather than not at all.
   - `settings.py` — the app's own DM-activation config + credential key.
 - `cli_setup.py` / `cli_doctor.py` — the app's `personalclaw setup` / `doctor` hooks.
 - `test_provider.py` + `tests/` — the app's own tests.
@@ -30,7 +39,10 @@ It imports core **only** via the PersonalClaw **SDK** (never core internals), so
 core can evolve without breaking it:
 
 - `personalclaw.sdk.channel` — transport ABC, `ChannelMessage`, the sender-trust
-  seam (`guard_inbound`), redaction, `run_chat`, `ProviderSettings`, `atomic_write`.
+  seam (`guard_inbound`), `run_chat`, `ProviderSettings`, `atomic_write`.
+
+Core masks every text it hands the delivery handle (keys and exfiltration URLs), so the app
+masks nothing itself.
 - `personalclaw.sdk.cli` — `SetupContext` / `DoctorLine`.
 
 Who may talk (allowlist, pairing) and which groups are tracked are owned by the
@@ -63,6 +75,14 @@ Three things this deliberately does *not* do:
   list above by a structural fact, so a sender cannot pick which of your automations runs.
 - **Prose never lands in `meta`.** `meta` is matched, not narrated, and core does not fence
   it — so a sender's chosen display name is not there.
+
+## Results from your schedules
+
+A schedule can send its results here too. In the schedule's Advanced → Notify channel, pick
+Telegram, then **You, in a direct message** or **A chat or channel** with its id: a number like
+`4242`, `-1001234567890` for a group, or a public channel's `@username`. Your DMs need Telegram
+to know who you are, its owner. Telegram checks the id when you save and says what's wrong if
+it can't send there.
 
 ## Install
 
@@ -101,15 +121,26 @@ and **any other present value — including a typo — turns it on**.
 4. Optionally send `/setprivacy` → **Disable** to let the bot read group messages.
 5. Enter the token in the app's Configure form (Settings above), or run
    `personalclaw setup` and paste it when prompted (along with your Telegram user
-   id, used as the owner DM target for approvals). The id is stored as Telegram's own owner,
-   `PERSONALCLAW_OWNER_ID_TELEGRAM`, so setting up another channel leaves it alone. An install
-   set up by an earlier release kept the owner under the shared `PERSONALCLAW_OWNER_ID`; the
-   first time Telegram starts, it copies that owner to its own key.
+   id, used as the owner DM target for approvals).
+6. Pair yourself as the owner, if setup did not: in the same Configure form, **Pair as owner**
+   shows an 8-digit code. Send it to your bot in a direct message within ten minutes, and the
+   bot answers that you are its owner. From then on, what PersonalClaw sends you on Telegram
+   (results, scheduled messages, approval prompts) goes to that chat, with no restart.
+
+The owner id is stored as Telegram's own owner, `PERSONALCLAW_OWNER_ID_TELEGRAM`, so setting up
+another channel leaves it alone. An install set up by an earlier release kept the owner under the
+shared `PERSONALCLAW_OWNER_ID`; the first time Telegram starts, it copies that owner to its own key.
 
 Once configured, the transport long-polls `getUpdates`. Trust is enforced by the
 core seam: an unknown DM sender gets a canned pairing-needed reply (run
 `personalclaw pair telegram` for a code); a tracked group's non-owner content is
 fenced before it enters a session.
+
+The Telegram row on Settings → Providers reads the long-poll, not just the token. If Telegram
+rejects the token (401, for example after `/revoke` in @BotFather) the receiver stops and the
+row says so; save the new token in Configure to start it again. A long-poll that fails and is
+retried (another poller holding the token, Telegram unreachable) reads as not receiving, with
+Telegram's answer, until a poll gets through.
 
 ## License
 

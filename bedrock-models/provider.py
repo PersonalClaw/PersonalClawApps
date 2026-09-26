@@ -45,23 +45,19 @@ from personalclaw.sdk.model import (
     ProviderResolutionError,
     get_default_registry,
     output_cap,
+    own_model,
     per_call_temperature,
+    require_model,
 )
 
 logger = logging.getLogger(__name__)
 
-# NO hardcoded model id (user directive 2026-07-06): Bedrock supports dynamic
-# discovery (control plane list_foundation_models + list_inference_profiles), so the
-# unpinned default is RESOLVED FROM LIVE DISCOVERY at start() — never a baked id
-# (the old bug #32 was a hardcoded default that this account rejected). See
-# _pick_default_model_id. When a model IS pinned (the common case — the chat binding
-# supplies e.g. Bedrock:global.anthropic.claude-opus-4-8), no default is needed.
+# NO model id is chosen here, hardcoded or discovered. A call names its model: the chat binding
+# in Settings → Models (e.g. ``Bedrock:global.anthropic.claude-opus-4-8``), else the instance's
+# own Default Model (the SDK's ``own_model``). One that names neither is refused before it is
+# sent (``require_model``). This used to pick a Claude from live discovery at ``start()``, so an
+# unbound call on an instance saved without a Default Model answered on a model nobody chose.
 DEFAULT_REGION = "us-west-2"
-
-# Preference order for auto-picking an unpinned default from the discovered list:
-# a mid-tier Claude (sonnet) first, then any Claude, then any Nova, then anything.
-# Substring match against discovered ids — no exact id is hardcoded.
-_DEFAULT_MODEL_PREFERENCE = ("claude-sonnet", "claude-haiku", "claude", "nova")
 
 # Max conversation history entries before trimming oldest (mirrors openai.py).
 _MAX_HISTORY = 50
@@ -149,16 +145,42 @@ def _bare_model_id(model: str | None, fallback: str) -> str:
     return mid
 
 
-def _friendly_bedrock_error(error: Exception, model_id: str) -> Exception:
-    """Map an opaque botocore Bedrock error to an actionable message.
+#: The IAM action an ``AccessDeniedException`` names when the identity's policy lacks it:
+#: "... is not authorized to perform: bedrock:InvokeModelWithResponseStream on resource: ...".
+_NOT_AUTHORIZED_RE = re.compile(r"not authorized to perform:\s*(?P<action>[\w:*-]+)", re.IGNORECASE)
+#: The codes AWS answers with when it does not accept the credentials themselves.
+_REJECTED_CREDENTIAL_CODES = frozenset(
+    {"UnrecognizedClientException", "ExpiredTokenException", "ExpiredToken", "InvalidClientTokenId"}
+)
 
-    Some models carry account/policy restrictions that no request parameter can
-    satisfy — e.g. a model whose mandatory data-retention policy isn't enabled
-    for this AWS account fails ``Converse``/``ConverseStream`` with
-    ``ValidationException: data retention mode 'default' is not available for
-    this model``. There's no per-request fix; surface a clear message telling
-    the user to pick a different Bedrock model rather than a raw botocore dump.
-    Other errors pass through unchanged.
+
+def _aws_error_code(error: Exception) -> str:
+    """The AWS error code of a botocore ``ClientError`` (``AccessDeniedException``), else ""."""
+    response = getattr(error, "response", None)
+    if isinstance(response, dict):
+        code = str((response.get("Error") or {}).get("Code") or "")
+        if code:
+            return code
+    found = re.search(r"\((\w+)\) when calling", str(error))
+    return found.group(1) if found else ""
+
+
+def _friendly_bedrock_error(error: Exception, model_id: str, *, region: str = "") -> Exception:
+    """Map an opaque botocore Bedrock error to the sentence that names its fix.
+
+    Returned as the SDK's ``ProviderResolutionError``, which the chat shows as written: the fix
+    for each of these is outside PersonalClaw, and only this app knows where.
+
+    * A model whose mandatory data-retention policy isn't enabled for this account
+      (``ValidationException: data retention mode 'default' is not available for this model``).
+    * ``AccessDeniedException`` naming an IAM action: the identity's policy lacks it, so the fix is
+      that action in the policy, not a new key.
+    * ``AccessDeniedException`` without one: the account has no access to that model in the
+      region (model access is granted per account and region).
+    * The credentials themselves turned down (an invalid or expired security token): sign in to
+      AWS again.
+
+    Everything else passes through unchanged.
     """
     msg = str(error)
     if "data retention" in msg and "not available for this model" in msg:
@@ -167,6 +189,27 @@ def _friendly_bedrock_error(error: Exception, model_id: str) -> Exception:
             f"it requires a data-retention policy that isn't enabled here. "
             f"Choose a different Bedrock model in Settings → Models (most models "
             f"work with no extra setup)."
+        )
+    code = _aws_error_code(error)
+    where = f" in {region}" if region else ""
+    if code == "AccessDeniedException":
+        named = _NOT_AUTHORIZED_RE.search(msg)
+        if named:
+            return ProviderResolutionError(
+                f"Your AWS credentials aren't allowed to call {named['action']} on the Bedrock "
+                f"model '{model_id}'{where}. Add that action to the IAM policy of the identity "
+                "Bedrock signs in as, or pick a different model in Settings → Models."
+            )
+        return ProviderResolutionError(
+            f"This AWS account has no access to the Bedrock model '{model_id}'{where}. Request "
+            "access to it in the Amazon Bedrock console for that region, or pick a different "
+            "model in Settings → Models."
+        )
+    if code in _REJECTED_CREDENTIAL_CODES or "security token included in the request is" in msg:
+        return ProviderResolutionError(
+            "AWS turned down the credentials Bedrock used: their security token is invalid or "
+            "has expired. Sign in to AWS again (`aws sso login` for an SSO profile), or pick a "
+            "different model in Settings → Models."
         )
     return error
 
@@ -593,7 +636,7 @@ class BedrockProvider(ModelProvider):
         temperature: float | None = None,
     ) -> None:
         # NO credential parameter — boto3's chain authenticates (G-AUTH).
-        # Empty ⇒ resolve from live discovery at start() (no hardcoded default id).
+        # Empty ⇒ every call that names no model of its own is refused (``require_model``).
         self._model_id = model or ""
         self._region = region or DEFAULT_REGION
         self._profile = profile_name or None
@@ -674,13 +717,9 @@ class BedrockProvider(ModelProvider):
             )
 
         self._client = await asyncio.to_thread(_build_client)
-        # No model pinned → resolve the default from LIVE discovery (no hardcoded id).
-        # _resolve_default_model_id already runs its boto calls via to_thread.
-        if not self._model_id:
-            self._model_id = await _resolve_default_model_id(self._region, self._profile)
         logger.info(
             "Bedrock provider ready: model=%s region=%s profile=%s",
-            self._model_id or "<unresolved>",
+            self._model_id or "<none chosen>",
             self._region,
             self._profile or "<default-chain>",
         )
@@ -702,6 +741,8 @@ class BedrockProvider(ModelProvider):
         record are pushed onto an :class:`asyncio.Queue` this generator
         drains, so the event loop is never blocked by boto I/O.
         """
+        # Refused before anything is built or kept: a call that names no model is never sent.
+        model_id = require_model(self._model_id)
         if self._client is None:
             await self.start()
 
@@ -710,7 +751,7 @@ class BedrockProvider(ModelProvider):
             self._history = self._history[-_MAX_HISTORY:]
 
         request: dict[str, Any] = {
-            "modelId": self._model_id,
+            "modelId": model_id,
             "messages": self._history,
             "inferenceConfig": self._inference_config(),
         }
@@ -765,7 +806,7 @@ class BedrockProvider(ModelProvider):
             await worker  # ensure the thread is joined even on cancellation
 
         if error is not None:
-            raise _friendly_bedrock_error(error, self._model_id)
+            raise _friendly_bedrock_error(error, self._model_id, region=self._region)
 
         if input_tokens > 0:
             ctx = _model_window(self._model_id, _DEFAULT_CONTEXT_WINDOW)
@@ -808,6 +849,7 @@ class BedrockProvider(ModelProvider):
         :class:`asyncio.Queue` so the event loop is never stalled (mirrors
         :meth:`stream`).
         """
+        model_id = require_model(_bare_model_id(model, self._model_id))
         if self._client is None:
             await self.start()
 
@@ -817,7 +859,7 @@ class BedrockProvider(ModelProvider):
         system_blocks, converse_messages = _translate_messages(messages, tool_name_fwd)
 
         request: dict[str, Any] = {
-            "modelId": _bare_model_id(model, self._model_id),
+            "modelId": model_id,
             "messages": converse_messages,
         }
         if system_blocks:
@@ -935,7 +977,7 @@ class BedrockProvider(ModelProvider):
             await worker  # ensure the thread is joined even on cancellation
 
         if error is not None:
-            raise _friendly_bedrock_error(error, model or self._model_id)
+            raise _friendly_bedrock_error(error, model_id, region=self._region)
 
         # Defensive flush — emit any unfinalized tool blocks.
         for block_index, bucket in tool_blocks.items():
@@ -951,7 +993,7 @@ class BedrockProvider(ModelProvider):
 
         context_pct = 0.0
         if input_tokens > 0:
-            ctx = _model_window(model or self._model_id, _DEFAULT_CONTEXT_WINDOW)
+            ctx = _model_window(model_id, _DEFAULT_CONTEXT_WINDOW)
             context_pct = (input_tokens / ctx) * 100
 
         yield LLMEvent(
@@ -1017,30 +1059,6 @@ BEDROCK_CAPABILITY = ProviderCapability(
 # from the control plane. If discovery can't run (no boto3/creds/permission), the
 # model list is EMPTY (the UI shows "no models discovered — check AWS creds/region")
 # rather than fake ids that may not be invocable. Discovery is authoritative.
-
-
-async def _resolve_default_model_id(region: str, profile: str | None) -> str:
-    """Pick an unpinned default from LIVE discovery — no hardcoded id.
-
-    Discovers the account's invocable models (foundation + inference profiles) and
-    returns the first that matches ``_DEFAULT_MODEL_PREFERENCE`` (a mid-tier Claude,
-    else any Claude, else Nova, else the first discovered). Returns "" when nothing
-    is discoverable (no creds/permission) — the caller then errors clearly at call
-    time rather than invoking a bogus baked id (bug #32's failure mode)."""
-    try:
-        rows = await asyncio.to_thread(_list_bedrock_models_sync, region, profile or "")
-    except Exception:
-        logger.debug("Bedrock default resolution: discovery failed", exc_info=True)
-        return ""
-    ids = [str(r.get("id", "")) for r in rows if r.get("id")]
-    if not ids:
-        return ""
-    for needle in _DEFAULT_MODEL_PREFERENCE:
-        match = next((i for i in ids if needle in i.lower()), None)
-        if match:
-            logger.info("Bedrock: auto-selected default %r (matched %r) from discovery", match, needle)
-            return match
-    return ids[0]  # nothing preferred matched → first discovered (still not hardcoded)
 
 
 def _list_bedrock_models_sync(region: str, profile: str) -> list[dict[str, Any]]:
@@ -1191,10 +1209,16 @@ class BedrockCatalog(ModelCatalog):
             # Discovery failed/empty → return [] (no hardcoded floor). The catalog is
             # authoritative; a keyless/misconfigured account shows an empty list, not
             # fake ids.
-        return [
+        models = [
             ModelInfo(id=r["id"], name=r.get("name", r["id"]), capabilities=list(r.get("capabilities", ["chat"])))
             for r in rows
         ]
+        if models:
+            # Amazon Transcribe, which the speech-to-text adapter runs, is no foundation model,
+            # so no listing names it, and Settings → Models had nothing to bind speech-to-text
+            # to. Listed for an account the listings reached, so a binding can name it.
+            models.append(ModelInfo(id=TRANSCRIBE_MODEL, name="Amazon Transcribe", capabilities=["stt"]))
+        return models
 
     async def test_connection(self) -> ConnectionResult:
         # A successful control-plane list is the connectivity signal. The fallback
@@ -1237,8 +1261,8 @@ def create_provider(config: dict[str, Any]) -> BedrockProvider:
     # "leave it to the model", which `output_cap` reads as unset rather than a zero-token ceiling.
     max_tokens = output_cap(config.get("max_tokens"), None)
     return BedrockProvider(
-        # Empty when unpinned → resolved from live discovery at start() (no baked id).
-        model=config.get("model") or config.get("default_model") or "",
+        # The instance's own model: its Default Model. With none, each call is refused.
+        model=own_model(config.get("model"), config),
         region=config.get("region") or DEFAULT_REGION,
         profile_name=config.get("profile") or None,
         system_prompt=config.get("system_prompt") or None,
@@ -1261,13 +1285,12 @@ def _factory(
     Bedrock is stateless. No credential is resolved (G-AUTH): the entry's
     options carry only region/model/profile.
 
-    A ``model`` kwarg (threaded by ``registry.build(name, model=…)``) overrides the
-    entry's pinned model. The config.json Bedrock entry usually has NO pinned model
-    — the active model lives in ``active_models.json`` and is resolved per use-case
-    (e.g. ``Bedrock:global.anthropic.claude-opus-4-8``) — so a caller that builds
-    the provider for a specific model (one_shot_completion's reasoning axis) MUST be
-    able to pass it, or the provider would silently fall back to the on-demand
-    default and ignore the user's selection.
+    A ``model`` kwarg (threaded by ``registry.build(name, model=…)``) is the model the call
+    is built for: core resolves the active model per use-case (e.g.
+    ``Bedrock:global.anthropic.claude-opus-4-8``) and passes it, and the provider must
+    serve exactly that. Without one, the entry's own model (the SDK's
+    ``ProviderEntry.own_model``: its model, else the Default Model the Add-instance form
+    saves). With neither, the provider is built for no model and refuses each call.
     """
     del session_key  # unused — Bedrock provider is stateless.
 
@@ -1286,10 +1309,7 @@ def _factory(
     # build kwarg. Without it every request samples at the model's default.
     temperature = per_call_temperature(kwargs)
 
-    model_override = kwargs.get("model")
-    # Unpinned (no override, no entry.model) → "" → resolved from live discovery at
-    # start(). No hardcoded default id.
-    model = str(model_override) if model_override else (entry.model or "")
+    model = str(kwargs.get("model") or "") or entry.own_model
 
     return BedrockProvider(
         model=model,
@@ -1364,16 +1384,28 @@ def _resolve_profile(config: dict | None) -> str | None:
 # so the loop stalls (symptoms: the composer's model list empties on send, new
 # tabs spin). Run it on a worker thread AND cache the boolean per (profile,
 # region) so repeated probes are instant.
+#
+# Cached for a while, not for the process: the answer was kept forever, so credentials that
+# came back (an SSO login, a fixed profile) left embeddings, images, video and speech
+# unavailable until a restart. A missing credential is asked about again soon, so recovery is
+# seen on the next use after it; a working one is re-checked less often, so an expired one is
+# noticed too.
 
-_cred_cache: dict[tuple[str, str], bool] = {}
+#: Seconds one answer stands: a credential that resolved, and one that did not.
+_CRED_OK_TTL = 300.0
+_CRED_MISSING_TTL = 30.0
+_cred_cache: dict[tuple[str, str], tuple[float, bool]] = {}
 
 
 async def _creds_ok(region: str, profile: str | None) -> bool:
-    """Whether the AWS credential chain resolves for this profile — cached,
-    and run off the event loop so it never blocks."""
+    """Whether the AWS credential chain resolves for this profile — cached for a while
+    (``_CRED_OK_TTL`` / ``_CRED_MISSING_TTL``), and run off the event loop so it never blocks."""
     key = (profile or "", region or "")
-    if key in _cred_cache:
-        return _cred_cache[key]
+    hit = _cred_cache.get(key)
+    if hit is not None:
+        at, ok = hit
+        if _time.monotonic() - at < (_CRED_OK_TTL if ok else _CRED_MISSING_TTL):
+            return ok
 
     def _probe() -> bool:
         try:
@@ -1385,19 +1417,20 @@ async def _creds_ok(region: str, profile: str | None) -> bool:
             return False
 
     ok = await asyncio.to_thread(_probe)
-    _cred_cache[key] = ok
+    _cred_cache[key] = (_time.monotonic(), ok)
     return ok
 
 
+# ── Bedrock media providers ──────────────────────────────────────────────────
+#
+# Like chat, a media call names its model: the binding in Settings → Models for that use case
+# (``Bedrock:amazon.nova-canvas-v1:0``). One that names none is refused before anything is sent
+# (the SDK's ``require_model``). Each adapter used to put Bedrock's first model of its kind in
+# its place (Titan Embed, Nova Canvas, Nova Reel), and the speech adapter ran Transcribe for a
+# binding that named no model at all.
+
+
 # ── Bedrock Embedding Provider ───────────────────────────────────────────────
-
-
-_EMBEDDING_MODELS = [
-    ("amazon.titan-embed-text-v2:0", 1024),
-    ("amazon.titan-embed-text-v1", 1536),
-    ("cohere.embed-v4:0", 1024),
-]
-_DEFAULT_EMBED_MODEL = "amazon.titan-embed-text-v2:0"
 
 
 class BedrockEmbeddingProvider(EmbeddingProvider):
@@ -1436,10 +1469,9 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
         """True if the AWS credential chain resolves (cached, off-loop)."""
         return await _creds_ok(self._region, self._profile)
 
-    def _invoke_embed_sync(self, text: str, model: str) -> list[float] | None:
+    def _invoke_embed_sync(self, text: str, model_id: str) -> list[float] | None:
         """Blocking invoke_model for embedding — run via to_thread."""
         client = self._get_client()
-        model_id = model or _DEFAULT_EMBED_MODEL
 
         # Build request body per model family
         if model_id.startswith("cohere"):
@@ -1460,15 +1492,25 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
             return result.get("embedding")
 
     async def embed(self, text: str, model: str = "") -> list[float] | None:
-        """Embed a single text string."""
+        """Embed a single text string with ``model``. ``None`` when it names none, or fails."""
         try:
-            return await asyncio.to_thread(self._invoke_embed_sync, text, model)
+            model_id = require_model(model)
+        except ProviderResolutionError as exc:
+            logger.warning("Bedrock embedding on %r refused: %s", self._name, exc)
+            return None
+        try:
+            return await asyncio.to_thread(self._invoke_embed_sync, text, model_id)
         except Exception:
             logger.debug("Bedrock embedding failed", exc_info=True)
             return None
 
     async def embed_batch(self, texts: list[str], model: str = "") -> list[list[float]]:
         """Embed multiple texts (sequential calls — Bedrock has no native batch)."""
+        try:
+            require_model(model)
+        except ProviderResolutionError as exc:
+            logger.warning("Bedrock embedding on %r refused: %s", self._name, exc)
+            return [[] for _ in texts]
         results: list[list[float]] = []
         for text in texts:
             vec = await self.embed(text, model)
@@ -1527,10 +1569,9 @@ class BedrockImageProvider(ImageGenProvider):
     async def list_models(self) -> list[ImageGenModel]:
         return list(_IMAGE_MODELS)
 
-    def _generate_sync(self, prompt: str, model: str, size: str, n: int) -> list[dict]:
+    def _generate_sync(self, prompt: str, model_id: str, size: str, n: int) -> list[dict]:
         """Blocking image generation — run via to_thread."""
         client = self._get_client()
-        model_id = model or "amazon.nova-canvas-v1:0"
 
         # Parse size
         width, height = 1024, 1024
@@ -1564,9 +1605,13 @@ class BedrockImageProvider(ImageGenProvider):
         n: int = 1,
         **opts: Any,
     ) -> list[ImageResult]:
-        """Generate images from a text prompt via Nova Canvas."""
+        """Generate images from a text prompt with ``model`` (Nova Canvas)."""
         try:
-            images_b64 = await asyncio.to_thread(self._generate_sync, prompt, model, size, n)
+            model_id = require_model(model)
+        except ProviderResolutionError as exc:
+            raise ImageGenError(str(exc)) from exc
+        try:
+            images_b64 = await asyncio.to_thread(self._generate_sync, prompt, model_id, size, n)
         except Exception as exc:
             raise ImageGenError(f"Bedrock image generation failed: {exc}") from exc
 
@@ -1665,7 +1710,7 @@ class BedrockVideoProvider(VideoGenProvider):
     async def list_models(self) -> list[VideoGenModel]:
         return list(_VIDEO_MODELS)
 
-    def _generate_sync(self, prompt: str, model: str, duration_seconds: float) -> str:
+    def _generate_sync(self, prompt: str, model_id: str, duration_seconds: float) -> str:
         """Blocking submit → poll → download. Returns local file path to the MP4."""
         if not self._s3_bucket:
             raise VideoGenError(
@@ -1674,7 +1719,6 @@ class BedrockVideoProvider(VideoGenProvider):
             )
 
         client = self._get_runtime_client()
-        model_id = model or "amazon.nova-reel-v1:1"
         duration = max(6, min(int(duration_seconds), 6))  # Nova Reel supports 6s clips
 
         s3_prefix = f"bedrock-video/{int(_time.time())}/"
@@ -1731,10 +1775,14 @@ class BedrockVideoProvider(VideoGenProvider):
         aspect_ratio: str = "",
         **opts: Any,
     ) -> list[VideoResult]:
-        """Generate a video from a text prompt via Nova Reel (async invoke)."""
+        """Generate a video from a text prompt with ``model`` (Nova Reel, async invoke)."""
+        try:
+            model_id = require_model(model)
+        except ProviderResolutionError as exc:
+            raise VideoGenError(str(exc)) from exc
         try:
             local_path = await asyncio.to_thread(
-                self._generate_sync, prompt, model, duration_seconds
+                self._generate_sync, prompt, model_id, duration_seconds
             )
         except VideoGenError:
             raise
@@ -1754,8 +1802,10 @@ class BedrockVideoProvider(VideoGenProvider):
 # Amazon Transcribe works via a batch job: upload audio to S3 → start_transcription_job
 # → poll → download transcript JSON. For short clips (< 30s, the composer mic path),
 # this completes in 3-8 seconds. No hallucination, handles all formats natively.
-_STT_MODELS = ["amazon-transcribe"]
-_DEFAULT_STT_MODEL = "amazon-transcribe"
+#: The id a speech-to-text binding names for it (``Bedrock:amazon-transcribe``), listed by the
+#: catalog so Settings → Models can offer it. Transcribe has one model, so the adapter needs no
+#: more than that the binding names it.
+TRANSCRIBE_MODEL = "amazon-transcribe"
 
 
 class BedrockSTTProvider(SttProvider):
@@ -1858,7 +1908,12 @@ class BedrockSTTProvider(SttProvider):
                 pass
 
     async def transcribe(self, audio_path: str, model: str = "", language: str = "") -> str | None:
-        """Transcribe an audio file via Amazon Transcribe."""
+        """Transcribe an audio file via Amazon Transcribe, for a call that names its model."""
+        try:
+            require_model(model)
+        except ProviderResolutionError as exc:
+            logger.error("Amazon Transcribe on %r refused: %s", self._name, exc)
+            return None
         try:
             return await asyncio.to_thread(self._transcribe_sync, audio_path, model, language)
         except Exception:

@@ -1,6 +1,6 @@
 {
   "name": "anthropic-models",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "displayName": "Anthropic",
   "description": "Anthropic Claude chat models (Messages API). Bring your own Anthropic API key.",
   "icon": "Sparkles",
@@ -45,7 +45,7 @@
           "default": "",
           "x-meta": {
             "label": "Default Model",
-            "help": "Anthropic model id. Empty = newest from the app's built-in catalog."
+            "help": "An Anthropic model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models."
           }
         },
         "endpoint": {

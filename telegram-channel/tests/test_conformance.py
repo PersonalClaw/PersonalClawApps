@@ -33,7 +33,7 @@ def _wired() -> tuple[TelegramTransport, TelegramDelivery, FakeAPI, object]:
     invented.
     """
     api = FakeAPI()
-    delivery = TelegramDelivery(api, "42")
+    delivery = TelegramDelivery(api, lambda: "42")
     clock = {"t": 0.0}
     delivery._now = lambda: clock["t"]  # type: ignore[method-assign]
     return TelegramTransport({"bot_token": "123:conformance"}), delivery, api, clock

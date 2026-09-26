@@ -13,8 +13,9 @@ def _write_agent(agents_dir, filename: str, data: dict) -> None:
 
 @pytest.fixture()
 def agents_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    d = tmp_path / ".personalclaw" / "agents"
+    home = tmp_path / "pclaw-home"
+    monkeypatch.setenv("PERSONALCLAW_HOME", str(home))
+    d = home / "agents"
     d.mkdir(parents=True)
     return d
 
@@ -43,9 +44,23 @@ def test_falls_back_to_stem_on_invalid_json(agents_dir):
 
 
 def test_empty_when_no_agents_dir(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    # No .personalclaw/agents directory exists
+    monkeypatch.setenv("PERSONALCLAW_HOME", str(tmp_path / "pclaw-home"))
+    # No agents directory exists in the home
     assert _get_agent_names() == []
+
+
+def test_lists_the_agents_of_the_active_home_not_the_default_one(tmp_path, monkeypatch):
+    """The agents come from the PersonalClaw home the gateway runs on. On a gateway with its
+    own PERSONALCLAW_HOME, this read ``~/.personalclaw/agents``: another home's agents."""
+    monkeypatch.setenv("HOME", str(tmp_path / "user"))
+    default_agents = tmp_path / "user" / ".personalclaw" / "agents"
+    default_agents.mkdir(parents=True)
+    _write_agent(default_agents, "other-home.json", {"name": "other-home"})
+    home = tmp_path / "pclaw-home"
+    monkeypatch.setenv("PERSONALCLAW_HOME", str(home))
+    (home / "agents").mkdir(parents=True)
+    _write_agent(home / "agents", "this-home.json", {"name": "this-home"})
+    assert _get_agent_names() == ["this-home"]
 
 
 def test_ignores_non_json_files(agents_dir):

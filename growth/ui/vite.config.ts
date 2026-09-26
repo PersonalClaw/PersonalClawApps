@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite'
 
-// Vite lib build → a single ESM bundle (dist/index.mjs) the host loads via
+// Vite lib build → a single ESM bundle (bundle/index.mjs) the host loads via
 // ContributedPage. React / react-dom / the app SDK are resolved at RUNTIME from
 // window.__personalclaw_modules (the host provides them), so they are externals —
 // keeping the bundle tiny and sharing the host's single React instance.
@@ -30,8 +30,11 @@ export default defineConfig({
   build: {
     lib: { entry: 'src/index.tsx', formats: ['es'], fileName: () => 'index.mjs' },
     // The host serves app UI assets from <app>/ui/, resolving the manifest entry
-    // "dist/index.mjs" as ui/dist/index.mjs — so build INTO ui/dist (not the app root).
-    outDir: 'dist',
+    // "bundle/index.mjs" as ui/bundle/index.mjs — so build INTO ui/bundle (not the app root).
+    // The bundle is COMMITTED: an install copies it as it is and never runs npm, so a user
+    // needs no Node to see this page. After editing src/, run `npm ci && npm run build` here
+    // and commit the result; CI rebuilds it and fails when the committed file differs.
+    outDir: 'bundle',
     emptyOutDir: true,
     rollupOptions: {
       external: ['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime', '@personalclaw/app-sdk', '@personalclaw/app-sdk/ui', 'lucide-react'],

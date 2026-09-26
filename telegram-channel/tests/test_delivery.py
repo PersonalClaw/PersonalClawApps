@@ -20,6 +20,9 @@ class FakeAPI(TelegramAPI):
         self.edits: list[dict] = []
         self.answers: list[dict] = []
         self.uploads: list[dict] = []
+        self.deleted: list[dict] = []
+        #: An edit Telegram refuses: a ``TelegramAPIError`` raised instead of editing.
+        self.refuse_edit: Exception | None = None
         self._mid = 0
 
     def _next(self) -> int:
@@ -41,8 +44,14 @@ class FakeAPI(TelegramAPI):
 
     async def edit_message_text(self, chat_id, message_id, text, *, parse_mode=None,
                                 reply_markup=None, disable_web_page_preview=None):
+        if self.refuse_edit is not None:
+            raise self.refuse_edit
         self.edits.append({"chat_id": chat_id, "message_id": message_id, "text": text})
         return {"message_id": message_id}
+
+    async def delete_message(self, chat_id, message_id):
+        self.deleted.append({"chat_id": chat_id, "message_id": message_id})
+        return True
 
     async def send_document(self, chat_id, file_path, *, caption=None, reply_to_message_id=None):
         mid = self._next()
@@ -60,7 +69,7 @@ class FakeAPI(TelegramAPI):
 
 
 def _delivery(owner="42"):
-    return TelegramDelivery(FakeAPI(), owner)
+    return TelegramDelivery(FakeAPI(), lambda: owner)
 
 
 class TestTextDelivery:
@@ -73,17 +82,11 @@ class TestTextDelivery:
         assert sent["text"] == r"Hello\. *bold*"
 
     @pytest.mark.asyncio
-    async def test_deliver_text_redacts_credentials(self):
-        d = _delivery()
-        await d.deliver_text("123", "token sk-ABC123DEF456GHI789JKL012MNO345PQR")
-        # the raw secret must not survive into the wire text
-        assert "sk-ABC123DEF456GHI789JKL012MNO345PQR" not in d._api.sent[0]["text"]
-
-    @pytest.mark.asyncio
     async def test_deliver_text_splits_long_body(self):
         d = _delivery()
         await d.deliver_text("123", "x" * 5000)
-        assert len(d._api.sent) == 2
+        assert [len(m["text"]) for m in d._api.sent] == [4096, 904]
+        assert all(m["parse_mode"] == "MarkdownV2" for m in d._api.sent)
 
     @pytest.mark.asyncio
     async def test_open_dm_returns_user_id(self):
@@ -188,6 +191,83 @@ class TestStreamThrottle:
         assert d._api.edits == []
 
 
+class TestNoPlaceholderIsLeftBehind:
+    """Ledger 281: a turn's stream opens with "Thinking…" and its reply is a message of its own.
+    The final edit re-sent the same text, Telegram answered 400 "message is not modified", and
+    the "Thinking…" stayed above the reply for good, reading as a turn that never finished."""
+
+    @pytest.mark.asyncio
+    async def test_a_stream_that_only_held_its_placeholder_is_removed(self):
+        d = _delivery()
+        sts = await d.start_stream("123", initial_text="Thinking…")
+        await d.stop_stream("123", sts)
+        assert d._api.deleted == [{"chat_id": "123", "message_id": int(sts)}]
+        assert d._api.edits == [], "the placeholder was re-sent instead of removed"
+
+    @pytest.mark.asyncio
+    async def test_a_stream_with_tasks_keeps_only_their_lines(self):
+        d = _delivery()
+        clock = {"t": 0.0}
+        d._now = lambda: clock["t"]
+        sts = await d.start_stream("123", initial_text="Thinking…")
+        clock["t"] = 5.0
+        await d.append_stream_task("123", sts, "tool_1", "Read notes.md", "in_progress")
+        assert d._api.edits[-1]["text"] == "Thinking…\n⏳ Read notes\\.md"
+        await d.append_stream_task("123", sts, "tool_1", "Read notes.md", "complete")
+        await d.stop_stream("123", sts)
+        assert d._api.edits[-1]["text"] == "✅ Read notes\\.md", (
+            "the placeholder, or the task's in-progress line, was left behind"
+        )
+        assert d._api.deleted == []
+
+    @pytest.mark.asyncio
+    async def test_not_modified_is_the_text_already_there(self, caplog):
+        import logging
+
+        from telegram_runtime.api import TelegramAPIError
+
+        d = _delivery()
+        sts = await d.start_stream("123", initial_text="Thinking…")
+        await d.append_stream_task("123", sts, "t1", "Step", "complete")
+        d._api.refuse_edit = TelegramAPIError(
+            "Bad Request: message is not modified: specified new message content and reply "
+            "markup are exactly the same as a current content", error_code=400,
+            method="editMessageText",
+        )
+        with caplog.at_level(logging.WARNING, logger="telegram_runtime.delivery"):
+            await d.stop_stream("123", sts)
+        assert "stream edit failed" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_an_edit_that_really_failed_says_so(self, caplog):
+        import logging
+
+        from telegram_runtime.api import TelegramAPIError
+
+        d = _delivery()
+        sts = await d.start_stream("123", initial_text="Thinking…")
+        await d.append_stream_task("123", sts, "t1", "Step", "complete")
+        d._api.refuse_edit = TelegramAPIError(
+            "Bad Request: message to edit not found", error_code=400, method="editMessageText"
+        )
+        with caplog.at_level(logging.WARNING, logger="telegram_runtime.delivery"):
+            await d.stop_stream("123", sts)
+        assert "stream edit failed: Bad Request: message to edit not found" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_long_task_list_still_fits_one_message(self):
+        from telegram_runtime.format import TELEGRAM_MAX_TEXT, utf16_len
+
+        d = _delivery()
+        sts = await d.start_stream("123", initial_text="Thinking…")
+        for i in range(120):
+            await d.append_stream_task("123", sts, f"t{i}", f"Step number {i} " + "x" * 40, "complete")
+        await d.stop_stream("123", sts)
+        final = d._api.edits[-1]["text"]
+        assert utf16_len(final) <= TELEGRAM_MAX_TEXT
+        assert final.startswith("…") and "Step number 119" in final
+
+
 class _Event:
     def __init__(self, request_id="req1", title="delete files"):
         self.request_id = request_id
@@ -213,7 +293,7 @@ class TestApproval:
         assert cbs == {"approve:reqX", "deny:reqX"}
 
         # A button press (callback_query) resolves the same pending future.
-        await d.resolve_callback({"id": "cbq1", "data": "approve:reqX"})
+        await d.resolve_callback({"id": "cbq1", "data": "approve:reqX", "from": {"id": 42}})
         approved = await asyncio.wait_for(task, timeout=1.0)
         assert approved is True
         # button spinner acknowledged
@@ -226,7 +306,7 @@ class TestApproval:
         d = _delivery(owner="42")
         task = asyncio.ensure_future(d.request_approval(_Event("reqY"), source="tool"))
         await asyncio.sleep(0)
-        await d.resolve_callback({"id": "c2", "data": "deny:reqY"})
+        await d.resolve_callback({"id": "c2", "data": "deny:reqY", "from": {"id": 42}})
         assert await asyncio.wait_for(task, timeout=1.0) is False
 
     @pytest.mark.asyncio
@@ -236,7 +316,128 @@ class TestApproval:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_only_the_owner_answers_a_prompt(self):
+        """A prompt for a chat linked to a tracked group is posted in the group, where every
+        member sees the buttons. A member's press must not approve what the owner's agent runs."""
+        d = _delivery(owner="42")
+        task = asyncio.ensure_future(d.request_approval(_Event("reqG", "rm -rf"), source="tool"))
+        await asyncio.sleep(0)
+
+        await d.resolve_callback({"id": "m1", "data": "approve:reqG", "from": {"id": 5151}})
+        await d.resolve_callback({"id": "m2", "data": "approve:reqG"})  # no presser at all
+        await asyncio.sleep(0)
+        assert not task.done(), "a member's press answered the owner's approval"
+        assert [a["text"] for a in d._api.answers[-2:]] == ["Only the owner can answer this."] * 2
+
+        # Floor: the owner's press, on the same prompt, does answer it.
+        await d.resolve_callback({"id": "o1", "data": "approve:reqG", "from": {"id": 42}})
+        assert await asyncio.wait_for(task, timeout=1.0) is True
+        assert d._api.answers[-1] == {"id": "o1", "text": "Recorded"}
+
+    @pytest.mark.asyncio
+    async def test_a_refused_press_is_a_security_event(self, monkeypatch):
+        import telegram_runtime.delivery as mod
+
+        events = []
+        monkeypatch.setattr(mod, "sel", lambda: type("S", (), {"log_api_access": lambda self, **kw: events.append(kw)})())
+        d = _delivery(owner="42")
+        task = asyncio.ensure_future(d.request_approval(_Event("reqS"), source="tool"))
+        await asyncio.sleep(0)
+        await d.resolve_callback({"id": "m1", "data": "deny:reqS", "from": {"id": 5151}})
+        assert [(e["caller"], e["outcome"], e["resources"]) for e in events] == [
+            ("telegram:5151", "denied", "reqS")
+        ]
+        await d.resolve_callback({"id": "o1", "data": "deny:reqS", "from": {"id": 42}})
+        assert await asyncio.wait_for(task, timeout=1.0) is False
+        assert len(events) == 1, "the owner's press is not an event"
+
+    @pytest.mark.asyncio
+    async def test_a_long_prompt_is_split_like_a_reply_with_the_buttons_last(self):
+        """Ledger 281: the prompt went out as one message, which Telegram refuses past 4,096
+        characters, so a long command was never asked about on Telegram at all."""
+        from telegram_runtime.format import TELEGRAM_MAX_TEXT, utf16_len
+
+        d = _delivery(owner="42")
+        command = "bash: " + " && ".join(f"echo step-{i}" for i in range(700))
+        task = asyncio.ensure_future(d.request_approval(_Event("reqL", command), source="tool"))
+        await asyncio.sleep(0)
+        sent = d._api.sent
+        assert len(sent) >= 2
+        assert all(utf16_len(m["text"]) <= TELEGRAM_MAX_TEXT for m in sent)
+        assert [m["reply_markup"] is not None for m in sent] == [False] * (len(sent) - 1) + [True]
+        # MarkdownV2 escapes the hyphen: each part is the prompt's own text, rendered.
+        assert "step\\-699" in sent[-1]["text"] and "step\\-0 " in sent[0]["text"]
+
+        await d.resolve_callback({"id": "c", "data": "approve:reqL", "from": {"id": 42}})
+        assert await asyncio.wait_for(task, timeout=1.0) is True
+        final = d._api.edits[-1]
+        assert final["message_id"] == sent[-1]["message_id"], "the buttons' message was not the one answered"
+        assert final["text"].endswith("✅ Approved") and utf16_len(final["text"]) <= TELEGRAM_MAX_TEXT
+
+    @pytest.mark.asyncio
     async def test_callback_for_unknown_request_just_acks(self):
         d = _delivery()
         await d.resolve_callback({"id": "c3", "data": "approve:ghost"})
         assert d._api.answers[-1]["id"] == "c3"  # acked, no crash
+
+
+# ── core masks what it hands this channel ──────────────────────────────────────────────────
+
+#: A key, assembled at runtime so the literal is not in the file, and its tail, which no
+#: rendering escapes: the wire is searched for the tail, since a channel's markup may escape
+#: the key's punctuation and hide the key from a search for all of it.
+TAIL = "A" * 20 + "B" * 20 + "C" * 15
+SECRET = "sk-" + "ant-api03-" + TAIL
+
+#: Every way core hands this channel text, each carrying a key.
+_HANDED = {
+    "deliver_text": lambda h: h.deliver_text("123", f"token {SECRET}"),
+    "deliver_notification": lambda h: h.deliver_notification(
+        "123", f"Nightly {SECRET}", f"result {SECRET}"
+    ),
+    "deliver_rich": lambda h: h.deliver_rich(
+        "123",
+        {"inline_keyboard": [[{"text": f"Open {SECRET}", "callback_data": "open"}]]},
+        f"fallback {SECRET}",
+    ),
+    "deliver_cron_result": lambda h: h.deliver_cron_result(
+        "123", f"backup {SECRET}", "job-1", f"done {SECRET}"
+    ),
+    "deliver_chat_mirror": lambda h: h.deliver_chat_mirror("123", f"answer {SECRET}"),
+    "deliver_subagent_reply": lambda h: h.deliver_subagent_reply(
+        "123", f"reply {SECRET}", elapsed_secs=1.5
+    ),
+    "upload_attachment": lambda h: h.upload_attachment(
+        "123", "report.txt", title=f"report {SECRET}"
+    ),
+    "start_stream": lambda h: h.start_stream("123", initial_text=f"thinking {SECRET}"),
+    "request_approval": lambda h: h.request_approval(
+        _Event("reqK", f"deploy {SECRET}"), source="tool"
+    ),
+}
+
+
+@pytest.fixture
+def through_core(monkeypatch):
+    """This delivery as core holds it: registered with core, and read back the way core reads it."""
+    from personalclaw import channel_delivery
+
+    monkeypatch.setattr("telegram_runtime.delivery._APPROVAL_TIMEOUT", 0.01)
+    d = _delivery()
+    channel_delivery.register(d, provider="telegram")
+    yield d, channel_delivery.delivery_for("telegram")
+    channel_delivery.register(None, provider="telegram")
+
+
+class TestCoreMasksWhatItHandsThisChannel:
+    """Core masks every text it hands a channel, so this app masks nothing again: a key in anything
+    core sends through it never reaches the Bot API."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("method", sorted(_HANDED))
+    async def test_no_key_reaches_the_bot_api(self, through_core, method):
+        d, handle = through_core
+        await _HANDED[method](handle)
+        wire = repr((d._api.sent, d._api.edits, d._api.uploads))
+        assert TAIL not in wire
+        assert "REDACTED" in wire, "nothing was sent"

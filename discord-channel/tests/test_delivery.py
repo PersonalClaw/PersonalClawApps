@@ -1,4 +1,4 @@
-"""DiscordDelivery — splitting, redaction, throttled edit-streaming, button approvals.
+"""DiscordDelivery — splitting, throttled edit-streaming, button approvals.
 
 The REST client is a fake implementing the ``DiscordAPI`` ABC (records calls, hands
 back incrementing message ids); the throttle clock is injected so the edit-rate
@@ -36,6 +36,7 @@ class FakeAPI(DiscordAPI):
     def __init__(self, *, fail: set[str] | None = None):
         self.sent: list[dict] = []
         self.edits: list[dict] = []
+        self.deleted: list[dict] = []
         self.dms: list[str] = []
         self.uploads: list[dict] = []
         self.acks: list[dict] = []
@@ -69,6 +70,10 @@ class FakeAPI(DiscordAPI):
         self.edits.append({"channel_id": channel_id, "message_id": message_id,
                            "content": content, "components": components})
         return {"id": message_id}
+
+    async def delete_message(self, channel_id, message_id):
+        self._boom("delete_message")
+        self.deleted.append({"channel_id": channel_id, "message_id": message_id})
 
     async def create_dm(self, user_id):
         self._boom("create_dm")
@@ -106,7 +111,7 @@ class FakeAPI(DiscordAPI):
 
 
 def _delivery(owner="42", **kwargs):
-    return DiscordDelivery(FakeAPI(**kwargs), owner)
+    return DiscordDelivery(FakeAPI(**kwargs), lambda: owner)
 
 
 class TestSplitMessage:
@@ -131,6 +136,38 @@ class TestSplitMessage:
         parts = split_message("y" * 2500)
         assert len(parts[0]) == DISCORD_MAX_TEXT
 
+    def test_a_code_block_cut_in_two_is_closed_and_reopened(self):
+        """Discord renders each message's markdown on its own. A cut inside a code block left
+        the first message with its fence open and the next showing the rest of the code as
+        markdown — `*`, `_` and `#` lines formatted, indentation gone."""
+        code = "    total = price * qty  # __init__ stays literal\n" * 120
+        text = "Here is the fix:\n```python\n" + code + "```\nThat is all."
+        parts = split_message(text)
+        assert len(parts) >= 3
+        assert all(len(p) <= DISCORD_MAX_TEXT for p in parts)
+        for part in parts:
+            fences = [line for line in part.split("\n") if line.lstrip().startswith("```")]
+            assert len(fences) % 2 == 0, f"a part leaves a code block open: {part[-60:]!r}"
+        for part in parts[1:]:
+            assert part.startswith("```python\n"), "the code block was not reopened"
+        joined = "\n".join(parts)
+        assert joined.count("total = price * qty") == 120
+        assert parts[-1].endswith("```\nThat is all.")
+
+    def test_a_line_longer_than_a_part_is_cut_between_words(self):
+        parts = split_message("words " * 800)
+        assert len(parts) >= 3
+        assert all(len(p) <= DISCORD_MAX_TEXT for p in parts)
+        assert all(token == "words" for p in parts for token in p.split())
+        assert sum(len(p.split()) for p in parts) == 800
+
+    def test_a_code_line_longer_than_a_part_stays_code(self):
+        parts = split_message("```\n" + "z" * 4500 + "\n```")
+        assert len(parts) == 3
+        assert all(len(p) <= DISCORD_MAX_TEXT for p in parts)
+        assert all(p.startswith("```\n") and p.endswith("\n```") for p in parts)
+        assert "".join(p[4:-4] for p in parts) == "z" * 4500
+
 
 class TestTextDelivery:
     @pytest.mark.asyncio
@@ -142,12 +179,6 @@ class TestTextDelivery:
         assert mid == d._api.sent[0]["id"]
 
     @pytest.mark.asyncio
-    async def test_deliver_text_redacts_credentials(self):
-        d = _delivery()
-        await d.deliver_text("500", "token sk-ABC123DEF456GHI789JKL012MNO345PQR")
-        assert "sk-ABC123DEF456GHI789JKL012MNO345PQR" not in d._api.sent[0]["content"]
-
-    @pytest.mark.asyncio
     async def test_deliver_text_splits_long_body(self):
         d = _delivery()
         await d.deliver_text("500", "x" * 5000)
@@ -155,12 +186,10 @@ class TestTextDelivery:
         assert all(len(s["content"]) <= DISCORD_MAX_TEXT for s in d._api.sent)
 
     @pytest.mark.asyncio
-    async def test_deliver_notification_titles_and_redacts(self):
+    async def test_deliver_notification_titles_its_text(self):
         d = _delivery()
-        await d.deliver_notification("500", "Heartbeat", "all good sk-ABC123DEF456GHI789JKL012MNO")
-        body = d._api.sent[0]["content"]
-        assert "**Heartbeat**" in body
-        assert "sk-ABC123DEF456GHI789JKL012MNO" not in body
+        await d.deliver_notification("500", "Heartbeat", "all good")
+        assert d._api.sent[0]["content"] == "**Heartbeat**\n\nall good"
 
     @pytest.mark.asyncio
     async def test_deliver_cron_result_headers_the_first_part_only(self):
@@ -364,13 +393,6 @@ class TestUploadAttachment:
         assert d._api.uploads[0]["content"] == "look"
         assert mid == "1"
 
-    @pytest.mark.asyncio
-    async def test_caption_is_redacted(self, tmp_path):
-        f = tmp_path / "data.csv"
-        f.write_text("a,b")
-        d = _delivery()
-        await d.upload_attachment("500", str(f), title="key sk-ABC123DEF456GHI789JKL012MNO345")
-        assert "sk-ABC123DEF456GHI789JKL012MNO345" not in d._api.uploads[0]["content"]
 
 
 class TestStreamThrottle:
@@ -441,6 +463,43 @@ class TestStreamThrottle:
         await d.stop_stream("500", sts)  # no raise
 
 
+class TestNoPlaceholderIsLeftBehind:
+    """Ledger 281's family: a turn's stream opens with "Thinking…" and its reply is a message of
+    its own, so the flush left the placeholder above the reply for good."""
+
+    @pytest.mark.asyncio
+    async def test_a_stream_that_only_held_its_placeholder_is_removed(self):
+        d = _delivery()
+        sts = await d.start_stream("500", initial_text="Thinking…")
+        await d.stop_stream("500", sts)
+        assert d._api.deleted == [{"channel_id": "500", "message_id": sts}]
+        assert d._api.edits == []
+
+    @pytest.mark.asyncio
+    async def test_a_stream_with_tasks_keeps_only_their_lines(self):
+        d = _delivery()
+        clock = {"t": 0.0}
+        d._now = lambda: clock["t"]
+        sts = await d.start_stream("500", initial_text="Thinking…")
+        clock["t"] = 5.0
+        await d.append_stream_task("500", sts, "tool_1", "Read notes.md", "in_progress")
+        assert d._api.edits[-1]["content"] == "Thinking…\n⏳ Read notes.md"
+        await d.append_stream_task("500", sts, "tool_1", "Read notes.md", "complete")
+        await d.stop_stream("500", sts)
+        assert d._api.edits[-1]["content"] == "✅ Read notes.md"
+        assert d._api.deleted == []
+
+    @pytest.mark.asyncio
+    async def test_a_placeholder_that_cannot_be_removed_says_so(self, caplog):
+        import logging
+
+        d = _delivery(fail={"delete_message"})
+        sts = await d.start_stream("500", initial_text="Thinking…")
+        with caplog.at_level(logging.WARNING, logger="discord_runtime.delivery"):
+            await d.stop_stream("500", sts)
+        assert f"the stream placeholder {sts} in 500 could not be removed" in caplog.text
+
+
 class _Event:
     def __init__(self, request_id="req1", title="delete files"):
         self.request_id = request_id
@@ -468,7 +527,7 @@ class TestApprovalRoundTrip:
         # The press arrives as an INTERACTION_CREATE and resolves the same future.
         await d.resolve_interaction({
             "id": "i1", "token": "itok", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "approve:reqX"},
+            "data": {"custom_id": "approve:reqX"}, "user": {"id": "42"},
         })
         assert await asyncio.wait_for(task, timeout=1.0) is True
 
@@ -483,6 +542,29 @@ class TestApprovalRoundTrip:
         assert final["components"] == []
 
     @pytest.mark.asyncio
+    async def test_a_long_prompt_is_split_like_a_reply_with_the_buttons_last(self):
+        """It was cut at 2,000 characters, so the owner approved a command whose end they
+        never saw. Every part arrives, and the buttons ride the last."""
+        d = _delivery(owner="42")
+        command = "bash: " + " && ".join(f"echo step-{i}" for i in range(400))
+        task = asyncio.ensure_future(d.request_approval(_Event("reqL", command), source="tool"))
+        for _ in range(4):
+            await asyncio.sleep(0)
+        sent = d._api.sent
+        assert len(sent) >= 2 and all(len(m["content"]) <= DISCORD_MAX_TEXT for m in sent)
+        assert [m["components"] is not None for m in sent] == [False] * (len(sent) - 1) + [True]
+        assert "step-399?" in sent[-1]["content"] and "step-0 " in sent[0]["content"]
+
+        await d.resolve_interaction({
+            "id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
+            "data": {"custom_id": "approve:reqL"}, "user": {"id": "42"},
+        })
+        assert await asyncio.wait_for(task, timeout=1.0) is True
+        final = d._api.edits[-1]
+        assert final["message_id"] == sent[-1]["id"] and final["components"] == []
+        assert final["content"].endswith("✅ Approved") and len(final["content"]) <= DISCORD_MAX_TEXT
+
+    @pytest.mark.asyncio
     async def test_deny_resolves_false_and_strips_buttons(self):
         d = _delivery(owner="42")
         task = asyncio.ensure_future(d.request_approval(_Event("reqY"), source="tool"))
@@ -490,7 +572,7 @@ class TestApprovalRoundTrip:
             await asyncio.sleep(0)
         await d.resolve_interaction({
             "id": "i2", "token": "t2", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "deny:reqY"},
+            "data": {"custom_id": "deny:reqY"}, "user": {"id": "42"},
         })
         assert await asyncio.wait_for(task, timeout=1.0) is False
         assert "Rejected" in d._api.edits[-1]["content"]
@@ -503,23 +585,6 @@ class TestApprovalRoundTrip:
         d = _delivery(owner="42")
         assert await d.request_approval(_Event("reqZ"), source="tool") is False
         assert "Rejected" in d._api.edits[-1]["content"]
-
-    @pytest.mark.asyncio
-    async def test_prompt_title_is_redacted(self):
-        d = _delivery(owner="42")
-        task = asyncio.ensure_future(
-            d.request_approval(
-                _Event("reqR", "push sk-ABC123DEF456GHI789JKL012MNO345"), source="tool"
-            )
-        )
-        for _ in range(4):
-            await asyncio.sleep(0)
-        assert "sk-ABC123DEF456GHI789JKL012MNO345" not in d._api.sent[-1]["content"]
-        await d.resolve_interaction({
-            "id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "deny:reqR"},
-        })
-        await asyncio.wait_for(task, timeout=1.0)
 
     @pytest.mark.asyncio
     async def test_prompts_the_linked_channel_when_there_is_one(self):
@@ -538,7 +603,7 @@ class TestApprovalRoundTrip:
         assert d._api.dms == []  # no DM needed
         await d.resolve_interaction({
             "id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "deny:reqL"},
+            "data": {"custom_id": "deny:reqL"}, "member": {"user": {"id": "42"}},
         })
         await asyncio.wait_for(task, timeout=1.0)
 
@@ -577,9 +642,70 @@ class TestApprovalRoundTrip:
             await asyncio.sleep(0)
         await d.resolve_interaction({
             "id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "approve:reqB"},
+            "data": {"custom_id": "approve:reqB"}, "user": {"id": "42"},
         })
         assert await asyncio.wait_for(task, timeout=1.0) is True
+
+
+class TestOnlyTheOwnerAnswers:
+    """A prompt for a chat linked to a tracked channel is posted in that channel, where every
+    member sees the buttons. A member's press must not approve what the owner's agent runs."""
+
+    @staticmethod
+    async def _linked_prompt(d, request_id):
+        class Sessions:
+            def get_channel(self, key):
+                return "700"
+
+        task = asyncio.ensure_future(
+            d.request_approval(_Event(request_id), source="tool", parent_session_key="s1", sessions=Sessions())
+        )
+        for _ in range(4):
+            await asyncio.sleep(0)
+        assert d._api.sent[-1]["channel_id"] == "700"
+        return task
+
+    @pytest.mark.asyncio
+    async def test_a_members_press_is_refused_and_the_owners_answers(self):
+        d = _delivery(owner="42")
+        task = await self._linked_prompt(d, "reqM")
+        for who in ({"member": {"user": {"id": "5151"}}}, {"user": {"id": "5151"}}, {}):
+            await d.resolve_interaction({
+                "id": "im", "token": "tm", "type": INTERACTION_TYPE_COMPONENT,
+                "data": {"custom_id": "approve:reqM"}, **who,
+            })
+        await asyncio.sleep(0)
+        assert not task.done(), "a member's press answered the owner's approval"
+        assert len(d._api.acks) == 3, "each refused press is still acknowledged"
+
+        # Floor: the owner's press, on the same prompt, does answer it.
+        await d.resolve_interaction({
+            "id": "io", "token": "to", "type": INTERACTION_TYPE_COMPONENT,
+            "data": {"custom_id": "approve:reqM"}, "member": {"user": {"id": "42"}},
+        })
+        assert await asyncio.wait_for(task, timeout=1.0) is True
+
+    @pytest.mark.asyncio
+    async def test_a_refused_press_is_a_security_event(self, monkeypatch):
+        import discord_runtime.delivery as mod
+
+        events = []
+        monkeypatch.setattr(mod, "sel", lambda: type("S", (), {"log_api_access": lambda self, **kw: events.append(kw)})())
+        d = _delivery(owner="42")
+        task = await self._linked_prompt(d, "reqS")
+        await d.resolve_interaction({
+            "id": "im", "token": "tm", "type": INTERACTION_TYPE_COMPONENT,
+            "data": {"custom_id": "deny:reqS"}, "member": {"user": {"id": "5151"}},
+        })
+        assert [(e["caller"], e["outcome"], e["resources"]) for e in events] == [
+            ("discord:5151", "denied", "reqS")
+        ]
+        await d.resolve_interaction({
+            "id": "io", "token": "to", "type": INTERACTION_TYPE_COMPONENT,
+            "data": {"custom_id": "deny:reqS"}, "member": {"user": {"id": "42"}},
+        })
+        assert await asyncio.wait_for(task, timeout=1.0) is False
+        assert len(events) == 1, "the owner's press is not an event"
 
 
 class TestResolveInteraction:
@@ -626,7 +752,72 @@ class TestResolveInteraction:
         for _ in range(4):
             await asyncio.sleep(0)
         payload = {"id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
-                   "data": {"custom_id": "approve:reqD"}}
+                   "data": {"custom_id": "approve:reqD"}, "user": {"id": "42"}}
         await d.resolve_interaction(payload)
         assert await asyncio.wait_for(task, timeout=1.0) is True
         await d.resolve_interaction(payload)  # double press — no InvalidStateError
+
+
+# ── core masks what it hands this channel ──────────────────────────────────────────────────
+
+#: A key, assembled at runtime so the literal is not in the file, and its tail, which no
+#: rendering escapes: the wire is searched for the tail, since a channel's markup may escape
+#: the key's punctuation and hide the key from a search for all of it.
+TAIL = "A" * 20 + "B" * 20 + "C" * 15
+SECRET = "sk-" + "ant-api03-" + TAIL
+
+#: Every way core hands this channel text, each carrying a key.
+_HANDED = {
+    "deliver_text": lambda h: h.deliver_text("500", f"token {SECRET}"),
+    "deliver_notification": lambda h: h.deliver_notification(
+        "500", f"Nightly {SECRET}", f"result {SECRET}"
+    ),
+    "deliver_rich": lambda h: h.deliver_rich(
+        "500",
+        {"components": [{"type": COMPONENT_ACTION_ROW, "components": [
+            {"type": COMPONENT_BUTTON, "style": BUTTON_STYLE_SUCCESS,
+             "label": f"Open {SECRET}", "custom_id": "open"},
+        ]}]},
+        f"fallback {SECRET}",
+    ),
+    "deliver_cron_result": lambda h: h.deliver_cron_result(
+        "500", f"backup {SECRET}", "job-1", f"done {SECRET}"
+    ),
+    "deliver_chat_mirror": lambda h: h.deliver_chat_mirror("500", f"answer {SECRET}"),
+    "deliver_subagent_reply": lambda h: h.deliver_subagent_reply(
+        "500", f"reply {SECRET}", elapsed_secs=1.5
+    ),
+    "upload_attachment": lambda h: h.upload_attachment(
+        "500", "report.txt", title=f"report {SECRET}"
+    ),
+    "start_stream": lambda h: h.start_stream("500", initial_text=f"thinking {SECRET}"),
+    "request_approval": lambda h: h.request_approval(
+        _Event("reqK", f"deploy {SECRET}"), source="tool"
+    ),
+}
+
+
+@pytest.fixture
+def through_core(monkeypatch):
+    """This delivery as core holds it: registered with core, and read back the way core reads it."""
+    from personalclaw import channel_delivery
+
+    monkeypatch.setattr("discord_runtime.delivery._APPROVAL_TIMEOUT", 0.01)
+    d = _delivery(owner="42")
+    channel_delivery.register(d, provider="discord")
+    yield d, channel_delivery.delivery_for("discord")
+    channel_delivery.register(None, provider="discord")
+
+
+class TestCoreMasksWhatItHandsThisChannel:
+    """Core masks every text it hands a channel, so this app masks nothing again: a key in anything
+    core sends through it never reaches the REST API."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("method", sorted(_HANDED))
+    async def test_no_key_reaches_the_rest_api(self, through_core, method):
+        d, handle = through_core
+        await _HANDED[method](handle)
+        wire = repr((d._api.sent, d._api.edits, d._api.uploads))
+        assert TAIL not in wire
+        assert "REDACTED" in wire, "nothing was sent"

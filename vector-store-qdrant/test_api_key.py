@@ -12,7 +12,8 @@ the fallback for an empty field.
 
 Proven over a real socket: :class:`KeyedQdrant` answers the REST calls this provider makes, on
 127.0.0.1, and refuses every request that does not carry the right ``api-key`` header, the way a
-Qdrant started with an api key does. Saves go through core's own Configure handler, and the
+Qdrant started with an api key does. Saves go through core's own Configure routes, made the way
+the page makes them (read the settings, then save over the revision that read reported), and the
 provider is built the way core's vector-store type handler builds it when the app is enabled.
 """
 
@@ -29,10 +30,12 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 from provider import API_KEY_NAME, create_provider
 
 from personalclaw.apps import app_manager
-from personalclaw.dashboard.handlers.apps import api_app_config_put
+from personalclaw.dashboard.handlers.apps import register_app_routes
 from personalclaw.providers.settings import ProviderSettings
 from personalclaw.sdk.vector_store import VectorRecord
 
@@ -172,16 +175,23 @@ def qdrant():
 
 
 def _configure_save(values: dict) -> None:
-    """The Apps page's Configure → Save: core's PUT /api/apps/{name}/config handler."""
+    """The Apps page's Configure → Save, over core's own routes: read the settings, then save
+    ``values`` over the revision that read reported. The save replaces the whole file, so it
+    names the copy it replaces (``If-Match``), as the page does."""
 
-    class _Request(dict):
-        match_info = {"name": _APP}
+    async def save() -> None:
+        app = web.Application()
+        register_app_routes(app)
+        async with TestClient(TestServer(app)) as client:
+            read = await client.get(f"/api/apps/{_APP}/config")
+            assert read.status == 200, await read.text()
+            revision = (await read.json())["revision"]
+            resp = await client.put(
+                f"/api/apps/{_APP}/config", json=values, headers={"If-Match": f'"{revision}"'}
+            )
+            assert resp.status == 200, await resp.text()
 
-        async def json(self):
-            return values
-
-    resp = asyncio.run(api_app_config_put(_Request()))
-    assert resp.status == 200, resp.text
+    asyncio.run(save())
 
 
 def _built_on_enable():

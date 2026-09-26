@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite'
 
-// Vite lib build → a single ESM bundle (dist/index.mjs) the host loads via
+// Vite lib build → a single ESM bundle (bundle/index.mjs) the host loads via
 // ContributedPage. React / react-dom / the app SDK are resolved at RUNTIME from
 // window.__personalclaw_modules (the host provides them), so they are externals —
 // keeping the bundle tiny and sharing the host's single React instance.
@@ -12,14 +12,11 @@ import { defineConfig } from 'vite'
 // provided by the host, and neither can simply be un-externalled (this bundle installs
 // no `react`, so vite cannot resolve them to bundle them either):
 //
-//   · `react/jsx-runtime` — emitted by the AUTOMATIC JSX runtime. This bundle is on vite 6,
-//     whose default is the CLASSIC transform, so it has never emitted that import — which is
-//     the only reason this app still mounts. `growth` was on vite 8, whose default flipped to
-//     automatic, and its page stopped rendering entirely ("Failed to resolve module specifier
-//     react/jsx-runtime", measured in a browser on unmodified sources; fixed). The
-//     transform is therefore PINNED below rather than left to a vite default that has already
-//     changed under the sibling app once — the pin is a no-op today and the whole fix after
-//     the next major bump.
+//   · `react/jsx-runtime` — emitted by the AUTOMATIC JSX runtime, which is vite 8's default
+//     for TSX. `growth` hit it first: its page stopped rendering entirely ("Failed to resolve
+//     module specifier react/jsx-runtime", measured in a browser on unmodified sources; fixed
+//     in APE-6). This bundle is on vite 8 too, so the CLASSIC transform PINNED below is what
+//     keeps that import out of it.
 //   · `lucide-react` — the host comment claims it is provided; it appears in
 //     `resolvableAppSpecs` but has NO entry in the module map, so `appModuleShimUrl`
 //     returns null and the specifier stays bare. Left external and unused: importing it
@@ -32,8 +29,11 @@ export default defineConfig({
   build: {
     lib: { entry: 'src/index.tsx', formats: ['es'], fileName: () => 'index.mjs' },
     // The host serves app UI assets from <app>/ui/, resolving the manifest entry
-    // "dist/index.mjs" as ui/dist/index.mjs — so build INTO ui/dist (not the app root).
-    outDir: 'dist',
+    // "bundle/index.mjs" as ui/bundle/index.mjs — so build INTO ui/bundle (not the app root).
+    // The bundle is COMMITTED: an install copies it as it is and never runs npm, so a user
+    // needs no Node to see this page. After editing src/, run `npm ci && npm run build` here
+    // and commit the result; CI rebuilds it and fails when the committed file differs.
+    outDir: 'bundle',
     emptyOutDir: true,
     rollupOptions: {
       external: ['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime', '@personalclaw/app-sdk', '@personalclaw/app-sdk/ui', 'lucide-react'],

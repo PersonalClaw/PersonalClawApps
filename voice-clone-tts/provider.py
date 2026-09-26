@@ -17,11 +17,13 @@ cloning_unsupported:<provider>``. The engine's model cards (``runtime: torch``,
 ``matrix.supports_cloning``) are declared in the bundled ``catalog.json``, the single
 source of truth for what this app offers.
 
-SCOPE (MI-6 remainder, formerly "MI-2c"): the heavy ML engine is an OPTIONAL, lazily
-detected dependency — it is NOT pinned in ``app.json`` ``pythonDependencies`` and no
-model weights are vendored, so the manifest/contract tests run everywhere. When no
-engine is installed the provider degrades gracefully (``is_available`` → False,
-``synthesize`` → None) rather than raising. The spike CHOSE OmniVoice (bake-off
+SCOPE (MI-6 remainder, formerly "MI-2c"): the heavy ML engine is declared in ``app.json``
+``sidecarDependencies``, which Install engine puts in this app's own Python environment where
+the sidecar runs, never in ``pythonDependencies`` (those go into the gateway's own packages).
+Nothing installs it before the owner asks, and no model weights are vendored, so the
+manifest/contract tests run everywhere. When no engine is installed the provider degrades
+gracefully (``is_available`` → False, ``synthesize`` → None) rather than raising, and
+``availability()`` sends the owner to Install engine. The spike CHOSE OmniVoice (bake-off
 0.906 vs 0.658 — see the core plan doc); real zero-shot inference runs in the app's
 ``worker.py`` through the SDK sidecar runner, weights download resumably with a
 completion receipt, and a sidecar killed mid-synthesis surfaces its typed crash
@@ -39,6 +41,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from personalclaw.sdk.model import ProviderResolutionError, require_model
 from personalclaw.sdk.tts import LocalTtsProvider, TtsVoice
 
 logger = logging.getLogger(__name__)
@@ -65,15 +68,50 @@ def _weights_dir() -> Path:
     return d
 
 
+def _engine_venv() -> Path | None:
+    """This app's own Python environment, ``<home>/apps/voice-clone-tts/venv``, when it exists.
+
+    ``SidecarRunner`` runs the worker under that environment's interpreter whenever it has
+    one, and under the gateway's only when it does not, so it is where the engine has to be.
+    None on a core too old to vend ``sidecar_venv_dir``.
+    """
+    try:
+        from personalclaw.sdk.sidecar import sidecar_venv_dir
+    except ImportError:
+        return None
+    venv = sidecar_venv_dir("voice-clone-tts")
+    python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    return venv if python.is_file() else None
+
+
+def _installed_in(venv: Path, module: str) -> bool:
+    """Whether *module* is installed in *venv*, read off disk: its package directory, or the
+    ``.dist-info`` an editable install leaves. Nothing is imported or run."""
+    for site in [*venv.glob("lib/python*/site-packages"), venv / "Lib" / "site-packages"]:
+        if (site / module).is_dir() or any(site.glob(f"{module}-*.dist-info")):
+            return True
+    return False
+
+
 def _detect_engine() -> str:
     """Return the import name of the first installed candidate cloning engine, else "".
 
-    Uses :func:`importlib.util.find_spec` so detection never imports (and never loads)
-    the multi-GB engine just to answer "is it here?". A namespace/partial-install edge
-    that raises is treated as absent (fail-closed), consistent with the capability
-    surface's fail-closed footing.
+    Looked for where the sidecar will import it. With this app's own environment present,
+    the worker runs there and nowhere else, so only that environment counts. It used to ask
+    the gateway's interpreter in every case, so an engine installed where the sidecar runs
+    left the app unavailable, and one installed into the gateway was reported ready for a
+    worker that could not import it.
+
+    Never imports the multi-GB engine to answer "is it here?": the environment is read off
+    disk, and the gateway's interpreter through :func:`importlib.util.find_spec`. A
+    namespace/partial-install edge that raises is treated as absent (fail-closed).
     """
+    venv = _engine_venv()
     for mod in _CANDIDATE_ENGINE_MODULES:
+        if venv is not None:
+            if _installed_in(venv, mod):
+                return mod
+            continue
         try:
             if importlib.util.find_spec(mod) is not None:
                 return mod
@@ -262,6 +300,14 @@ class VoiceCloneTtsProvider(LocalTtsProvider):
         gateway stays up, the typed reason (``sidecar_crashed:signal_9``) is recorded on
         :attr:`last_crash_reason` and logged, and the call degrades to ``None``.
         """
+        # Like chat, a call names its voice (the text-to-speech binding's model), and one that
+        # names none is refused before the engine loads: it used to load the weights folder's
+        # root in its place.
+        try:
+            voice = require_model(voice)
+        except ProviderResolutionError as exc:
+            logger.warning("voice-clone-tts refused: %s", exc)
+            return None
         engine = _detect_engine()
         if not engine:
             logger.info(
@@ -288,7 +334,7 @@ class VoiceCloneTtsProvider(LocalTtsProvider):
         try:
             await runner.acall(
                 "load",
-                {"device": self._device, "weights_dir": str(_weights_dir() / (voice or ""))},
+                {"device": self._device, "weights_dir": str(_weights_dir() / voice)},
             )
             result = await runner.acall(
                 "call",
@@ -329,12 +375,15 @@ def create_provider(config: dict[str, Any] | None = None) -> VoiceCloneTtsProvid
 
 
 def availability() -> tuple[bool, str]:
-    """Whether cloning synthesis can run here — i.e. a candidate engine is installed."""
-    engine = _detect_engine()
-    if engine:
+    """Whether cloning synthesis can run here — i.e. a candidate engine is installed.
+
+    The engine is ``dependencies.sidecarDependencies``, which Install engine puts in this app's
+    own Python environment, so the reason sends the owner there rather than to a shell.
+    """
+    if _detect_engine():
         return True, ""
     return False, (
-        "No cloning engine detected. Voice Clone TTS needs a torch-based zero-shot engine "
-        "(OmniVoice or CosyVoice, selected by the MI-2c spike); install it and download a "
-        "model card's weights to enable cloning."
+        "The OmniVoice cloning engine is not installed. Install engine, on this app's card in "
+        "Settings → Providers, puts it in the app's own Python environment (it brings torch, "
+        "several GB). Then download OmniVoice in Settings → Models."
     )

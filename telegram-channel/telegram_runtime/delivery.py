@@ -10,25 +10,94 @@ Streaming is edit-based: Telegram has no chunk-append API, so a "stream" is one
 message repeatedly edited via ``editMessageText``. Telegram rate-limits edits
 hard, so :class:`TelegramDelivery` throttles to at most one edit per
 :data:`_EDIT_MIN_INTERVAL` seconds and always flushes the exact final text on
-``stop_stream`` — the contract the fake-API tests pin.
+``stop_stream`` — the contract the fake-API tests pin. The stream's placeholder
+("Thinking…") is gone when it stops: the message is left holding the task lines
+alone, or deleted when there were none, because the reply is a message of its own
+and a placeholder left behind reads as a turn that never finished. An edit Telegram
+refuses as "message is not modified" is the text already being there, not a failure.
+
+Every text that can outgrow one message goes out through :func:`send_parts`, which
+splits it into parts Telegram accepts and never lets one go missing quietly. An
+approval prompt does too, its buttons on the last part.
+
+Core masks every text it hands this handle, keys and exfiltration URLs included, before
+any method here is called, so nothing here masks it again.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Callable
 
-from personalclaw.sdk.channel import (
-    is_tracked_channel,
-    redact_credentials,
-    redact_exfiltration_urls,
-)
+from personalclaw.sdk.channel import is_tracked_channel, sel
 
-from telegram_runtime.api import TelegramAPI
-from telegram_runtime.format import split_message, to_markdown_v2
+from telegram_runtime.api import TelegramAPI, TelegramAPIError
+from telegram_runtime.format import TELEGRAM_MAX_TEXT, render_parts, to_markdown_v2, utf16_len
 
 logger = logging.getLogger(__name__)
+
+#: Telegram's code for a request it will not take as sent: for a MarkdownV2 text, the
+#: formatting it cannot parse.
+_BAD_REQUEST = 400
+
+
+async def send_parts(
+    api: TelegramAPI,
+    chat_id: int | str,
+    text: str,
+    *,
+    reply_markup: dict[str, Any] | None = None,
+    disable_web_page_preview: bool | None = None,
+    reply_to_message_id: int | None = None,
+) -> str:
+    """Send *text* as as many messages as it takes. Returns the last message id ("" for none).
+
+    Each part (:func:`~telegram_runtime.format.render_parts`) goes out as MarkdownV2. One the
+    Bot API refuses as a bad request is sent again as its plain source text, so the reader
+    loses that part's formatting rather than the part. Any other refusal, or a plain re-send
+    that is refused too, is logged naming the part and raised: a reply is never cut short
+    without a trace. A keyboard rides the last part, where the reader ends up; a reply-to
+    anchors the first."""
+    parts = render_parts(text)
+    last = ""
+    for index, part in enumerate(parts, 1):
+        options: dict[str, Any] = {
+            "reply_markup": reply_markup if index == len(parts) else None,
+            "disable_web_page_preview": disable_web_page_preview,
+            "reply_to_message_id": reply_to_message_id if index == 1 else None,
+        }
+        try:
+            msg = await api.send_message(
+                chat_id, part.markdown_v2, parse_mode="MarkdownV2", **options
+            )
+        except TelegramAPIError as exc:
+            if exc.error_code != _BAD_REQUEST:
+                logger.warning(
+                    "telegram: part %d of %d to %s was not delivered: %s",
+                    index, len(parts), chat_id, exc.description,
+                )
+                raise
+            logger.warning(
+                "telegram: part %d of %d to %s was refused as MarkdownV2 (%s); sending it as "
+                "plain text", index, len(parts), chat_id, exc.description,
+            )
+            try:
+                msg = await api.send_message(chat_id, part.plain, **options)
+            except Exception as plain_exc:
+                logger.warning(
+                    "telegram: part %d of %d to %s was not delivered, as plain text either: %s",
+                    index, len(parts), chat_id, plain_exc,
+                )
+                raise
+        except Exception as exc:
+            logger.warning(
+                "telegram: part %d of %d to %s was not delivered: %s",
+                index, len(parts), chat_id, exc,
+            )
+            raise
+        last = str(msg.get("message_id", "")) or last
+    return last
 
 # Minimum wall-clock seconds between two edits of the same streamed message. The
 # plan sets the floor at 1.1s; Telegram tolerates roughly one edit/second.
@@ -42,16 +111,38 @@ _DENY = "deny"
 
 
 class _StreamState:
-    """Bookkeeping for one edit-streamed message."""
+    """Bookkeeping for one edit-streamed message: its placeholder, and one line per task.
 
-    __slots__ = ("chat_id", "message_id", "last_edit", "last_text", "pending_text")
+    A task's line is replaced in place as its status changes, so a finished task does not
+    leave its "in progress" line behind."""
 
-    def __init__(self, chat_id: str, message_id: int) -> None:
+    __slots__ = ("chat_id", "message_id", "last_edit", "last_text", "head", "tasks")
+
+    def __init__(self, chat_id: str, message_id: int, head: str) -> None:
         self.chat_id = chat_id
         self.message_id = message_id
         self.last_edit = 0.0
-        self.last_text = ""
-        self.pending_text = ""
+        self.last_text = head
+        self.head = head
+        self.tasks: dict[str, str] = {}
+
+    def text(self, *, final: bool = False) -> str:
+        """What the message shows: the placeholder over the task lines while it runs, the task
+        lines alone once it stops ("" when there were none). The oldest lines give way when
+        they would not fit one message."""
+        lines = list(self.tasks.values())
+        dropped = False
+        while True:
+            body = (["…"] if dropped else []) + lines
+            text = "\n".join(body if final else [self.head, *body]).strip()
+            if not lines or utf16_len(to_markdown_v2(text)) <= TELEGRAM_MAX_TEXT:
+                return text
+            lines, dropped = lines[1:], True
+
+
+def _not_modified(exc: TelegramAPIError) -> bool:
+    """Telegram's answer to an edit that changes nothing: the text is already there."""
+    return exc.error_code == _BAD_REQUEST and "message is not modified" in exc.description
 
 
 class _PendingApproval:
@@ -67,9 +158,12 @@ class _PendingApproval:
 class TelegramDelivery:
     """Renders + delivers gateway results to Telegram. Implements ChannelDelivery."""
 
-    def __init__(self, api: TelegramAPI, owner_id: str) -> None:
+    def __init__(self, api: TelegramAPI, owner: Callable[[], str]) -> None:
         self._api = api
-        self._owner_id = owner_id
+        #: Who the owner is NOW, read each time it is needed. The owner can be paired from the
+        #: channel's Configure page while this receiver runs; a value kept from the start sent the
+        #: approval prompt to nobody until the next restart.
+        self._owner = owner
         self._streams: dict[str, _StreamState] = {}
         # keyed by "chat_id:message_id" of the prompt message the buttons live on.
         self._pending: dict[str, _PendingApproval] = {}
@@ -87,17 +181,9 @@ class TelegramDelivery:
         unfurl_links: bool | None = None, unfurl_media: bool | None = None,
         reply_broadcast: bool | None = None,
     ) -> str:
-        body_plain, _ = redact_exfiltration_urls(text)
-        body_plain, _ = redact_credentials(body_plain)
-        body = to_markdown_v2(body_plain)
-        last = ""
-        for part in split_message(body):
-            msg = await self._api.send_message(
-                channel, part, parse_mode="MarkdownV2",
-                disable_web_page_preview=(unfurl_links is False) or None,
-            )
-            last = str(msg.get("message_id", "")) or last
-        return last
+        return await send_parts(
+            self._api, channel, text, disable_web_page_preview=(unfurl_links is False) or None,
+        )
 
     async def deliver_rich(
         self, channel: str, payload: Any, fallback_text: str, *,
@@ -107,41 +193,23 @@ class TelegramDelivery:
         # Telegram has no Block-Kit analogue; render the plain-text fallback. When a
         # caller hands a reply_markup dict through, pass it as an inline keyboard.
         markup = payload if isinstance(payload, dict) and "inline_keyboard" in payload else None
-        msg = await self._api.send_message(
-            channel, to_markdown_v2(fallback_text), parse_mode="MarkdownV2", reply_markup=markup,
-        )
-        return str(msg.get("message_id", ""))
+        return await send_parts(self._api, channel, fallback_text, reply_markup=markup)
 
     async def deliver_cron_result(
         self, channel: str, job_name: str, job_id: str, text: str, thread_ts: str = ""
     ) -> str:
-        redacted, _ = redact_exfiltration_urls(text)
-        redacted, _ = redact_credentials(redacted)
-        header = to_markdown_v2(f"⏰ Cron: {job_name}\n\n")
-        first = True
-        last = ""
-        for part in split_message(to_markdown_v2(redacted)):
-            body = (header + part) if first else part
-            first = False
-            msg = await self._api.send_message(channel, body, parse_mode="MarkdownV2")
-            last = str(msg.get("message_id", "")) or last
-        return last
+        return await send_parts(self._api, channel, f"⏰ Cron: {job_name}\n\n{text}")
 
     async def deliver_notification(
         self, channel: str, title: str, text: str, thread_ts: str = ""
     ) -> str:
-        body = to_markdown_v2(f"💓 {title}\n\n{text}")
-        msg = await self._api.send_message(channel, body, parse_mode="MarkdownV2")
-        return str(msg.get("message_id", ""))
+        return await send_parts(self._api, channel, f"💓 {title}\n\n{text}")
 
     async def deliver_chat_mirror(self, channel: str, text: str, thread_ts: str = "") -> None:
         from personalclaw.sdk.channel import extract_options
 
-        body, _ = redact_exfiltration_urls(text)
-        body, _ = redact_credentials(body)
-        body, options = extract_options(body)
-        for part in split_message(to_markdown_v2(body)):
-            await self._api.send_message(channel, part, parse_mode="MarkdownV2")
+        body, options = extract_options(text)
+        await send_parts(self._api, channel, body)
         if options:
             markup = {
                 "inline_keyboard": [[{"text": o[:64], "callback_data": f"opt:{i}"}] for i, o in enumerate(options)]
@@ -153,10 +221,7 @@ class TelegramDelivery:
     async def deliver_subagent_reply(
         self, channel: str, text: str, thread_ts: str = "", elapsed_secs: float = 0.0
     ) -> None:
-        body, _ = redact_exfiltration_urls(text)
-        body, _ = redact_credentials(body)
-        for part in split_message(to_markdown_v2(body)):
-            await self._api.send_message(channel, part, parse_mode="MarkdownV2")
+        await send_parts(self._api, channel, text)
         if elapsed_secs:
             footer = to_markdown_v2(f"_took {elapsed_secs:.1f}s_")
             await self._api.send_message(channel, footer, parse_mode="MarkdownV2")
@@ -210,25 +275,25 @@ class TelegramDelivery:
 
     # ── edit-based streaming ──
     async def start_stream(self, channel: str, thread_ts: str = "", initial_text: str = "") -> str:
-        text = to_markdown_v2(initial_text or "…")
-        msg = await self._api.send_message(channel, text, parse_mode="MarkdownV2")
+        head = initial_text or "…"
+        msg = await self._api.send_message(channel, to_markdown_v2(head), parse_mode="MarkdownV2")
         mid = int(msg.get("message_id", 0) or 0)
         if not mid:
             return ""
         key = f"{channel}:{mid}"
-        st = _StreamState(channel, mid)
+        st = _StreamState(channel, mid, head)
         st.last_edit = self._now()
-        st.last_text = initial_text or "…"
         self._streams[key] = st
         return str(mid)
 
     async def append_stream_task(
         self, channel: str, stream_ts: str, task_id: str, title: str, status: str,
     ) -> None:
-        """Append a progress line to the streamed message, throttled.
+        """Show a task's progress line in the streamed message, throttled.
 
         Telegram has no task-animation primitive, so a task update is folded into
-        the streamed text as a status line and edited in — at most one edit per
+        the streamed text as a status line, the task's own (a finished task's line
+        replaces its "in progress" one), and edited in — at most one edit per
         :data:`_EDIT_MIN_INTERVAL`. The final flush happens in :meth:`stop_stream`,
         so a throttled-away update is never lost."""
         key = f"{channel}:{stream_ts}"
@@ -236,33 +301,55 @@ class TelegramDelivery:
         if st is None:
             return
         icon = "✅" if status in ("complete", "completed", "done") else "⏳"
-        st.pending_text = f"{st.last_text}\n{icon} {title}".strip()
+        st.tasks[task_id] = f"{icon} {title}".strip()
         await self._maybe_edit(st, force=False)
 
     async def stop_stream(self, channel: str, stream_ts: str) -> None:
+        """Leave the streamed message holding the task lines, or remove it when it only ever
+        held its placeholder: the reply is a message of its own, and a "Thinking…" left above
+        it reads as a turn that never finished."""
         key = f"{channel}:{stream_ts}"
         st = self._streams.pop(key, None)
         if st is None:
             return
+        final = st.text(final=True)
+        if not final:
+            try:
+                await self._api.delete_message(st.chat_id, st.message_id)
+            except Exception:
+                logger.warning(
+                    "telegram: the stream placeholder %s in %s could not be removed",
+                    st.message_id, st.chat_id, exc_info=True,
+                )
+            return
         # Always flush the exact final text, throttle be damned.
-        await self._maybe_edit(st, force=True)
+        await self._edit(st, final, self._now())
 
     async def _maybe_edit(self, st: _StreamState, *, force: bool) -> None:
-        text = st.pending_text or st.last_text
-        if text == st.last_text and not force:
+        """Show the running stream's text now, unless an edit landed inside the throttle
+        window (``force`` ignores it)."""
+        text = st.text()
+        if text == st.last_text:
             return
         now = self._now()
         if not force and (now - st.last_edit) < _EDIT_MIN_INTERVAL:
-            return  # throttled — the pending text rides until the next edit/flush
+            return  # throttled — the text rides until the next edit/flush
+        await self._edit(st, text, now)
+
+    async def _edit(self, st: _StreamState, text: str, now: float) -> None:
         try:
             await self._api.edit_message_text(
                 st.chat_id, st.message_id, to_markdown_v2(text), parse_mode="MarkdownV2",
             )
-            st.last_edit = now
-            st.last_text = text
-            st.pending_text = ""
+        except TelegramAPIError as exc:
+            if not _not_modified(exc):
+                logger.warning("telegram: stream edit failed: %s", exc.description)
+                return
         except Exception:
-            logger.debug("telegram: stream edit failed", exc_info=True)
+            logger.warning("telegram: stream edit failed", exc_info=True)
+            return
+        st.last_edit = now
+        st.last_text = text
 
     # ── approval via inline keyboard ──
     async def request_approval(
@@ -284,22 +371,23 @@ class TelegramDelivery:
             except Exception:
                 chat_id = ""
         if not chat_id:
-            chat_id = self._owner_id
+            chat_id = self._owner()
         if not chat_id:
             return None
 
         request_id = str(getattr(event, "request_id", ""))
-        title, _ = redact_exfiltration_urls(str(getattr(event, "title", "")))
-        title, _ = redact_credentials(title)
+        title = str(getattr(event, "title", ""))
         markup = {
             "inline_keyboard": [[
                 {"text": "✅ Approve", "callback_data": f"{_APPROVE}:{request_id}"},
                 {"text": "🚫 Deny", "callback_data": f"{_DENY}:{request_id}"},
             ]]
         }
-        prompt = to_markdown_v2(f"🔐 [{source}] Approve: {title}?")
-        msg = await self._api.send_message(chat_id, prompt, parse_mode="MarkdownV2", reply_markup=markup)
-        mid = int(msg.get("message_id", 0) or 0)
+        # Split like a reply, the buttons on the last part: one message of it all was refused
+        # as too long, and the owner was never asked.
+        prompt = f"🔐 [{source}] Approve: {title}?"
+        parts = render_parts(prompt)
+        mid = int(await send_parts(self._api, chat_id, prompt, reply_markup=markup) or 0)
         key = f"{chat_id}:{mid}"
         pending = _PendingApproval(request_id, chat_id, mid)
         self._pending[key] = pending
@@ -322,27 +410,55 @@ class TelegramDelivery:
         status = "✅ Approved" if outcome == "approved" else "🚫 Rejected"
         try:
             await self._api.edit_message_text(
-                chat_id, mid, to_markdown_v2(f"🔐 {title} — {status}"), parse_mode="MarkdownV2",
+                chat_id, mid, to_markdown_v2(_answered(title, parts, status)),
+                parse_mode="MarkdownV2",
             )
         except Exception:
-            logger.debug("telegram: approval finalize edit failed", exc_info=True)
+            logger.warning("telegram: approval finalize edit failed", exc_info=True)
         return outcome == "approved"
 
     async def resolve_callback(self, cq: dict[str, Any]) -> None:
-        """Resolve a pending approval from a ``callback_query`` (button press)."""
+        """Resolve a pending approval from a ``callback_query`` (button press).
+
+        Only the owner's press answers it. A prompt for a chat linked to a tracked group is posted
+        in that group, where every member sees the buttons, and a member must not approve what
+        the owner's agent runs. Anyone else's press is refused and logged."""
         data = cq.get("data", "") or ""
         cq_id = cq.get("id", "")
         action, _, request_id = data.partition(":")
+        answer = "Recorded"
         if action in (_APPROVE, _DENY) and request_id:
             pending = self._pending.get(f"req:{request_id}")
             if pending is not None and not pending.future.done():
-                pending.future.set_result("approved" if action == _APPROVE else "rejected")
+                presser = str((cq.get("from") or {}).get("id", "") or "")
+                owner = str(self._owner() or "")
+                if owner and presser == owner:
+                    pending.future.set_result("approved" if action == _APPROVE else "rejected")
+                else:
+                    answer = "Only the owner can answer this."
+                    logger.warning("telegram: refused an approval press from %s, not the owner", presser)
+                    sel().log_api_access(
+                        caller=f"telegram:{presser or 'unknown'}",
+                        operation="telegram.approval_press",
+                        outcome="denied",
+                        source="telegram",
+                        resources=request_id,
+                        error="not the owner",
+                    )
         # Acknowledge so Telegram stops the button's spinner.
         if cq_id:
             try:
-                await self._api.answer_callback_query(cq_id, text="Recorded")
+                await self._api.answer_callback_query(cq_id, text=answer)
             except Exception:
                 logger.debug("telegram: answerCallbackQuery failed", exc_info=True)
+
+
+def _answered(title: str, parts: list, status: str) -> str:
+    """What the prompt's last message says once it is answered, in one message: the prompt with
+    its outcome, or, for a prompt split over several, its last part's text with it, or the
+    outcome alone when that would not fit (the parts above keep the rest)."""
+    text = f"🔐 {title} — {status}" if len(parts) <= 1 else f"{parts[-1].plain} — {status}"
+    return text if len(render_parts(text)) == 1 else f"🔐 {status}"
 
 
 def _monotonic() -> float:

@@ -38,6 +38,7 @@ What this rail was built from, measured on ``origin/main``:
 
 from __future__ import annotations
 
+import hashlib
 import re
 import subprocess
 import sys
@@ -113,6 +114,168 @@ _PLACEHOLDER_HOMES = frozenset(
 _UNLISTED_OWNER = "zz" + "notaplaceholder" + "zz"
 
 
+# ── internal references ─────────────────────────────────────────────────────────────────
+#
+# A public repository must not name a system that is not public: the name, host, identifier
+# or document of an internal tool. Measured when this rule was added: 43 references on 28
+# lines in 17 files, an internal guidance system cited by name, document id and numbered
+# control id, and one bundle describing its CLI with an internal characterisation, an
+# internal install path and an internal sign-in tool. Each was rewritten to the principle
+# it stood for.
+#
+# ⚠️  THE DENYLIST IS SALTED SHA-256 DIGESTS, NEVER PLAINTEXT. A plaintext list would publish
+#     the very names it keeps out, the self-defeat the home-path rule avoids by being an
+#     allowlist. The text is folded into candidates (words, two-word phrases, host suffixes,
+#     digit-shaped codes, id shapes), each distinct candidate is digested once, and digests are
+#     compared. A compound kind is only checked in a file that carries one of its HEAD words.
+#     These are the same salt and entries as core's ``publication-hygiene-baseline.json``
+#     (``internal_reference_rule``): add a name there with
+#     ``python3 scripts/check_publication_hygiene.py --digest KIND TEXT`` and copy the printed
+#     lines here. Never write the plaintext into this repo, a commit message, a PR or an issue.
+
+_INTERNAL_SALT = "personalclaw/publication-hygiene/internal-reference/v1"
+_INTERNAL_DENIED: dict[str, frozenset[str]] = {
+    "word": frozenset(),
+    "phrase-head": frozenset(),
+    "phrase": frozenset(),
+    "host-head": frozenset(),
+    "host": frozenset(),
+    "code-head": frozenset(),
+    "code": frozenset(),
+    "id-head": frozenset(),
+    "id": frozenset(),
+}
+_DIGITS = "0123456789"
+#: A word: a maximal run of letters and digits, case-folded, plus the CamelCase parts of a
+#: mixed-case run — so ``snake_case``, ``kebab-case``, ``dotted.names`` and ``FooService``
+#: all fold into the words a reader sees.
+_RUN = re.compile(r"[A-Za-z0-9]+")
+_CAMEL_PART = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
+#: A dotted, host-like run, anchored at a label start. Every suffix of two or more labels is a
+#: candidate, so a denied host also denies each of its subdomains.
+_HOST_RUN = re.compile(r"(?<![a-z0-9-])[a-z0-9-]+(?:\.[a-z0-9-]+)+")
+#: A catalogue code (letters, optional hyphen, 1-3 digits; not a ``pkg-1.6.0`` version),
+#: digits folded to 9s so one entry covers a numbered family.
+_CODE = re.compile(r"(?<![a-z0-9])([a-z]{2,6})(-?)([0-9]{1,3})(?![a-z0-9]|\.[0-9])")
+#: A document-store id: a three-letter prefix, ``_``, then 14 mixed-case base62 characters or
+#: 8 lowercase-and-digit ones. Folded to prefix and shape. Matched case-sensitively.
+_ID = re.compile(
+    r"(?<![A-Za-z0-9])(?P<prefix>[a-z]{3})_(?:"
+    r"(?P<m14>(?=[a-z0-9]*[A-Z])(?=[A-Za-z]*[0-9])(?=[A-Z0-9]*[a-z])[A-Za-z0-9]{14})"
+    r"|(?P<l8>(?=[a-z]*[0-9])(?=[0-9]*[a-z])[a-z0-9]{8})"
+    r")(?![A-Za-z0-9])"
+)
+#: How far apart two words may sit and still read as one phrase (a wrapped comment included).
+_PHRASE_GAP = 12
+
+#: Each kind's CONTROL (whose digest ``_INTERNAL_DENIED`` carries) planted in ordinary text, and
+#: a near miss that must stay green. Assembled at runtime for the reason ``_UNLISTED_OWNER`` is:
+#: this script is inside its own input set, so a literal control would make it a published
+#: match. Each piece is split so that no fragment is itself a candidate.
+_INTERNAL_CONTROLS = (
+    ("word", "per the " + "ZZ" + "HYGIENECONTROL" + "ZZ" + " guidance", "zz" + "hygienecontrol" + "zzish"),
+    (
+        "phrase",
+        "sign in with " + "zzcontrol" + "head\n#   " + "zzcontrol" + "tail first",
+        "zzcontrol" + "head unrelated",
+    ),
+    ("host", "https://docs." + "zzcontrol" + ".invalid/page", "not" + "zzcontrol" + ".invalid"),
+    ("code", "(" + "ZZQ" + "-42 boundary)", "zzq" + "-1.6.0"),
+    ("id", "cited as " + "zzq" + "_" + "Ab3dE5gH7jK9mN", "zzq" + "_processed1"),
+)
+
+
+def _internal_digest(kind: str, candidate: str) -> str:
+    return hashlib.sha256(f"{_INTERNAL_SALT}\0{kind}\0{candidate}".encode("utf-8")).hexdigest()
+
+
+def _words(text: str) -> set[str]:
+    runs = set(_RUN.findall(text))
+    words = {run.lower() for run in runs}
+    for run in runs:
+        tail = run[1:]
+        if tail != tail.lower() and not run.isupper():
+            words.update(part.lower() for part in _CAMEL_PART.findall(run))
+    return words
+
+
+def _phrase_pattern(heads: list[str]) -> re.Pattern[str]:
+    alternation = "|".join(map(re.escape, heads))
+    return re.compile(rf"(?<![a-z0-9])({alternation})(?=[^a-z0-9]{{1,{_PHRASE_GAP}}}([a-z0-9]+))")
+
+
+def _wrapped_phrase(phrase: str) -> re.Pattern[str]:
+    head, tail = (re.escape(part) for part in phrase.split(" ", 1))
+    return re.compile(rf"(?<![a-z0-9]){head}(?=[^a-z0-9]{{1,{_PHRASE_GAP}}}{tail}(?![a-z0-9]))")
+
+
+class _InternalMatcher:
+    """Finds denylisted references while knowing the denylist only as digests; each distinct
+    candidate is digested once per run and then checked with set arithmetic."""
+
+    def __init__(self) -> None:
+        self._seen: dict[str, set[str]] = {kind: set() for kind in _INTERNAL_DENIED}
+        self._hits: dict[str, set[str]] = {kind: set() for kind in _INTERNAL_DENIED}
+
+    def _denied_among(self, kind: str, candidates: set[str]) -> set[str]:
+        seen = self._seen[kind]
+        new = candidates - seen
+        if new:
+            denied = _INTERNAL_DENIED[kind]
+            self._hits[kind].update(c for c in new if _internal_digest(kind, c) in denied)
+            seen |= new
+        return candidates & self._hits[kind]
+
+    def references(self, text: str) -> list[tuple[str, str]]:
+        """Every ``(kind, surface)`` denied reference in *text*, sorted, once each."""
+        low = text.lower()
+        words = _words(text)
+        found = {("word", w) for w in self._denied_among("word", words)}
+        heads = self._denied_among("phrase-head", words)
+        if heads:
+            phrases = {f"{m.group(1)} {m.group(2)}" for m in _phrase_pattern(sorted(heads)).finditer(low)}
+            found.update(("phrase", p) for p in self._denied_among("phrase", phrases))
+        if self._denied_among("host-head", words):
+            for run in set(_HOST_RUN.findall(low)):
+                labels = run.split(".")
+                suffixes = {".".join(labels[start:]) for start in range(len(labels) - 1)}
+                denied = self._denied_among("host", suffixes)
+                if denied:
+                    found.add(("host", max(denied, key=len)))
+        letters = {w.rstrip(_DIGITS) for w in words if w[-1] in _DIGITS}
+        if self._denied_among("code-head", words | letters):
+            codes = {(f"{a}{h}{'9' * len(d)}", f"{a}{h}{d}") for a, h, d in set(_CODE.findall(low))}
+            denied = self._denied_among("code", {shape for shape, _ in codes})
+            found.update(("code", surface) for shape, surface in codes if shape in denied)
+        if self._denied_among("id-head", words):
+            ids = {
+                (f"{m.group('prefix')}_{'m14' if m.group('m14') else 'l8'}", m.group(0))
+                for m in _ID.finditer(text)
+            }
+            denied = self._denied_among("id", {shape for shape, _ in ids})
+            found.update(("id", surface) for shape, surface in ids if shape in denied)
+        return sorted(found)
+
+    def located(self, text: str) -> list[tuple[int, str, str]]:
+        """``(line, kind, surface)`` for each reference; a phrase wrapped across a line break is
+        placed on its first word's line."""
+        hits = self.references(text)
+        if not hits:
+            return []
+        located = {
+            (number, kind, surface)
+            for number, line in enumerate(text.splitlines(), 1)
+            for kind, surface in self.references(line)
+        }
+        placed = {(kind, surface) for _, kind, surface in located}
+        low = text.lower()
+        for kind, surface in hits:
+            if kind == "phrase" and (kind, surface) not in placed:
+                for match in _wrapped_phrase(surface).finditer(low):
+                    located.add((low.count("\n", 0, match.start()) + 1, kind, surface))
+        return sorted(located)
+
+
 def _tracked_files() -> list[str]:
     """Every tracked path as a repo-relative POSIX string. ``-z`` because a path may
     legitimately contain a space and line-splitting would silently drop its tail."""
@@ -169,6 +332,15 @@ def _detector_floor() -> list[str]:
         failures.append("detector floor: the control owner was added to the allowlist")
     if _HOME_PATH.findall("HOME = '/Users/me'") != ["me"] or "me" not in _PLACEHOLDER_HOMES:
         failures.append("detector floor: '/Users/me' is not treated as a placeholder")
+    matcher = _InternalMatcher()
+    for kind, planted, near_miss in _INTERNAL_CONTROLS:
+        if kind not in {found for found, _ in matcher.references(planted)}:
+            failures.append(f"detector floor: the {kind} control no longer fires on {planted!r}")
+        if matcher.references(near_miss):
+            failures.append(f"detector floor: internal-reference falsely catches {near_miss!r}")
+    for kind, entries in _INTERNAL_DENIED.items():
+        if len(entries) < 2:
+            failures.append(f"detector floor: the {kind} denylist holds nothing but its control")
 
     # This script polices itself — there are no exemptions. A literal `/Users/<name>` here
     # would make this file a published real-home path, so the guard is on the MECHANISM (an
@@ -199,6 +371,11 @@ def main() -> int:
             if compiled.search(path):
                 violations.append(f"{rule}: {path}")
 
+    matcher = _InternalMatcher()
+    for path in tracked:
+        for kind, surface in matcher.references(path):
+            violations.append(f"internal-reference: {path} (its PATH) names a denied {kind} ({surface!r})")
+
     for path in tracked:
         full = ROOT / path
         if not full.is_file():
@@ -211,14 +388,23 @@ def main() -> int:
                     f"oversized-binary: {path} is {size} bytes (ceiling {_MAX_BINARY_BYTES})"
                 )
             continue
-        for name in set(_HOME_PATH.findall(blob.decode("utf-8", "replace"))):
+        text = blob.decode("utf-8", "replace")
+        for name in set(_HOME_PATH.findall(text)):
             if name not in _PLACEHOLDER_HOMES:
                 violations.append(f"real-home-path: {path} names home directory {name!r}")
+        for line, kind, surface in matcher.located(text):
+            violations.append(f"internal-reference: {path}:{line} names a denied {kind} ({surface!r})")
 
     if violations:
         print("publication-hygiene: FAIL")
         for line in sorted(violations):
             print(f"  {line}")
+        if any(line.startswith("internal-reference:") for line in violations):
+            print(
+                "\nAn internal reference is fixed by stating the PRINCIPLE instead of naming its "
+                "source (e.g. 'never trust an upload's declared type; cap decoded size'), and by "
+                "renaming a fixture that borrows a non-public name. There is no exemption."
+            )
         print(
             "\nDelete the path, or move it somewhere this repo publishes deliberately. Do not "
             "widen the allowlist to make CI green — every entry is reviewed as policy."

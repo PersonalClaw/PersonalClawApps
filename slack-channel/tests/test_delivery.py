@@ -268,3 +268,87 @@ class TestApprovalBriefOnTheNotification:
         got, fallback = await self._prompt(None, outcome)
         assert got is verdict
         assert fallback == "🔐 [cron] Approve: bash?"
+
+
+# ── core masks what it hands this channel ──────────────────────────────────────────────────
+
+#: A key, assembled at runtime so the literal is not in the file, and its tail, which no
+#: rendering escapes: the wire is searched for the tail, since a channel's markup may escape
+#: the key's punctuation and hide the key from a search for all of it.
+TAIL = "A" * 20 + "B" * 20 + "C" * 15
+SECRET = "sk-" + "ant-api03-" + TAIL
+
+
+def _asks(title: str):
+    from personalclaw.llm.base import LLMEvent
+
+    return LLMEvent(
+        kind="permission_request",
+        request_id="req-k",
+        title=title,
+        options=[],
+        tool_purpose=f"push the build with {SECRET}",
+        tool_input=f'{{"command": "deploy --token {SECRET}"}}',
+    )
+
+
+#: Every way core hands this channel text, each carrying a key.
+_HANDED = {
+    "deliver_text": lambda h: h.deliver_text("C1", f"token {SECRET}"),
+    "deliver_notification": lambda h: h.deliver_notification(
+        "C1", f"Nightly {SECRET}", f"result {SECRET}"
+    ),
+    "deliver_rich": lambda h: h.deliver_rich(
+        "C1",
+        [{"type": "section", "text": {"type": "mrkdwn", "text": f"deploy {SECRET}"}}],
+        f"fallback {SECRET}",
+    ),
+    "deliver_cron_result": lambda h: h.deliver_cron_result(
+        "C1", f"backup {SECRET}", "job-1", f"done {SECRET}"
+    ),
+    "deliver_chat_mirror": lambda h: h.deliver_chat_mirror("C1", f"answer {SECRET}"),
+    "deliver_subagent_reply": lambda h: h.deliver_subagent_reply("C1", f"reply {SECRET}"),
+    "upload_attachment": lambda h: h.upload_attachment(
+        "C1", "report.txt", title=f"report {SECRET}"
+    ),
+    "start_stream": lambda h: h.start_stream("C1", "1.0", initial_text=f"thinking {SECRET}"),
+    "append_stream_task": lambda h: h.append_stream_task(
+        "C1", "9.9", "t1", f"run {SECRET}", "in_progress"
+    ),
+    "request_approval": lambda h: h.request_approval(
+        _asks(f"deploy {SECRET}"),
+        source="tool",
+        on_prompted=lambda pending: pending.future.set_result("rejected"),
+    ),
+}
+
+
+@pytest.fixture
+def through_core():
+    """This delivery as core holds it: registered with core, and read back the way core reads it."""
+    from personalclaw import channel_delivery
+
+    client = MagicMock()
+    for name in (
+        "post_message", "post_blocks", "update_message", "upload_file",
+        "start_stream", "append_task", "stop_stream",
+    ):
+        setattr(client, name, AsyncMock(return_value="1.1"))
+    client.open_dm = AsyncMock(return_value="D1")
+    channel_delivery.register(_delivery(client), provider="slack")
+    yield client, channel_delivery.delivery_for("slack")
+    channel_delivery.register(None, provider="slack")
+
+
+class TestCoreMasksWhatItHandsThisChannel:
+    """Core masks every text it hands a channel, so this app's delivery masks nothing again: a key
+    in anything core sends through it never reaches the Slack client."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("method", sorted(_HANDED))
+    async def test_no_key_reaches_the_slack_client(self, through_core, method):
+        client, handle = through_core
+        await _HANDED[method](handle)
+        wire = repr(client.mock_calls)
+        assert TAIL not in wire
+        assert "REDACTED" in wire, "nothing was sent"

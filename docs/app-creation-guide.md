@@ -166,12 +166,21 @@ An app that plugs a capability into core declares a `provider` (or several via
   "multiInstance": true,                     // user may add several instances (e.g. two endpoints)
   "capabilities": ["search"],                // what this provider can do
   "entity": "",                              // optional sub-grouping within a type
+  "execution": "in-process",                 // or "sidecar": its own process and Python environment
   "settingsSchema": { ... }                  // JSON Schema (Draft-07 + x-meta) for the Configure form
 }
 ```
 
 The factory receives the app's current config dict and returns a provider
 instance implementing the relevant SDK contract.
+
+`execution: "sidecar"` is for an engine heavy or crash-prone enough to keep out of
+the gateway (torch, a native library). Your provider still loads in-process, and it
+drives the engine through `personalclaw.sdk.sidecar.SidecarRunner`: a worker module
+you ship runs in a child process under the app's own Python environment,
+`apps/<app>/venv`, so a crash in it leaves the gateway up with a typed reason. The
+engine packages go in `dependencies.sidecarDependencies` (see
+[Dependencies](#dependencies)). `voice-clone-tts` is the worked example.
 
 `settingsSchema` properties support `x-meta` per field:
 `label`, `help`, `sensitive: true` (secret handling), `tags: ["advanced"]`
@@ -338,7 +347,8 @@ the install back.
 
 ```json
 "dependencies": {
-  "pythonDependencies": ["faster-whisper>=1.0"]  // pip specs, installed into <home>/app-python
+  "pythonDependencies": ["faster-whisper>=1.0"],   // pip specs, installed into <home>/app-python
+  "sidecarDependencies": ["omnivoice>=0.2.1,<0.3"] // pip specs for a sidecar's engine, installed into apps/<app>/venv
 }
 ```
 
@@ -364,8 +374,39 @@ it runs from:
   `PYTHONPATH` (the `piper-tts` app does this), and don't look for its console script
   beside the interpreter — pip puts it in `<home>/app-python/bin`.
 
+`sidecarDependencies` is the engine of a provider declared `execution: "sidecar"`, and a
+manifest that lists it without one is refused. Nothing installs it with the app. The owner
+presses **Install engine** on the app's card in Settings → Providers, or on its Configure
+page, and PersonalClaw makes `apps/<app>/venv` and pip-installs the list there, showing pip's
+output as it runs. Only your worker, in that child process, imports these packages; the
+gateway never does. Each entry is a PEP 508 requirement (an option such as `--index-url` is
+an install error), and install consent names them under what the app runs. An update keeps
+the environment, so the engine survives it. If the new version declares a different list,
+the card offers Install engine again and pip brings the same environment up to it. Say in
+your provider's availability reason that Install engine is the way in, as `voice-clone-tts`
+does, rather than giving shell commands.
+
 There is also a `marketplace` block (mcp/skills/agents ids with
 `managedBy: "gateway" | "app"`) for marketplace-managed dependencies.
+
+### Prerequisites (`requires`)
+
+```json
+"requires": [{
+  "name": "ComfyUI",                                   // what it is (at most 80 characters)
+  "why": "Every image is made by a ComfyUI server ...", // what the app uses it for (300)
+  "how": "Install ComfyUI and start it on this machine ..." // what the owner does to have it (600)
+}]
+```
+
+What the app needs on this machine that PersonalClaw does not install: a local server it
+sends its work to, a program a tool runs. Install consent leads with these, under "What it
+needs that PersonalClaw doesn't install", the Store card says "Needs ComfyUI", and an update
+that adds one asks for consent again. All three strings are plain text shown as you wrote
+them, so write `how` as steps the owner can follow, with the address or command they need.
+At most 10 entries, each named once. Something PersonalClaw can install is not a
+prerequisite: a Python package goes in `dependencies`. `local-image-gen` is the worked
+example.
 
 ### Platform
 
@@ -495,6 +536,12 @@ DATA_DIR = Path(os.environ.get("PERSONALCLAW_APP_DATA_DIR", "/tmp/my-app"))  # o
 Your `ui` entry is an ESM bundle exporting a mount function. The host resolves
 bare imports of `react` and `@personalclaw/app-sdk` for you (no bundling them).
 
+Ship that bundle built. An install copies your app as it is and never builds anything, so
+a page written in TSX is built ahead of time and its output committed: Minutes and Growth
+build into `ui/bundle/`, and the `ui-bundles` CI job rebuilds them and fails when the
+committed file differs. Don't build it from an install hook: the hook has 60 seconds, and
+the user may have no Node at all.
+
 ```js
 import { createAppApi, createAppEvents, notify } from '@personalclaw/app-sdk'
 
@@ -524,6 +571,64 @@ the `agent` permission), `useTheme`/`readAppTheme`, and React-hook variants
 Read your saved `configSchema` values via your own detail endpoint
 (`GET /api/apps/<name>` — declare it in `permissions.api`), like demo-dashboard
 does for its `label` and `refresh_interval_s`.
+
+### Saving your settings from your page
+
+`PUT /api/apps/<name>/config` replaces the whole settings file, so the gateway
+saves it only over the copy your page read. `GET /api/apps/<name>/config` answers
+with that copy and its `revision`. Keep the two together, and pass the revision
+back as `{ basedOn }` on the save. The SDK sends it as `If-Match`, the one header
+an app sets. `post`, `put` and `patch` all take it, and declaring
+`/api/apps/<name>` in `permissions.api` covers both routes.
+
+```js
+import { createAppApi, isStaleWrite, notify } from '@personalclaw/app-sdk'
+
+export function mount(el, ctx) {
+  const api = createAppApi(ctx)
+  const route = `/api/apps/${ctx.name}/config`
+  let read // { config, revision, … }
+
+  async function load() {
+    read = await api.get(route)
+    render(read.config)
+  }
+
+  // `edit` is only what the user changed, e.g. { collection: 'journal' }.
+  async function save(edit) {
+    const put = () => api.put(route, { ...read.config, ...edit }, { basedOn: read.revision })
+    try {
+      read = await put().catch(async (e) => {
+        if (!isStaleWrite(e)) throw e
+        // 409 stale_write: the settings changed after this page read them (another
+        // tab, Settings → Providers, your own backend), and nothing was saved.
+        // Apply the same edit to the stored copy and save over its revision.
+        read = await api.get(route)
+        return put()
+      })
+      render(read.config) // what the save stored, with its new revision
+    } catch (e) {
+      notify(e.message, 'error') // 428, or any other refusal, in the gateway's words
+    }
+  }
+
+  // ... render into el, call save() from its controls ...
+  load()
+}
+```
+
+- `isStaleWrite(e)` is true only for `409 stale_write`, the one refusal a page
+  recovers from by itself. If the other change could touch the field the user
+  edited, show them both values instead of re-applying theirs.
+- A save without `basedOn` is refused with `428 revision_required`
+  (`e.status === 428`, `e.code === 'revision_required'`). It fails the same way
+  every time, so it is a bug in the page, not something to retry.
+- Every refusal rejects with the gateway's `status`, `code` and sentence
+  (`e.message`), so `notify(e.message, 'error')` shows the user the gateway's
+  own words.
+- A sensitive field comes back masked, and sending the mask back keeps the
+  stored secret. `{ ...read.config, ...edit }` therefore never erases a secret
+  the user did not touch.
 
 ## Testing
 

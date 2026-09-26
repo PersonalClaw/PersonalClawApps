@@ -49,7 +49,7 @@ class FakeSession:
     def append(self, role, text, cls):
         self.appended.append((role, text, cls))
 
-    def queue_append(self, text):
+    def queue_append(self, text, *, channel=""):
         self.queued.append(text)
 
 

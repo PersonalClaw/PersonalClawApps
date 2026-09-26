@@ -106,3 +106,18 @@ def test_normalize_frontmatter_name():
     assert "description: makes changelogs" in out and "# Body" in out
     ok = "---\nname: already-good\ndescription: d\n---\n"
     assert _normalize_frontmatter_name(ok, "already-good") == ok
+
+
+def test_the_api_key_is_read_from_the_credential_store(monkeypatch):
+    """A key stored under ``skills_sh_api_key`` (Settings → Secrets, or ``personalclaw setup
+    --credential``) reaches the client. It passed ``config_dir() / "credentials.json"`` where
+    ``CredentialStore`` takes the home, so it looked beneath a file and never found the key."""
+    from personalclaw.config.credentials import save_credential
+
+    monkeypatch.delenv("SKILLS_SH_API_KEY", raising=False)
+    monkeypatch.setenv("skills_sh_api_key", "x")
+    monkeypatch.delenv("skills_sh_api_key")  # registered: teardown drops the mirrored value
+    save_credential("skills_sh_api_key", "key-from-the-store")
+    monkeypatch.delenv("skills_sh_api_key")  # read from the store, not the process environment
+
+    assert SkillsShMarketplace()._api_key() == "key-from-the-store"

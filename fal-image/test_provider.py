@@ -98,7 +98,7 @@ class TestFalImageProvider:
             return_value=_resp(200, {"images": [{"url": "https://cdn/y.png"}]})
         )
         with patch("personalclaw.sdk.net.fetch", fake_fetch):
-            out = await prov.generate("a cat")
+            out = await prov.generate("a cat", model="fal-ai/flux/schnell")
         assert out[0].url == "https://cdn/y.png"
 
     @pytest.mark.asyncio
@@ -114,7 +114,7 @@ class TestFalImageProvider:
         fake_fetch = AsyncMock(side_effect=seq)
         with patch("personalclaw.sdk.net.fetch", fake_fetch), \
              patch("provider._POLL_INTERVAL_S", 0):
-            out = await prov.edit("make it night", source_image=str(src))
+            out = await prov.edit("make it night", source_image=str(src), model="fal-ai/flux-pro/kontext")
         assert out[0].url == "https://cdn/e.png"
         body = json.loads(fake_fetch.call_args_list[0].kwargs["data"])
         assert body["image_url"].startswith("data:image/png;base64,")
@@ -129,27 +129,27 @@ class TestFalImageProvider:
         with patch("personalclaw.sdk.net.fetch", AsyncMock(side_effect=seq)), \
              patch("provider._POLL_INTERVAL_S", 0):
             with pytest.raises(ImageGenError):
-                await prov.generate("x")
+                await prov.generate("x", model="fal-ai/flux/schnell")
 
     @pytest.mark.asyncio
     async def test_no_key_raises(self, monkeypatch):
         monkeypatch.delenv("FAL_KEY", raising=False)
         monkeypatch.delenv("FAL_API_KEY", raising=False)
-        monkeypatch.setattr("provider._resolve_fal_key", lambda: "")
+        monkeypatch.setattr("provider._resolve_fal_key", lambda: ("", ""))
         prov = FalImageProvider(api_key="")
         with pytest.raises(ImageGenError):
-            await prov.generate("x")
+            await prov.generate("x", model="fal-ai/flux/schnell")
 
     @pytest.mark.asyncio
     async def test_submit_http_error_raises(self):
         prov = FalImageProvider(api_key="k")
         with patch("personalclaw.sdk.net.fetch", AsyncMock(return_value=_resp(500, {}))):
             with pytest.raises(ImageGenError):
-                await prov.generate("x")
+                await prov.generate("x", model="fal-ai/flux/schnell")
 
     @pytest.mark.asyncio
     async def test_is_available_reflects_key(self, monkeypatch):
-        monkeypatch.setattr("provider._resolve_fal_key", lambda: "")
+        monkeypatch.setattr("provider._resolve_fal_key", lambda: ("", ""))
         assert await FalImageProvider(api_key="").is_available() is False
         assert await FalImageProvider(api_key="k").is_available() is True
 
@@ -188,12 +188,13 @@ class TestFalVideoProvider:
              patch("provider._POLL_INTERVAL_S", 0):
             await prov.generate(
                 "waves crashing",
+                model="fal-ai/veo2",
                 duration_seconds=8.0,
                 aspect_ratio="16:9",
             )
         body = json.loads(fake_fetch.call_args_list[0].kwargs["data"])
-        # veo2 (the default video model) takes a literal '<n>s' duration string,
-        # not a raw float — see FalVideoProvider._format_duration.
+        # veo2 takes a literal '<n>s' duration string, not a raw float — see
+        # FalVideoProvider._format_duration.
         assert body["duration"] == "8s"
         assert body["aspect_ratio"] == "16:9"
 
@@ -205,7 +206,7 @@ class TestFalVideoProvider:
             return_value=_resp(200, {"videos": [{"url": "https://cdn/v1.mp4"}]})
         )
         with patch("personalclaw.sdk.net.fetch", fake_fetch):
-            out = await prov.generate("dancing")
+            out = await prov.generate("dancing", model="fal-ai/kling-video/v2/master/text-to-video")
         assert out[0].url == "https://cdn/v1.mp4"
 
     @pytest.mark.asyncio
@@ -218,7 +219,7 @@ class TestFalVideoProvider:
         with patch("personalclaw.sdk.net.fetch", AsyncMock(side_effect=seq)), \
              patch("provider._POLL_INTERVAL_S", 0):
             with pytest.raises(ImageGenError):
-                await prov.generate("x")
+                await prov.generate("x", model="fal-ai/kling-video/v2/master/text-to-video")
 
     @pytest.mark.asyncio
     async def test_no_video_in_result_raises(self):
@@ -232,47 +233,51 @@ class TestFalVideoProvider:
         with patch("personalclaw.sdk.net.fetch", fake_fetch), \
              patch("provider._POLL_INTERVAL_S", 0):
             with pytest.raises(VideoGenError):
-                await prov.generate("x")
+                await prov.generate("x", model="fal-ai/kling-video/v2/master/text-to-video")
 
     @pytest.mark.asyncio
     async def test_is_available_reflects_key(self, monkeypatch):
-        monkeypatch.setattr("provider._resolve_fal_key", lambda: "")
+        monkeypatch.setattr("provider._resolve_fal_key", lambda: ("", ""))
         assert await FalVideoProvider(api_key="").is_available() is False
         assert await FalVideoProvider(api_key="k").is_available() is True
 
 
-class TestFalDefaultModel:
-    """The unpinned default model must be DERIVED from catalogs, not hardcoded."""
-
-    def test_image_generate_default_is_first_text_to_image_entry(self):
-        from provider import _KNOWN_IMAGE_MODELS, _default_image_model
-
-        expected = next(m.name for m in _KNOWN_IMAGE_MODELS if not m.supports_edit)
-        assert _default_image_model(edit=False) == expected
-
-    def test_image_edit_default_is_first_edit_capable_entry(self):
-        from provider import _KNOWN_IMAGE_MODELS, _default_image_model
-
-        expected = next(m.name for m in _KNOWN_IMAGE_MODELS if m.supports_edit)
-        assert _default_image_model(edit=True) == expected
-
-    def test_video_default_is_first_entry(self):
-        from provider import _KNOWN_VIDEO_MODELS, _default_video_model
-
-        assert _default_video_model() == _KNOWN_VIDEO_MODELS[0].name
+class TestFalNamesItsModel:
+    """A call names its model, like chat. With none it is refused and nothing is sent: these
+    used to take the first model of the app's catalog in its place."""
 
     @pytest.mark.asyncio
-    async def test_generate_uses_derived_default_when_unpinned(self):
-        from provider import _default_image_model
+    @pytest.mark.parametrize("method", ["generate", "edit"])
+    async def test_an_image_call_that_names_no_model_is_refused(self, method, tmp_path):
+        source = tmp_path / "in.png"
+        source.write_bytes(b"\x89PNG")
+        prov = FalImageProvider(api_key="k")
+        fake_fetch = AsyncMock(return_value=_resp(200, {"images": []}))
+        with patch("personalclaw.sdk.net.fetch", fake_fetch):
+            call = getattr(prov, method)
+            kwargs = {"source_image": str(source)} if method == "edit" else {}
+            with pytest.raises(ImageGenError, match="No model is chosen for this call"):
+                await call("a bird", **kwargs)
+        assert fake_fetch.call_count == 0
 
+    @pytest.mark.asyncio
+    async def test_a_video_call_that_names_no_model_is_refused(self):
+        prov = FalVideoProvider(api_key="k")
+        fake_fetch = AsyncMock(return_value=_resp(200, {}))
+        with patch("personalclaw.sdk.net.fetch", fake_fetch):
+            with pytest.raises(VideoGenError, match="No model is chosen for this call"):
+                await prov.generate("a bird")
+        assert fake_fetch.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_a_named_model_is_the_one_sent(self):
         prov = FalImageProvider(api_key="k")
         fake_fetch = AsyncMock(
             return_value=_resp(200, {"images": [{"url": "https://cdn/z.png"}]})
         )
         with patch("personalclaw.sdk.net.fetch", fake_fetch):
-            await prov.generate("a bird")  # no model= -> derived default
-        submit_url = fake_fetch.call_args_list[0].args[0]
-        assert submit_url.endswith(_default_image_model(edit=False))
+            await prov.generate("a bird", model="fal-ai/flux/schnell")
+        assert fake_fetch.call_args_list[0].args[0].endswith("fal-ai/flux/schnell")
 
 
 class TestFalFactory:
@@ -305,11 +310,59 @@ class TestFalFactory:
             "personalclaw.sdk.settings.ProviderSettings.load",
             staticmethod(lambda name: {"api_key": "card-key"}),
         )
-        assert fal._resolve_fal_key() == "card-key"
+        assert fal._resolve_fal_key() == ("card-key", "")
 
         monkeypatch.setattr(
             "personalclaw.sdk.settings.ProviderSettings.load",
             staticmethod(lambda name: {}),
         )
         monkeypatch.setenv("FAL_KEY", "env-key")
-        assert fal._resolve_fal_key() == "env-key"
+        assert fal._resolve_fal_key() == ("env-key", "")
+
+
+class TestARefusedCardKey:
+    """A card key core refuses to read for this app says why, instead of "No FAL API key".
+
+    Core resolves a ``{{secret:…}}`` in an app's settings only against the app's own keys
+    (PersonalClaw #3626), so a card holding ``{{secret:MY_FAL_KEY}}``, a key saved in Settings →
+    Secrets, is refused with a sentence naming the reference. ``_resolve_fal_key`` swallowed it,
+    so the user was told to configure a key they had configured. Real core, no stub of the check.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _card_with_a_foreign_reference(self, monkeypatch):
+        from personalclaw.sdk.util import config_dir
+
+        data = config_dir() / "apps" / "fal-image" / "data"
+        data.mkdir(parents=True, exist_ok=True)
+        (data / "config.json").write_text(json.dumps({"api_key": "{{secret:MY_FAL_KEY}}"}))
+        monkeypatch.delenv("FAL_KEY", raising=False)
+        monkeypatch.delenv("FAL_API_KEY", raising=False)
+
+    @staticmethod
+    def _assert_the_refusal(message: str) -> None:
+        assert "{{secret:MY_FAL_KEY}}" in message and "different owner" in message, message
+        assert "No FAL API key configured" not in message
+
+    @pytest.mark.asyncio
+    async def test_an_image_says_why_the_key_was_refused(self):
+        with pytest.raises(ImageGenError) as refused:
+            await FalImageProvider(api_key="").generate("x", model="fal-ai/flux/schnell")
+        self._assert_the_refusal(str(refused.value))
+
+    @pytest.mark.asyncio
+    async def test_a_video_says_why_the_key_was_refused(self):
+        with pytest.raises(VideoGenError) as refused:
+            await FalVideoProvider(api_key="").generate("x", model="fal-ai/kling-video/v2/master/text-to-video")
+        self._assert_the_refusal(str(refused.value))
+
+    @pytest.mark.asyncio
+    async def test_it_is_unavailable_and_says_nothing_until_asked(self):
+        assert await FalImageProvider(api_key="").is_available() is False
+        assert await FalVideoProvider(api_key="").is_available() is False
+
+    def test_a_key_in_the_environment_still_works(self, monkeypatch):
+        import provider as fal
+
+        monkeypatch.setenv("FAL_KEY", "env-key")
+        assert fal._resolve_fal_key() == ("env-key", "")

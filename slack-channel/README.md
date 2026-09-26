@@ -45,6 +45,25 @@ Three things this deliberately does *not* do:
 - **Prose never lands in `meta`.** `meta` is matched, not narrated, and core does not fence
   it — so a sender's Slack profile name is not there.
 
+## Messages in your Inbox
+
+The bundle's third provider is an **inbox source** (`slack_runtime.inbox_source:create_provider`):
+PersonalClaw's Inbox polls it while the app is enabled, for the channel ids listed in the
+Inbox's `inbox.watched_channels` (in `config.json`; no settings page edits it yet). Each new
+message in one of them becomes a row you can draft and send a reply to, posted in its
+thread. A channel's first poll starts after its newest message, so its history is not
+surfaced and fires none of your inbox automations; what is posted after it is. When no
+watched channel can be read (a revoked token, the bot not in the channel), the Inbox says so
+under Slack's name, with Slack's own reason for each channel.
+
+## Results from your schedules
+
+A schedule can send its results here too. In the schedule's Advanced → Notify channel, pick
+Slack, then **You, in a direct message** or **A chat or channel** with the channel's id, like
+`C0123456789` (at the bottom of the channel's About tab). Your DMs need Slack to know who you
+are, its owner. Slack checks the id when you save and says what's wrong if it can't send
+there.
+
 ## Install
 
 From the App Store, add the `apps/` directory as a **local source**, then install
@@ -63,9 +82,13 @@ Both tokens are **write-only**: once saved, the form shows `••••••�
 leaves the gateway. Saving other fields keeps the stored tokens; typing a new value
 replaces one.
 
-**Inbound starts at gateway boot**, so tokens saved into a running gateway apply on the
-next restart. Until then the channel row reports the inbound half honestly — "Outbound
-ready, inbound NOT STARTED" — rather than a flat green.
+**Inbound follows the tokens.** The gateway starts the Socket-Mode receiver when it turns
+the channel on, and a Configure → Save moves it onto the saved tokens at once; the channel
+row reads "starting" until Socket Mode is connected. Whenever outbound works and inbound does
+not, the row says so, and what starts it, rather than showing a flat green. That includes a
+connection Slack dropped later: the Slack SDK reconnects on its own every 10 seconds, and while
+it cannot, the row says what Slack answered (`invalid_auth` means the App Token was revoked or
+regenerated; save the new one in Configure).
 
 An allowlisted (non-owner) user is authorized for conversation *and* for the commands in
 the "any allowed user" tier — `!stop`, `!title`, `!compact`, `sessions`, and `!dashboard`,

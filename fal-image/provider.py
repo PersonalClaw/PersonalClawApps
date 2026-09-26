@@ -34,6 +34,7 @@ from personalclaw.sdk.video import (
     VideoGenProvider,
     VideoResult,
 )
+from personalclaw.sdk.model import ProviderResolutionError, require_model
 
 logger = logging.getLogger(__name__)
 
@@ -110,17 +111,16 @@ _KNOWN_VIDEO_MODELS = [
 ]
 
 
-def _default_image_model(*, edit: bool) -> str:
-    """Unpinned default image model id derived from catalog."""
-    for m in _KNOWN_IMAGE_MODELS:
-        if bool(m.supports_edit) == edit:
-            return m.name
-    return _KNOWN_IMAGE_MODELS[0].name if _KNOWN_IMAGE_MODELS else ""
+def _named(model: str, error: type[Exception]) -> str:
+    """The model a call names, or ``error`` with the SDK's refusal when it names none.
 
-
-def _default_video_model() -> str:
-    """Unpinned default video model id derived from catalog."""
-    return _KNOWN_VIDEO_MODELS[0].name if _KNOWN_VIDEO_MODELS else ""
+    Like chat, a call names its model (the image or video binding in Settings → Models), and
+    nothing picks one in its place. This used to take the first model of the catalog above.
+    """
+    try:
+        return require_model(model)
+    except ProviderResolutionError as exc:
+        raise error(str(exc)) from exc
 
 
 # Bound the internal poll loop.
@@ -155,17 +155,32 @@ def _normalize_image_size(size: str) -> Any:
     return None
 
 
-def _resolve_fal_key() -> str:
-    """FAL credential from the Settings-card config, then a FAL_* env var."""
+def _resolve_fal_key() -> tuple[str, str]:
+    """``(key, refusal)``: the FAL credential from the Settings-card config, then a FAL_* env var.
+
+    ``refusal`` is core's sentence when the card's key is a reference to a credential another
+    owner holds, which core refuses to read for this app (PersonalClaw #3626). That refusal is a
+    ``ValueError`` from ``ProviderSettings.load``; swallowing it read as "No FAL API key
+    configured" for a key that is set, so the user went looking for the wrong thing. Only a
+    failed read of anything else still falls through to the environment.
+    """
+    refusal = ""
+    key = ""
     try:
         from personalclaw.sdk.settings import ProviderSettings
 
         key = str(ProviderSettings.load(_MANIFEST_NAME).get("api_key", "") or "")
-        if key:
-            return key
-    except Exception:  # noqa: BLE001
+    except ValueError as refused:  # the owner check; its message names the key, never a value
+        refusal = str(refused)
+    except Exception:  # noqa: BLE001 — an unreadable card falls back to the environment
         pass
-    return os.environ.get("FAL_KEY", "") or os.environ.get("FAL_API_KEY", "")
+    key = key or os.environ.get("FAL_KEY", "") or os.environ.get("FAL_API_KEY", "")
+    return key, ("" if key else refusal)
+
+
+def _no_key_message(refusal: str) -> str:
+    """What a generate call says when there is no key: the refusal when core gave one."""
+    return refusal or "No FAL API key configured (set a 'fal' provider or FAL_KEY)."
 
 
 async def _submit_and_poll(
@@ -187,9 +202,9 @@ async def _submit_and_poll(
     """
     from personalclaw.sdk.net import CONNECTOR, fetch
 
-    key = api_key or _resolve_fal_key()
+    key, refusal = (api_key, "") if api_key else _resolve_fal_key()
     if not key:
-        raise ImageGenError("No FAL API key configured (set a 'fal' provider or FAL_KEY).")
+        raise ImageGenError(_no_key_message(refusal))
     auth = {"Authorization": f"Key {key}", "Content-Type": "application/json"}
     body = json.dumps(payload).encode()
 
@@ -263,7 +278,7 @@ class FalImageProvider(ImageGenProvider):
         return "FAL (image)"
 
     async def is_available(self) -> bool:
-        return bool(self._api_key or _resolve_fal_key())
+        return bool(self._api_key or _resolve_fal_key()[0])
 
     async def list_models(self) -> list[ImageGenModel]:
         from personalclaw.sdk.image import active_image_gen
@@ -282,7 +297,7 @@ class FalImageProvider(ImageGenProvider):
     async def generate(
         self, prompt: str, *, model: str = "", size: str = "", n: int = 1, **opts: Any,
     ) -> list[ImageResult]:
-        model_id = model or _default_image_model(edit=False)
+        model_id = _named(model, ImageGenError)
         payload: dict[str, Any] = {"prompt": prompt}
         image_size = _normalize_image_size(size)
         if image_size is not None:
@@ -299,7 +314,7 @@ class FalImageProvider(ImageGenProvider):
         import base64
         import mimetypes
 
-        model_id = model or _default_image_model(edit=True)
+        model_id = _named(model, ImageGenError)
         try:
             with open(source_image, "rb") as fh:
                 raw = fh.read()
@@ -348,7 +363,7 @@ class FalVideoProvider(VideoGenProvider):
         return "FAL (video)"
 
     async def is_available(self) -> bool:
-        return bool(self._api_key or _resolve_fal_key())
+        return bool(self._api_key or _resolve_fal_key()[0])
 
     async def list_models(self) -> list[VideoGenModel]:
         from personalclaw.sdk.video import active_video_gen
@@ -388,7 +403,7 @@ class FalVideoProvider(VideoGenProvider):
         aspect_ratio: str = "",
         **opts: Any,
     ) -> list[VideoResult]:
-        model_id = model or _default_video_model()
+        model_id = _named(model, VideoGenError)
         payload: dict[str, Any] = {"prompt": prompt}
         if duration_seconds and duration_seconds > 0:
             dur = self._format_duration(model_id, duration_seconds)
@@ -418,9 +433,9 @@ class FalVideoProvider(VideoGenProvider):
         queue for models that don't support the sync endpoint."""
         import aiohttp
 
-        key = self._api_key or _resolve_fal_key()
+        key, refusal = (self._api_key, "") if self._api_key else _resolve_fal_key()
         if not key:
-            raise VideoGenError("No FAL API key configured (set a 'fal' provider or FAL_KEY).")
+            raise VideoGenError(_no_key_message(refusal))
         headers = {"Authorization": f"Key {key}", "Content-Type": "application/json"}
         body = json.dumps(payload).encode()
 

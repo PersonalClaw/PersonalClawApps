@@ -274,7 +274,7 @@ class TestLinkedThreadIntercept:
         type(session).running = PropertyMock(return_value=True)
         session.key = "session1"
         session._queue = []
-        session.queue_append = lambda content: (session._queue.append({"id": "test", "content": content}) or "test")
+        session.queue_append = lambda content, *, channel="": (session._queue.append({"id": "test", "content": content}) or "test")
         ds = MagicMock()
         ds.get_linked_session = MagicMock(return_value=session)
         ds.broadcast_ws = MagicMock()

@@ -52,8 +52,8 @@ credential store under a name this app owns, the file keeps only a reference to 
 uninstalling the app removes it. Leave the field empty to fall back to the `QDRANT_API_KEY`
 environment variable. No key is fine and normal for a local Qdrant.
 
-The app reads its settings when it is enabled, so a changed key or URL takes effect the next time
-it is: disable and re-enable the app, or restart the gateway.
+The app reads its settings when it is enabled, and saving them rebuilds it from what you saved,
+so a changed key or URL takes effect as soon as you save it.
 
 ### Collections
 

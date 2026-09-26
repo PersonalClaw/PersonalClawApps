@@ -7,12 +7,11 @@ which nothing has written since core's S108, so a real user's `cron list` showed
 remove/pause/resume answered "not found" for every live id.
 
 The contract under test is unchanged — the relative next-run rendering, and that a job's message is
-redacted before it reaches Slack. Both now go through a real `TriggerStore`.
+masked before it reaches Slack. Both now go through a real `TriggerStore`.
 """
 
 import re
 import time
-from unittest.mock import patch
 
 import pytest
 
@@ -26,7 +25,8 @@ def store(tmp_path):
 
 
 def _seed(store, *, enabled: bool = True, message: str = "do something important",
-          next_fire_at: str = "", trigger_id: str = "clock:test-job") -> Trigger:
+          next_fire_at: str = "", trigger_id: str = "clock:test-job",
+          granted: bool = True) -> Trigger:
     trigger = Trigger(
         id=trigger_id,
         name="test-job",
@@ -35,6 +35,10 @@ def _seed(store, *, enabled: bool = True, message: str = "do something important
         spec={"kind": "cron", "expr": "0 13 * * *"},
         workflow={"inline": {"provider": "invoke-agent", "config": {"task_template": message}}},
         next_fire_at=next_fire_at,
+        # The grant, as the store records it for an automation the owner allowed: core's
+        # `automation_create` freezes it and the Triggers page's Allow writes it. Resuming an
+        # ungranted one is refused (core `triggers.grants`), so a seed without it is no real row.
+        capabilities={"providers": ["invoke-agent"]} if granted else {},
     )
     store.upsert(trigger)
     return trigger
@@ -104,23 +108,14 @@ class TestHandleCronList:
         assert "⚠️" in result
         assert "clock:broken" in result
 
-    def test_the_message_is_redacted(self, store) -> None:
+    def test_a_key_in_the_message_reaches_slack_masked(self, store) -> None:
+        """What reaches Slack, not which functions ran: the row arrives masked from core's
+        `to_schedule_row`, so the reply shows core's marker where the key was, and never the key."""
         _seed(store, message="token=AKIAIOSFODNN7EXAMPLE")
-        with (
-            patch(
-                "slack_runtime.handler.redact_exfiltration_urls",
-                return_value=("[URL_REDACTED]", True),
-            ) as mock_url,
-            patch(
-                "slack_runtime.handler.redact_credentials", return_value=("[REDACTED]", True)
-            ) as mock_cred,
-        ):
-            result = _handle_cron_command("cron list", store, "C123", "t123")
-        mock_url.assert_called_once_with("token=AKIAIOSFODNN7EXAMPLE")
-        mock_cred.assert_called_once_with("[URL_REDACTED]")
+        result = _handle_cron_command("cron list", store, "C123", "t123")
         assert result is not None
-        assert "[REDACTED]" in result
         assert "AKIAIOSFODNN7EXAMPLE" not in result
+        assert re.search(r"token=\[REDACTED:[^\]]*\]", result), result
 
 
 class TestHandleCronMutations:
@@ -136,6 +131,19 @@ class TestHandleCronMutations:
             _handle_cron_command("cron resume clock:test-job", store, "C", "t") or ""
         )
         assert store.get("clock:test-job").trigger.enabled is True
+
+    def test_resuming_an_automation_nobody_allowed_says_so_and_leaves_it_off(self, store) -> None:
+        """Switching an automation on allows what it runs, and only the owner gives that, on the
+        Triggers page after its consent dialog. A `cron resume` from Slack cannot, so it relays
+        core's refusal rather than a "Resumed" that left the row off or a bare "not found"."""
+        _seed(store, enabled=False, granted=False)
+
+        result = _handle_cron_command("cron resume clock:test-job", store, "C", "t") or ""
+
+        assert "“test-job” is not allowed to use the “Invoke Agent” action, so it was not " \
+            "switched on." in result, result
+        assert "Triggers page" in result, result
+        assert store.get("clock:test-job").trigger.enabled is False
 
     def test_remove(self, store) -> None:
         _seed(store)

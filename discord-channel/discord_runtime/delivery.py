@@ -12,30 +12,35 @@ Two Discord-specific shapes drive this module:
   one message repeatedly PATCHed. Message edits share a per-channel rate bucket
   with sends, so :class:`DiscordDelivery` throttles to at most one edit per
   :data:`_EDIT_MIN_INTERVAL` seconds and always flushes the exact final text on
-  ``stop_stream`` — the contract the fake-API tests pin.
+  ``stop_stream`` — the contract the fake-API tests pin. The stream's placeholder
+  ("Thinking…") is gone when it stops: the message keeps the task lines alone, or is
+  deleted when there were none, because the reply is a message of its own and a
+  placeholder left above it reads as a turn that never finished.
 * **Approvals are message COMPONENTS.** An action row of two buttons; the press
   arrives back as an ``INTERACTION_CREATE`` (not a message), which MUST be answered
   within three seconds or Discord shows the user "This interaction failed". When
   the decision resolves, the prompt is edited to show the outcome AND its
   ``components`` are cleared — a still-clickable approval button on a
-  hours-old decided request is a real footgun, not a cosmetic one.
+  hours-old decided request is a real footgun, not a cosmetic one. A prompt too
+  long for one message is split like a reply, the buttons on its last part.
 
 Discord renders standard markdown, so unlike Telegram's MarkdownV2 there is no
 escaping layer: the model's markdown goes out as-is. Length is the only rendering
-constraint, hence :func:`split_message`.
+constraint, hence :func:`split_message` — which keeps a code block whole in every
+message it spans, because Discord renders each message's markdown on its own.
+
+Core masks every text it hands this handle, keys and exfiltration URLs included, before
+any method here is called, so nothing here masks it again.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+import re
+from typing import Any, Callable
 
-from personalclaw.sdk.channel import (
-    is_tracked_channel,
-    redact_credentials,
-    redact_exfiltration_urls,
-)
+from personalclaw.sdk.channel import is_tracked_channel, sel
 
 from discord_runtime.api import (
     BUTTON_STYLE_DANGER,
@@ -63,48 +68,134 @@ _DENY = "deny"
 INTERACTION_TYPE_COMPONENT = 3
 
 
-def split_message(text: str, limit: int = DISCORD_MAX_TEXT) -> list[str]:
-    """Split *text* into parts no longer than *limit*, preferring newline breaks.
+#: A line that opens or closes a fenced code block (CommonMark allows three spaces of indent).
+_FENCE_LINE_RE = re.compile(r"^ {0,3}```")
+#: The longest info string (a code block's language) carried onto a block reopened in the next
+#: message. Anything longer, or with a space or backtick in it, is not a language tag.
+_MAX_FENCE_INFO = 32
+_CLOSE_FENCE = "```"
 
-    Discord rejects a message body over 2000 chars with ``50035 Invalid Form Body``,
-    so long replies stream across several messages. Splits on the last newline
-    before the limit when possible, else hard-splits."""
+
+def split_message(text: str, limit: int = DISCORD_MAX_TEXT) -> list[str]:
+    """Split *text* into messages of at most *limit* characters, at line breaks where it can.
+
+    Discord rejects a message body over 2000 chars with ``50035 Invalid Form Body``, so a long
+    reply goes out as several messages, and Discord renders each one's markdown on its own. A
+    code block cut in two is therefore closed at the end of one message and opened again, with
+    its language, at the start of the next: cut anywhere, the first message kept its fence open
+    and the second showed the rest of the code as markdown. A line longer than a whole message is
+    cut at its last space that fits, or where it has to be in code (whose spaces are content) and
+    in a run with no space."""
     if len(text) <= limit:
         return [text] if text else []
+    lines = text.split("\n")
     parts: list[str] = []
-    remaining = text
-    while len(remaining) > limit:
-        cut = remaining.rfind("\n", 0, limit)
-        if cut <= 0:
-            cut = limit
-        parts.append(remaining[:cut])
-        remaining = remaining[cut:].lstrip("\n")
-    if remaining:
-        parts.append(remaining)
+    i = 0
+    #: The opening line of the code block line ``i`` is in; "" outside one.
+    fence = ""
+    while i < len(lines):
+        if not fence:
+            # Outside code, the break between two messages already separates them: a
+            # message does not start on blank lines.
+            while i < len(lines) and not lines[i].strip():
+                i += 1
+            if i == len(lines):
+                break
+        head = [_reopening(fence)] if fence else []
+        body: list[str] = []
+        state = fence
+        while i < len(lines):
+            after = _fence_after(state, lines[i])
+            if len(_part(head + body + [lines[i]], after)) > limit:
+                break
+            body.append(lines[i])
+            state = after
+            i += 1
+        if i < len(lines) and len(body) > 1 and _opens(body[-1], state):
+            # A message does not end on the line that opens a code block: the block would
+            # arrive empty, and its code as the next message's.
+            body.pop()
+            i -= 1
+            state = ""
+        if i < len(lines) and (not body or _opens(body[-1], state)):
+            # The next line does not fit even at the start of a message: its longest piece
+            # that does ends this one, and the rest of it starts the next.
+            before = len("\n".join(head + body + [""]))
+            room = max(1, limit - before - (len(_CLOSE_FENCE) + 1 if state else 0))
+            piece, lines[i] = _cut(lines[i], room, in_code=bool(state))
+            body.append(piece)
+        if not state:
+            while body and not body[-1].strip():
+                body.pop()
+        parts.append(_part(head + body, state))
+        fence = state
     return parts
 
 
-def _safe(text: str) -> str:
-    """Redact before anything reaches the wire (exfil URLs, then credentials).
+def _part(lines: list[str], fence: str) -> str:
+    """*lines* as one message, its code block closed when the message ends inside one."""
+    text = "\n".join(lines)
+    return f"{text}\n{_CLOSE_FENCE}" if fence else text
 
-    Every delivery path funnels through here — an unredacted path is the whole
-    class of bug this centralization prevents."""
-    body, _ = redact_exfiltration_urls(text)
-    body, _ = redact_credentials(body)
-    return body
+
+def _fence_after(fence: str, line: str) -> str:
+    """The code block the text is in after *line*: a fence line opens one, or closes it."""
+    if not _FENCE_LINE_RE.match(line):
+        return fence
+    return "" if fence else line.strip()
+
+
+def _opens(line: str, fence: str) -> bool:
+    """Whether *line* opened the block *fence* (the state after it) is in."""
+    return bool(fence) and bool(_FENCE_LINE_RE.match(line))
+
+
+def _reopening(fence: str) -> str:
+    """The line that reopens the code block *fence* opened, in the next message."""
+    info = fence[3:].strip()
+    if info and len(info) <= _MAX_FENCE_INFO and " " not in info and "`" not in info:
+        return f"{_CLOSE_FENCE}{info}"
+    return _CLOSE_FENCE
+
+
+def _cut(line: str, room: int, *, in_code: bool) -> tuple[str, str]:
+    """``(piece, rest)``: the first *room* characters of *line*, ended at the last space in
+    them outside code (the cut drops that space, as a line break is dropped at a cut)."""
+    prefix = line[:room]
+    space = prefix.rfind(" ")
+    if not in_code and space > 0 and prefix[:space].strip():
+        return prefix[:space], line[space + 1:]
+    return prefix, line[room:]
 
 
 class _StreamState:
-    """Bookkeeping for one edit-streamed message."""
+    """Bookkeeping for one edit-streamed message: its placeholder, and one line per task.
 
-    __slots__ = ("channel_id", "message_id", "last_edit", "last_text", "pending_text")
+    A task's line is replaced in place as its status changes, so a finished task does not
+    leave its "in progress" line behind."""
 
-    def __init__(self, channel_id: str, message_id: str) -> None:
+    __slots__ = ("channel_id", "message_id", "last_edit", "last_text", "head", "tasks")
+
+    def __init__(self, channel_id: str, message_id: str, head: str) -> None:
         self.channel_id = channel_id
         self.message_id = message_id
         self.last_edit = 0.0
-        self.last_text = ""
-        self.pending_text = ""
+        self.last_text = head
+        self.head = head
+        self.tasks: dict[str, str] = {}
+
+    def text(self, *, final: bool = False) -> str:
+        """What the message shows: the placeholder over the task lines while it runs, the task
+        lines alone once it stops ("" when there were none). The oldest lines give way when
+        they would not fit one message."""
+        lines = list(self.tasks.values())
+        dropped = False
+        while True:
+            body = (["…"] if dropped else []) + lines
+            text = "\n".join(body if final else [self.head, *body]).strip()
+            if not lines or len(text) <= DISCORD_MAX_TEXT:
+                return text[:DISCORD_MAX_TEXT]
+            lines, dropped = lines[1:], True
 
 
 class _PendingApproval:
@@ -120,9 +211,12 @@ class _PendingApproval:
 class DiscordDelivery:
     """Renders + delivers gateway results to Discord. Implements ChannelDelivery."""
 
-    def __init__(self, api: DiscordAPI, owner_id: str) -> None:
+    def __init__(self, api: DiscordAPI, owner: Callable[[], str]) -> None:
         self._api = api
-        self._owner_id = owner_id
+        #: Who the owner is NOW, read each time it is needed. The owner can be paired from the
+        #: channel's Configure page while this receiver runs; a value kept from the start sent the
+        #: approval prompt to nobody until the next restart.
+        self._owner = owner
         self._streams: dict[str, _StreamState] = {}
         # keyed by "req:<request_id>" (from the button custom_id) and by
         # "<channel>:<message>" (the prompt the buttons live on).
@@ -168,7 +262,7 @@ class DiscordDelivery:
         reply_broadcast: bool | None = None,
     ) -> str:
         last = ""
-        for part in split_message(_safe(text)):
+        for part in split_message(text):
             msg = await self._api.create_message(channel, part)
             last = str(msg.get("id", "")) or last
         return last
@@ -186,7 +280,7 @@ class DiscordDelivery:
         if isinstance(payload, dict) and isinstance(payload.get("components"), list):
             components = payload["components"]
         msg = await self._api.create_message(
-            channel, _safe(fallback_text)[:DISCORD_MAX_TEXT], components=components
+            channel, fallback_text[:DISCORD_MAX_TEXT], components=components
         )
         return str(msg.get("id", ""))
 
@@ -194,7 +288,7 @@ class DiscordDelivery:
         self, channel: str, job_name: str, job_id: str, text: str, thread_ts: str = ""
     ) -> str:
         header = f"**Cron: {job_name}**\n\n"
-        parts = split_message(_safe(text), DISCORD_MAX_TEXT - len(header))
+        parts = split_message(text, DISCORD_MAX_TEXT - len(header))
         last = ""
         for i, part in enumerate(parts or [""]):
             msg = await self._api.create_message(channel, (header + part) if i == 0 else part)
@@ -204,9 +298,8 @@ class DiscordDelivery:
     async def deliver_notification(
         self, channel: str, title: str, text: str, thread_ts: str = ""
     ) -> str:
-        body = _safe(f"**{title}**\n\n{text}")
         last = ""
-        for part in split_message(body):
+        for part in split_message(f"**{title}**\n\n{text}"):
             msg = await self._api.create_message(channel, part)
             last = str(msg.get("id", "")) or last
         return last
@@ -215,7 +308,7 @@ class DiscordDelivery:
         """Mirror a dashboard reply, rendering a trailing ``[OPTIONS: …]`` as buttons."""
         from personalclaw.sdk.channel import extract_options
 
-        body, options = extract_options(_safe(text))
+        body, options = extract_options(text)
         for part in split_message(body):
             await self._api.create_message(channel, part)
         if options:
@@ -240,7 +333,7 @@ class DiscordDelivery:
     async def deliver_subagent_reply(
         self, channel: str, text: str, thread_ts: str = "", elapsed_secs: float = 0.0
     ) -> None:
-        for part in split_message(_safe(text)):
+        for part in split_message(text):
             await self._api.create_message(channel, part)
         if elapsed_secs:
             await self._api.create_message(channel, f"_took {elapsed_secs:.1f}s_")
@@ -315,7 +408,7 @@ class DiscordDelivery:
     ) -> str:
         """Upload a file. Discord renders images inline from the attachment itself,
         so there is no photo-vs-document split to make (unlike Telegram)."""
-        caption = _safe(initial_comment or title or "")
+        caption = initial_comment or title or ""
         msg = await self._api.upload_file(
             channel, file_path, filename=filename, content=caption[:DISCORD_MAX_TEXT]
         )
@@ -342,54 +435,72 @@ class DiscordDelivery:
 
     # ── edit-based streaming ──
     async def start_stream(self, channel: str, thread_ts: str = "", initial_text: str = "") -> str:
-        text = initial_text or "…"
-        msg = await self._api.create_message(channel, text)
+        head = initial_text or "…"
+        msg = await self._api.create_message(channel, head)
         mid = str(msg.get("id", ""))
         if not mid:
             return ""
-        st = _StreamState(channel, mid)
+        st = _StreamState(channel, mid, head)
         st.last_edit = self._now()
-        st.last_text = text
         self._streams[f"{channel}:{mid}"] = st
         return mid
 
     async def append_stream_task(
         self, channel: str, stream_ts: str, task_id: str, title: str, status: str,
     ) -> None:
-        """Append a progress line to the streamed message, throttled.
+        """Show a task's progress line in the streamed message, throttled.
 
         Discord has no task-animation primitive, so a task update is folded into the
-        streamed text as a status line and edited in — at most one edit per
+        streamed text as a status line, the task's own (a finished task's line replaces
+        its "in progress" one), and edited in — at most one edit per
         :data:`_EDIT_MIN_INTERVAL`. The final flush happens in :meth:`stop_stream`,
         so a throttled-away update is never lost."""
         st = self._streams.get(f"{channel}:{stream_ts}")
         if st is None:
             return
         mark = "✅" if status in ("complete", "completed", "done") else "⏳"
-        st.pending_text = f"{st.last_text}\n{mark} {title}".strip()
+        st.tasks[task_id] = f"{mark} {title}".strip()
         await self._maybe_edit(st, force=False)
 
     async def stop_stream(self, channel: str, stream_ts: str) -> None:
+        """Leave the streamed message holding the task lines, or remove it when it only ever
+        held its placeholder: the reply is a message of its own, and a "Thinking…" left above
+        it reads as a turn that never finished."""
         st = self._streams.pop(f"{channel}:{stream_ts}", None)
         if st is None:
             return
+        final = st.text(final=True)
+        if not final:
+            try:
+                await self._api.delete_message(st.channel_id, st.message_id)
+            except Exception:
+                logger.warning(
+                    "discord: the stream placeholder %s in %s could not be removed",
+                    st.message_id, st.channel_id, exc_info=True,
+                )
+            return
         # Always flush the exact final text, throttle be damned.
-        await self._maybe_edit(st, force=True)
+        await self._edit(st, final, self._now())
 
     async def _maybe_edit(self, st: _StreamState, *, force: bool) -> None:
-        text = st.pending_text or st.last_text
-        if text == st.last_text and not force:
+        """Show the running stream's text now, unless an edit landed inside the throttle
+        window (``force`` ignores it)."""
+        text = st.text()
+        if text == st.last_text:
             return
         now = self._now()
         if not force and (now - st.last_edit) < _EDIT_MIN_INTERVAL:
-            return  # throttled — the pending text rides until the next edit/flush
+            return  # throttled — the text rides until the next edit/flush
+        await self._edit(st, text, now)
+
+    async def _edit(self, st: _StreamState, text: str, now: float) -> None:
         try:
-            await self._api.edit_message(st.channel_id, st.message_id, text[:DISCORD_MAX_TEXT])
-            st.last_edit = now
-            st.last_text = text
-            st.pending_text = ""
+            await self._api.edit_message(st.channel_id, st.message_id, text)
         except Exception:
-            logger.debug("discord: stream edit failed", exc_info=True)
+            logger.warning("discord: stream edit failed", exc_info=True)
+            return
+        st.last_edit = now
+        st.last_text = text
 
     # ── approval via message components ──
     async def request_approval(
@@ -411,16 +522,22 @@ class DiscordDelivery:
         if not channel_id:
             # No linked channel: prompt the owner's DM, which must be OPENED first —
             # a Discord user id is not a postable channel id.
-            channel_id = await self.open_dm(self._owner_id) if self._owner_id else ""
+            owner = self._owner()
+            channel_id = await self.open_dm(owner) if owner else ""
         if not channel_id:
             return None
 
         request_id = str(getattr(event, "request_id", ""))
-        title = _safe(str(getattr(event, "title", "")))
-        prompt = f"🔐 [{source}] Approve: {title}?"
-        msg = await self._api.create_message(
-            channel_id, prompt[:DISCORD_MAX_TEXT], components=_approval_components(request_id)
-        )
+        title = str(getattr(event, "title", ""))
+        # Split like a reply, the buttons on the last part: the prompt was cut at 2,000
+        # characters, so the owner approved a command whose end they never saw.
+        parts = split_message(f"🔐 [{source}] Approve: {title}?")
+        msg: dict[str, Any] = {}
+        for index, part in enumerate(parts, 1):
+            last = index == len(parts)
+            msg = await self._api.create_message(
+                channel_id, part, components=_approval_components(request_id) if last else None
+            )
         message_id = str(msg.get("id", ""))
         pending = _PendingApproval(request_id, channel_id, message_id)
         self._pending[f"{channel_id}:{message_id}"] = pending
@@ -446,7 +563,7 @@ class DiscordDelivery:
             # components=[] strips the buttons: a decided request must not leave a
             # clickable Approve behind.
             await self._api.edit_message(
-                channel_id, message_id, f"🔐 {title} — {status}"[:DISCORD_MAX_TEXT], components=[]
+                channel_id, message_id, _answered(title, parts, status), components=[]
             )
         except Exception:
             logger.debug("discord: approval finalize edit failed", exc_info=True)
@@ -465,7 +582,25 @@ class DiscordDelivery:
         if action in (_APPROVE, _DENY) and request_id:
             pending = self._pending.get(f"req:{request_id}")
             if pending is not None and not pending.future.done():
-                pending.future.set_result("approved" if action == _APPROVE else "rejected")
+                # Only the owner's press answers it. A prompt for a chat linked to a tracked
+                # channel is posted there, where everyone in it sees the buttons, and a member
+                # must not approve what the owner's agent runs. In a server the presser is
+                # `member.user`, in a DM `user`.
+                member_user = (interaction.get("member") or {}).get("user") or {}
+                presser = str((member_user or interaction.get("user") or {}).get("id", "") or "")
+                owner = str(self._owner() or "")
+                if owner and presser == owner:
+                    pending.future.set_result("approved" if action == _APPROVE else "rejected")
+                else:
+                    logger.warning("discord: refused an approval press from %s, not the owner", presser)
+                    sel().log_api_access(
+                        caller=f"discord:{presser or 'unknown'}",
+                        operation="discord.approval_press",
+                        outcome="denied",
+                        source="discord",
+                        resources=request_id,
+                        error="not the owner",
+                    )
         iid = str(interaction.get("id", ""))
         itoken = str(interaction.get("token", ""))
         if iid and itoken:
@@ -509,3 +644,11 @@ def _monotonic() -> float:
     import time
 
     return time.monotonic()
+
+
+def _answered(title: str, parts: list[str], status: str) -> str:
+    """What the prompt's last message says once it is answered, in one message: the prompt with
+    its outcome, or, for a prompt split over several, its last part with it, or the outcome
+    alone when that would not fit (the parts above keep the rest)."""
+    text = f"🔐 {title} — {status}" if len(parts) <= 1 else f"{parts[-1]} — {status}"
+    return text if len(text) <= DISCORD_MAX_TEXT else f"🔐 {status}"

@@ -2,12 +2,13 @@
 
 import asyncio
 import logging
-import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from personalclaw.sdk.credentials import resolve_token
 from personalclaw.sdk.local_model import LocalModelProvider
+from personalclaw.sdk.model import ProviderResolutionError, require_model
 from personalclaw.sdk.stt import (
     SttModel,
     SttProvider,
@@ -16,8 +17,13 @@ from personalclaw.sdk.stt import (
     TranscriptWord,
     ensure_ffmpeg_in_path,
 )
+from personalclaw.sdk.util import config_dir, outside_home_path
 
 logger = logging.getLogger(__name__)
+
+#: The place core lets the owner turn on in Settings → Security → Outside PersonalClaw's home:
+#: the Hugging Face folder other tools share. Off, this app reads nothing outside the home.
+_SHARED_HF = "huggingface-cache"
 
 
 def create_provider(config: dict[str, Any] | None = None) -> "FasterWhisperProvider":
@@ -48,21 +54,20 @@ _MODELS = [
 
 
 def _models_dir() -> Path:
-    """Where downloaded weights are WRITTEN — rooted at ``PERSONALCLAW_HOME`` so an
-    isolated home is actually isolated. Same one-line idiom as the sibling model bundles
-    (sentence-transformers, piper-tts, voice-clone-tts); this used to root at
-    ``XDG_CACHE_HOME``/``~/.cache``, which no PersonalClaw home can reach."""
-    home = os.environ.get("PERSONALCLAW_HOME", str(Path.home() / ".personalclaw"))
-    return Path(home) / "models" / "stt"
+    """Where downloaded weights are WRITTEN: the PersonalClaw home (``config_dir()``), so an
+    isolated home is actually isolated. This used to root at ``XDG_CACHE_HOME``/``~/.cache``,
+    which no PersonalClaw home can reach."""
+    return config_dir() / "models" / "stt"
 
 
-def _legacy_dir() -> Path:
-    """Where weights landed BEFORE they were rooted under ``PERSONALCLAW_HOME``: the
-    machine-wide HuggingFace hub cache. Read-through only (see :func:`_weights_root`) —
-    an existing install keeps working with zero downloads, and nothing is ever copied out
-    of here. A multi-GB migration copy at startup is its own outage, and looks like a hang
-    rather than an error."""
-    return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "huggingface" / "hub"
+def _shared_hub() -> Path | None:
+    """The model cache of the Hugging Face folder other tools share, when the owner allowed
+    PersonalClaw to read it, else ``None``. Earlier releases downloaded there, so an install
+    that allows it keeps using those weights without a download. Only ever read: a model is
+    loaded from its snapshot folder in place (:func:`_load_target`), and nothing is written,
+    copied or deleted there."""
+    shared = outside_home_path(_SHARED_HF)
+    return shared / "hub" if shared is not None else None
 
 
 def _repo_id(model_name: str) -> str:
@@ -120,26 +125,57 @@ def _has_weights(d: Path) -> bool:
     return any(d.rglob("model.bin")) or any(d.rglob("*.safetensors"))
 
 
-def _weights_root(model_name: str) -> Path:
-    """The root handed to ``huggingface_hub`` when LOADING *model_name*: the new
-    ``PERSONALCLAW_HOME`` one, unless the weights live only in the legacy cache — then read
-    straight through it so an upgrade fetches nothing."""
-    new = _models_dir()
-    if _has_weights(_repo_dir(new, model_name)):
-        return new
-    if _has_weights(_repo_dir(_legacy_dir(), model_name)):
-        return _legacy_dir()
-    return new
+def _shared_snapshot(model_name: str) -> Path | None:
+    """The snapshot folder holding *model_name*'s weights in the allowed shared cache, or
+    ``None``. The revision ``refs/main`` names comes first, as ``huggingface_hub`` would pick."""
+    hub = _shared_hub()
+    if hub is None:
+        return None
+    repo = _repo_dir(hub, model_name)
+    try:
+        snapshots = sorted(p for p in (repo / "snapshots").iterdir() if p.is_dir())
+    except OSError:
+        return None
+    try:
+        pinned = (repo / "refs" / "main").read_text(encoding="utf-8").strip()
+    except OSError:
+        pinned = ""
+    for snapshot in sorted(snapshots, key=lambda p: p.name != pinned):
+        if _has_weights(snapshot):
+            return snapshot
+    return None
+
+
+def _in_home(model_name: str) -> bool:
+    return _has_weights(_repo_dir(_models_dir(), model_name))
+
+
+def _load_target(model_name: str) -> tuple[str, dict[str, Any]]:
+    """What ``WhisperModel`` is handed to LOAD *model_name*: the name, with the home as the
+    root a missing model downloads into, unless the weights are only in the shared folder the
+    owner allowed. Then it is that snapshot's own folder, which faster-whisper loads in place
+    without asking ``huggingface_hub`` anything, so nothing is fetched or written there."""
+    if not _in_home(model_name):
+        shared = _shared_snapshot(model_name)
+        if shared is not None:
+            return str(shared), {}
+    return model_name, _home_fetch_kwargs()
+
+
+def _home_fetch_kwargs() -> dict[str, Any]:
+    """How a fetch into the home authenticates: the token PersonalClaw resolves, or none.
+    ``False`` keeps ``huggingface_hub`` from reading ``huggingface-cli login``'s token file,
+    which is outside the home and read only when the owner allows its folder."""
+    root = _models_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    return {"download_root": str(root), "use_auth_token": resolve_token() or False}
 
 
 def _model_downloaded(model_name: str) -> bool:
-    """Whether usable weights exist in EITHER root. Accepting the legacy cache is what
-    keeps an upgrade free: without it every already-downloaded model reads as missing and
-    the Settings UI invites the user to re-fetch gigabytes."""
-    return (
-        _has_weights(_repo_dir(_models_dir(), model_name))
-        or _has_weights(_repo_dir(_legacy_dir(), model_name))
-    )
+    """Whether usable weights exist in the home, or in the shared folder the owner allowed.
+    Counting the allowed shared copy is what keeps an upgrade free: without it every model an
+    earlier release downloaded there reads as missing and Settings invites a re-fetch."""
+    return _in_home(model_name) or _shared_snapshot(model_name) is not None
 
 
 class FasterWhisperProvider(SttProvider, LocalModelProvider):
@@ -159,10 +195,9 @@ class FasterWhisperProvider(SttProvider, LocalModelProvider):
         """Where downloaded weights land — lets the core download UI track byte progress
         without knowing this backend's layout.
 
-        ALWAYS the new root, never the legacy one, because every download writes here
-        (see :meth:`download_model`) even when the legacy cache already holds a copy.
-        Returning the legacy dir whenever it happened to hold weights would aim the
-        progress bar at a tree that never grows."""
+        ALWAYS the home, never the shared folder, because every download writes here (see
+        :meth:`download_model`) even when the shared folder already holds a copy. It is also
+        the root core's delete sweeps, which must never be a folder outside the home."""
         return str(_models_dir())
 
     async def is_available(self) -> bool:
@@ -178,10 +213,13 @@ class FasterWhisperProvider(SttProvider, LocalModelProvider):
         # + local download state.
         result = []
         for m in _MODELS:
+            shared_only = not _in_home(m.name) and _shared_snapshot(m.name) is not None
             result.append(SttModel(
                 name=m.name,
                 size_mb=m.size_mb,
-                description=m.description,
+                # Said on the row, because Delete cannot remove this copy: it is outside the home.
+                description=(m.description + ". Read from the Hugging Face folder other tools "
+                             "share") if shared_only else m.description,
                 downloaded=_model_downloaded(m.name),
                 active=False,
             ))
@@ -196,12 +234,10 @@ class FasterWhisperProvider(SttProvider, LocalModelProvider):
                 from faster_whisper import WhisperModel
                 # ``download_root`` becomes huggingface_hub's ``cache_dir``, which rebuilds
                 # the models--<org>--<repo> layout underneath it. A deliberate download
-                # always fills the NEW root — never the legacy one — so cache_dir()'s byte
+                # always fills the home, never the shared folder, so cache_dir()'s byte
                 # progress tracks the tree that is actually growing.
-                root = _models_dir()
-                root.mkdir(parents=True, exist_ok=True)
                 WhisperModel(model_name, device="cpu", compute_type="int8",
-                             download_root=str(root))
+                             **_home_fetch_kwargs())
                 return True
             except Exception:
                 return False
@@ -213,17 +249,15 @@ class FasterWhisperProvider(SttProvider, LocalModelProvider):
             return False
 
     async def delete_model(self, model_name: str) -> bool:
+        """Remove the model from the home. A copy in the Hugging Face folder other tools share
+        is never deleted: it is outside the home and other tools use it. The model then still
+        reads as downloaded, and its row says where it is read from."""
         import shutil
-        # BOTH roots, for the same reason sentence-transformers removes both of its
-        # layouts: _model_downloaded() reads through to the legacy cache, so leaving that
-        # copy behind would keep the model reporting as "downloaded" right after a delete.
-        removed = False
-        for root in (_models_dir(), _legacy_dir()):
-            model_dir = _repo_dir(root, model_name)
-            if model_dir.is_dir():
-                shutil.rmtree(model_dir, ignore_errors=True)
-                removed = True
-        return removed
+        model_dir = _repo_dir(_models_dir(), model_name)
+        if not model_dir.is_dir():
+            return False
+        shutil.rmtree(model_dir, ignore_errors=True)
+        return True
 
     async def transcribe(self, audio_path: str, model: str = "", language: str = "") -> str | None:
         # Flat path: run the detailed transcription and return just its text, so there is
@@ -254,14 +288,22 @@ class FasterWhisperProvider(SttProvider, LocalModelProvider):
     ) -> "TranscriptResult | None":
         """Rich transcription with VAD (silence removal → fewer hallucinations, tighter
         timestamps), per-word timestamps, and optional Lexicon bias (initial_prompt +
-        hotwords). Maps native faster-whisper Segment/Word objects → TranscriptResult."""
+        hotwords). Maps native faster-whisper Segment/Word objects → TranscriptResult.
+
+        ``model`` is the speech-to-text binding's model. Like chat, a call that names none is
+        refused before anything is loaded; this used to load ``turbo`` in its place.
+        """
+        try:
+            model_name = require_model(model)
+        except ProviderResolutionError as exc:
+            logger.error("faster-whisper refused: %s", exc)
+            return None
         try:
             from faster_whisper import WhisperModel
         except ImportError:
             return None
 
         ensure_ffmpeg_in_path()
-        model_name = model or "turbo"
         lang = language.split("-")[0] if language else None
         # Whisper's decoder caps the PROMPT window at max_length//2 = 224 tokens; a bias
         # string that (with the forced decoder tokens) pushes a position >= 448 raises
@@ -273,11 +315,10 @@ class FasterWhisperProvider(SttProvider, LocalModelProvider):
 
         def _run() -> "TranscriptResult | None":
             try:
-                # Read-through: the legacy root is passed only when the weights live
-                # ONLY there, so an upgraded install loads what it already has instead of
-                # re-fetching it. Nothing is copied.
-                m = WhisperModel(model_name, device="cpu", compute_type="int8",
-                                 download_root=str(_weights_root(model_name)))
+                # The home's copy, else the allowed shared folder's snapshot loaded in place
+                # (nothing fetched, copied or written there), else a download into the home.
+                target, fetch = _load_target(model_name)
+                m = WhisperModel(target, device="cpu", compute_type="int8", **fetch)
                 kwargs: dict = {"language": lang, "word_timestamps": True, "vad_filter": True}
                 if bias_prompt:
                     # Prefer ``hotwords`` (the purpose-built biasing lever) when the

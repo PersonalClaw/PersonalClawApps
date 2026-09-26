@@ -137,21 +137,39 @@ async def send_dashboard_link(
 ) -> str:
     """Generate a presigned dashboard URL and DM it to *user_id*.
 
-    Returns the generated URL (for logging), or an empty string on failure.
+    Returns the generated URL (for logging), or an empty string when the DM failed.
     The link is always sent as a DM to prevent token leakage in channels.
 
-    The URL must be clicked within 5 minutes. Once opened, the session
-    cookie lasts for *ttl* seconds (capped at 6 hours).
-    """
-    from personalclaw.sdk.channel import LINK_WINDOW_SECS, MAX_SESSION_TTL_SECS
+    The link can be opened until the sooner of the gateway's link window
+    (``LINK_WINDOW_SECS``, 24 hours) and *ttl*, and the sign-in it starts ends *ttl* seconds
+    after the link is made. The DM says both (``blocks.link_lifetime_text``).
 
-    session_ttl = min(ttl, MAX_SESSION_TTL_SECS)
+    A *ttl* longer than the gateway lets a sign-in last is refused, never shortened here:
+    ``generate_token`` raises ``ValueError``, whose message is the sentence to show the person
+    who asked, and it propagates with nothing sent. (A core from before that limit shortened
+    the lifetime itself, without a word.)
+    """
+    from personalclaw.sdk.channel import LINK_WINDOW_SECS
+    from slack_runtime.blocks import link_lifetime_text
+
     cfg = AppConfig.load()
     configured_host, port = parse_dashboard_url(cfg.dashboard.url)
     local_only = is_local_bind(resolve_bind_host())
     host = resolve_dashboard_host(local_only, configured_host)
 
-    token = generate_token(user_id, session_ttl)
+    try:
+        token = generate_token(user_id, ttl)
+    except ValueError:
+        try:
+            sel().log_api_access(
+                caller=user_id,
+                operation="slack.dashboard_token",
+                outcome="denied",
+                resources=f"ttl={ttl}",
+            )
+        except Exception:
+            logger.debug("could not audit a refused dashboard link", exc_info=True)
+        raise
     origin = dashboard_origin(cfg.dashboard.url)
     url = f"{origin}/?token={token}" if origin else f"http://{host}:{port}/?token={token}"
 
@@ -161,20 +179,18 @@ async def send_dashboard_link(
     if proxy:
         proxy_line = f"\n🔗 <{proxy}/?token={token}|Open via DevSpaces Proxy>"
 
-    link_mins = LINK_WINDOW_SECS // 60
-    session_mins = session_ttl // 60
     try:
         dm = await slack.open_dm(user_id)
         await slack.post_message(
             dm,
             f"🔗 <{url}|Open Dashboard>{proxy_line}\n"
-            f"⏱ Click within {link_mins}m · session lasts {session_mins}m",
+            f"{link_lifetime_text(ttl, LINK_WINDOW_SECS)}",
         )
         sel().log_api_access(
             caller=user_id,
             operation="slack.dashboard_token",
             outcome="ok",
-            resources=f"ttl={session_ttl}",
+            resources=f"ttl={ttl}",
         )
     except Exception:
         try:
@@ -182,7 +198,7 @@ async def send_dashboard_link(
                 caller=user_id,
                 operation="slack.dashboard_token",
                 outcome="error",
-                resources=f"ttl={session_ttl}",
+                resources=f"ttl={ttl}",
             )
         except Exception:
             pass

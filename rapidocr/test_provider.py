@@ -84,17 +84,17 @@ def test_engine_is_installed_and_available(provider):
 
 @pytest.mark.asyncio
 async def test_ocr_with_no_model_bound_returns_the_ground_truth(provider, image):
-    """No model is bound in this process — `can_resolve_use_case("image_modality")` is
-    False, which is the environment where core's VLM OcrNode is skipped — and OCR still
-    produces non-empty text carrying the token rendered into the image."""
+    """With no model bound, OCR still produces non-empty text carrying the token rendered
+    into the image.
+
+    Nothing is bound here by construction: the repository's ``conftest.py`` gives every test
+    its own empty scratch home (``.github/tests/test_scratch_home.py`` holds it to that), and a
+    fresh home has no model in Settings → Models. Nor can the provider reach one: it imports
+    core only through ``personalclaw.sdk.ocr`` (clause 2). ``result.engine`` names what read
+    the image, so a model can't satisfy this in the engine's place. Core's own answer to "is an
+    image model set up" is not part of the SDK, and this test doesn't need it.
+    """
     from personalclaw.sdk.ocr import assert_image  # noqa: F401  (import-path smoke)
-
-    from personalclaw.knowledge.pipeline.registry import can_resolve_use_case
-
-    assert can_resolve_use_case("image_modality") is False, (
-        "this test's whole point is the no-model environment; a bound image model here "
-        "would let a VLM satisfy the assertion and the clause would go unmeasured"
-    )
 
     result = await provider.recognize([image])
 

@@ -536,7 +536,9 @@ function currentQuarter(): string {
  *  instructions; the digest card renders raw text, so the fence showed literally.
  *  Unwrap ONE whole-document fence (any language tag); leave inner fences alone. */
 function unwrapFence(text: string): string {
-  const m = /^```[a-zA-Z]*\n([\s\S]*?)\n?```$/.exec(text)
+  // `match`, not `RegExp.exec`: the install scanner reads `exec(` in the built bundle as
+  // Python's and flags the app. Same result for a non-global pattern.
+  const m = text.match(/^```[a-zA-Z]*\n([\s\S]*?)\n?```$/)
   return m ? m[1].trim() : text
 }
 

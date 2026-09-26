@@ -3,7 +3,9 @@
 # so there is no repo-level Python lockfile to track here — Dependabot watches the
 # GitHub Actions the CI workflow pins. The npm manifests
 # and lockfiles live in nested app UI directories, so each directory is watched
-# separately and its dependency updates are grouped.
+# separately and its dependency updates are grouped. Those apps commit their built bundle
+# (`ui/bundle/`), so a bump that changes the build output needs a rebuild commit before it
+# merges; the `ui-bundles` CI job names the bundle that differs.
 version: 2
 updates:
   - package-ecosystem: github-actions

@@ -1,6 +1,6 @@
 {
   "name": "design-critique",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Design Critique",
   "description": "The review a colleague would give you, before you spend their attention. Point it at a URL or a screenshot and it returns evidence-backed accessibility and craft findings — each with its WCAG clause where one applies and the change that clears it — plus an explicit rubric for the judgment no measurement can make.",
   "icon": "Eye",

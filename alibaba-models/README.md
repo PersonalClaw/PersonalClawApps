@@ -5,12 +5,21 @@ Alibaba Cloud Model Studio (DashScope) provider for PersonalClaw.
 ## Capabilities
 
 - **Chat** — Qwen family models via OpenAI-compatible endpoint
+- **Image input** — the Qwen-VL, QVQ and Qwen-Omni models are sent an attached image as the
+  image itself (`takes_images` in `provider.py` names the ones whose ids don't say so); every
+  other model gets the image's text instead
 - **Embedding** — text-embedding-v3, text-embedding-v2
 - **Image Generation** — qwen-image-2.0, qwen-image-2.0-pro, wan2.7-image, wan2.7-image-pro
 
 ## Configuration
 
 Set your API key via the `ALIBABA_API_KEY` environment variable or in the app settings.
+
+| Key | Label | Notes |
+|---|---|---|
+| `api_key` | API Key | Your Alibaba Model Studio API key. Falls back to ALIBABA_API_KEY env var. |
+| `default_model` | Default Model | A Model Studio model id, such as qwen-plus. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
+| `endpoint` | Endpoint | Regional API endpoint (below). |
 
 ### Regional Endpoints
 

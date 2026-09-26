@@ -9,6 +9,11 @@ calls a bound model.
 
 It rides core's branded-app factory (``register_branded_app``), which reads both. So this drives
 the app's real ``openai`` client against a fake endpoint that records the request.
+
+An image goes to a model as an image only when the platform's record says the model takes one: the
+provider type's ``supports_vision`` and ``image_modality`` on the model's catalog row. The last
+test asks that record the way a chat turn does, for a model whose id says so, one this app declares
+and one that takes none, and checks that the image part reaches the request.
 """
 
 from __future__ import annotations
@@ -21,10 +26,16 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the repo root: apps_testkit
 
 from apps_testkit.model_wire import (  # noqa: E402
+    LISTED,
     MODEL,
+    PNG_DATA_URL,
     REPLY,
     RecordingModelServer,
+    blank_model_expected,
+    blank_model_report,
     form_options,
+    image_call,
+    images_sent,
     one_call,
     sampling_sent,
 )
@@ -62,3 +73,76 @@ async def test_what_core_asks_of_a_call_is_what_the_request_carries(server, aske
     assert built.sampling_temperature == sent[0]
     assert await one_call(built) == REPLY
     assert [sampling_sent(call) for call in server.calls()] == [sent]
+
+
+#: A DashScope model that takes images and whose id does not say so (``provider.takes_images``).
+DECLARED_VISION = "qvq-max"
+#: One whose id does: core's classifier tags it from the ``qwen-vl`` marker.
+NAMED_VISION = "qwen-vl-max"
+TEXT_ONLY = "qwen-plus"
+
+
+@pytest.fixture
+def listed(monkeypatch):
+    """A form-saved instance registered the way core registers one, against a server that lists
+    the three models, with 127.0.0.1 allow-listed so catalog discovery may reach it."""
+    from personalclaw.config.loader import AppConfig
+    from personalclaw.llm.registry import get_default_registry
+    from personalclaw.providers import image_input
+
+    cfg = AppConfig()
+    cfg.security.egress.allow_hosts = ["127.0.0.1"]
+    monkeypatch.setattr(AppConfig, "load", staticmethod(lambda *a, **k: cfg))
+    with RecordingModelServer(models=(DECLARED_VISION, NAMED_VISION, TEXT_ONLY)) as recording:
+        entry = _entry(recording.url)
+        registry = get_default_registry()
+        registry.register_entry(entry)
+        image_input.clear_cache()
+        try:
+            yield recording, entry
+        finally:
+            registry.unregister_entry(entry.name)
+            image_input.clear_cache()
+
+
+@pytest.mark.asyncio
+async def test_a_model_that_takes_images_is_sent_the_image(listed):
+    from personalclaw.providers.image_input import image_input
+
+    recording, entry = listed
+    for model in (DECLARED_VISION, NAMED_VISION):
+        answer = await image_input(f"{entry.name}:{model}")
+        assert answer.accepted, (model, answer.reason)
+    refused = await image_input(f"{entry.name}:{TEXT_ONLY}")
+    assert (refused.accepted, refused.reason) == (False, f"{TEXT_ONLY} can't take images.")
+
+    built = provider._factory(entry=entry, model=DECLARED_VISION)
+    assert await image_call(built) == REPLY
+    calls = recording.calls()
+    assert [images_sent(call) for call in calls] == [[PNG_DATA_URL]]
+    assert calls[0]["body"]["model"] == DECLARED_VISION
+
+
+# ── A call no model is chosen for ─────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def listing():
+    """An endpoint that lists only a model nobody chose (``LISTED``): a provider that picked a
+    model of its own would name it on the wire."""
+    with RecordingModelServer(models=(LISTED,)) as recording:
+        yield recording
+
+
+@pytest.mark.asyncio
+async def test_no_model_chosen_is_refused_and_the_default_model_is_named(listing):
+    """Saved with its Default Model empty and called with nothing bound, an instance is sent no
+    call, and no model is picked in its place. With a Default Model, both calls name it."""
+    report = await blank_model_report(
+        app_dir=APP_DIR,
+        entry_type="alibaba",
+        factory=provider._factory,
+        create_provider=provider.create_provider,
+        server=listing,
+    )
+    assert report == blank_model_expected(APP_DIR)

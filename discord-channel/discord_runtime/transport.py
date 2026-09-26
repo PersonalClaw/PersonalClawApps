@@ -1,8 +1,10 @@
 """DiscordTransport — the ChannelTransportProvider that owns the Discord channel.
 
 Outbound + health/test are token-gated and always available. Inbound is the Gateway
-WebSocket loop started by :meth:`start_inbound`, which the gateway calls once at
-boot with a :class:`GatewayServices` handle. The loop:
+WebSocket loop started by :meth:`start_inbound`, which PersonalClaw's gateway calls
+with a :class:`GatewayServices` handle whenever it starts this channel's receiver: at
+boot, and when the channel is turned on, updated or its settings are saved (it stops
+the previous instance's receiver first). The loop:
 
 1. holds a gateway connection (:class:`DiscordGateway` owns identify/heartbeat/
    resume — see its module docstring for the WS lifecycle);
@@ -12,9 +14,9 @@ boot with a :class:`GatewayServices` handle. The loop:
    fencing, redaction, session linking and the turn itself all happen in core, so
    this transport can't forget any of them; it keeps only the outbound half,
    delivering the verdict's canned reply. Core mirrors agent replies back out
-   through the :class:`DiscordDelivery` this transport registers at boot
-   (the outbound half of the seam). ``INTERACTION_CREATE`` events (button presses) resolve a pending
-   approval in the delivery.
+   through the :class:`DiscordDelivery` this transport registers as its receiver
+   starts (the outbound half of the seam). ``INTERACTION_CREATE`` events (button
+   presses) resolve a pending approval in the delivery.
 
 Two Discord-specific inbound facts shape this file:
 
@@ -33,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sys as _sys
 from pathlib import Path as _Path
 from typing import Any
@@ -58,7 +61,7 @@ from personalclaw.sdk.channel import (
 # only keeps this app's dir on sys.path while it execs this module, so a
 # ``from discord_runtime.X import`` inside a method would run LATER, off the path,
 # and fail. Binding them here, during exec, captures them for the process life.
-from discord_runtime.api import DISCORD_MAX_TEXT, DiscordAPI, HTTPDiscordAPI
+from discord_runtime.api import DISCORD_MAX_TEXT, DiscordAPI, DiscordAPIError, HTTPDiscordAPI
 from discord_runtime.delivery import DiscordDelivery, split_message
 from discord_runtime.gateway import DEFAULT_GATEWAY_URL, DiscordGateway
 from discord_runtime.inbound_tap import publish as publish_inbound
@@ -73,8 +76,49 @@ from discord_runtime.settings import (
 )
 from discord_runtime.writes import SendRefused, live_writes_disabled
 
+#: A Discord id: a snowflake, 17 to 20 digits. Channels, threads and DMs are all addressed by one.
+_SNOWFLAKE_RE = re.compile(r"\d{17,20}")
+
 logger = logging.getLogger(__name__)
 
+#: Discord refused the token at ``GET /gateway/bot``, before any session was opened.
+_TOKEN_REFUSED_AT_DISCOVERY = (
+    "Discord rejected the bot token (401 Unauthorized), so no gateway session was opened. Save a "
+    "working token in Configure to start one; sending with this token fails too."
+)
+#: What each close code Discord says not to retry after means for the owner — the same set as
+#: ``gateway.FATAL_CLOSE_CODES``, which a test holds equal to this map's keys.
+_REFUSALS = {
+    4004: (
+        "Discord rejected the bot token (close code 4004, authentication failed), so the gateway "
+        "session stopped. Save a working token in Configure to start it again; sending with this "
+        "token fails too."
+    ),
+    4014: (
+        "Discord refused the privileged intent this bot asks for (close code 4014, disallowed "
+        "intents), so the gateway session stopped. Turn on Message Content Intent under Bot → "
+        "Privileged Gateway Intents in the Discord Developer Portal, then turn the channel off "
+        "and on, or use Configure → Save, to connect again."
+    ),
+    4013: (
+        "Discord rejected the gateway intents this app sends (close code 4013, invalid intents), "
+        "so the gateway session stopped. That is a defect in the Discord Channel app, not in your "
+        "settings: update the app."
+    ),
+    4012: (
+        "Discord no longer accepts the gateway API version this app uses (close code 4012), so the "
+        "gateway session stopped. Update the Discord Channel app."
+    ),
+    4011: (
+        "Discord requires this bot to shard (close code 4011, sharding required): it is in too "
+        "many servers for one gateway session, and this app opens one. The gateway session "
+        "stopped."
+    ),
+    4010: (
+        "Discord rejected the shard this app sent (close code 4010, invalid shard), so the gateway "
+        "session stopped. That is a defect in the Discord Channel app: update the app."
+    ),
+}
 
 
 class DiscordTransport(ChannelTransportProvider):
@@ -82,8 +126,8 @@ class DiscordTransport(ChannelTransportProvider):
         # Kept live, so a Configure → Save reaches the next Test/Connect/health/send (see
         # LiveConfig) instead of the next restart.
         self._config = LiveConfig(config or {})
-        #: The bot token the gateway drove the receiver with at boot (``""`` when it had none) —
-        #: ``None`` until it did. The gateway session keeps the token it started with.
+        #: The bot token the receiver was started with (``""`` when there was none) — ``None``
+        #: until PersonalClaw started it. The gateway session keeps the token it started with.
         self._inbound_token: str | None = None
         self._services: Any = None
         self._api: DiscordAPI | None = None
@@ -92,6 +136,9 @@ class DiscordTransport(ChannelTransportProvider):
         self._gateway_task: asyncio.Task | None = None
         # The bot's own user id, captured from READY — half of the self-message filter.
         self._own_user_id = ""
+        #: Why the receiver did not open a gateway session at all (``""`` when it did): Discord
+        #: refused the token at ``GET /gateway/bot``.
+        self._inbound_stopped = ""
 
     @property
     def name(self) -> str:
@@ -100,6 +147,19 @@ class DiscordTransport(ChannelTransportProvider):
     @property
     def display_name(self) -> str:
         return "Discord"
+
+    def validate_target(self, target: str) -> str:
+        """Whether a schedule can send its results to ``target`` on Discord.
+
+        Delivery posts to a channel by its id, a snowflake: a number of 17 to 20 digits. A DM is a
+        channel too, which is what the owner's DM route opens.
+        """
+        if _SNOWFLAKE_RE.fullmatch(str(target or "").strip()):
+            return ""
+        return (
+            "A Discord channel id is a long number, like 1234567890123456789. With Developer Mode "
+            "on, right-click the channel and pick Copy Channel ID."
+        )
 
     def capabilities(self) -> ChannelCapabilities:
         # Honest, and every True below has an implementation behind it:
@@ -110,10 +170,14 @@ class DiscordTransport(ChannelTransportProvider):
         #   edits            → DiscordDelivery streaming PATCHes the message
         #   rich_text        → Discord renders standard markdown natively
         # Discord caps a message body at 2000 chars.
+        # owner_pairing → DMs cross core's guarded door, where the owner's code from the
+        #                  Configure page is redeemed; the delivery reads the owner at each use
+        # dm_thread_is_channel → a DM message's thread is its channel id (see
+        #                  _to_channel_message), so a handed-off chat continues in the DM
         return ChannelCapabilities(
             inbound=True, threads=True, attachments=True, reactions=True,
             edits=True, rich_text=True, typing_indicator=True,
-            max_text_len=DISCORD_MAX_TEXT,
+            max_text_len=DISCORD_MAX_TEXT, owner_pairing=True, dm_thread_is_channel=True,
         )
 
     def _token(self) -> str:
@@ -132,7 +196,7 @@ class DiscordTransport(ChannelTransportProvider):
     def connected(self) -> bool:
         return bool(self._token())
 
-    # ── Inbound: the gateway drives this once at boot ──
+    # ── Inbound: PersonalClaw's gateway starts and stops this with the channel ──
     async def start_inbound(self, services: Any) -> None:
         # Before the token check, so a channel configured later keeps its owner too.
         adopt_owner_id()
@@ -144,15 +208,19 @@ class DiscordTransport(ChannelTransportProvider):
         self._services = services
         reload_settings()
         self._api = HTTPDiscordAPI(token)
+        gateway_url = await self._discover_gateway_url()
+        if self._inbound_stopped:
+            # Discord refused the token: no session to open, and nothing it could deliver.
+            await self._api.close()
+            self._api = None
+            return
 
         # Register outbound delivery on the gateway + dashboard. Core delivers every
         # channel result through this ONE provider-agnostic ChannelDelivery handle —
         # it never sees the Discord API client. Filed under PROVIDER, the name core reads this
-        # channel's owner by, so the owner core DMs is the one below.
-        # Discord's OWN owner: an id stored for this channel. The one shared key every channel
-        # used to write could hold another platform's user id.
-        owner_id = owner_id_for(PROVIDER)
-        self._delivery = DiscordDelivery(self._api, owner_id)
+        # channel's owner by. The delivery reads Discord's OWN owner each time it needs it, so an
+        # owner paired from the Configure page while this receiver runs is the one it prompts.
+        self._delivery = DiscordDelivery(self._api, lambda: owner_id_for(PROVIDER))
         if hasattr(services, "register_channel_delivery"):
             services.register_channel_delivery(self._delivery, provider=PROVIDER)
         if getattr(services, "dashboard_state", None) is not None:
@@ -160,7 +228,7 @@ class DiscordTransport(ChannelTransportProvider):
 
         self._gateway = DiscordGateway(
             token,
-            gateway_url=await self._discover_gateway_url(),
+            gateway_url=gateway_url,
             on_message=self._on_message_create,
             on_interaction=self._on_interaction_create,
             on_ready=self._on_ready,
@@ -172,12 +240,21 @@ class DiscordTransport(ChannelTransportProvider):
         """The bot's own gateway URL from ``GET /gateway/bot``.
 
         Discord asks clients to fetch this rather than hardcode the host (it can move
-        and it carries the session-start budget). A failure here is not fatal — the
+        and it carries the session-start budget). Most failures here are not fatal — the
         documented default host still works — so degrade to it and let the gateway
-        loop's own backoff report the real problem."""
+        loop's own backoff report the real problem. A 401 is the exception: Discord has
+        refused the token, and opening a session with it only has Discord refuse it again
+        (close code 4004), so the refusal is kept for :meth:`health` instead."""
         try:
             info = await self._api.get_gateway_bot()  # type: ignore[union-attr]
             return str(info.get("url", "")) or DEFAULT_GATEWAY_URL
+        except DiscordAPIError as exc:
+            if exc.status == 401:
+                logger.error("discord: GET /gateway/bot refused the bot token (401) — not connecting")
+                self._inbound_stopped = _TOKEN_REFUSED_AT_DISCOVERY
+                return ""
+            logger.warning("discord: GET /gateway/bot failed (%s) — using the default gateway URL", exc)
+            return DEFAULT_GATEWAY_URL
         except Exception:
             logger.warning("discord: GET /gateway/bot failed — using the default gateway URL")
             return DEFAULT_GATEWAY_URL
@@ -321,29 +398,50 @@ class DiscordTransport(ChannelTransportProvider):
         if not token:
             return {"state": "offline", "detail": "No bot token configured"}
         if self._inbound_token is None:
-            # A transport the gateway has not driven: enabled or re-built after boot. Its token
-            # is live for outbound; "ready" would claim a gateway session that does not exist.
+            # A transport whose receiver PersonalClaw has not started yet. Its token is live for
+            # outbound; "ready" would claim a gateway session that does not exist. PersonalClaw
+            # starts one on the instance it has whenever the channel changes (turned on, updated,
+            # its settings saved) — and this state is how it tells the channel is configured.
             return {
                 "state": "error",
                 "detail": (
-                    "Outbound ready, inbound NOT STARTED — the Discord gateway session starts "
-                    "with the gateway, so the bot token takes effect on the next restart."
+                    "Outbound ready, inbound NOT STARTED — PersonalClaw starts the Discord "
+                    "gateway session when it turns the channel on, and Configure → Save starts "
+                    "it now."
                 ),
             }
         if self._inbound_token != token:
-            # Saved tokens reach outbound at once, the gateway session only when it starts.
+            # Saved tokens reach outbound at once, the gateway session only when it starts. A
+            # token saved in the running PersonalClaw replaces this instance and its session;
+            # one changed outside it is what this reports.
             if self._gateway_task is not None and not self._gateway_task.done():
                 detail = (
                     "Outbound uses the saved bot token; the Discord gateway session still runs "
-                    "on the one it started with. Restart the gateway to move inbound onto it."
+                    "on the one it started with. Configure → Save, or turning the channel off "
+                    "and on, moves inbound onto it."
                 )
             else:
                 detail = (
-                    "Outbound ready, inbound OFFLINE — the Discord gateway session starts with "
-                    "the gateway, so the bot token saved since then takes effect on the next "
-                    "restart."
+                    "Outbound ready, inbound OFFLINE — the Discord gateway session was started "
+                    "before this bot token was saved. Configure → Save, or turning the channel "
+                    "off and on, starts it on this one."
                 )
             return {"state": "error", "detail": detail}
+        # The receiver started on the saved token. Whether it is RECEIVING is its session's to say.
+        if self._inbound_stopped:
+            return {"state": "error", "detail": f"Inbound STOPPED — {self._inbound_stopped}"}
+        gateway = self._gateway
+        if gateway is not None and gateway.fatal_close_code is not None:
+            refusal = _REFUSALS[gateway.fatal_close_code]
+            return {"state": "error", "detail": f"Inbound STOPPED — {refusal}"}
+        if gateway is not None and gateway.last_drop:
+            return {
+                "state": "error",
+                "detail": (
+                    f"Inbound NOT RECEIVING — {gateway.last_drop}, and the gateway session is "
+                    "reconnecting."
+                ),
+            }
         return {"state": "ready", "detail": "Bot token configured"}
 
     async def test(self) -> dict[str, Any]:

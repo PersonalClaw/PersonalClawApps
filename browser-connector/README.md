@@ -54,15 +54,16 @@ logged-in session:
 This app installs on **your** machine, not the server.
 
 ```bash
-DEST="$HOME/.personalclaw/apps/browser-connector"
+DEST="${PERSONALCLAW_HOME:-$HOME/.personalclaw}/apps/browser-connector"
 git clone --depth 1 --filter=blob:none --sparse https://github.com/PersonalClaw/PersonalClawApps "$DEST"
 git -C "$DEST" sparse-checkout set browser-connector
 ```
 
-Then, in your browser's extensions page (developer mode), **Load unpacked** →
-`~/.personalclaw/apps/browser-connector/browser-connector/extension`. Start the browser with a
-loopback remote-debugging port, and pair the connector from **Settings → Devices**. (On
-Windows, use the equivalent `%USERPROFILE%` path.)
+It goes into the PersonalClaw home: `$PERSONALCLAW_HOME` when you run PersonalClaw on a home of
+its own, else `~/.personalclaw`. Then, in your browser's extensions page (developer mode),
+**Load unpacked** → `$DEST/browser-connector/extension`. Start the browser with a loopback
+remote-debugging port, and pair the connector from **Settings → Devices**. (On Windows, use the
+equivalent `%USERPROFILE%` path.)
 
 ## Security posture
 

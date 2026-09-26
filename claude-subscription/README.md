@@ -39,9 +39,12 @@ It imports only the PersonalClaw **SDK** (never core internals):
 
 ## Sign-in, and what happens when you are not signed in
 
-Run the CLI's own sign-in — `claude login` — and nothing else. PersonalClaw reads that
-store **read-only**: it never writes, refreshes, repairs, chmods or deletes it, not even to
-renew an expired token. When the token expires you re-run `claude login` yourself.
+Run the CLI's own sign-in — `claude login` — then let PersonalClaw read it: the store is
+outside the PersonalClaw home, so it is read only once you turn on **The claude-code sign-in**
+in **Settings → Security → Outside PersonalClaw's home**. Until then the provider reads as not
+signed in and says where to allow it. PersonalClaw reads that store **read-only**: it never
+writes, refreshes, repairs, chmods or deletes it, not even to renew an expired token. When the
+token expires you re-run `claude login` yourself.
 
 Not signed in is not an error. Core derives an availability probe from the declared
 `credential_source`, so the app is greyed out in the extensions list with this app's own
@@ -96,7 +99,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 | Key | Label | Notes |
 |---|---|---|
-| `default_model` | Default Model | A Claude model id. Empty = the newest model from the app's built-in list. |
+| `default_model` | Default Model | A Claude model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 | `endpoint` | Base URL | Optional Anthropic-compatible base URL. Empty uses the official Anthropic host. |
 
 There is deliberately **no `api_key` setting**. A key set by hand on the instance would

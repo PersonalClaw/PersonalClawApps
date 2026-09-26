@@ -45,7 +45,22 @@ def test_vite_pins_the_classic_jsx_transform():
 
 
 def test_built_bundle_imports_only_specifiers_the_host_resolves():
-    design_rails.assert_dist_host_resolvable(_APP_DIR)
+    design_rails.assert_bundle_host_resolvable(_APP_DIR)
+
+
+def test_the_page_ships_built_and_installing_it_runs_no_npm():
+    """🔴 Red on main: the entry was ``ui/dist/index.mjs``, a path the repo ignores, and the
+    install hook ran ``npm install && npx vite build``."""
+    design_rails.assert_ships_built(_APP_DIR)
+
+
+def test_the_store_installs_it_without_a_scanner_warning(tmp_path):
+    """The shipped bundle is scanned as a script at install. Its ``RegExp.exec`` call matched
+    the scanner's rule for Python's ``exec`` and made the consent say "The security scanner
+    raised warnings". The app's own files are scanned too, this one included."""
+    from personalclaw.supply_chain import default_scanner
+
+    design_rails.assert_scans_clean(_APP_DIR, default_scanner, tmp_path)
 
 
 # ── App-specific rails — these pin THIS bundle's surfaces, not the contract ──────────

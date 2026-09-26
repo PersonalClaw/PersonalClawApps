@@ -61,28 +61,39 @@ def test_cache_dir_exposed():
     assert P.create_provider({}).cache_dir()  # for download byte-progress
 
 
-# ── issue #93: weights must be rooted at PERSONALCLAW_HOME, without re-downloading ──
+# ── the pair lives in the PersonalClaw home; the old cache outside it is left alone ──
+
+
+def _home(monkeypatch, tmp_path) -> Path:
+    home = tmp_path / "pclaw-home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("PERSONALCLAW_HOME", str(home))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    return home
+
+
+def _old_cache(tmp_path) -> Path:
+    """Where earlier releases put the pair: outside the home, in the machine-wide XDG cache."""
+    return tmp_path / "xdg" / "personalclaw" / "diarization-onnx"
+
+
+def _files(root: Path) -> list[str]:
+    return sorted(p.relative_to(root).as_posix() for p in root.rglob("*")) if root.exists() else []
 
 
 def test_write_root_is_under_personalclaw_home(monkeypatch, tmp_path):
-    """The WRITE target is PERSONALCLAW_HOME-rooted, so an isolated home is isolated.
-    Asserted on the RESOLVED path (not a mock call): setting PERSONALCLAW_HOME must move
-    the tree, and no part of it may sit in the machine-wide XDG cache."""
-    home = tmp_path / "pclaw-home"
-    monkeypatch.setenv("PERSONALCLAW_HOME", str(home))
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
-
+    """The pair is written to and read from the PersonalClaw home, so an isolated home is
+    isolated. Asserted on the RESOLVED path (not a mock call)."""
+    home = _home(monkeypatch, tmp_path)
     root = P._models_dir()
     assert home in root.parents, f"{root} is not under PERSONALCLAW_HOME {home}"
-    assert P._legacy_dir() not in root.parents and root != P._legacy_dir()
-    assert ".cache" not in root.parts
+    assert ".cache" not in root.parts and (tmp_path / "xdg") not in root.parents
     assert Path(P.create_provider({}).cache_dir()) == root
 
 
 def test_write_root_defaults_to_dot_personalclaw_not_dot_cache(monkeypatch):
-    """Unset, the root defaults exactly the way the three sibling bundles spell it —
-    ``Path.home()/".personalclaw"`` — NOT the host's ``~/.cache``, which is what this app
-    used to fall back to and is why an isolated home leaked."""
+    """Unset, the root is the default home, ``~/.personalclaw``, NOT the host's ``~/.cache``,
+    which is what this app used to fall back to and is why an isolated home leaked."""
     monkeypatch.delenv("PERSONALCLAW_HOME", raising=False)
     root = P._models_dir()
     assert Path.home() / ".personalclaw" in root.parents
@@ -90,42 +101,31 @@ def test_write_root_defaults_to_dot_personalclaw_not_dot_cache(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_legacy_weights_report_downloaded_and_fetch_nothing(monkeypatch, tmp_path):
-    """Upgrade path: a pair already in the legacy machine-wide cache reports as downloaded
-    even though the new PERSONALCLAW_HOME root is EMPTY — so the UI never invites a re-fetch.
-    Presence checking must not hit the network, so urlretrieve explodes if it is touched."""
-    home = tmp_path / "pclaw-home"
-    home.mkdir()
-    monkeypatch.setenv("PERSONALCLAW_HOME", str(home))
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
-    _seed_pair(P._legacy_dir())
-    assert not P._models_dir().exists()  # nothing at the new root
+async def test_a_pair_left_in_the_old_cache_outside_the_home_is_not_read(monkeypatch, tmp_path):
+    """The old cache is outside the home, so a pair there does not count: the model reads as
+    not downloaded (one 47 MB download puts it in the home), and presence checking reaches
+    neither that folder's files nor the network."""
+    _home(monkeypatch, tmp_path)
+    _seed_pair(_old_cache(tmp_path))
 
     def _boom(*a, **k):
         raise AssertionError("presence check hit the network")
 
     monkeypatch.setattr(P.urllib.request, "urlretrieve", _boom)
-
-    assert P._downloaded() is True
+    assert P._downloaded() is False
     models = await P.create_provider({}).list_models()
-    assert models[0].downloaded is True
-    # still nothing written to the new root: read-through, never a migration copy
-    assert not P._models_dir().exists()
+    assert models[0].downloaded is False
 
 
 @pytest.mark.asyncio
-async def test_diarize_reads_through_legacy_root_without_copying(monkeypatch, tmp_path):
-    """The read-through is the mechanism that makes the upgrade free: with the pair only in
-    the legacy cache, the PIPELINE is handed the legacy paths and the new root stays
-    untouched. sherpa-onnx is stubbed into sys.modules (the repo's vendor-SDK pattern)."""
+async def test_diarize_reads_the_pair_from_the_home(monkeypatch, tmp_path):
+    """The PIPELINE is handed the home's paths. sherpa-onnx is stubbed into sys.modules (the
+    repo's vendor-SDK pattern)."""
     import sys
     import types
 
-    home = tmp_path / "pclaw-home"
-    home.mkdir()
-    monkeypatch.setenv("PERSONALCLAW_HOME", str(home))
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
-    _seed_pair(P._legacy_dir())
+    _home(monkeypatch, tmp_path)
+    _seed_pair(P._models_dir())
 
     seen = {}
 
@@ -159,20 +159,16 @@ async def test_diarize_reads_through_legacy_root_without_copying(monkeypatch, tm
     f = tmp_path / "a.wav"
     f.write_bytes(b"\x00" * 32)
     assert await P.create_provider({}).diarize(str(f)) == []
-
-    assert P._weights_root() == P._legacy_dir()
-    assert seen["seg"] == str(P._legacy_dir() / P._SEG_REL)
-    assert seen["emb"] == str(P._legacy_dir() / P._EMB_REL)
-    assert not P._models_dir().exists()  # no copy
+    assert seen["seg"] == str(P._models_dir() / P._SEG_REL)
+    assert seen["emb"] == str(P._models_dir() / P._EMB_REL)
 
 
 @pytest.mark.asyncio
 async def test_cache_dir_is_the_dir_a_fresh_download_fills(monkeypatch, tmp_path):
     """cache_dir() is what core's download UI reads for byte progress, so it must be the
-    directory that ACTUALLY fills. Fresh case, asserted by running the real download path
-    against a stubbed network and then checking the REPORTED dir now holds the weights."""
-    monkeypatch.setenv("PERSONALCLAW_HOME", str(tmp_path / "pclaw-home"))
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    directory that ACTUALLY fills. Asserted by running the real download path against a
+    stubbed network and then checking the REPORTED dir now holds the weights."""
+    _home(monkeypatch, tmp_path)
     monkeypatch.setattr(P.urllib.request, "urlretrieve", _fake_urlretrieve)
 
     p = P.create_provider({})
@@ -182,31 +178,27 @@ async def test_cache_dir_is_the_dir_a_fresh_download_fills(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
-async def test_cache_dir_tracks_new_root_even_when_legacy_holds_weights(monkeypatch, tmp_path):
-    """Presence-reporting and progress-reporting must not disagree. A legacy pair makes
-    presence TRUE, but a deliberate download still fills the NEW root — so cache_dir() must
-    keep pointing there, not at the legacy tree that will never grow."""
-    home = tmp_path / "pclaw-home"
-    home.mkdir()
-    monkeypatch.setenv("PERSONALCLAW_HOME", str(home))
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
-    _seed_pair(P._legacy_dir())
-    assert P._downloaded() is True  # presence: yes, from legacy
-    monkeypatch.setattr(P.urllib.request, "urlretrieve", _fake_urlretrieve)
+async def test_delete_removes_the_home_pair_and_never_the_old_cache(monkeypatch, tmp_path):
+    """Delete removes what is in the home. The old cache outside it is left exactly as it
+    was: it is not PersonalClaw's to delete any more."""
+    _home(monkeypatch, tmp_path)
+    _seed_pair(P._models_dir())
+    _seed_pair(_old_cache(tmp_path))
+    before = _files(tmp_path / "xdg")
 
     p = P.create_provider({})
-    reported = Path(p.cache_dir())
-    assert reported == P._models_dir() and reported != P._legacy_dir()
-    assert await p.download_model(P._MODEL) is True
-    assert P._has_weights(reported), f"cache_dir() {reported} did not fill"
+    assert await p.delete_model(P._MODEL) is True
+    assert not P._models_dir().exists()
+    assert _files(tmp_path / "xdg") == before
+    assert await p.delete_model(P._MODEL) is False  # nothing left in the home
+    assert _files(tmp_path / "xdg") == before
 
 
 def test_half_a_pair_is_not_downloaded(monkeypatch, tmp_path):
     """Segmentation without the embedding model cannot diarize. Counting a half-populated
-    root as present is how the legacy fallback silently resolves to an unusable tree."""
-    monkeypatch.setenv("PERSONALCLAW_HOME", str(tmp_path / "pclaw-home"))
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
-    seg = P._legacy_dir() / P._SEG_REL
+    root as present would resolve to an unusable tree."""
+    _home(monkeypatch, tmp_path)
+    seg = P._models_dir() / P._SEG_REL
     seg.parent.mkdir(parents=True)
     seg.write_bytes(b"\x00" * 16)
     assert P._downloaded() is False

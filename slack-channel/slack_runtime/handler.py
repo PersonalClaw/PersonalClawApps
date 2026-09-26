@@ -668,7 +668,7 @@ def _resolve_agent_name(name: str) -> str | None:
 
     Returns the resolved name, or None if not found.
     """
-    agents_dir = Path.home() / ".personalclaw" / "agents"
+    agents_dir = config_dir() / "agents"
     jsons = (
         sorted(agents_dir.glob("*.json"), key=lambda f: (len(f.stem), f.stem))
         if agents_dir.is_dir()
@@ -1181,7 +1181,7 @@ async def _handle_slash_command(
             return ""
         resolved = _resolve_agent_name(agent_name)
         if not resolved:
-            agents_dir = Path.home() / ".personalclaw" / "agents"
+            agents_dir = config_dir() / "agents"
             jsons = sorted(agents_dir.glob("*.json")) if agents_dir.is_dir() else []
             names = ", ".join(sorted(f.stem for f in jsons)) if jsons else "(none found)"
             await slack.post_message(
@@ -1224,7 +1224,12 @@ async def _handle_slash_command(
                 return ""
             ttl = parsed
 
-        url = await send_dashboard_link(slack, user_id, ttl)
+        try:
+            url = await send_dashboard_link(slack, user_id, ttl)
+        except ValueError as exc:
+            # Longer than the gateway lets a sign-in last: its own sentence says so, and why.
+            await slack.post_message(channel, f"❌ {exc}", reply_ts)
+            return ""
         if url:
             await slack.post_message(channel, "🔗 Dashboard link sent via DM.", reply_ts)
         else:
@@ -1321,7 +1326,7 @@ async def _handle_slash_command(
             return ""
         resolved = _resolve_agent_name(agent_name)
         if not resolved:
-            agents_dir = Path.home() / ".personalclaw" / "agents"
+            agents_dir = config_dir() / "agents"
             jsons = sorted(agents_dir.glob("*.json")) if agents_dir.is_dir() else []
             names = ", ".join(sorted(f.stem for f in jsons)) if jsons else "(none found)"
             await slack.post_message(
@@ -1393,7 +1398,7 @@ async def _handle_slash_command(
             if agent_name.lower() == "off":
                 agent_name = ""
             else:
-                agents_dir = Path.home() / ".personalclaw" / "agents"
+                agents_dir = config_dir() / "agents"
                 if not agents_dir.is_dir():
                     await slack.post_message(
                         channel,
@@ -3298,13 +3303,14 @@ def _handle_cron_command(
                 last = " ✓"
             elif view.get("last_status") in ("error", "failure", "timeout"):
                 last = " ❌"
-            safe_msg, _ = redact_credentials(
-                redact_exfiltration_urls(str(view.get("message") or ""))[0]
-            )
+            # The row arrives masked: core masks every field of it that holds text someone wrote
+            # (`schedule_view.MASKED_FIELDS`), so the prompt reads here as it does on the
+            # Automations page, and is cut short only after it was masked.
+            message = str(view.get("message") or "")
             next_part = _relative_next_run(view.get("next_run_ts"), now)
             lines.append(
                 f"{status} `{trigger.id}` | `{describe_cadence(trigger)}` "
-                f"| {safe_msg[:50]}{last}{next_part}"
+                f"| {message[:50]}{last}{next_part}"
             )
         return "\n".join(lines)
 
@@ -3349,9 +3355,8 @@ async def _handle_sessions_command(
 ) -> None:
     """Handle ``!sessions`` — list recent sessions as task_card blocks with resume buttons."""
     import json as _json
-    from pathlib import Path
 
-    sess_dir = Path.home() / ".personalclaw" / "sessions"
+    sess_dir = config_dir() / "sessions"
     if not sess_dir.exists():
         await slack.post_message(channel, "_No recent sessions._", reply_ts)
         return

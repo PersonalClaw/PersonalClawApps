@@ -156,6 +156,14 @@ class TestChannelMessageMapping:
         assert cm.metadata["chat_type"] == "private"
         assert cm.metadata["sender_name"] == "Ada"
 
+    def test_a_group_message_carries_the_groups_title(self):
+        t = TelegramTransport()
+        m = _msg(chat_id="-100777", chat_type="supergroup")["message"]
+        m["chat"]["title"] = "Family"
+        assert t._to_channel_message(m).metadata["channel_name"] == "Family"
+        dm = t._to_channel_message(_msg()["message"])
+        assert dm.metadata["channel_name"] == "", "a DM has no title"
+
     def test_caption_falls_back_for_text(self):
         t = TelegramTransport()
         m = _msg()["message"]
@@ -228,6 +236,24 @@ class TestTrustHooks:
         await asyncio.sleep(0)
         assert "text" not in captured
         assert t._delivery.texts == []  # tracked_only drops silently, no owner spam
+
+    @pytest.mark.asyncio
+    async def test_an_untracked_group_is_listed_by_its_title_for_the_owner_to_track(
+        self, transport_with_capture
+    ):
+        """Refused silently, and remembered with its title: the Sender trust page offers Track
+        for it, and a Telegram group id alone (`-100…`) tells the owner nothing."""
+        from personalclaw.sdk.channel import is_tracked_channel
+        from personalclaw.channel_trust import provider_trust
+
+        t, state, captured = transport_with_capture
+        m = _msg(text="hello bot", chat_id="-100555", chat_type="group", from_id="66")["message"]
+        m["chat"]["title"] = "Family"
+        await t._on_message(m)
+        await asyncio.sleep(0)
+        assert "text" not in captured and not is_tracked_channel("telegram", "-100555")
+        seen = provider_trust("telegram")["seen_channels"]
+        assert [(g["channel_id"], g["name"]) for g in seen] == [("-100555", "Family")]
 
     @pytest.mark.asyncio
     async def test_empty_text_ignored(self, transport_with_capture):

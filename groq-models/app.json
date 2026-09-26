@@ -1,6 +1,6 @@
 {
   "name": "groq-models",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "displayName": "Groq",
   "description": "Groq LPU inference (OpenAI-compatible), very low latency. Bring your own Groq API key.",
   "icon": "Zap",
@@ -22,7 +22,8 @@
     "capabilities": [
       "chat",
       "code_tools",
-      "streaming"
+      "streaming",
+      "vision"
     ],
     "settingsSchema": {
       "type": "object",
@@ -41,7 +42,7 @@
           "default": "",
           "x-meta": {
             "label": "Default Model",
-            "help": "A Groq model id. Empty = resolved from live /v1/models discovery."
+            "help": "A Groq model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models."
           }
         },
         "endpoint": {

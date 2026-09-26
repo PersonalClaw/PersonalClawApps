@@ -59,6 +59,15 @@ TOKEN = "TESTONLY-fake-subscription-token"
 import provider as prov  # noqa: E402  — app-local; registers source + type + catalog
 
 
+def _allow_the_sign_in(pc_home: Path, allowed: bool = True) -> None:
+    """What the Settings switch for this app's sign-in writes into the PersonalClaw home."""
+    pc_home.mkdir(parents=True, exist_ok=True)
+    places = [f"sign-in:{prov.CREDENTIAL_SOURCE}"] if allowed else []
+    (pc_home / "config.json").write_text(
+        json.dumps({"security": {"outside_home": places}}), encoding="utf-8"
+    )
+
+
 @pytest.fixture(autouse=True)
 def _isolated(monkeypatch, tmp_path):
     """Redirect HOME + the PersonalClaw home into tmp, and stub the anthropic SDK."""
@@ -67,6 +76,9 @@ def _isolated(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("PERSONALCLAW_HOME", str(tmp_path / "pc-home"))
     monkeypatch.setenv("PERSONALCLAW_WORKSPACE", str(tmp_path / "pc-home" / "ws"))
+    # The sign-in is outside the PersonalClaw home, so core reads it only once the owner allows
+    # it (Settings → Security → Outside PersonalClaw's home). These tests are about reading it.
+    _allow_the_sign_in(tmp_path / "pc-home")
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
@@ -172,6 +184,19 @@ def test_spec_registered_for_core_to_read():
     assert spec_credential_source("claude_subscription") == "claude-code"
 
 
+def test_the_sign_in_is_not_read_until_the_owner_allows_it(tmp_path, _isolated):
+    """The Claude Code store is outside the PersonalClaw home. Signed in but not allowed, the
+    provider reads as not signed in, says where to allow it, and never opens the file."""
+    _store(tmp_path)
+    _allow_the_sign_in(tmp_path / "pc-home", allowed=False)
+    ok, reason = _availability()
+    assert ok is False
+    assert "Settings → Security" in reason, reason
+
+    _allow_the_sign_in(tmp_path / "pc-home")
+    assert _availability()[0] is True
+
+
 # ── 2. No separate API key, anywhere ─────────────────────────────────────
 
 
@@ -203,7 +228,7 @@ def test_config_path_uses_the_cli_token(tmp_path, _isolated):
     _store(tmp_path)
     built = prov.create_provider({})
     assert _client_key(_isolated) == TOKEN
-    assert built._model == prov.SPEC.default_model  # derived default, not a baked id
+    assert built._model == ""  # no Default Model: the spec's curated pick is not served instead
     assert built._max_tokens == 4096
 
 

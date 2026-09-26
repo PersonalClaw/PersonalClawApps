@@ -49,8 +49,10 @@ from personalclaw.sdk.model import (
     ModelCatalog,
     ModelInfo,
     PromptCache,
+    ProviderResolutionError,
     get_default_registry,
     register_branded_app,
+    require_model,
 )
 from personalclaw.sdk.net import CONNECTOR, EgressBlocked, egress_policy_for, fetch
 from personalclaw.sdk.video import (
@@ -117,7 +119,7 @@ SPEC = BrandedProviderSpec(
     protocol="openai",
     default_base_url=_BASE,
     api_key_env=_API_KEY_ENV,
-    default_model="",  # resolved from live /v1/models discovery at start()
+    default_model="",  # no curated pick: a call names its binding or the instance's Default Model
     # openai-wire: leave max_tokens unset (only the anthropic wire requires a value).
     max_tokens=None,
     capabilities=frozenset({
@@ -620,17 +622,13 @@ class OpenRouterImageProvider(ImageGenProvider):
         return out
 
     async def _resolve_model(self, key: str, model: str) -> tuple[str, dict[str, Any]]:
-        """Resolve the model id + its live descriptor, defaulting to the first listed."""
-        discovered = await _discover_image_models(key)
-        by_id = {str(m["id"]): m for m in discovered}
-        model_id = str(model or "")
-        if not model_id:
-            if not discovered:
-                raise ImageGenError(
-                    "No OpenRouter image-generation model is available (discovery "
-                    "returned nothing — check the API key and connectivity)."
-                )
-            model_id = str(discovered[0]["id"])
+        """The named model + its live descriptor. Like chat, a call names its model (the image
+        binding), and one that names none is refused; this used to take the first listed."""
+        try:
+            model_id = require_model(model)
+        except ProviderResolutionError as exc:
+            raise ImageGenError(str(exc)) from exc
+        by_id = {str(m["id"]): m for m in await _discover_image_models(key)}
         return model_id, by_id.get(model_id, {})
 
     def _geometry(self, size: str, descriptor: dict[str, Any]) -> dict[str, Any]:
@@ -861,16 +859,12 @@ class OpenRouterVideoProvider(VideoGenProvider):
         return out
 
     async def _resolve_model(self, key: str, model: str) -> tuple[str, dict[str, Any]]:
-        discovered = await _discover_video_models(key)
-        by_id = {str(m["id"]): m for m in discovered}
-        model_id = str(model or "")
-        if not model_id:
-            if not discovered:
-                raise VideoGenError(
-                    "No OpenRouter video-generation model is available (discovery "
-                    "returned nothing — check the API key and connectivity)."
-                )
-            model_id = str(discovered[0]["id"])
+        """The named model + its live descriptor, refused when the call names none."""
+        try:
+            model_id = require_model(model)
+        except ProviderResolutionError as exc:
+            raise VideoGenError(str(exc)) from exc
+        by_id = {str(m["id"]): m for m in await _discover_video_models(key)}
         return model_id, by_id.get(model_id, {})
 
     def _build_body(

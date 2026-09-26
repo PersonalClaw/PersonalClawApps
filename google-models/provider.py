@@ -46,7 +46,9 @@ from personalclaw.sdk.model import (
     BrandedProviderSpec,
     Capability,
     PromptCache,
+    ProviderResolutionError,
     register_branded_app,
+    require_model,
 )
 from personalclaw.sdk.video import (
     VideoGenError,
@@ -56,6 +58,15 @@ from personalclaw.sdk.video import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _named(model: str, error: type[Exception]) -> str:
+    """The model a media call names, or ``error`` with the SDK's refusal when it names none."""
+    try:
+        return require_model(model)
+    except ProviderResolutionError as exc:
+        raise error(str(exc)) from exc
+
 
 _OPENAI_COMPAT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
 _NATIVE_BASE = "https://generativelanguage.googleapis.com/v1beta/"
@@ -75,7 +86,7 @@ SPEC = BrandedProviderSpec(
     protocol="openai",
     default_base_url=_OPENAI_COMPAT_BASE,
     api_key_env="GEMINI_API_KEY",
-    default_model="",  # resolved from live /v1/models discovery
+    default_model="",  # no curated pick: a call names its binding or the instance's Default Model
     capabilities=frozenset({
         Capability.CHAT, Capability.CODE_TOOLS, Capability.STREAMING,
         Capability.VISION, Capability.EMBEDDING,
@@ -90,33 +101,6 @@ SPEC = BrandedProviderSpec(
 )
 
 _factory, _create_chat_provider, create_catalog = register_branded_app(SPEC)
-
-# Register embedding catalog so the embedding adapter resolves `google:model` refs.
-from personalclaw.sdk.model import MediaCatalog, MediaModel, register_media_catalog
-
-register_media_catalog(
-    "embedding", "google",
-    MediaCatalog(
-        models=(
-            MediaModel(name="gemini-embedding-001", description="Gemini Embedding (3072 dims)"),
-            MediaModel(name="gemini-embedding-2-preview", description="Gemini Embedding 2 (preview)"),
-            MediaModel(name="gemini-embedding-2", description="Gemini Embedding 2"),
-        ),
-        default_model="gemini-embedding-001",
-    ),
-)
-
-register_media_catalog(
-    "tts", "google",
-    MediaCatalog(
-        models=(
-            MediaModel(name="gemini-2.5-flash-preview-tts", description="Gemini 2.5 Flash TTS"),
-            MediaModel(name="gemini-3.1-flash-tts-preview", description="Gemini 3.1 Flash TTS"),
-        ),
-        default_model="gemini-3.1-flash-tts-preview",
-    ),
-)
-
 
 def _resolve_api_key(config: dict[str, Any] | None = None) -> str:
     """Resolve the Gemini API key from config or environment."""
@@ -244,29 +228,17 @@ class GeminiImageProvider(ImageGenProvider):
     async def generate(
         self, prompt: str, *, model: str = "", size: str = "", n: int = 1, **opts: Any,
     ) -> list[ImageResult]:
+        # Like chat, a call names its model (the image binding in Settings → Models), and it
+        # is refused when it names none. This used to take the first image model discovery
+        # listed. The bound id arrives as "models/…" from split_ref; strip the prefix so URL
+        # construction doesn't double it (models/models/… → 404).
+        model_id = _named(model, ImageGenError).removeprefix("models/")
         key = self._key()
         if not key:
             raise ImageGenError("No Gemini API key configured (set GEMINI_API_KEY).")
 
-        # The bound model id arrives as "models/…" from split_ref; strip the
-        # prefix so URL construction doesn't double it (models/models/… → 404).
-        model_id = (model or "").removeprefix("models/")
-        discovered = await _discover_models(key)
-        by_id = {_model_id(m): m for m in discovered}
-        if not model_id:
-            # Prefer a generateContent image model (broadly available), else Imagen.
-            for m in discovered:
-                if _is_content_image(m):
-                    model_id = _model_id(m)
-                    break
-            if not model_id:
-                for m in discovered:
-                    if _is_imagen(m):
-                        model_id = _model_id(m)
-                        break
-        if not model_id:
-            raise ImageGenError("No Gemini image-generation model discovered.")
-
+        # Discovery says which API the named model speaks (Imagen's predict, or generateContent).
+        by_id = {_model_id(m): m for m in await _discover_models(key)}
         meta = by_id.get(model_id, {})
         if _is_imagen(meta):
             return await self._generate_via_predict(model_id, prompt, size=size, n=n, key=key)
@@ -432,20 +404,13 @@ class GeminiVideoProvider(VideoGenProvider):
         aspect_ratio: str = "",
         **opts: Any,
     ) -> list[VideoResult]:
+        # Like chat, a call names its model (the video binding), and it is refused when it names
+        # none; this used to take the first Veo model discovery listed. Strip the "models/"
+        # prefix the binding carries (split_ref keeps it): URL construction prepends it.
+        model_id = _named(model, VideoGenError).removeprefix("models/")
         key = self._key()
         if not key:
             raise VideoGenError("No Gemini API key configured (set GEMINI_API_KEY).")
-
-        # Strip the "models/" prefix the binding carries (split_ref keeps it);
-        # URL construction prepends it, so without the strip → models/models/… → 404.
-        model_id = (model or "").removeprefix("models/")
-        if not model_id:
-            for m in await _discover_models(key):
-                if _is_video_gen(m):
-                    model_id = _model_id(m)
-                    break
-        if not model_id:
-            raise VideoGenError("No Gemini video-generation (Veo) model discovered.")
 
         op_name = await self._submit(model_id, prompt, aspect_ratio=aspect_ratio, key=key)
         return await self._poll_and_fetch(op_name, key=key)
@@ -609,7 +574,13 @@ class GeminiTTSProvider:
         # ``voice`` carries the bound TTS model id, which may arrive as either a
         # bare id or the fully-qualified ``models/…`` name (split_ref keeps the
         # prefix). Strip it so the URL isn't doubled (``models/models/…`` → 404).
-        model = (voice or "gemini-3.1-flash-tts-preview").removeprefix("models/")
+        # Like chat, a call that names none is refused; this used to speak with
+        # gemini-3.1-flash-tts-preview in its place.
+        try:
+            model = require_model(voice).removeprefix("models/")
+        except ProviderResolutionError as exc:
+            logger.warning("GeminiTTS refused: %s", exc)
+            return None
         url = f"{_NATIVE_BASE}models/{model}:generateContent?key={key}"
 
         body = {

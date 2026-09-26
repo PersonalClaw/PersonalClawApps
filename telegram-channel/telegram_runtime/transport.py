@@ -2,7 +2,9 @@
 
 Outbound + health/test are token-gated and always available. Inbound is a
 ``getUpdates`` long-poll loop started by :meth:`start_inbound`, which the gateway
-calls once at boot with a :class:`GatewayServices` handle. The loop:
+calls with a :class:`GatewayServices` handle whenever it starts this channel's
+receiver: at boot, and when the channel is turned on, updated or its settings are
+saved (it stops the previous instance's receiver first). The loop:
 
 1. long-polls ``getUpdates`` (offset persisted in the app's ``data/`` dir so a
    restart resumes where it left off, never reprocessing an update);
@@ -12,9 +14,9 @@ calls once at boot with a :class:`GatewayServices` handle. The loop:
    redaction, session linking and the turn itself all happen in core, so this
    transport can't forget any of them; it keeps only the outbound half, delivering
    the verdict's canned reply. Core mirrors agent replies back out through the
-   :class:`TelegramDelivery` this transport registers at boot (the outbound half of
-   the seam). ``callback_query`` updates (inline-keyboard button presses) resolve a
-   pending approval in the delivery.
+   :class:`TelegramDelivery` this transport registers as its receiver starts (the
+   outbound half of the seam). ``callback_query`` updates (inline-keyboard button
+   presses) resolve a pending approval in the delivery.
 
 Webhook mode is deferred to EXTERNAL-ACCESS by the plan; long-poll is the whole
 inbound story here.
@@ -25,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import sys as _sys
 from pathlib import Path as _Path
 from typing import Any
@@ -51,7 +54,7 @@ from personalclaw.sdk.channel import (
 # ``from telegram_runtime.X import`` inside a method would run LATER, off the path,
 # and fail. Binding them here, during exec, captures them for the process life.
 from telegram_runtime.api import DEFAULT_POLL_TIMEOUT, HTTPTelegramAPI, TelegramAPI, TelegramAPIError
-from telegram_runtime.delivery import TelegramDelivery
+from telegram_runtime.delivery import TelegramDelivery, send_parts
 from telegram_runtime.inbound_tap import publish as publish_inbound
 from telegram_runtime.settings import (
     ACTIVATION_OFF,
@@ -70,6 +73,27 @@ logger = logging.getLogger(__name__)
 # channel posts) is noise for a DM/group bot and just inflates the poll payload.
 ALLOWED_UPDATES = ["message", "callback_query"]
 _OFFSET_FILE = "poll_offset.json"
+#: The longest the receiver waits between two failed long-polls.
+_MAX_BACKOFF = 30.0
+
+
+def _why_the_poll_failed(exc: BaseException) -> str:
+    """A failed long-poll in words safe to show: Telegram's own answer, never the request.
+
+    An answer from Telegram carries its code and description. A failure with no code never got
+    one — the client could not reach Telegram, or got back something that is not the Bot API —
+    and its text is the HTTP client's, which can carry the request URL, and the URL carries the
+    token. So that case, and anything else, is named rather than quoted."""
+    if isinstance(exc, TelegramAPIError):
+        if not exc.error_code:
+            return "Telegram could not be reached, or did not answer like the Bot API"
+        code = str(exc.error_code)
+        return exc.description if code in exc.description else f"{exc.description} (code {code})"
+    return f"an unexpected {type(exc).__name__}"
+
+#: What ``sendMessage`` takes as ``chat_id``: an integer id (negative for groups and channels), or a
+#: public channel's ``@username`` (5 to 32 letters, digits or underscores, starting with a letter).
+_TARGET_RE = re.compile(r"-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31}")
 
 
 class TelegramTransport(ChannelTransportProvider):
@@ -77,8 +101,8 @@ class TelegramTransport(ChannelTransportProvider):
         # Kept live, so a Configure → Save reaches the next Test/Connect/health/send (see
         # LiveConfig) instead of the next restart.
         self._config = LiveConfig(config or {})
-        #: The bot token the gateway drove the long-poll receiver with at boot (``""`` when it
-        #: had none) — ``None`` until it did. The receiver keeps the token it started with.
+        #: The bot token the long-poll receiver was started with (``""`` when there was none) —
+        #: ``None`` until the gateway started it. The receiver keeps the token it started with.
         self._inbound_token: str | None = None
         self._services: Any = None
         self._api: TelegramAPI | None = None
@@ -86,6 +110,11 @@ class TelegramTransport(ChannelTransportProvider):
         self._poll_task: asyncio.Task | None = None
         self._stopping = False
         self._offset = 0
+        #: Why the long-poll receiver gave up for good (``""`` while it runs). The loop used to end
+        #: on a 401 with only a log line, and ``health`` kept answering "ready".
+        self._inbound_stopped = ""
+        #: Why the last long-poll failed while the receiver retries it (``""`` once one succeeds).
+        self._poll_failure = ""
 
     @property
     def name(self) -> str:
@@ -95,13 +124,32 @@ class TelegramTransport(ChannelTransportProvider):
     def display_name(self) -> str:
         return "Telegram"
 
+    def validate_target(self, target: str) -> str:
+        """Whether a schedule can send its results to ``target`` on Telegram.
+
+        ``sendMessage`` takes a chat id, a number that is negative for a group, supergroup or
+        channel (``-1001234567890``), or a public channel's ``@username``. Anything else would be
+        refused by Telegram at send time, so it is refused here, in words, instead.
+        """
+        if _TARGET_RE.fullmatch(str(target or "").strip()):
+            return ""
+        return (
+            "A Telegram chat id is a number, like 4242, or -1001234567890 for a group, or a "
+            "public channel's @username."
+        )
+
     def capabilities(self) -> ChannelCapabilities:
         # Honest: streaming is edit-based (not native chunk append), rich text is
         # MarkdownV2 (a limited subset), threads are reply-chains. Telegram caps a
         # message at 4096 chars.
+        # owner_pairing: DMs cross core's guarded door, where the owner's code from the Configure
+        # page is redeemed, and the delivery reads the owner each time it needs it.
+        # dm_thread_is_channel: every DM message carries its chat id as its thread (see
+        # _to_channel_message), so a chat handed off to Telegram continues in the DM.
         return ChannelCapabilities(
             inbound=True, threads=True, attachments=True, reactions=False,
             edits=True, rich_text=True, typing_indicator=False, max_text_len=4096,
+            owner_pairing=True, dm_thread_is_channel=True,
         )
 
     def _token(self) -> str:
@@ -143,7 +191,7 @@ class TelegramTransport(ChannelTransportProvider):
         except OSError:
             logger.debug("telegram: failed to persist poll offset", exc_info=True)
 
-    # ── Inbound: the gateway drives this once at boot ──
+    # ── Inbound: the gateway starts and stops this with the channel ──
     async def start_inbound(self, services: Any) -> None:
         # Before the token check, so a channel configured later keeps its owner too.
         adopt_owner_id()
@@ -159,11 +207,9 @@ class TelegramTransport(ChannelTransportProvider):
         # Register outbound delivery on the gateway + dashboard. Core delivers every
         # channel result through this ONE provider-agnostic ChannelDelivery handle —
         # it never sees the Telegram API client. Filed under PROVIDER, the name core reads this
-        # channel's owner by, so the owner core DMs is the one below.
-        # Telegram's OWN owner: an id stored for this channel. The one shared key every channel
-        # used to write could hold another platform's user id.
-        owner_id = owner_id_for(PROVIDER)
-        self._delivery = TelegramDelivery(self._api, owner_id)
+        # channel's owner by. The delivery reads Telegram's OWN owner each time it needs it, so an
+        # owner paired from the Configure page while this receiver runs is the one it prompts.
+        self._delivery = TelegramDelivery(self._api, lambda: owner_id_for(PROVIDER))
         if hasattr(services, "register_channel_delivery"):
             services.register_channel_delivery(self._delivery, provider=PROVIDER)
         if getattr(services, "dashboard_state", None) is not None:
@@ -188,7 +234,11 @@ class TelegramTransport(ChannelTransportProvider):
             await self._api.close()
 
     async def _poll_loop(self) -> None:
-        """Long-poll getUpdates, dispatching each update. Degrades, never crashes."""
+        """Long-poll getUpdates, dispatching each update. Degrades, never crashes.
+
+        Every way it stops receiving is recorded for :meth:`health`: a token Telegram rejects ends
+        the loop (``_inbound_stopped``), and a poll that fails and is retried leaves its reason
+        (``_poll_failure``) until the next one succeeds."""
         backoff = 1.0
         while not self._stopping:
             try:
@@ -197,6 +247,7 @@ class TelegramTransport(ChannelTransportProvider):
                     allowed_updates=ALLOWED_UPDATES,
                 )
                 backoff = 1.0
+                self._poll_failure = ""
                 for update in updates:
                     # Advance past this update_id BEFORE dispatch so a handler that
                     # raises can't wedge the loop on the same update forever.
@@ -213,15 +264,22 @@ class TelegramTransport(ChannelTransportProvider):
                 raise
             except TelegramAPIError as exc:
                 if exc.error_code == 401:
-                    logger.error("telegram: invalid bot token (401) — inbound offline")
+                    logger.error("telegram: invalid bot token (401) — the long-poll receiver stopped")
+                    self._inbound_stopped = (
+                        "Telegram rejected the bot token (401 Unauthorized), so the long-poll "
+                        "receiver stopped. Save a working token from @BotFather in Configure to "
+                        "start it again; sending with this token fails too."
+                    )
                     return
+                self._poll_failure = _why_the_poll_failed(exc)
                 logger.warning("telegram: getUpdates error: %s — backing off %ss", exc, backoff)
                 await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
-            except Exception:
+                backoff = min(backoff * 2, _MAX_BACKOFF)
+            except Exception as exc:
+                self._poll_failure = _why_the_poll_failed(exc)
                 logger.warning("telegram: poll loop error — backing off %ss", backoff, exc_info=True)
                 await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
+                backoff = min(backoff * 2, _MAX_BACKOFF)
 
     async def _dispatch(self, update: dict[str, Any]) -> None:
         if "callback_query" in update:
@@ -253,6 +311,9 @@ class TelegramTransport(ChannelTransportProvider):
                 "chat_type": chat.get("type", ""),
                 "sender_name": sender_name,
                 "username": frm.get("username", ""),
+                # A group's title: core lists an untracked group that messaged the bot by it, on
+                # the Sender trust page, so the owner can tell which group to track.
+                "channel_name": chat.get("title", "") or "",
             },
         )
 
@@ -312,14 +373,14 @@ class TelegramTransport(ChannelTransportProvider):
         borrowed = self._api is not None and self._inbound_token in (None, token)
         api = self._api if borrowed else HTTPTelegramAPI(token)
         try:
-            from telegram_runtime.format import to_markdown_v2
-
-            await api.send_message(  # type: ignore[union-attr]
-                message.channel_id, to_markdown_v2(message.text),
-                parse_mode="MarkdownV2",
+            # A text that renders to no message at all ("", ANSI codes, blank lines) sends
+            # nothing and says so, instead of reporting a delivery that did not happen.
+            sent = await send_parts(
+                api,  # type: ignore[arg-type]
+                message.channel_id, message.text,
                 reply_to_message_id=int(message.thread_id) if message.thread_id.isdigit() else None,
             )
-            return True
+            return bool(sent)
         except Exception as exc:
             logger.warning("TelegramTransport.send failed: %s", exc)
             return False
@@ -332,28 +393,46 @@ class TelegramTransport(ChannelTransportProvider):
         if not token:
             return {"state": "offline", "detail": "No bot token configured"}
         if self._inbound_token is None:
-            # A transport the gateway has not driven: enabled or re-built after boot. Its token
-            # is live for outbound; "ready" would claim a receiver that does not exist.
+            # A transport whose receiver the gateway has not started yet. Its token is live for
+            # outbound; "ready" would claim a receiver that does not exist. The gateway starts
+            # one on the instance it has whenever the channel changes (turned on, updated, its
+            # settings saved) — and this state is how it tells the channel is configured.
             return {
                 "state": "error",
                 "detail": (
-                    "Outbound ready, inbound NOT STARTED — the long-poll receiver starts with "
-                    "the gateway, so the bot token takes effect on the next restart."
+                    "Outbound ready, inbound NOT STARTED — the gateway starts the long-poll "
+                    "receiver when it turns the channel on, and Configure → Save starts it now."
                 ),
             }
         if self._inbound_token != token:
-            # Saved tokens reach outbound at once, the long-poll receiver only when it starts.
+            # Saved tokens reach outbound at once, the long-poll receiver only when it starts. A
+            # token saved in the running gateway replaces this instance and its receiver; one
+            # changed outside it is what this reports.
             if self._poll_task is not None and not self._poll_task.done():
                 detail = (
                     "Outbound uses the saved bot token; the long-poll receiver still runs on "
-                    "the one it started with. Restart the gateway to move inbound onto it."
+                    "the one it started with. Configure → Save, or turning the channel off and "
+                    "on, moves inbound onto it."
                 )
             else:
                 detail = (
-                    "Outbound ready, inbound OFFLINE — the long-poll receiver starts with the "
-                    "gateway, so the bot token saved since then takes effect on the next restart."
+                    "Outbound ready, inbound OFFLINE — the long-poll receiver was started before "
+                    "this bot token was saved. Configure → Save, or turning the channel off and "
+                    "on, starts it on this one."
                 )
             return {"state": "error", "detail": detail}
+        # The receiver runs on the saved token. Whether it is RECEIVING is the poll loop's to say.
+        if self._inbound_stopped:
+            return {"state": "error", "detail": f"Inbound STOPPED — {self._inbound_stopped}"}
+        if self._poll_failure:
+            return {
+                "state": "error",
+                "detail": (
+                    f"Inbound NOT RECEIVING — the last long-poll failed: {self._poll_failure}. "
+                    f"The receiver keeps retrying, waiting up to {_MAX_BACKOFF:g} seconds between "
+                    "tries."
+                ),
+            }
         return {"state": "ready", "detail": "Bot token configured"}
 
     async def test(self) -> dict[str, Any]:
