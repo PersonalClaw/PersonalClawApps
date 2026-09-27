@@ -6,8 +6,9 @@ nothing, while the transport read its token in ``__init__``. A save now also reb
 transport, and PersonalClaw moves its receiver onto the new instance (core #3628); these tests
 hold one instance, so they also cover what it says when its token changes under it.
 
-Saves go through core's own route handler; ``HTTPDiscordAPI`` is replaced so nothing opens a
-socket.
+Saves go through core's own routes, served on a loopback test server and made the way the page
+makes them: read the settings, then save over the revision that read reported. ``HTTPDiscordAPI``
+is replaced so nothing reaches Discord.
 """
 
 from __future__ import annotations
@@ -17,11 +18,13 @@ import shutil
 from pathlib import Path
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 
 import discord_runtime.transport as transport_mod
 from discord_runtime.settings import CRED_DISCORD_BOT_TOKEN, get_settings
 from discord_runtime.transport import create_provider
-from personalclaw.dashboard.handlers.apps import api_app_config_put
+from personalclaw.dashboard.handlers.apps import register_app_routes
 from personalclaw.providers.settings import ProviderSettings
 from personalclaw.sdk.channel import OutboundMessage
 
@@ -40,16 +43,19 @@ def installed(_isolate_home, monkeypatch):
 
 
 async def _configure_save(values: dict) -> None:
-    """The Apps page's Configure → Save: core's PUT /api/apps/{name}/config handler."""
-
-    class _Request(dict):
-        match_info = {"name": _APP}
-
-        async def json(self):
-            return values
-
-    resp = await api_app_config_put(_Request())
-    assert resp.status == 200, resp.text
+    """The Apps page's Configure → Save, over core's own routes: read the settings, then save
+    ``values`` over the revision that read reported. The save replaces the whole file, so it
+    names the copy it replaces (``If-Match``), as the page does."""
+    app = web.Application()
+    register_app_routes(app)
+    async with TestClient(TestServer(app)) as client:
+        read = await client.get(f"/api/apps/{_APP}/config")
+        assert read.status == 200, await read.text()
+        revision = (await read.json())["revision"]
+        resp = await client.put(
+            f"/api/apps/{_APP}/config", json=values, headers={"If-Match": f'"{revision}"'}
+        )
+        assert resp.status == 200, await resp.text()
 
 
 class _FakeAPI:
