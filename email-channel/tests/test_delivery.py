@@ -1,5 +1,6 @@
 """EmailDelivery: threading headers, three-message continuity, the streaming no-op
-contract, the reply-token approval, redaction, and attachments.
+contract, the reply-token approval, attachments, and that no key core is handed reaches
+the wire.
 
 Every send goes to an injected :class:`FakeSmtpServer`, so the assertions read the exact
 headers that would have gone on the wire — the threading contract IS a header contract.
@@ -30,12 +31,13 @@ from _fakes import FakeSmtpServer, build_message
 AGENT = "agent@example.com"
 BOB = "bob@example.com"
 
-#: A credential-shaped string for the redaction assertions, ASSEMBLED AT RUNTIME.
-#: Written as a literal it trips secret scanners (measured — one flagged this file), which
-#: costs a real review cycle over a string that was never a key. The concatenation keeps
-#: the value the redactor must match while keeping the literal out of the file.
-FAKE_KEY = "sk-" + "ant-api03-" + "A" * 24
-FAKE_KEY_TAIL = "A" * 24
+#: A key for the masking assertions, ASSEMBLED AT RUNTIME. Written as a literal it trips
+#: secret scanners (measured — one flagged this file), which costs a real review cycle over a
+#: string that was never a key.
+#: Its tail, which no rendering escapes: the wire is searched for this, since a channel's
+#: markup may escape the key's punctuation and hide the key from a search for all of it.
+TAIL = "A" * 20 + "B" * 20 + "C" * 15
+SECRET = "sk-" + "ant-api03-" + TAIL
 
 
 @pytest.fixture
@@ -405,20 +407,6 @@ class TestRecipientResolution:
         assert smtp.sent == []
 
 
-class TestRedaction:
-    @pytest.mark.asyncio
-    async def test_credentials_never_reach_the_wire(self, wired):
-        delivery, smtp, _ = wired
-        await delivery.deliver_text(BOB, f"the key is {FAKE_KEY}")
-        assert FAKE_KEY_TAIL not in smtp.body_text()
-
-    @pytest.mark.asyncio
-    async def test_redaction_covers_the_html_alternative_too(self, wired):
-        delivery, smtp, _ = wired
-        await delivery.deliver_rich(BOB, {"html": f"<p>{FAKE_KEY}</p>"}, FAKE_KEY)
-        assert FAKE_KEY_TAIL not in smtp.last.as_string()
-
-
 class TestSendFailure:
     @pytest.mark.asyncio
     async def test_a_refused_send_returns_empty_and_does_not_raise(self):
@@ -542,18 +530,6 @@ class TestApprovalReplyToken:
         await asyncio.wait_for(task, timeout=1.0)
 
     @pytest.mark.asyncio
-    async def test_the_prompt_title_is_redacted(self, wired):
-        delivery, smtp, _ = wired
-        task = asyncio.ensure_future(
-            delivery.request_approval(self._Event(title=f"echo {FAKE_KEY}"), source="tool")
-        )
-        await asyncio.sleep(0)
-        assert FAKE_KEY_TAIL not in smtp.last.as_string()
-        token = next(iter(delivery._pending))
-        delivery.resolve_reply_token(f"{DENY_WORD} {token}")
-        await asyncio.wait_for(task, timeout=1.0)
-
-    @pytest.mark.asyncio
     async def test_no_pending_approvals_means_no_match(self, wired):
         delivery, _, _ = wired
         assert delivery.resolve_reply_token("APPROVE DEADBEEF") is False
@@ -614,3 +590,75 @@ class TestSettingsIntegrationForDelivery:
         isolation contract) — a leak here would write into the real ~/.personalclaw."""
         ProviderSettings.update("email-channel", {"folder": "Agent"})
         assert ProviderSettings.load("email-channel")["folder"] == "Agent"
+
+
+# ── core masks what it hands this channel ──────────────────────────────────────────────────
+
+
+class _Asks:
+    """An approval request, as core hands one."""
+
+    def __init__(self, title: str) -> None:
+        self.request_id = "req-k"
+        self.title = title
+
+
+#: Every way core hands this channel text, each carrying a key.
+_HANDED = {
+    "deliver_text": lambda h, _: h.deliver_text(BOB, f"the key is {SECRET}"),
+    "deliver_notification": lambda h, _: h.deliver_notification(
+        BOB, f"Nightly {SECRET}", f"result {SECRET}"
+    ),
+    "deliver_rich": lambda h, _: h.deliver_rich(
+        BOB, {"html": f"<p>{SECRET}</p>"}, f"fallback {SECRET}"
+    ),
+    "deliver_cron_result": lambda h, _: h.deliver_cron_result(
+        BOB, f"backup {SECRET}", "job-1", f"done {SECRET}"
+    ),
+    "deliver_chat_mirror": lambda h, _: h.deliver_chat_mirror(BOB, f"answer {SECRET}"),
+    "deliver_subagent_reply": lambda h, _: h.deliver_subagent_reply(BOB, f"reply {SECRET}"),
+    "upload_attachment": lambda h, tmp: h.upload_attachment(
+        BOB, str(tmp), title=f"report {SECRET}", initial_comment=f"see {SECRET}"
+    ),
+    "request_approval": lambda h, _: h.request_approval(_Asks(f"deploy {SECRET}"), source="tool"),
+}
+
+
+def _wire(smtp: FakeSmtpServer) -> str:
+    """Everything that went on the wire, decoded: each message's subject and every text part."""
+    out = []
+    for msg in smtp.sent:
+        out.append(str(msg["Subject"] or ""))
+        out.extend(
+            part.get_content() for part in msg.walk() if part.get_content_maintype() == "text"
+        )
+    return "\n".join(out)
+
+
+@pytest.fixture
+def through_core(wired, monkeypatch):
+    """This delivery as core holds it: registered with core, and read back the way core reads it."""
+    from personalclaw import channel_delivery
+
+    monkeypatch.setattr("email_runtime.delivery._APPROVAL_TIMEOUT", 0.01)
+    delivery, smtp, _ = wired
+    channel_delivery.register(delivery, provider="email")
+    yield smtp, channel_delivery.delivery_for("email")
+    channel_delivery.register(None, provider="email")
+
+
+class TestCoreMasksWhatItHandsThisChannel:
+    """Core masks every text it hands a channel, so this app masks nothing again: a key in anything
+    core sends through it, a subject and an HTML alternative included, never reaches the wire."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("method", sorted(_HANDED))
+    async def test_no_key_reaches_the_wire(self, through_core, method, tmp_path):
+        smtp, handle = through_core
+        attachment = tmp_path / "report.txt"
+        attachment.write_text("a,b\n")
+        await _HANDED[method](handle, attachment)
+        wire = _wire(smtp)
+        assert smtp.sent, "nothing was sent"
+        assert TAIL not in wire
+        assert "REDACTED" in wire

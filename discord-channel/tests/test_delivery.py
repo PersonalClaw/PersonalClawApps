@@ -1,4 +1,4 @@
-"""DiscordDelivery — splitting, redaction, throttled edit-streaming, button approvals.
+"""DiscordDelivery — splitting, throttled edit-streaming, button approvals.
 
 The REST client is a fake implementing the ``DiscordAPI`` ABC (records calls, hands
 back incrementing message ids); the throttle clock is injected so the edit-rate
@@ -179,12 +179,6 @@ class TestTextDelivery:
         assert mid == d._api.sent[0]["id"]
 
     @pytest.mark.asyncio
-    async def test_deliver_text_redacts_credentials(self):
-        d = _delivery()
-        await d.deliver_text("500", "token sk-ABC123DEF456GHI789JKL012MNO345PQR")
-        assert "sk-ABC123DEF456GHI789JKL012MNO345PQR" not in d._api.sent[0]["content"]
-
-    @pytest.mark.asyncio
     async def test_deliver_text_splits_long_body(self):
         d = _delivery()
         await d.deliver_text("500", "x" * 5000)
@@ -192,12 +186,10 @@ class TestTextDelivery:
         assert all(len(s["content"]) <= DISCORD_MAX_TEXT for s in d._api.sent)
 
     @pytest.mark.asyncio
-    async def test_deliver_notification_titles_and_redacts(self):
+    async def test_deliver_notification_titles_its_text(self):
         d = _delivery()
-        await d.deliver_notification("500", "Heartbeat", "all good sk-ABC123DEF456GHI789JKL012MNO")
-        body = d._api.sent[0]["content"]
-        assert "**Heartbeat**" in body
-        assert "sk-ABC123DEF456GHI789JKL012MNO" not in body
+        await d.deliver_notification("500", "Heartbeat", "all good")
+        assert d._api.sent[0]["content"] == "**Heartbeat**\n\nall good"
 
     @pytest.mark.asyncio
     async def test_deliver_cron_result_headers_the_first_part_only(self):
@@ -401,13 +393,6 @@ class TestUploadAttachment:
         assert d._api.uploads[0]["content"] == "look"
         assert mid == "1"
 
-    @pytest.mark.asyncio
-    async def test_caption_is_redacted(self, tmp_path):
-        f = tmp_path / "data.csv"
-        f.write_text("a,b")
-        d = _delivery()
-        await d.upload_attachment("500", str(f), title="key sk-ABC123DEF456GHI789JKL012MNO345")
-        assert "sk-ABC123DEF456GHI789JKL012MNO345" not in d._api.uploads[0]["content"]
 
 
 class TestStreamThrottle:
@@ -602,23 +587,6 @@ class TestApprovalRoundTrip:
         assert "Rejected" in d._api.edits[-1]["content"]
 
     @pytest.mark.asyncio
-    async def test_prompt_title_is_redacted(self):
-        d = _delivery(owner="42")
-        task = asyncio.ensure_future(
-            d.request_approval(
-                _Event("reqR", "push sk-ABC123DEF456GHI789JKL012MNO345"), source="tool"
-            )
-        )
-        for _ in range(4):
-            await asyncio.sleep(0)
-        assert "sk-ABC123DEF456GHI789JKL012MNO345" not in d._api.sent[-1]["content"]
-        await d.resolve_interaction({
-            "id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "deny:reqR"}, "user": {"id": "42"},
-        })
-        await asyncio.wait_for(task, timeout=1.0)
-
-    @pytest.mark.asyncio
     async def test_prompts_the_linked_channel_when_there_is_one(self):
         class Sessions:
             def get_channel(self, key):
@@ -788,3 +756,68 @@ class TestResolveInteraction:
         await d.resolve_interaction(payload)
         assert await asyncio.wait_for(task, timeout=1.0) is True
         await d.resolve_interaction(payload)  # double press — no InvalidStateError
+
+
+# ── core masks what it hands this channel ──────────────────────────────────────────────────
+
+#: A key, assembled at runtime so the literal is not in the file, and its tail, which no
+#: rendering escapes: the wire is searched for the tail, since a channel's markup may escape
+#: the key's punctuation and hide the key from a search for all of it.
+TAIL = "A" * 20 + "B" * 20 + "C" * 15
+SECRET = "sk-" + "ant-api03-" + TAIL
+
+#: Every way core hands this channel text, each carrying a key.
+_HANDED = {
+    "deliver_text": lambda h: h.deliver_text("500", f"token {SECRET}"),
+    "deliver_notification": lambda h: h.deliver_notification(
+        "500", f"Nightly {SECRET}", f"result {SECRET}"
+    ),
+    "deliver_rich": lambda h: h.deliver_rich(
+        "500",
+        {"components": [{"type": COMPONENT_ACTION_ROW, "components": [
+            {"type": COMPONENT_BUTTON, "style": BUTTON_STYLE_SUCCESS,
+             "label": f"Open {SECRET}", "custom_id": "open"},
+        ]}]},
+        f"fallback {SECRET}",
+    ),
+    "deliver_cron_result": lambda h: h.deliver_cron_result(
+        "500", f"backup {SECRET}", "job-1", f"done {SECRET}"
+    ),
+    "deliver_chat_mirror": lambda h: h.deliver_chat_mirror("500", f"answer {SECRET}"),
+    "deliver_subagent_reply": lambda h: h.deliver_subagent_reply(
+        "500", f"reply {SECRET}", elapsed_secs=1.5
+    ),
+    "upload_attachment": lambda h: h.upload_attachment(
+        "500", "report.txt", title=f"report {SECRET}"
+    ),
+    "start_stream": lambda h: h.start_stream("500", initial_text=f"thinking {SECRET}"),
+    "request_approval": lambda h: h.request_approval(
+        _Event("reqK", f"deploy {SECRET}"), source="tool"
+    ),
+}
+
+
+@pytest.fixture
+def through_core(monkeypatch):
+    """This delivery as core holds it: registered with core, and read back the way core reads it."""
+    from personalclaw import channel_delivery
+
+    monkeypatch.setattr("discord_runtime.delivery._APPROVAL_TIMEOUT", 0.01)
+    d = _delivery(owner="42")
+    channel_delivery.register(d, provider="discord")
+    yield d, channel_delivery.delivery_for("discord")
+    channel_delivery.register(None, provider="discord")
+
+
+class TestCoreMasksWhatItHandsThisChannel:
+    """Core masks every text it hands a channel, so this app masks nothing again: a key in anything
+    core sends through it never reaches the REST API."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("method", sorted(_HANDED))
+    async def test_no_key_reaches_the_rest_api(self, through_core, method):
+        d, handle = through_core
+        await _HANDED[method](handle)
+        wire = repr((d._api.sent, d._api.edits, d._api.uploads))
+        assert TAIL not in wire
+        assert "REDACTED" in wire, "nothing was sent"

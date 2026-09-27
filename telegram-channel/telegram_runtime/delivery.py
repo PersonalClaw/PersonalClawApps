@@ -19,6 +19,9 @@ refuses as "message is not modified" is the text already being there, not a fail
 Every text that can outgrow one message goes out through :func:`send_parts`, which
 splits it into parts Telegram accepts and never lets one go missing quietly. An
 approval prompt does too, its buttons on the last part.
+
+Core masks every text it hands this handle, keys and exfiltration URLs included, before
+any method here is called, so nothing here masks it again.
 """
 
 from __future__ import annotations
@@ -27,12 +30,7 @@ import asyncio
 import logging
 from typing import Any, Callable
 
-from personalclaw.sdk.channel import (
-    is_tracked_channel,
-    redact_credentials,
-    redact_exfiltration_urls,
-    sel,
-)
+from personalclaw.sdk.channel import is_tracked_channel, sel
 
 from telegram_runtime.api import TelegramAPI, TelegramAPIError
 from telegram_runtime.format import TELEGRAM_MAX_TEXT, render_parts, to_markdown_v2, utf16_len
@@ -183,10 +181,8 @@ class TelegramDelivery:
         unfurl_links: bool | None = None, unfurl_media: bool | None = None,
         reply_broadcast: bool | None = None,
     ) -> str:
-        body, _ = redact_exfiltration_urls(text)
-        body, _ = redact_credentials(body)
         return await send_parts(
-            self._api, channel, body, disable_web_page_preview=(unfurl_links is False) or None,
+            self._api, channel, text, disable_web_page_preview=(unfurl_links is False) or None,
         )
 
     async def deliver_rich(
@@ -202,9 +198,7 @@ class TelegramDelivery:
     async def deliver_cron_result(
         self, channel: str, job_name: str, job_id: str, text: str, thread_ts: str = ""
     ) -> str:
-        redacted, _ = redact_exfiltration_urls(text)
-        redacted, _ = redact_credentials(redacted)
-        return await send_parts(self._api, channel, f"⏰ Cron: {job_name}\n\n{redacted}")
+        return await send_parts(self._api, channel, f"⏰ Cron: {job_name}\n\n{text}")
 
     async def deliver_notification(
         self, channel: str, title: str, text: str, thread_ts: str = ""
@@ -214,9 +208,7 @@ class TelegramDelivery:
     async def deliver_chat_mirror(self, channel: str, text: str, thread_ts: str = "") -> None:
         from personalclaw.sdk.channel import extract_options
 
-        body, _ = redact_exfiltration_urls(text)
-        body, _ = redact_credentials(body)
-        body, options = extract_options(body)
+        body, options = extract_options(text)
         await send_parts(self._api, channel, body)
         if options:
             markup = {
@@ -229,9 +221,7 @@ class TelegramDelivery:
     async def deliver_subagent_reply(
         self, channel: str, text: str, thread_ts: str = "", elapsed_secs: float = 0.0
     ) -> None:
-        body, _ = redact_exfiltration_urls(text)
-        body, _ = redact_credentials(body)
-        await send_parts(self._api, channel, body)
+        await send_parts(self._api, channel, text)
         if elapsed_secs:
             footer = to_markdown_v2(f"_took {elapsed_secs:.1f}s_")
             await self._api.send_message(channel, footer, parse_mode="MarkdownV2")
@@ -386,8 +376,7 @@ class TelegramDelivery:
             return None
 
         request_id = str(getattr(event, "request_id", ""))
-        title, _ = redact_exfiltration_urls(str(getattr(event, "title", "")))
-        title, _ = redact_credentials(title)
+        title = str(getattr(event, "title", ""))
         markup = {
             "inline_keyboard": [[
                 {"text": "✅ Approve", "callback_data": f"{_APPROVE}:{request_id}"},
