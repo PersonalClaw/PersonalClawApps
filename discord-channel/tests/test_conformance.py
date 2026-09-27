@@ -31,7 +31,7 @@ def _wired() -> tuple[DiscordTransport, DiscordDelivery, FakeAPI, dict]:
     app's real floor without sleeping.
     """
     api = FakeAPI()
-    delivery = DiscordDelivery(api, "42")
+    delivery = DiscordDelivery(api, lambda: "42")
     clock = {"t": 0.0}
     delivery._now = lambda: clock["t"]  # type: ignore[method-assign]
     return DiscordTransport({"bot_token": "conformance.token"}), delivery, api, clock

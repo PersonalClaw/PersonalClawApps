@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from personalclaw.sdk.channel import (
     is_tracked_channel,
@@ -67,9 +67,12 @@ class _PendingApproval:
 class TelegramDelivery:
     """Renders + delivers gateway results to Telegram. Implements ChannelDelivery."""
 
-    def __init__(self, api: TelegramAPI, owner_id: str) -> None:
+    def __init__(self, api: TelegramAPI, owner: Callable[[], str]) -> None:
         self._api = api
-        self._owner_id = owner_id
+        #: Who the owner is NOW, read each time it is needed. The owner can be paired from the
+        #: channel's Configure page while this receiver runs; a value kept from the start sent the
+        #: approval prompt to nobody until the next restart.
+        self._owner = owner
         self._streams: dict[str, _StreamState] = {}
         # keyed by "chat_id:message_id" of the prompt message the buttons live on.
         self._pending: dict[str, _PendingApproval] = {}
@@ -284,7 +287,7 @@ class TelegramDelivery:
             except Exception:
                 chat_id = ""
         if not chat_id:
-            chat_id = self._owner_id
+            chat_id = self._owner()
         if not chat_id:
             return None
 

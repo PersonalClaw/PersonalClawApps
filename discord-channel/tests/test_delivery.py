@@ -106,7 +106,7 @@ class FakeAPI(DiscordAPI):
 
 
 def _delivery(owner="42", **kwargs):
-    return DiscordDelivery(FakeAPI(**kwargs), owner)
+    return DiscordDelivery(FakeAPI(**kwargs), lambda: owner)
 
 
 class TestSplitMessage:

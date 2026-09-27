@@ -60,7 +60,7 @@ class FakeAPI(TelegramAPI):
 
 
 def _delivery(owner="42"):
-    return TelegramDelivery(FakeAPI(), owner)
+    return TelegramDelivery(FakeAPI(), lambda: owner)
 
 
 class TestTextDelivery:

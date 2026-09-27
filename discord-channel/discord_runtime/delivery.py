@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from personalclaw.sdk.channel import (
     is_tracked_channel,
@@ -120,9 +120,12 @@ class _PendingApproval:
 class DiscordDelivery:
     """Renders + delivers gateway results to Discord. Implements ChannelDelivery."""
 
-    def __init__(self, api: DiscordAPI, owner_id: str) -> None:
+    def __init__(self, api: DiscordAPI, owner: Callable[[], str]) -> None:
         self._api = api
-        self._owner_id = owner_id
+        #: Who the owner is NOW, read each time it is needed. The owner can be paired from the
+        #: channel's Configure page while this receiver runs; a value kept from the start sent the
+        #: approval prompt to nobody until the next restart.
+        self._owner = owner
         self._streams: dict[str, _StreamState] = {}
         # keyed by "req:<request_id>" (from the button custom_id) and by
         # "<channel>:<message>" (the prompt the buttons live on).
@@ -411,7 +414,8 @@ class DiscordDelivery:
         if not channel_id:
             # No linked channel: prompt the owner's DM, which must be OPENED first —
             # a Discord user id is not a postable channel id.
-            channel_id = await self.open_dm(self._owner_id) if self._owner_id else ""
+            owner = self._owner()
+            channel_id = await self.open_dm(owner) if owner else ""
         if not channel_id:
             return None
 

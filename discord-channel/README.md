@@ -130,6 +130,10 @@ and **any other present value — including a typo — turns it on**.
    channel leaves it alone. An install set up by an earlier release kept the owner under the
    shared `PERSONALCLAW_OWNER_ID`; the first time Discord starts, it copies that owner to its
    own key.
+
+   Set up in the dashboard instead? Settings → Providers → Discord Channel → Configure →
+   **Pair as owner** shows an 8-digit code. Send it to the bot in a direct message within ten
+   minutes, and the bot answers that you are its owner — no user id to look up, and no restart.
 6. Track the channels you want the bot active in from the Channels page.
 
 The invite requests exactly the permissions the code exercises: View Channels, Send

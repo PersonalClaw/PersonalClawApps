@@ -80,7 +80,7 @@ def test_setup_keeps_the_owner_under_telegrams_own_key():
 def test_doctor_reports_telegrams_own_owner_and_names_its_key_when_unset(monkeypatch):
     monkeypatch.setenv(CRED_TELEGRAM_BOT_TOKEN, TOKEN)
 
-    assert {line.label: line.detail for line in cli_doctor.probe()}["owner"] == f"{_OWN} not set"
+    assert {line.label: line.detail for line in cli_doctor.probe()}["owner"] == f"{_OWN} not set — pair one in the dashboard (Settings → Providers → Telegram Channel → Configure → Pair as owner)"
 
     credentials.save_credential(_OWN, "424242")
     lines = {line.label: (line.status, line.detail) for line in cli_doctor.probe()}
@@ -110,7 +110,7 @@ async def _what_the_transport_registers(monkeypatch) -> tuple[str, str]:
         config=AppConfig.load(),
         owner_id=credentials.get_credential(_SHARED),
         register_channel_delivery=lambda delivery, provider="": registered.append(
-            (provider, delivery._owner_id)
+            (provider, delivery._owner())
         ),
         dashboard_state=None,
     )
