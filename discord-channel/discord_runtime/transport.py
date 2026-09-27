@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sys as _sys
 from pathlib import Path as _Path
 from typing import Any
@@ -75,6 +76,9 @@ from discord_runtime.settings import (
 )
 from discord_runtime.writes import SendRefused, live_writes_disabled
 
+#: A Discord id: a snowflake, 17 to 20 digits. Channels, threads and DMs are all addressed by one.
+_SNOWFLAKE_RE = re.compile(r"\d{17,20}")
+
 logger = logging.getLogger(__name__)
 
 
@@ -102,6 +106,19 @@ class DiscordTransport(ChannelTransportProvider):
     @property
     def display_name(self) -> str:
         return "Discord"
+
+    def validate_target(self, target: str) -> str:
+        """Whether a schedule can send its results to ``target`` on Discord.
+
+        Delivery posts to a channel by its id, a snowflake: a number of 17 to 20 digits. A DM is a
+        channel too, which is what the owner's DM route opens.
+        """
+        if _SNOWFLAKE_RE.fullmatch(str(target or "").strip()):
+            return ""
+        return (
+            "A Discord channel id is a long number, like 1234567890123456789. With Developer Mode "
+            "on, right-click the channel and pick Copy Channel ID."
+        )
 
     def capabilities(self) -> ChannelCapabilities:
         # Honest, and every True below has an implementation behind it:

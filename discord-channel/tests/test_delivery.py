@@ -468,7 +468,7 @@ class TestApprovalRoundTrip:
         # The press arrives as an INTERACTION_CREATE and resolves the same future.
         await d.resolve_interaction({
             "id": "i1", "token": "itok", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "approve:reqX"},
+            "data": {"custom_id": "approve:reqX"}, "user": {"id": "42"},
         })
         assert await asyncio.wait_for(task, timeout=1.0) is True
 
@@ -490,7 +490,7 @@ class TestApprovalRoundTrip:
             await asyncio.sleep(0)
         await d.resolve_interaction({
             "id": "i2", "token": "t2", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "deny:reqY"},
+            "data": {"custom_id": "deny:reqY"}, "user": {"id": "42"},
         })
         assert await asyncio.wait_for(task, timeout=1.0) is False
         assert "Rejected" in d._api.edits[-1]["content"]
@@ -517,7 +517,7 @@ class TestApprovalRoundTrip:
         assert "sk-ABC123DEF456GHI789JKL012MNO345" not in d._api.sent[-1]["content"]
         await d.resolve_interaction({
             "id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "deny:reqR"},
+            "data": {"custom_id": "deny:reqR"}, "user": {"id": "42"},
         })
         await asyncio.wait_for(task, timeout=1.0)
 
@@ -538,7 +538,7 @@ class TestApprovalRoundTrip:
         assert d._api.dms == []  # no DM needed
         await d.resolve_interaction({
             "id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "deny:reqL"},
+            "data": {"custom_id": "deny:reqL"}, "member": {"user": {"id": "42"}},
         })
         await asyncio.wait_for(task, timeout=1.0)
 
@@ -577,9 +577,70 @@ class TestApprovalRoundTrip:
             await asyncio.sleep(0)
         await d.resolve_interaction({
             "id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "approve:reqB"},
+            "data": {"custom_id": "approve:reqB"}, "user": {"id": "42"},
         })
         assert await asyncio.wait_for(task, timeout=1.0) is True
+
+
+class TestOnlyTheOwnerAnswers:
+    """A prompt for a chat linked to a tracked channel is posted in that channel, where every
+    member sees the buttons. A member's press must not approve what the owner's agent runs."""
+
+    @staticmethod
+    async def _linked_prompt(d, request_id):
+        class Sessions:
+            def get_channel(self, key):
+                return "700"
+
+        task = asyncio.ensure_future(
+            d.request_approval(_Event(request_id), source="tool", parent_session_key="s1", sessions=Sessions())
+        )
+        for _ in range(4):
+            await asyncio.sleep(0)
+        assert d._api.sent[-1]["channel_id"] == "700"
+        return task
+
+    @pytest.mark.asyncio
+    async def test_a_members_press_is_refused_and_the_owners_answers(self):
+        d = _delivery(owner="42")
+        task = await self._linked_prompt(d, "reqM")
+        for who in ({"member": {"user": {"id": "5151"}}}, {"user": {"id": "5151"}}, {}):
+            await d.resolve_interaction({
+                "id": "im", "token": "tm", "type": INTERACTION_TYPE_COMPONENT,
+                "data": {"custom_id": "approve:reqM"}, **who,
+            })
+        await asyncio.sleep(0)
+        assert not task.done(), "a member's press answered the owner's approval"
+        assert len(d._api.acks) == 3, "each refused press is still acknowledged"
+
+        # Floor: the owner's press, on the same prompt, does answer it.
+        await d.resolve_interaction({
+            "id": "io", "token": "to", "type": INTERACTION_TYPE_COMPONENT,
+            "data": {"custom_id": "approve:reqM"}, "member": {"user": {"id": "42"}},
+        })
+        assert await asyncio.wait_for(task, timeout=1.0) is True
+
+    @pytest.mark.asyncio
+    async def test_a_refused_press_is_a_security_event(self, monkeypatch):
+        import discord_runtime.delivery as mod
+
+        events = []
+        monkeypatch.setattr(mod, "sel", lambda: type("S", (), {"log_api_access": lambda self, **kw: events.append(kw)})())
+        d = _delivery(owner="42")
+        task = await self._linked_prompt(d, "reqS")
+        await d.resolve_interaction({
+            "id": "im", "token": "tm", "type": INTERACTION_TYPE_COMPONENT,
+            "data": {"custom_id": "deny:reqS"}, "member": {"user": {"id": "5151"}},
+        })
+        assert [(e["caller"], e["outcome"], e["resources"]) for e in events] == [
+            ("discord:5151", "denied", "reqS")
+        ]
+        await d.resolve_interaction({
+            "id": "io", "token": "to", "type": INTERACTION_TYPE_COMPONENT,
+            "data": {"custom_id": "deny:reqS"}, "member": {"user": {"id": "42"}},
+        })
+        assert await asyncio.wait_for(task, timeout=1.0) is False
+        assert len(events) == 1, "the owner's press is not an event"
 
 
 class TestResolveInteraction:
@@ -626,7 +687,7 @@ class TestResolveInteraction:
         for _ in range(4):
             await asyncio.sleep(0)
         payload = {"id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
-                   "data": {"custom_id": "approve:reqD"}}
+                   "data": {"custom_id": "approve:reqD"}, "user": {"id": "42"}}
         await d.resolve_interaction(payload)
         assert await asyncio.wait_for(task, timeout=1.0) is True
         await d.resolve_interaction(payload)  # double press — no InvalidStateError

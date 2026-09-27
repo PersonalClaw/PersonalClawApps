@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sys as _sys
 from pathlib import Path as _Path
 from typing import Any
@@ -47,6 +48,10 @@ from slack_runtime.interactions import init as init_interactions
 from slack_runtime.runtime import SlackRuntime
 from slack_runtime.settings import LiveConfig, adopt_owner_id, load_tokens
 from slack_runtime.writes import SendRefused, live_writes_disabled
+
+#: A Slack conversation id: C (channel), D (DM), G (private group) or W (enterprise channel), then
+#: upper-case letters and digits.
+_CONVERSATION_RE = re.compile(r"[CDGW][A-Z0-9]+")
 
 # NOT ``__name__``: the app loader execs this ENTRY module under a synthetic name
 # (``_pclaw_app_slack_channel__slack_runtime_transport``), so ``__name__`` produced a
@@ -120,6 +125,19 @@ class SlackTransport(ChannelTransportProvider):
     @property
     def display_name(self) -> str:
         return "Slack"
+
+    def validate_target(self, target: str) -> str:
+        """Whether a schedule can send its results to ``target`` on Slack.
+
+        A conversation id: a public channel (``C…``), a DM (``D…``), a private group (``G…``) or
+        an enterprise-wide channel (``W…``). This rule used to be core's, for every channel.
+        """
+        if _CONVERSATION_RE.fullmatch(str(target or "").strip()):
+            return ""
+        return (
+            "A Slack channel id starts with C, D, G or W, like C0123456789. It's at the bottom of "
+            "the channel's About tab."
+        )
 
     def _tokens(self) -> tuple[str, str]:
         """``(bot_token, app_token)`` as configured now."""

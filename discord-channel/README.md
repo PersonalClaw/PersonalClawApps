@@ -34,6 +34,8 @@ ships as a self-contained directory:
     outbound `send`.
   - `delivery.py` — the `ChannelDelivery` the gateway delivers results through
     (message splitting, throttled edit-streaming, button approvals, reactions).
+    Only the owner's press answers an approval: in a tracked channel everyone in it
+    sees the buttons, and anyone else's press is refused and logged.
   - `settings.py` — the app's own DM-activation / application-id config + the
     credential key.
 - `cli_setup.py` / `cli_doctor.py` — the app's `personalclaw setup` / `doctor` hooks.
@@ -83,6 +85,14 @@ Three things this deliberately does *not* do:
   list above by a structural fact, so a sender cannot pick which of your automations runs.
 - **Prose never lands in `meta`.** `meta` is matched, not narrated, and core does not fence
   it — so an author's chosen `global_name` is not there.
+
+## Results from your schedules
+
+A schedule can send its results here too. In the schedule's Advanced → Notify channel, pick
+Discord, then **You, in a direct message** or **A chat or channel** with the channel's id, a
+long number (with Developer Mode on, right-click the channel and pick Copy Channel ID). Your
+DMs need Discord to know who you are, its owner. Discord checks the id when you save and says
+what's wrong if it can't send there.
 
 ## Install
 
