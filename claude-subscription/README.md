@@ -39,9 +39,12 @@ It imports only the PersonalClaw **SDK** (never core internals):
 
 ## Sign-in, and what happens when you are not signed in
 
-Run the CLI's own sign-in — `claude login` — and nothing else. PersonalClaw reads that
-store **read-only**: it never writes, refreshes, repairs, chmods or deletes it, not even to
-renew an expired token. When the token expires you re-run `claude login` yourself.
+Run the CLI's own sign-in — `claude login` — then let PersonalClaw read it: the store is
+outside the PersonalClaw home, so it is read only once you turn on **The claude-code sign-in**
+in **Settings → Security → Outside PersonalClaw's home**. Until then the provider reads as not
+signed in and says where to allow it. PersonalClaw reads that store **read-only**: it never
+writes, refreshes, repairs, chmods or deletes it, not even to renew an expired token. When the
+token expires you re-run `claude login` yourself.
 
 Not signed in is not an error. Core derives an availability probe from the declared
 `credential_source`, so the app is greyed out in the extensions list with this app's own

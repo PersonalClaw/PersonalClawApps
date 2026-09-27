@@ -242,9 +242,7 @@ async def _handle_agent(
         await respond(f"❌ Unknown agent `{name}`. Pick one below:")
 
     # Show selector dropdown
-    from pathlib import Path
-
-    agents_dir = Path.home() / ".personalclaw" / "agents"
+    agents_dir = config_dir() / "agents"
     jsons = sorted(agents_dir.glob("*.json")) if agents_dir.is_dir() else []
     agent_names = sorted(f.stem for f in jsons)
     current = _get_default_agent() or ""
@@ -417,11 +415,10 @@ def _get_agent_names() -> list[str]:
     (``sensitive_path_blocked``) is emitted so the attempt is observable.
     """
     import json
-    from pathlib import Path
 
     from personalclaw.sdk.channel import safe_read_file
 
-    agents_dir = Path.home() / ".personalclaw" / "agents"
+    agents_dir = config_dir() / "agents"
     if not agents_dir.is_dir():
         return []
     names = []
@@ -496,9 +493,8 @@ async def _handle_sessions(
 ) -> None:
     """List last 10 sessions as task_card blocks with resume buttons."""
     import json
-    from pathlib import Path
 
-    sess_dir = Path.home() / ".personalclaw" / "sessions"
+    sess_dir = config_dir() / "sessions"
     if not sess_dir.exists():
         await respond("_No recent sessions._")
         return

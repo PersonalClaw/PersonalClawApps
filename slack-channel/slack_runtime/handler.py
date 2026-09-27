@@ -668,7 +668,7 @@ def _resolve_agent_name(name: str) -> str | None:
 
     Returns the resolved name, or None if not found.
     """
-    agents_dir = Path.home() / ".personalclaw" / "agents"
+    agents_dir = config_dir() / "agents"
     jsons = (
         sorted(agents_dir.glob("*.json"), key=lambda f: (len(f.stem), f.stem))
         if agents_dir.is_dir()
@@ -1181,7 +1181,7 @@ async def _handle_slash_command(
             return ""
         resolved = _resolve_agent_name(agent_name)
         if not resolved:
-            agents_dir = Path.home() / ".personalclaw" / "agents"
+            agents_dir = config_dir() / "agents"
             jsons = sorted(agents_dir.glob("*.json")) if agents_dir.is_dir() else []
             names = ", ".join(sorted(f.stem for f in jsons)) if jsons else "(none found)"
             await slack.post_message(
@@ -1321,7 +1321,7 @@ async def _handle_slash_command(
             return ""
         resolved = _resolve_agent_name(agent_name)
         if not resolved:
-            agents_dir = Path.home() / ".personalclaw" / "agents"
+            agents_dir = config_dir() / "agents"
             jsons = sorted(agents_dir.glob("*.json")) if agents_dir.is_dir() else []
             names = ", ".join(sorted(f.stem for f in jsons)) if jsons else "(none found)"
             await slack.post_message(
@@ -1393,7 +1393,7 @@ async def _handle_slash_command(
             if agent_name.lower() == "off":
                 agent_name = ""
             else:
-                agents_dir = Path.home() / ".personalclaw" / "agents"
+                agents_dir = config_dir() / "agents"
                 if not agents_dir.is_dir():
                     await slack.post_message(
                         channel,
@@ -3349,9 +3349,8 @@ async def _handle_sessions_command(
 ) -> None:
     """Handle ``!sessions`` — list recent sessions as task_card blocks with resume buttons."""
     import json as _json
-    from pathlib import Path
 
-    sess_dir = Path.home() / ".personalclaw" / "sessions"
+    sess_dir = config_dir() / "sessions"
     if not sess_dir.exists():
         await slack.post_message(channel, "_No recent sessions._", reply_ts)
         return

@@ -51,6 +51,14 @@ def server(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # The sign-in is outside the PersonalClaw home: core reads it once the owner allows it in
+    # Settings → Security → Outside PersonalClaw's home, which writes this.
+    pc_home = tmp_path / "pc-home"
+    pc_home.mkdir()
+    monkeypatch.setenv("PERSONALCLAW_HOME", str(pc_home))
+    (pc_home / "config.json").write_text(
+        json.dumps({"security": {"outside_home": [f"sign-in:{provider.CREDENTIAL_SOURCE}"]}})
+    )
     with RecordingModelServer() as recording:
         yield recording
 
