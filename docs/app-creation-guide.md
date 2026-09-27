@@ -642,6 +642,9 @@ export function mount(el, ctx) {
   under that: every test starts with `PERSONALCLAW_HOME` pointing at a scratch
   directory of its own, so a test that forgets still does not resolve the real home
   through core. Code that builds `Path.home() / ".personalclaw"` itself is not covered.
+  It also turns the OS keychain off for the run, with
+  `personalclaw.sdk.testing.keychain_off()`: one keychain serves every home on the
+  machine, so a scratch home alone would leave the owner's secrets in reach.
 - **End-to-end**: install your app from a local source (below) and drive it in
   the real UI. Set `PERSONALCLAW_SKIP_APP_BACKENDS=1` in unit tests that don't
   want backend subprocesses.
