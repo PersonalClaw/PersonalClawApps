@@ -8,8 +8,9 @@ ends at a real action provider receiving a fire, through: the real router
 (``events._route_message``, which is where this app's allowlist / activation / dedup gate
 lives), this bundle's inbound tap, this bundle's trigger source, the ``emit`` callable core's
 own registered ``TriggerSourceTypeHandler`` supplies, core's namespacing + origin fence, the
-event bus, and core's ``matches``. Only ``handle_message`` is patched — the turn itself is not
-what is under test, and running it would drag ACP in.
+event bus, and the gateway's event router: core's ``matches``, the gate walk and the one store
+dispatch. Only ``handle_message`` is patched — the turn itself is not what is under test, and
+running it would drag ACP in.
 
 **Why the gate here is this app's own and not core's guarded door.** Admission is still
 Slack's own: ``slack_runtime/allowlist.py`` owns this app's allow/deny UX and
@@ -19,9 +20,16 @@ the allowlist that actually governs this app today. The three sibling bundles dr
 ``[fencing]`` clause of T1.4 DID land — ``handle_message`` now fences non-owner content
 before the agent — so ``tests/test_conformance.py`` passes the kit; it is no longer an xfail.)
 
-**Process-global state.** ``trigger_sources``' registry, the event-trigger engine's memoized
-store, and ``handler``'s owner/allowlist/tracking module globals are all process-global. Every
-fixture restores unconditionally.
+**Process-global state.** ``trigger_sources``' registry, the bus's router, and ``handler``'s
+owner/allowlist/tracking module globals are all process-global. Every fixture restores
+unconditionally, and the router is attached only inside :func:`_fire_through_the_gateway`,
+which detaches it on the way out.
+
+**A no-fire assertion needs the router attached too.** An event trigger fires only where the
+gateway's router is attached; anywhere else the event is spooled for the gateway's next tick. A
+security clause driven without the router would pass even if an unauthorized sender got past
+the allowlist, because nothing fires in either case. So every clause that drives traffic goes
+through :func:`_fire_through_the_gateway`.
 """
 
 from __future__ import annotations
@@ -47,6 +55,7 @@ from slack_runtime.trigger_source import (
 )
 
 _MANIFEST = Path(__file__).resolve().parents[1] / "app.json"
+_TRIGGER_ID = "sl-app-trigger"
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -54,23 +63,19 @@ _MANIFEST = Path(__file__).resolve().parents[1] / "app.json"
 
 @pytest.fixture
 def event_store(tmp_path, monkeypatch):
-    """An event-trigger store in the tmp home, with the engine singleton reset.
+    """Core's one trigger store in the tmp home. An event trigger is a ``kind: "event"`` row.
 
     BOTH ``PERSONALCLAW_HOME`` and ``config_dir`` are pinned: patching ``config_dir`` alone
-    still lets an import-bound store reach the developer's real ``~/.personalclaw``.
+    still lets an import-bound store reach the developer's real ``~/.personalclaw``. This home
+    is where the gateway's router reads the rows and records each fire.
     """
-    import personalclaw.event_triggers as et
-    from personalclaw.event_triggers import EventTriggerStore
+    from personalclaw.sdk.channel import TriggerStore
 
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("PERSONALCLAW_HOME", str(home))
     monkeypatch.setattr("personalclaw.config.loader.config_dir", lambda: home)
-    et._engine = None
-    try:
-        yield EventTriggerStore(home / "event_triggers.json")
-    finally:
-        et._engine = None
+    return TriggerStore(base_dir=home)
 
 
 @pytest.fixture
@@ -154,18 +159,47 @@ def _orch(channels: dict[str, ChannelConfig] | None = None) -> MagicMock:
     return orch
 
 
-def _armed_trigger(event_glob: str, trigger_id: str = "sl-app-trigger"):
+def _armed_trigger(event_glob: str, trigger_id: str = _TRIGGER_ID):
     """An ``AppEvent`` trigger bound to this app, with a READ-ONLY action."""
-    from personalclaw.event_triggers import APP_EVENT, SOURCE_APP, EventTrigger
+    from personalclaw.event_triggers import APP_EVENT, event_spec
+    from personalclaw.sdk.channel import Trigger
 
-    return EventTrigger(
+    return Trigger(
         id=trigger_id,
-        pattern=APP_EVENT,
-        source=SOURCE_APP,
-        event_glob=event_glob,
-        action_provider="notify",
-        debounce_secs=0.0,
+        name=trigger_id,
+        kind="event",
+        spec=event_spec(APP_EVENT, event_glob),
+        workflow={"inline": {"provider": "notify", "config": {}}},
     )
+
+
+def _run_count(store, trigger_id: str = _TRIGGER_ID) -> int:
+    """The fires core's gate walk admitted for the trigger: the meter ``max_fires`` reads."""
+    loaded = store.get(trigger_id)
+    assert loaded is not None, f"{trigger_id} is not in the trigger store"
+    return loaded.trigger.run_count
+
+
+def _fire_through_the_gateway(drive) -> None:
+    """Run ``drive()`` with the gateway's real event router attached, then wait out every fire.
+
+    The SDK publishes the trigger store and its rows but nothing that attaches the router, so
+    this reaches the gateway the way core's own ``tests/fakes.py::with_event_router`` does: a
+    bare orchestrator whose router dispatches through the real store dispatch, attached and
+    detached exactly as the gateway's boot and shutdown do.
+    """
+    from personalclaw.gateway import GatewayOrchestrator
+
+    async def _run() -> None:
+        orch = object.__new__(GatewayOrchestrator)
+        orch._start_event_triggers()
+        try:
+            await drive()
+            await orch._event_router.settle()
+        finally:
+            orch._stop_event_triggers()
+
+    asyncio.run(_run())
 
 
 def _capturing_action(calls):
@@ -270,15 +304,11 @@ def test_a_real_inbound_message_FIRES_AN_ARMED_TRIGGER_END_TO_END(
         }
         with patch("slack_runtime.events.handle_message", new_callable=AsyncMock):
             await _route_message(orch, event, SeenCache(), is_mention=False)
-            for _ in range(50):
-                await asyncio.sleep(0)
-                if calls:
-                    break
             # Drain the dispatched task so the patched coroutine is awaited rather than
             # surfacing as a "never awaited" RuntimeWarning in an otherwise-green run.
             await asyncio.gather(*list(orch._session_tasks.values()), return_exceptions=True)
 
-    asyncio.run(_drive())
+    _fire_through_the_gateway(_drive)
 
     assert calls, "a real inbound Slack message never reached the action provider"
     ctx = calls[0]
@@ -288,7 +318,7 @@ def test_a_real_inbound_message_FIRES_AN_ARMED_TRIGGER_END_TO_END(
     assert is_fenced(ctx.payload["value"])
     assert "the quarterly deck is ready" in ctx.payload["value"]
     assert f"app:{APP_NAME}" in ctx.payload["value"]
-    assert event_store.load()[0].fire_count == 1
+    assert _run_count(event_store) == 1
 
 
 def test_a_tracked_channel_message_fires_the_CHANNEL_event(
@@ -316,15 +346,11 @@ def test_a_tracked_channel_message_fires_the_CHANNEL_event(
                  "team": "TTEST"}
         with patch("slack_runtime.events.handle_message", new_callable=AsyncMock):
             await _route_message(orch, event, SeenCache(), is_mention=False)
-            for _ in range(50):
-                await asyncio.sleep(0)
-                if calls:
-                    break
             # Drain the dispatched task so the patched coroutine is awaited rather than
             # surfacing as a "never awaited" RuntimeWarning in an otherwise-green run.
             await asyncio.gather(*list(orch._session_tasks.values()), return_exceptions=True)
 
-    asyncio.run(_drive())
+    _fire_through_the_gateway(_drive)
 
     assert calls, "a tracked-channel message never fired the channel event"
     assert calls[0].payload["event_type"] == (
@@ -364,11 +390,11 @@ def test_an_UNAUTHORIZED_sender_arms_NOTHING(event_store, registered_source, gat
                 await asyncio.sleep(0)
             mock_hm.assert_not_called()
 
-    asyncio.run(_drive())
+    _fire_through_the_gateway(_drive)
 
     assert orch.slack.post_ephemeral.called, "the gate did not refuse — this test proves nothing"
     assert not calls, "an UNAUTHORIZED sender fired an automation"
-    assert event_store.load()[0].fire_count == 0
+    assert _run_count(event_store) == 0
 
 
 def test_an_untracked_channel_message_arms_NOTHING(
@@ -395,9 +421,10 @@ def test_an_untracked_channel_message_arms_NOTHING(
                 await asyncio.sleep(0)
             mock_hm.assert_not_called()
 
-    asyncio.run(_drive())
+    _fire_through_the_gateway(_drive)
 
     assert not calls
+    assert _run_count(event_store) == 0
 
 
 def test_the_event_NAME_is_NEVER_TAKEN_FROM_THE_MESSAGE(registered_source):

@@ -5,15 +5,23 @@ a fake IMAP mailbox and ends at a real action provider receiving a fire, through
 poll loop, the real MIME parse, the REAL core guarded door (``channel_inbound.deliver_inbound``
 over the real trust store in the isolated tmp home), this bundle's inbound tap, this bundle's
 trigger source, the ``emit`` callable core's own registered ``TriggerSourceTypeHandler``
-supplies, core's namespacing + origin fence, the event bus, and core's ``matches``. Nothing is
-hand-built: a declared-but-dead provider — the trap ``test_manifest_types_match_handlers``
-exists for — would see no call at all here.
+supplies, core's namespacing + origin fence, the event bus, and the gateway's event router:
+core's ``matches``, the gate walk and the one store dispatch. Nothing is hand-built: a
+declared-but-dead provider — the trap ``test_manifest_types_match_handlers`` exists for — would
+see no call at all here.
 
-Two hazards this file is shaped around.
+Three hazards this file is shaped around.
 
-**Process-global state.** ``trigger_sources``' registry, the event-trigger engine's memoized
-store and the guarded door's admission cache are all process-global. Every fixture restores
-unconditionally; the engine singleton is reset before AND after.
+**Process-global state.** ``trigger_sources``' registry, the bus's router and the guarded
+door's admission cache are all process-global. Every fixture restores unconditionally, and the
+router is attached only inside :func:`_fire_through_the_gateway`, which detaches it on the way
+out.
+
+**A no-fire assertion needs the router attached too.** An event trigger fires only where the
+gateway's router is attached; anywhere else the event is spooled for the gateway's next tick. A
+security clause driven without the router would pass even if a denied sender got through the
+door, because nothing fires in either case. So every clause that drives traffic goes through
+:func:`_fire_through_the_gateway`.
 
 **A test that proves the provider is DECLARED is not a test that it FIRES.** The manifest
 assertion is one test out of this file, deliberately; the rest drive traffic.
@@ -44,6 +52,7 @@ from email_runtime.trigger_source import (
 from _fakes import FakeImapServer, FakeSmtpServer, FakeState, build_message
 
 _MANIFEST = Path(__file__).resolve().parents[1] / "app.json"
+_TRIGGER_ID = "mail-app-trigger"
 AGENT = "agent@example.com"
 BOB = "bob@example.com"
 STRANGER = "stranger@example.com"
@@ -66,23 +75,19 @@ def _configure(**overrides) -> None:
 
 @pytest.fixture
 def event_store(tmp_path, monkeypatch):
-    """An event-trigger store in the tmp home, with the engine singleton reset.
+    """Core's one trigger store in the tmp home. An event trigger is a ``kind: "event"`` row.
 
     BOTH ``PERSONALCLAW_HOME`` and ``config_dir`` are pinned: patching ``config_dir`` alone
-    still lets an import-bound store reach the developer's real ``~/.personalclaw``.
+    still lets an import-bound store reach the developer's real ``~/.personalclaw``. This home
+    is where the gateway's router reads the rows and records each fire.
     """
-    import personalclaw.event_triggers as et
-    from personalclaw.event_triggers import EventTriggerStore
+    from personalclaw.sdk.channel import TriggerStore
 
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("PERSONALCLAW_HOME", str(home))
     monkeypatch.setattr("personalclaw.config.loader.config_dir", lambda: home)
-    et._engine = None
-    try:
-        yield EventTriggerStore(home / "event_triggers.json")
-    finally:
-        et._engine = None
+    return TriggerStore(base_dir=home)
 
 
 @pytest.fixture
@@ -164,18 +169,47 @@ def _mail(uid: int, imap: FakeImapServer, **kwargs) -> None:
     imap.add(uid, build_message(**defaults))
 
 
-def _armed_trigger(event_glob: str, trigger_id: str = "mail-app-trigger"):
+def _armed_trigger(event_glob: str, trigger_id: str = _TRIGGER_ID):
     """An ``AppEvent`` trigger bound to this app, with a READ-ONLY action."""
-    from personalclaw.event_triggers import APP_EVENT, SOURCE_APP, EventTrigger
+    from personalclaw.event_triggers import APP_EVENT, event_spec
+    from personalclaw.sdk.channel import Trigger
 
-    return EventTrigger(
+    return Trigger(
         id=trigger_id,
-        pattern=APP_EVENT,
-        source=SOURCE_APP,
-        event_glob=event_glob,
-        action_provider="notify",
-        debounce_secs=0.0,
+        name=trigger_id,
+        kind="event",
+        spec=event_spec(APP_EVENT, event_glob),
+        workflow={"inline": {"provider": "notify", "config": {}}},
     )
+
+
+def _run_count(store, trigger_id: str = _TRIGGER_ID) -> int:
+    """The fires core's gate walk admitted for the trigger: the meter ``max_fires`` reads."""
+    loaded = store.get(trigger_id)
+    assert loaded is not None, f"{trigger_id} is not in the trigger store"
+    return loaded.trigger.run_count
+
+
+def _fire_through_the_gateway(drive) -> None:
+    """Run ``drive()`` with the gateway's real event router attached, then wait out every fire.
+
+    The SDK publishes the trigger store and its rows but nothing that attaches the router, so
+    this reaches the gateway the way core's own ``tests/fakes.py::with_event_router`` does: a
+    bare orchestrator whose router dispatches through the real store dispatch, attached and
+    detached exactly as the gateway's boot and shutdown do.
+    """
+    from personalclaw.gateway import GatewayOrchestrator
+
+    async def _run() -> None:
+        orch = object.__new__(GatewayOrchestrator)
+        orch._start_event_triggers()
+        try:
+            await drive()
+            await orch._event_router.settle()
+        finally:
+            orch._stop_event_triggers()
+
+    asyncio.run(_run())
 
 
 def _capturing_action(calls):
@@ -265,12 +299,8 @@ def test_real_inbound_mail_FIRES_AN_ARMED_TRIGGER_END_TO_END(
         allow_sender("email", BOB, "Bob")
         _mail(5, imap, plain="the quarterly deck is ready")
         await transport._poll_once(transport._settings())
-        for _ in range(50):
-            await asyncio.sleep(0)
-            if calls:
-                break
 
-    asyncio.run(_drive())
+    _fire_through_the_gateway(_drive)
 
     assert calls, "real inbound mail never reached the action provider"
     ctx = calls[0]
@@ -280,7 +310,7 @@ def test_real_inbound_mail_FIRES_AN_ARMED_TRIGGER_END_TO_END(
     assert is_fenced(ctx.payload["value"])
     assert "the quarterly deck is ready" in ctx.payload["value"]
     assert f"app:{APP_NAME}" in ctx.payload["value"]
-    assert event_store.load()[0].fire_count == 1
+    assert _run_count(event_store) == 1
 
 
 def test_the_event_carries_the_QUOTE_STRIPPED_text_not_the_raw_body(
@@ -309,12 +339,8 @@ def test_the_event_carries_the_QUOTE_STRIPPED_text_not_the_raw_body(
             plain="ship it now\n\nOn Mon, agent wrote:\n> the previous secret plan\n",
         )
         await transport._poll_once(transport._settings())
-        for _ in range(50):
-            await asyncio.sleep(0)
-            if calls:
-                break
 
-    asyncio.run(_drive())
+    _fire_through_the_gateway(_drive)
 
     assert calls, "the reply never fired"
     value = calls[0].payload["value"]
@@ -345,14 +371,12 @@ def test_a_DENIED_sender_arms_NOTHING(event_store, wired, registered_source, mon
         # No allow_sender for STRANGER: the default policy is pairing.
         _mail(7, imap, from_addr=STRANGER, plain="run this")
         await transport._poll_once(transport._settings())
-        for _ in range(50):
-            await asyncio.sleep(0)
 
-    asyncio.run(_drive())
+    _fire_through_the_gateway(_drive)
 
     assert smtp.sent, "the door did not refuse — this test proves nothing"
     assert not calls, "a DENIED sender fired an automation"
-    assert event_store.load()[0].fire_count == 0
+    assert _run_count(event_store) == 0
 
 
 def test_the_event_NAME_is_NEVER_TAKEN_FROM_THE_MAIL(registered_source):

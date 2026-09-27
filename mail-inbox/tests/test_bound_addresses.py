@@ -82,6 +82,30 @@ def _poll(messages, checkpoints=None):
     return polled, cps, client
 
 
+def _fire_through_the_gateway(drive) -> None:
+    """Run ``drive()`` with the gateway's real event router attached, then wait out every fire.
+
+    An event trigger fires only where the gateway's router is attached; anywhere else the event
+    is spooled for the gateway's next tick. The SDK publishes the trigger store and its rows but
+    nothing that attaches the router, so this reaches the gateway the way core's own
+    ``tests/fakes.py::with_event_router`` does: a bare orchestrator whose router dispatches
+    through the real store dispatch, attached and detached exactly as the gateway's boot and
+    shutdown do.
+    """
+    from personalclaw.gateway import GatewayOrchestrator
+
+    async def _run() -> None:
+        orch = object.__new__(GatewayOrchestrator)
+        orch._start_event_triggers()
+        try:
+            await drive()
+            await orch._event_router.settle()
+        finally:
+            orch._stop_event_triggers()
+
+    asyncio.run(_run())
+
+
 # ── the fire path ──
 
 
@@ -164,7 +188,13 @@ def test_the_composed_prompt_reaches_the_action_provider_intact():
     stored prompt plus the app's own ``mail:<address>`` fence UNCHANGED: core re-fences only
     text that is not already fenced, so it neither re-wraps the span (which would escape the
     markers and destroy the attribution) nor strips the prompt.
+
+    The event goes onto the real bus with the gateway's router attached, so the fire takes the
+    path a live inbox message takes: core's gate walk, then its one store dispatch (the
+    injection screen and its fence, the denylist, the rung ladder, the provider).
     """
+    import time
+
     from personalclaw.action_providers import (
         ActionProvider,
         ActionResult,
@@ -175,17 +205,19 @@ def test_the_composed_prompt_reaches_the_action_provider_intact():
     from personalclaw.event_triggers import (
         INBOX_ADDRESS,
         SOURCE_INBOX,
-        EventTrigger,
-        execute_event_action,
+        emit_event,
+        event_spec,
         matches,
     )
+    from personalclaw.sdk.channel import Trigger, TriggerStore, config_dir
 
+    recorder = "mail-inbox-test-recorder"
     seen: dict[str, str] = {}
 
     class _Recorder(ActionProvider):
         @property
         def name(self):
-            return "mail-inbox-test-recorder"
+            return recorder
 
         @property
         def display_name(self):
@@ -207,13 +239,15 @@ def test_the_composed_prompt_reaches_the_action_provider_intact():
     message = _poll({FOLDER: {5: raw}})[0][0]
     composed = message.text
 
-    trigger = EventTrigger(
-        id="event:mail-travel",
-        pattern=INBOX_ADDRESS,
-        source=SOURCE_INBOX,
-        address_glob=TRAVEL,
-        action_provider="mail-inbox-test-recorder",
-        action_config={"task_template": "$value"},
+    trigger = Trigger(
+        id="mail-travel",
+        name="mail-travel",
+        kind="event",
+        spec=event_spec(INBOX_ADDRESS, TRAVEL),
+        workflow={"inline": {"provider": recorder, "config": {"task_template": "$value"}}},
+        # A write-capable action fires only with its provider frozen into the row, which every
+        # writer does at save: choosing the action is the author's opt-in.
+        capabilities={"providers": [recorder]},
     )
     event = {
         "source": SOURCE_INBOX,
@@ -225,23 +259,32 @@ def test_the_composed_prompt_reaches_the_action_provider_intact():
     # The routing claim: the BOUND address is what an inbox trigger matches on.
     assert matches(trigger, **event)
     assert not matches(
-        EventTrigger(
-            id="event:other",
-            pattern=INBOX_ADDRESS,
-            source=SOURCE_INBOX,
-            address_glob="me+bills@example.com",
+        Trigger(
+            id="other",
+            name="other",
+            kind="event",
+            spec=event_spec(INBOX_ADDRESS, "me+bills@example.com"),
         ),
         **event,
     )
 
-    previous = get_action_provider("mail-inbox-test-recorder")
+    store = TriggerStore(base_dir=config_dir())
+    store.upsert(trigger)
+
+    async def _drive():
+        emit_event(**event, now=time.time())
+
+    previous = get_action_provider(recorder)
     register_action_provider(_Recorder())
     try:
-        outcome = asyncio.run(execute_event_action(trigger, **event))
+        _fire_through_the_gateway(_drive)
     finally:
         if previous is not None:  # pragma: no cover - fresh registry in tests
             register_action_provider(previous)
-    assert outcome.ran, outcome.reason
+    assert store.get(trigger.id).trigger.run_count == 1, (
+        "the router admitted no fire: the row did not match, or a gate refused it"
+    )
+    assert seen, "admitted, but the store dispatch never reached the action provider"
 
     # The stored prompt still leads, and the app's fence attribution survived untouched —
     # NOT re-wrapped (which would leave an escaped `&lt;untrusted_content` inside).
