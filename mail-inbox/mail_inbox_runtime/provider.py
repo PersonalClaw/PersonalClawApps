@@ -6,15 +6,16 @@ On each ``poll`` the provider:
 1. reads the latest app settings + the IMAP password, whose value ``ProviderSettings`` keeps
    in the credential store (the settings file holds only a reference — EIAT guardrail);
 2. **fails closed on the allowlist** — an empty/absent ``allow_senders`` surfaces ZERO
-   messages and never even connects; the posture is logged once so a silent empty inbox
-   is diagnosable (§2.7, guardrail 1);
+   messages and never even connects (§2.7, guardrail 1);
 3. UID-SEARCHes the folder for messages newer than the checkpoint cursor (the dict
    ``poll`` returns is the resume mechanism — the highest processed UID per folder), so a
    restart neither reprocesses nor skips. A mailbox with no checkpoint yet — the first poll
    after setup — starts after its newest message and surfaces nothing: the mail already
    there was not sent to PersonalClaw, and every item surfaced emits an inbox event, so the
    whole folder would have fired the owner's inbox automations (and a prompt-bound
-   address's stored prompt) at once;
+   address's stored prompt) at once. A folder whose ``UIDVALIDITY`` changed since the last
+   poll (the server renumbered it) starts after its newest message again, the way Email
+   Channel does: a cursor from the old numbering would skip or replay the whole folder;
 4. drops a message whose ``From`` is not allowlisted (a per-rejection SEL
    ``mail_sender_rejected`` event fires) and a duplicate ``Message-ID`` (a second belt
    over the UID cursor);
@@ -33,10 +34,17 @@ On each ``poll`` the provider:
 Fencing therefore happens exactly ONCE and only at prompt-composition time — never in
 ``mime.py``, never for unbound mail.
 
+**A poll that cannot read the mailbox RAISES**, with the sentence core's inbox shows as this
+source's health (Inbox → the banner, ``GET /api/inbox/status``): the server unreachable, its
+certificate refused, the login refused, or a setting it needs missing. It used to log a
+warning and return nothing, so a wrong password read exactly like a quiet mailbox. Core keeps
+the checkpoints it had, so the next poll starts where this one would have.
+
 **Outbound (EIAT-3, C3, guardrail 4).** Polling also REMEMBERS how to answer each
 surfaced message (``outbound.remember_target``), because ``send_reply``'s signature —
 ``(channel_id, text, thread_ts)`` — carries no recipient and one can never be inferred
-from a channel id. ``send_reply`` then composes a properly threaded reply
+from a channel id. ``thread_ts`` is the mail's ``Message-ID`` (its ``IncomingMessage.id``,
+which the inbox hands back), and a reply that names none is refused. ``send_reply`` then composes a properly threaded reply
 (``In-Reply-To`` + ``References``) and **drafts it**: sending happens only when the user
 has explicitly turned ``send_enabled`` on AND the platform's live-writes posture permits
 it. See :mod:`mail_inbox_runtime.outbound` for the four independent draft conditions;
@@ -80,6 +88,7 @@ from mail_inbox_runtime.mime import extract_body
 from mail_inbox_runtime.outbound import (
     NO_TARGET,
     SEND_FAILED,
+    ReplyNotSent,
     ReplyOutcome,
     ReplyTarget,
     compose_reply,
@@ -123,8 +132,15 @@ def _recipients(msg: "email.message.EmailMessage") -> list[str]:
     return [addr.strip().lower() for _, addr in pairs if addr and addr.strip()]
 
 
+class NotSetUp(Exception):
+    """A setting the poll needs is missing. Its message is the sentence the inbox shows."""
+
+
 class MailInboxProvider(MessageSourceProvider):
     """Polls an IMAP mailbox and surfaces allowlisted mail as inbox items."""
+
+    #: What the inbox's sentences call this source.
+    display_name = "Mail Inbox"
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         # config is the per-instance override the loader may pass; mail-inbox reads its
@@ -259,20 +275,16 @@ class MailInboxProvider(MessageSourceProvider):
             logger.debug("mail-inbox: SEL log failed", exc_info=True)
 
     def _log_posture_once(self, settings: MailInboxSettings) -> None:
-        if self._posture_logged:
+        """Log the allowlist once. An empty one is not logged here: it fails the poll, with
+        a sentence, so the inbox says it rather than the log alone."""
+        if self._posture_logged or not settings.allow_senders:
             return
         self._posture_logged = True
-        if settings.allow_senders:
-            logger.info(
-                "mail-inbox: allowlist active with %d pattern(s) — only matching senders "
-                "are surfaced (fail-closed)",
-                len(settings.allow_senders),
-            )
-        else:
-            logger.warning(
-                "mail-inbox: NO allowlist configured — surfacing ZERO messages (fail-closed). "
-                "Add allow_senders in the app settings to enable triggering."
-            )
+        logger.info(
+            "mail-inbox: allowlist active with %d pattern(s) — only matching senders "
+            "are surfaced (fail-closed)",
+            len(settings.allow_senders),
+        )
 
     # ── client factory (real, or the injected test fake) ──
     def _make_client(self, settings: MailInboxSettings, password: str) -> ImapClient:
@@ -304,37 +316,49 @@ class MailInboxProvider(MessageSourceProvider):
         # with another source's key in core's shared last_read_ts dict.
         return f"mailuid:{settings.username}:{settings.folder}"
 
+    @staticmethod
+    def _validity_key(settings: MailInboxSettings) -> str:
+        """The folder's ``UIDVALIDITY`` when its cursor was set: the numbering the cursor is in.
+        Absent until a server reports one, and absent means "unknown", never "changed"."""
+        return f"mailuidvalidity:{settings.username}:{settings.folder}"
+
     # ── the poll contract ──
     async def poll(
         self, watched_channels: list[str], checkpoints: dict[str, str], user_id: str
     ) -> tuple[list[IncomingMessage], dict[str, str]]:
+        """Mail since the checkpoint. RAISES with a sentence when the mailbox cannot be read
+        (see the module docstring); core keeps the checkpoints and shows the sentence."""
         settings = reload_settings()
         self._log_posture_once(settings)
 
-        # Not fully configured yet — nothing to poll, cursor untouched.
         if not settings.configured:
-            return [], dict(checkpoints)
-
+            raise NotSetUp(
+                "its IMAP Host and Username aren't set yet. Set them in Mail Inbox's "
+                "Configure form"
+            )
         # Fail closed: an empty allowlist surfaces NOTHING and never connects. This is the
         # structural guarantee (guardrail 1) — not a per-message filter, an upstream refusal.
         if not settings.allow_senders:
-            return [], dict(checkpoints)
-
+            raise NotSetUp(
+                "Allowed Senders is empty, so it reads no mail: it surfaces only mail from the "
+                "senders listed there. Add them in Mail Inbox's Configure form"
+            )
         password = self._resolve_password()
         if not password:
-            logger.warning("mail-inbox: no IMAP password configured — cannot poll")
-            return [], dict(checkpoints)
+            raise NotSetUp(
+                "no IMAP password is saved. Enter it in Mail Inbox's Configure form"
+            )
 
         return await asyncio.to_thread(self._poll_sync, settings, password, dict(checkpoints))
 
     def _poll_sync(
         self, settings: MailInboxSettings, password: str, checkpoints: dict[str, str]
     ) -> tuple[list[IncomingMessage], dict[str, str]]:
-        key = self._checkpoint_key(settings)
-        if key not in checkpoints:
-            return [], self._first_poll(settings, password, checkpoints, key)
-        last_uid = _parse_int(checkpoints.get(key, "0"))
-        cursor = last_uid
+        """BLOCKING: connect, select, then either start after the newest message or read
+        what arrived since the cursor. An :class:`ImapError` propagates, with the client
+        closed, so a failed poll records nothing."""
+        key, vkey = self._checkpoint_key(settings), self._validity_key(settings)
+        known_validity = _parse_int(checkpoints.get(vkey, "0"))
         seen_ids = self._load_seen_ids()
         new_ids: list[str] = []
         messages: list[IncomingMessage] = []
@@ -342,13 +366,29 @@ class MailInboxProvider(MessageSourceProvider):
         client = self._make_client(settings, password)
         try:
             client.connect()
-            uids = client.fetch_uids_since(settings.folder, last_uid)
-            for uid in sorted(uids):
+            validity = client.select_folder(settings.folder)
+            renumbered = bool(validity and known_validity and validity != known_validity)
+            if key not in checkpoints or renumbered:
+                newest = client.newest_uid(settings.folder)
+                self._log_start(settings, newest, renumbered, known_validity, validity)
+                checkpoints[key] = str(newest)
+                if validity:
+                    checkpoints[vkey] = str(validity)
+                return [], checkpoints
+            last_uid = _parse_int(checkpoints.get(key, "0"))
+            cursor = last_uid
+            for uid in client.fetch_uids_since(settings.folder, last_uid):
                 raw = client.fetch_message(settings.folder, uid)
                 if not raw:
-                    # Transient per-UID fetch failure: STOP so the cursor never advances
-                    # past an unread message — next poll resumes here (never skips).
-                    logger.debug("mail-inbox: empty fetch for uid %s — pausing at cursor", uid)
+                    if cursor == last_uid:
+                        # Nothing read yet, and newer mail waits behind this one: say so.
+                        raise ImapError(
+                            f"the IMAP server {settings.host}:{settings.port} returned nothing "
+                            f"for message {uid} in {settings.folder}, so the mail after it "
+                            "waits"
+                        )
+                    # Stop so the cursor never advances past an unread message: the next
+                    # poll starts at it, and says so if it is still empty.
                     break
                 # A message we successfully fetched IS processed (accepted, rejected, or
                 # duplicate) — advance the cursor so a restart doesn't reprocess it.
@@ -356,8 +396,6 @@ class MailInboxProvider(MessageSourceProvider):
                 incoming = self._process_message(raw, settings, uid, seen_ids, new_ids)
                 if incoming is not None:
                     messages.append(incoming)
-        except ImapError as exc:
-            logger.warning("mail-inbox: IMAP poll failed: %s — will retry next cycle", exc)
         finally:
             try:
                 client.close()
@@ -365,37 +403,28 @@ class MailInboxProvider(MessageSourceProvider):
                 logger.debug("mail-inbox: client close error", exc_info=True)
 
         checkpoints[key] = str(cursor)
+        if validity and not known_validity:
+            checkpoints[vkey] = str(validity)
         if new_ids:
             self._save_seen_ids(seen_ids, new_ids)
         return messages, checkpoints
 
-    def _first_poll(
-        self, settings: MailInboxSettings, password: str, checkpoints: dict[str, str], key: str
-    ) -> dict[str, str]:
-        """Record the folder's newest UID as the cursor, reading no message.
-
-        Only a start that was read is recorded. A poll that cannot connect leaves the key
-        absent, so the next one starts after the newest message too — a missing checkpoint
-        must never turn into "surface everything"."""
-        client = self._make_client(settings, password)
-        try:
-            client.connect()
-            newest = client.newest_uid(settings.folder)
-        except ImapError as exc:
-            logger.warning("mail-inbox: IMAP poll failed: %s — will retry next cycle", exc)
-            return checkpoints
-        finally:
-            try:
-                client.close()
-            except Exception:
-                logger.debug("mail-inbox: client close error", exc_info=True)
+    @staticmethod
+    def _log_start(
+        settings: MailInboxSettings, newest: int, renumbered: bool, was: int, now: int
+    ) -> None:
+        if renumbered:
+            logger.warning(
+                "mail-inbox: %s was renumbered (UIDVALIDITY %d → %d) — starting after uid %d, "
+                "so its mail is neither skipped nor surfaced again",
+                settings.folder, was, now, newest,
+            )
+            return
         logger.info(
             "mail-inbox: first poll of %s — starting after uid %d, so the mail already there "
             "is not surfaced",
             settings.folder, newest,
         )
-        checkpoints[key] = str(newest)
-        return checkpoints
 
     def _process_message(
         self,
@@ -520,6 +549,7 @@ class MailInboxProvider(MessageSourceProvider):
             timestamp=ts,
             thread_context=[],
             is_dm=False,
+            kind="email",
         )
 
     @staticmethod
@@ -533,16 +563,20 @@ class MailInboxProvider(MessageSourceProvider):
         return time.time()
 
     # ── outbound (C3, guardrail 4) ──
-    async def send_reply(self, channel_id: str, text: str, thread_ts: str | None = None) -> bool:
-        """The ABC's outbound hook. Returns whether the reply was actually DELIVERED.
+    async def send_reply(
+        self, channel_id: str, text: str, thread_ts: str | None = None
+    ) -> "bool | ReplyNotSent":
+        """The ABC's outbound hook. ``True`` when the reply was actually DELIVERED.
 
-        In draft mode — the default — that is ``False``, and it is the correct, successful
+        Otherwise a falsy :class:`~mail_inbox_runtime.outbound.ReplyNotSent` whose ``str()``
+        says why, which core's inbox shows the owner who pressed Send (a plain ``False``
+        told them nothing). In draft mode — the default — that is the correct, successful
         outcome rather than an error: the composed reply is on disk under the app's drafts
         dir and the reason is in the log and the SEL trail. Callers wanting the full picture
         (drafted vs refused vs failed, and the draft path) use :meth:`reply`; narrowing an
-        outcome to a bool must not turn "we deliberately did not send" into "delivered"."""
+        outcome must not turn "we deliberately did not send" into "delivered"."""
         outcome = await self.reply(channel_id, text, thread_ts)
-        return outcome.sent
+        return True if outcome.sent else ReplyNotSent(outcome.reason, outcome.draft_path)
 
     async def reply(
         self,

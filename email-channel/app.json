@@ -1,6 +1,6 @@
 {
   "name": "email-channel",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "Email Channel",
   "description": "Two-way email channel over stdlib IMAP/SMTP. Converse with your agent by email, replies thread back, and results arrive in the same conversation. No streaming; approvals answer by reply token.",
   "icon": "Mails",
@@ -46,7 +46,7 @@
           "default": 993,
           "x-meta": {
             "label": "IMAP Port",
-            "help": "993 for implicit SSL (the default), 143 for plaintext."
+            "help": "993 for implicit SSL (the default), usually 143 with Use SSL off (upgraded with STARTTLS)."
           }
         },
         "imap_user": {
@@ -71,7 +71,7 @@
           "default": true,
           "x-meta": {
             "label": "IMAP SSL",
-            "help": "Connect with implicit TLS (IMAP4_SSL). Leave on for port 993."
+            "help": "Connect with implicit TLS (IMAP4_SSL). Leave on for port 993. Off, the connection is upgraded with STARTTLS before the password is sent, and a server that does not offer STARTTLS is refused: the password is never sent in the clear."
           }
         },
         "folder": {

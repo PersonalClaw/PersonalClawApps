@@ -117,7 +117,7 @@ def test_reply_is_composed_but_not_sent_while_draft_mode_is_on():
     provider, sender = _provider()  # send_enabled defaults to False: the shipped posture
     assert _poll_one(provider), "precondition: the parent message must have been surfaced"
 
-    outcome = _reply(provider, MAILBOX, "Thanks - reading it now.")
+    outcome = _reply(provider, MAILBOX, "Thanks - reading it now.", PARENT_ID)
 
     # Nothing left the machine.
     assert sender.sent == []
@@ -154,19 +154,25 @@ def test_send_enabled_defaults_to_false_in_a_fully_configured_app():
     assert MailInboxSettings.load().send_enabled is False
 
 
-def test_send_reply_bool_is_false_while_drafting_and_true_once_enabled():
-    """The ABC's ``bool`` never claims delivery for a draft, and ``send_enabled`` is read
-    live — flipping it between calls changes the outcome with no restart."""
+def test_send_reply_is_falsy_while_drafting_and_true_once_enabled():
+    """``send_reply`` never claims delivery for a draft, and ``send_enabled`` is read
+    live — flipping it between calls changes the outcome with no restart. The draft's result
+    says why it was not sent, which core's inbox shows the owner who pressed Send."""
     from personalclaw.sdk.settings import ProviderSettings
 
     provider, sender = _provider()
     _poll_one(provider)
 
-    assert asyncio.run(provider.send_reply(MAILBOX, "drafted")) is False
+    drafted = asyncio.run(provider.send_reply(MAILBOX, "drafted", PARENT_ID))
+    assert not drafted and drafted is not True
+    assert str(drafted) == (
+        "Send Replies is off, so it kept the reply as a draft. Turn Send Replies on in Mail "
+        "Inbox's Configure form to send."
+    )
     assert sender.sent == []
 
     ProviderSettings.update(_APP, {"send_enabled": True})
-    assert asyncio.run(provider.send_reply(MAILBOX, "sent for real")) is True
+    assert asyncio.run(provider.send_reply(MAILBOX, "sent for real", PARENT_ID)) is True
     assert len(sender.sent) == 1
 
 
@@ -175,7 +181,7 @@ def test_enabling_sending_delivers_and_threads_via_in_reply_to():
     provider, sender = _provider(send_enabled=True)
     _poll_one(provider)
 
-    outcome = _reply(provider, MAILBOX, "On it.")
+    outcome = _reply(provider, MAILBOX, "On it.", PARENT_ID)
 
     assert outcome.sent is True and outcome.drafted is False
     assert len(sender.sent) == 1
@@ -197,7 +203,7 @@ def test_references_chain_extends_the_parents_chain():
     provider, sender = _provider(send_enabled=True)
     _poll_one(provider, references=f"{ROOT_ID} <mid@example.com>")
 
-    _reply(provider, MAILBOX, "ack")
+    _reply(provider, MAILBOX, "ack", PARENT_ID)
 
     assert sender.sent[0]["References"].split() == [ROOT_ID, "<mid@example.com>", PARENT_ID]
 
@@ -217,7 +223,7 @@ def test_reply_from_a_bound_address_keeps_that_identity():
     provider, sender = _provider(send_enabled=True, bound=bound)
     _poll_one(provider, to_addr="me+travel@example.com")
 
-    outcome = _reply(provider, "me+travel@example.com", "ack")
+    outcome = _reply(provider, "me+travel@example.com", "ack", PARENT_ID)
 
     assert outcome.sent is True
     assert sender.sent[0]["From"] == "me+travel@example.com"
@@ -257,7 +263,7 @@ def test_dry_run_drafts_and_constructs_no_sender_at_all():
 
     provider._sender_factory = factory
 
-    outcome = _reply(provider, MAILBOX, "preview only", dry_run=True)
+    outcome = _reply(provider, MAILBOX, "preview only", PARENT_ID, dry_run=True)
 
     assert built == []
     assert sender.sent == []
@@ -271,7 +277,7 @@ def test_live_writes_disabled_forces_a_draft(monkeypatch):
     provider, sender = _provider(send_enabled=True)
     _poll_one(provider)
 
-    outcome = _reply(provider, MAILBOX, "hi")
+    outcome = _reply(provider, MAILBOX, "hi", PARENT_ID)
 
     assert sender.sent == []
     assert outcome.drafted is True and outcome.sent is False
@@ -284,7 +290,7 @@ def test_unknown_live_writes_token_fails_safe(monkeypatch):
     provider, sender = _provider(send_enabled=True)
     _poll_one(provider)
 
-    assert _reply(provider, MAILBOX, "hi").reason == DRAFT_LIVE_WRITES_DISABLED
+    assert _reply(provider, MAILBOX, "hi", PARENT_ID).reason == DRAFT_LIVE_WRITES_DISABLED
     assert sender.sent == []
 
 
@@ -293,7 +299,7 @@ def test_explicitly_falsy_live_writes_flag_does_not_block(monkeypatch):
     provider, sender = _provider(send_enabled=True)
     _poll_one(provider)
 
-    assert _reply(provider, MAILBOX, "hi").sent is True
+    assert _reply(provider, MAILBOX, "hi", PARENT_ID).sent is True
     assert len(sender.sent) == 1
 
 
@@ -302,7 +308,7 @@ def test_missing_smtp_credential_fails_closed_and_never_borrows_the_imap_one():
     provider, sender = _provider(send_enabled=True, smtp_password="")
     _poll_one(provider)
 
-    outcome = _reply(provider, MAILBOX, "hi")
+    outcome = _reply(provider, MAILBOX, "hi", PARENT_ID)
 
     assert sender.sent == []
     assert outcome.reason == DRAFT_NO_CREDENTIAL
@@ -315,7 +321,7 @@ def test_unconfigured_smtp_host_fails_closed():
     provider, sender = _provider(send_enabled=True, smtp_host="")
     _poll_one(provider)
 
-    assert _reply(provider, MAILBOX, "hi").reason == DRAFT_NO_SMTP_CONFIG
+    assert _reply(provider, MAILBOX, "hi", PARENT_ID).reason == DRAFT_NO_SMTP_CONFIG
     assert sender.sent == []
 
 
@@ -324,13 +330,44 @@ def test_unknown_channel_is_refused_never_guessed():
     provider, sender = _provider(send_enabled=True)
     _poll_one(provider)
 
-    outcome = _reply(provider, "stranger@example.com", "hi")
+    outcome = _reply(provider, "stranger@example.com", "hi", PARENT_ID)
 
     assert outcome.sent is False and outcome.drafted is False
     assert outcome.reason == NO_TARGET
     assert outcome.message is None  # nothing composed against a guessed address
     assert sender.sent == []
     assert list(outbound.drafts_dir().glob("*.eml")) == []
+
+
+def test_a_reply_that_names_no_mail_is_refused():
+    """Every mail this source surfaces arrives on one channel (the receiving address), so the
+    old fallback to the channel's most recent mail answered whoever wrote there last: on the
+    fakes, a reply to PyTO's acceptance went to the contractor who mailed after it."""
+    provider, sender = _provider(send_enabled=True)
+    _poll_one(provider)
+
+    outcome = _reply(provider, MAILBOX, "hi")
+
+    assert outcome.reason == NO_TARGET
+    assert outcome.message is None and sender.sent == []
+
+
+def test_a_reply_answers_the_mail_it_names_not_the_latest():
+    provider, sender = _provider(send_enabled=True)
+    _poll_one(provider)
+    later = build_message(
+        from_addr="later@example.com", to_addr=MAILBOX, subject="Something else",
+        message_id="<later@example.com>", plain="another mail",
+    )
+    provider._client_factory = lambda settings, password: FakeImapClient({FOLDER: {9: later}})
+    polled = {MailInboxProvider._checkpoint_key(MailInboxSettings.load()): "5"}
+    asyncio.run(provider.poll([], polled, MAILBOX))
+
+    outcome = _reply(provider, MAILBOX, "About the report", PARENT_ID)
+
+    assert outcome.sent is True
+    assert [str(m["To"]) for m in sender.sent] == [CORRESPONDENT]
+    assert str(sender.sent[0]["In-Reply-To"]) == PARENT_ID
 
 
 def test_explicit_unknown_thread_id_is_refused_not_downgraded():
@@ -351,7 +388,7 @@ def test_smtp_failure_keeps_the_reply_as_a_draft():
     failing = FakeSmtpSender(error=SmtpError("SMTP send failed: 421 service unavailable"))
     provider._sender_factory = lambda settings, password: failing
 
-    outcome = _reply(provider, MAILBOX, "hi")
+    outcome = _reply(provider, MAILBOX, "hi", PARENT_ID)
 
     assert outcome.sent is False
     assert outcome.drafted is True  # the composed reply is preserved, not lost
@@ -364,7 +401,7 @@ def test_poll_records_the_reply_target():
     provider, _ = _provider()
     _poll_one(provider)
 
-    target = lookup_target(MAILBOX)
+    target = lookup_target(MAILBOX, PARENT_ID)
 
     assert target is not None
     assert target.to_addr == CORRESPONDENT
@@ -377,7 +414,7 @@ def test_poll_records_the_reply_target():
 def test_target_lookup_never_crosses_channels():
     provider, _ = _provider()
     _poll_one(provider)
-    assert lookup_target("someone-else@example.com") is None
+    assert lookup_target("someone-else@example.com", PARENT_ID) is None
 
 
 def test_targets_are_deduped_on_message_id():
@@ -391,7 +428,7 @@ def test_targets_are_deduped_on_message_id():
 def test_drafted_reply_is_audited_in_the_sel():
     provider, _ = _provider()
     _poll_one(provider)
-    _reply(provider, MAILBOX, "hi")
+    _reply(provider, MAILBOX, "hi", PARENT_ID)
 
     from personalclaw.sel import sel
 
@@ -405,7 +442,7 @@ def test_drafted_reply_is_audited_in_the_sel():
 def test_sent_reply_is_audited_in_the_sel():
     provider, _ = _provider(send_enabled=True)
     _poll_one(provider)
-    _reply(provider, MAILBOX, "hi")
+    _reply(provider, MAILBOX, "hi", PARENT_ID)
 
     from personalclaw.sel import sel
 
@@ -429,7 +466,7 @@ def test_no_credential_ever_reaches_the_audit_trail_or_the_draft():
     """The SMTP password must not appear in any artifact a reply produces."""
     provider, _ = _provider(send_enabled=True)
     _poll_one(provider)
-    outcome = _reply(provider, MAILBOX, "hi")
+    outcome = _reply(provider, MAILBOX, "hi", PARENT_ID)
 
     from personalclaw.sel import sel
 
@@ -438,3 +475,22 @@ def test_no_credential_ever_reaches_the_audit_trail_or_the_draft():
     assert "imap-app-password" not in blob
     if outcome.draft_path:
         assert "smtp-app-password" not in Path(outcome.draft_path).read_text(encoding="utf-8")
+
+
+def test_every_reason_a_reply_is_not_sent_reads_as_a_sentence():
+    """``ReplyNotSent``'s ``str()`` follows "Mail Inbox didn't send the reply: " in the inbox,
+    so each fixed reason has its sentence, and an SMTP failure carries the server's."""
+    from mail_inbox_runtime import outbound as ob
+
+    for reason in (
+        ob.DRAFT_DRY_RUN, ob.DRAFT_LIVE_WRITES_DISABLED, ob.DRAFT_SEND_DISABLED,
+        ob.DRAFT_NO_SMTP_CONFIG, ob.DRAFT_NO_CREDENTIAL, ob.NO_TARGET,
+    ):
+        said = str(ob.ReplyNotSent(reason))
+        assert said != reason, f"{reason!r} has no sentence"
+        assert said.endswith("."), said
+    failed = ob.ReplyNotSent(f"{ob.SEND_FAILED}: the SMTP server smtp.example.com:587 is unreachable")
+    assert str(failed) == (
+        "the SMTP server smtp.example.com:587 is unreachable, so it kept the reply as a draft."
+    )
+    assert not failed

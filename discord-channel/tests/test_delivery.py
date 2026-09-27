@@ -36,6 +36,7 @@ class FakeAPI(DiscordAPI):
     def __init__(self, *, fail: set[str] | None = None):
         self.sent: list[dict] = []
         self.edits: list[dict] = []
+        self.deleted: list[dict] = []
         self.dms: list[str] = []
         self.uploads: list[dict] = []
         self.acks: list[dict] = []
@@ -69,6 +70,10 @@ class FakeAPI(DiscordAPI):
         self.edits.append({"channel_id": channel_id, "message_id": message_id,
                            "content": content, "components": components})
         return {"id": message_id}
+
+    async def delete_message(self, channel_id, message_id):
+        self._boom("delete_message")
+        self.deleted.append({"channel_id": channel_id, "message_id": message_id})
 
     async def create_dm(self, user_id):
         self._boom("create_dm")
@@ -473,6 +478,43 @@ class TestStreamThrottle:
         await d.stop_stream("500", sts)  # no raise
 
 
+class TestNoPlaceholderIsLeftBehind:
+    """Ledger 281's family: a turn's stream opens with "Thinking…" and its reply is a message of
+    its own, so the flush left the placeholder above the reply for good."""
+
+    @pytest.mark.asyncio
+    async def test_a_stream_that_only_held_its_placeholder_is_removed(self):
+        d = _delivery()
+        sts = await d.start_stream("500", initial_text="Thinking…")
+        await d.stop_stream("500", sts)
+        assert d._api.deleted == [{"channel_id": "500", "message_id": sts}]
+        assert d._api.edits == []
+
+    @pytest.mark.asyncio
+    async def test_a_stream_with_tasks_keeps_only_their_lines(self):
+        d = _delivery()
+        clock = {"t": 0.0}
+        d._now = lambda: clock["t"]
+        sts = await d.start_stream("500", initial_text="Thinking…")
+        clock["t"] = 5.0
+        await d.append_stream_task("500", sts, "tool_1", "Read notes.md", "in_progress")
+        assert d._api.edits[-1]["content"] == "Thinking…\n⏳ Read notes.md"
+        await d.append_stream_task("500", sts, "tool_1", "Read notes.md", "complete")
+        await d.stop_stream("500", sts)
+        assert d._api.edits[-1]["content"] == "✅ Read notes.md"
+        assert d._api.deleted == []
+
+    @pytest.mark.asyncio
+    async def test_a_placeholder_that_cannot_be_removed_says_so(self, caplog):
+        import logging
+
+        d = _delivery(fail={"delete_message"})
+        sts = await d.start_stream("500", initial_text="Thinking…")
+        with caplog.at_level(logging.WARNING, logger="discord_runtime.delivery"):
+            await d.stop_stream("500", sts)
+        assert f"the stream placeholder {sts} in 500 could not be removed" in caplog.text
+
+
 class _Event:
     def __init__(self, request_id="req1", title="delete files"):
         self.request_id = request_id
@@ -513,6 +555,29 @@ class TestApprovalRoundTrip:
         final = d._api.edits[-1]
         assert "Approved" in final["content"]
         assert final["components"] == []
+
+    @pytest.mark.asyncio
+    async def test_a_long_prompt_is_split_like_a_reply_with_the_buttons_last(self):
+        """It was cut at 2,000 characters, so the owner approved a command whose end they
+        never saw. Every part arrives, and the buttons ride the last."""
+        d = _delivery(owner="42")
+        command = "bash: " + " && ".join(f"echo step-{i}" for i in range(400))
+        task = asyncio.ensure_future(d.request_approval(_Event("reqL", command), source="tool"))
+        for _ in range(4):
+            await asyncio.sleep(0)
+        sent = d._api.sent
+        assert len(sent) >= 2 and all(len(m["content"]) <= DISCORD_MAX_TEXT for m in sent)
+        assert [m["components"] is not None for m in sent] == [False] * (len(sent) - 1) + [True]
+        assert "step-399?" in sent[-1]["content"] and "step-0 " in sent[0]["content"]
+
+        await d.resolve_interaction({
+            "id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
+            "data": {"custom_id": "approve:reqL"}, "user": {"id": "42"},
+        })
+        assert await asyncio.wait_for(task, timeout=1.0) is True
+        final = d._api.edits[-1]
+        assert final["message_id"] == sent[-1]["id"] and final["components"] == []
+        assert final["content"].endswith("✅ Approved") and len(final["content"]) <= DISCORD_MAX_TEXT
 
     @pytest.mark.asyncio
     async def test_deny_resolves_false_and_strips_buttons(self):

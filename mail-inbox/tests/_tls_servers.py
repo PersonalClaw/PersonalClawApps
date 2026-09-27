@@ -5,9 +5,10 @@ Named ``_tls_servers`` (leading underscore, not ``test_*``) so pytest doesn't co
 
 A throwaway certificate authority signs a server certificate (``mint``), and two tiny
 servers bound to 127.0.0.1 on an ephemeral port speak just enough IMAP and SMTP for a login:
-``ImapsServer`` (implicit TLS) and ``StarttlsSmtpServer`` (plaintext, then STARTTLS). Each
-records the logins it received, which is how a test proves a refused certificate never saw
-the password. Nothing leaves the machine.
+``ImapsServer`` (implicit TLS), ``StarttlsImapServer`` and ``StarttlsSmtpServer`` (plaintext,
+then STARTTLS). Each records the logins it received, which is how a test proves a refused
+certificate, or a server that cannot upgrade, never saw the password. Nothing leaves the
+machine.
 """
 
 from __future__ import annotations
@@ -150,6 +151,54 @@ class ImapsServer(_Server):
                 stream.write(b"* CAPABILITY IMAP4rev1 AUTH=PLAIN\r\n")
             elif command == "LOGIN":
                 self.logins.append(rest[len("LOGIN "):])
+            elif command in ("SELECT", "EXAMINE"):
+                stream.write(b"* 0 EXISTS\r\n* OK [UIDVALIDITY 7] ok\r\n")
+            elif command == "STATUS":
+                stream.write(b'* STATUS "INBOX" (UIDVALIDITY 7)\r\n')
+            elif command == "LOGOUT":
+                stream.write(b"* BYE bye\r\n" + f"{tag} OK done\r\n".encode())
+                stream.flush()
+                return
+            stream.write(f"{tag} OK done\r\n".encode())
+            stream.flush()
+
+
+class StarttlsImapServer(_Server):
+    """Plain IMAP that upgrades with STARTTLS: greeting, CAPABILITY, STARTTLS, LOGIN, SELECT,
+    STATUS, LOGOUT. With ``offer_starttls=False`` it is a server that cannot upgrade.
+
+    ``logins`` are the logins that arrived over TLS, ``clear_logins`` the ones that arrived in
+    the clear, which is how a test proves a password was never put on a plaintext socket."""
+
+    def __init__(self, minted: Minted, *, offer_starttls: bool = True) -> None:
+        self.offer_starttls = offer_starttls
+        self.clear_logins: list[str] = []
+        super().__init__(minted)
+
+    def handle(self, raw: socket.socket) -> None:
+        stream = raw.makefile("rwb")
+        stream.write(b"* OK test IMAP ready\r\n")
+        stream.flush()
+        tls = False
+        while True:
+            line = stream.readline()
+            if not line:
+                return
+            tag, _, rest = line.decode("utf-8", "replace").rstrip("\r\n").partition(" ")
+            command = rest.split(" ", 1)[0].upper()
+            if command == "CAPABILITY":
+                if tls or not self.offer_starttls:
+                    stream.write(b"* CAPABILITY IMAP4rev1 AUTH=PLAIN\r\n")
+                else:
+                    stream.write(b"* CAPABILITY IMAP4rev1 STARTTLS LOGINDISABLED\r\n")
+            elif command == "STARTTLS" and self.offer_starttls and not tls:
+                stream.write(f"{tag} OK begin TLS now\r\n".encode())
+                stream.flush()
+                stream = self._context.wrap_socket(raw, server_side=True).makefile("rwb")
+                tls = True
+                continue
+            elif command == "LOGIN":
+                (self.logins if tls else self.clear_logins).append(rest[len("LOGIN "):])
             elif command in ("SELECT", "EXAMINE"):
                 stream.write(b"* 0 EXISTS\r\n* OK [UIDVALIDITY 7] ok\r\n")
             elif command == "STATUS":

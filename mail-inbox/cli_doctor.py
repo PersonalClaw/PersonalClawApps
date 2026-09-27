@@ -63,8 +63,8 @@ def probe() -> list[DoctorLine]:
 
 def _tls_line(settings: MailInboxSettings) -> DoctorLine:
     """What the server's certificate is checked against. A CA Certificate File that cannot
-    be loaded refuses every connection, and this source has no status card: without this
-    line the poll log would be the only place that says so."""
+    be loaded refuses every connection: the Inbox says so for this source once a poll has
+    failed on it, and this line says so before one has."""
     trusted = "the server's certificate is checked against this machine's authorities"
     if not settings.tls_ca_file:
         return DoctorLine("tls", "ok", trusted)

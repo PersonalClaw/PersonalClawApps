@@ -25,7 +25,7 @@ from email_runtime.imap_client import Imap4Client, ImapError, probe_login
 from email_runtime.smtp_client import SmtpError, SmtplibSender
 from email_runtime.smtp_client import probe_login as smtp_probe
 
-from _tls_servers import ImapsServer, StarttlsSmtpServer, mint
+from _tls_servers import ImapsServer, StarttlsImapServer, StarttlsSmtpServer, mint
 
 
 @pytest.fixture
@@ -220,3 +220,75 @@ def _message():
     msg["Subject"] = "hi"
     msg.set_content("hello")
     return msg
+
+
+class TestWithImapSslOffTheConnectionIsUpgradedFirst:
+    """Ledger 282: with IMAP SSL off, ``imaplib.IMAP4`` logged in on the plain connection, so
+    the app password crossed the network in the clear. It is upgraded with STARTTLS through the
+    verifying context first now, and a server that cannot upgrade is refused before the
+    login. There is no setting that sends the password in the clear."""
+
+    @pytest.fixture
+    def plain(self, ca):
+        server = StarttlsImapServer(ca)
+        yield server
+        server.close()
+
+    @pytest.fixture
+    def no_upgrade(self, ca):
+        server = StarttlsImapServer(ca, offer_starttls=False)
+        yield server
+        server.close()
+
+    def test_the_login_goes_over_tls(self, plain, ca):
+        ok, detail = probe_login(
+            "127.0.0.1", plain.port, "u", "pw", "INBOX", use_ssl=False, ca_file=str(ca.ca)
+        )
+        assert ok is True, detail
+        assert len(plain.logins) == 1 and plain.clear_logins == []
+
+    def test_a_server_that_cannot_upgrade_never_gets_the_password(self, no_upgrade, ca):
+        client = Imap4Client(
+            "127.0.0.1", no_upgrade.port, "u", "pw", use_ssl=False, ca_file=str(ca.ca)
+        )
+        with pytest.raises(ImapError) as refused:
+            client.connect()
+        assert refused.value.kind == "tls"
+        assert str(refused.value) == (
+            f"the IMAP server 127.0.0.1:{no_upgrade.port} doesn't offer STARTTLS, so the "
+            "password was not sent: with IMAP SSL off, the connection must be upgraded to TLS "
+            "before the login. Turn IMAP SSL on (usually port 993), or use a server that offers "
+            "STARTTLS"
+        )
+        assert no_upgrade.clear_logins == [] and no_upgrade.logins == []
+
+    def test_the_upgrade_checks_the_certificate_like_implicit_tls(self, plain):
+        client = Imap4Client("127.0.0.1", plain.port, "u", "pw", use_ssl=False)
+        with pytest.raises(ImapError) as refused:
+            client.connect()
+        assert refused.value.kind == "tls"
+        assert "is not trusted" in str(refused.value)
+        assert "so the password was not sent" in str(refused.value)
+        assert plain.clear_logins == [] and plain.logins == []
+
+    def test_imaplib_is_given_the_verifying_context_for_the_upgrade(self, monkeypatch):
+        seen = {}
+
+        class Capture:
+            capabilities = ("IMAP4REV1", "STARTTLS")
+
+            def __init__(self, host, port, timeout=None):
+                seen["timeout"] = timeout
+
+            def starttls(self, ssl_context=None):
+                seen["context"] = ssl_context
+                return ("OK", [b""])
+
+            def login(self, user, password):
+                seen["login_after_upgrade"] = "context" in seen
+                return ("OK", [b""])
+
+        monkeypatch.setattr(imaplib, "IMAP4", Capture)
+        Imap4Client("mail.test", 143, "u", "p", use_ssl=False).connect()
+        assert seen["context"].verify_mode == ssl.CERT_REQUIRED and seen["context"].check_hostname
+        assert seen["login_after_upgrade"] is True

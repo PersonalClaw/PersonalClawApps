@@ -16,6 +16,9 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
+from mail_inbox_runtime.imap_client import ImapError
 from mail_inbox_runtime.provider import MailInboxProvider
 from mail_inbox_runtime.settings import MailInboxSettings, _APP
 
@@ -64,6 +67,10 @@ def _key() -> str:
     return MailInboxProvider._checkpoint_key(MailInboxSettings.load())
 
 
+def _vkey() -> str:
+    return MailInboxProvider._validity_key(MailInboxSettings.load())
+
+
 def _poll(client: FakeImapClient, checkpoints: dict[str, str]):
     provider = MailInboxProvider()
     provider._client_factory = lambda settings, password: client
@@ -95,16 +102,17 @@ def test_mail_after_the_first_poll_is_surfaced():
 
 
 def test_a_first_poll_that_cannot_connect_records_no_start():
-    """Nothing was read, so nothing is recorded: a missing cursor must never become 0
-    ("surface everything"), so the next poll that connects still starts after the newest."""
+    """Nothing was read, so nothing is recorded: the poll raises (its sentence is the inbox's
+    health for this source) and core keeps the checkpoints it had. A missing cursor must never
+    become 0 ("surface everything"), so the next poll that connects starts after the newest."""
     _configure()
     client = FakeImapClient({FOLDER: _seeded()})
     client.fail_connect = True
-    messages, checkpoints = _poll(client, {})
-    assert messages == [] and checkpoints == {}
+    with pytest.raises(ImapError, match="is unreachable"):
+        _poll(client, {})
 
     client.fail_connect = False
-    messages, checkpoints = _poll(client, checkpoints)
+    messages, checkpoints = _poll(client, {})
     assert messages == [] and checkpoints == {_key(): "11"}
 
 
@@ -145,7 +153,7 @@ def test_core_keeps_the_start_so_the_next_poll_surfaces_new_mail():
     client = FakeImapClient({FOLDER: folder})
     provider = MailInboxProvider()
     provider._client_factory = lambda settings, password: client
-    service = InboxService(provider=provider)
+    service = InboxService(sources=lambda: [provider])
 
     asyncio.run(service._poll_once())
     assert service.inbox.items == {}, "mail that was already there became inbox items"
@@ -156,3 +164,53 @@ def test_core_keeps_the_start_so_the_next_poll_surfaces_new_mail():
     folder[12] = _new_mail()
     asyncio.run(service._poll_once())
     assert [item.sender_id for item in service.inbox.items.values()] == ["new@example.com"]
+
+
+# ── UIDVALIDITY: a renumbered folder starts again after its newest message (ledger 280) ──
+
+
+def test_the_folders_numbering_is_recorded_with_its_start():
+    _configure()
+    client = FakeImapClient({FOLDER: _seeded()}, uidvalidity=7)
+    _, checkpoints = _poll(client, {})
+    assert checkpoints == {_key(): "11", _vkey(): "7"}
+
+
+def test_a_renumbered_folder_starts_after_its_newest_message_again():
+    """The server renumbered the folder (a restore, a migration), so the cursor is in a
+    numbering that no longer exists. Read from it, UIDs 1..12 are all below 30: nothing would
+    ever surface again. A cursor below the new UIDs would replay them instead. Email Channel
+    starts after the newest message on a UIDVALIDITY change, and so does this source now."""
+    _configure()
+    folder = _seeded()
+    client = FakeImapClient({FOLDER: folder}, uidvalidity=8)
+    messages, checkpoints = _poll(client, {_key(): "30", _vkey(): "7"})
+    assert messages == [] and client.fetch_calls == [], "a renumbered folder was read"
+    assert checkpoints == {_key(): "11", _vkey(): "8"}
+
+    folder[12] = _new_mail()
+    messages, _ = _poll(client, checkpoints)
+    assert [m.id for m in messages] == ["<new@example.com>"]
+
+
+def test_an_unreported_numbering_is_not_a_renumbering():
+    """0 is "the server did not say", which must not throw away a good cursor."""
+    _configure()
+    folder = _seeded()
+    folder[12] = _new_mail()
+    client = FakeImapClient({FOLDER: folder}, uidvalidity=0)
+    messages, checkpoints = _poll(client, {_key(): "11", _vkey(): "7"})
+    assert [m.id for m in messages] == ["<new@example.com>"]
+    assert checkpoints == {_key(): "12", _vkey(): "7"}
+
+
+def test_a_cursor_from_before_the_numbering_was_known_adopts_it():
+    """A cursor recorded by an earlier version, or while the server did not report it, reads on
+    and records the numbering it is in from then on."""
+    _configure()
+    folder = _seeded()
+    folder[12] = _new_mail()
+    client = FakeImapClient({FOLDER: folder}, uidvalidity=7)
+    messages, checkpoints = _poll(client, {_key(): "11"})
+    assert [m.id for m in messages] == ["<new@example.com>"]
+    assert checkpoints == {_key(): "12", _vkey(): "7"}

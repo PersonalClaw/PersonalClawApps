@@ -61,6 +61,9 @@ class _FakeAPI(DiscordAPI):
     async def edit_message(self, channel_id, message_id, content, *, components=None):
         return {"id": message_id}
 
+    async def delete_message(self, channel_id, message_id):
+        return None
+
     async def create_dm(self, user_id):
         return {"id": f"dm-{user_id}", "type": 1}
 

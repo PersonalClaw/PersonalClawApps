@@ -12,13 +12,17 @@ Two Discord-specific shapes drive this module:
   one message repeatedly PATCHed. Message edits share a per-channel rate bucket
   with sends, so :class:`DiscordDelivery` throttles to at most one edit per
   :data:`_EDIT_MIN_INTERVAL` seconds and always flushes the exact final text on
-  ``stop_stream`` — the contract the fake-API tests pin.
+  ``stop_stream`` — the contract the fake-API tests pin. The stream's placeholder
+  ("Thinking…") is gone when it stops: the message keeps the task lines alone, or is
+  deleted when there were none, because the reply is a message of its own and a
+  placeholder left above it reads as a turn that never finished.
 * **Approvals are message COMPONENTS.** An action row of two buttons; the press
   arrives back as an ``INTERACTION_CREATE`` (not a message), which MUST be answered
   within three seconds or Discord shows the user "This interaction failed". When
   the decision resolves, the prompt is edited to show the outcome AND its
   ``components`` are cleared — a still-clickable approval button on a
-  hours-old decided request is a real footgun, not a cosmetic one.
+  hours-old decided request is a real footgun, not a cosmetic one. A prompt too
+  long for one message is split like a reply, the buttons on its last part.
 
 Discord renders standard markdown, so unlike Telegram's MarkdownV2 there is no
 escaping layer: the model's markdown goes out as-is. Length is the only rendering
@@ -177,16 +181,33 @@ def _safe(text: str) -> str:
 
 
 class _StreamState:
-    """Bookkeeping for one edit-streamed message."""
+    """Bookkeeping for one edit-streamed message: its placeholder, and one line per task.
 
-    __slots__ = ("channel_id", "message_id", "last_edit", "last_text", "pending_text")
+    A task's line is replaced in place as its status changes, so a finished task does not
+    leave its "in progress" line behind."""
 
-    def __init__(self, channel_id: str, message_id: str) -> None:
+    __slots__ = ("channel_id", "message_id", "last_edit", "last_text", "head", "tasks")
+
+    def __init__(self, channel_id: str, message_id: str, head: str) -> None:
         self.channel_id = channel_id
         self.message_id = message_id
         self.last_edit = 0.0
-        self.last_text = ""
-        self.pending_text = ""
+        self.last_text = head
+        self.head = head
+        self.tasks: dict[str, str] = {}
+
+    def text(self, *, final: bool = False) -> str:
+        """What the message shows: the placeholder over the task lines while it runs, the task
+        lines alone once it stops ("" when there were none). The oldest lines give way when
+        they would not fit one message."""
+        lines = list(self.tasks.values())
+        dropped = False
+        while True:
+            body = (["…"] if dropped else []) + lines
+            text = "\n".join(body if final else [self.head, *body]).strip()
+            if not lines or len(text) <= DISCORD_MAX_TEXT:
+                return text[:DISCORD_MAX_TEXT]
+            lines, dropped = lines[1:], True
 
 
 class _PendingApproval:
@@ -427,54 +448,72 @@ class DiscordDelivery:
 
     # ── edit-based streaming ──
     async def start_stream(self, channel: str, thread_ts: str = "", initial_text: str = "") -> str:
-        text = initial_text or "…"
-        msg = await self._api.create_message(channel, text)
+        head = initial_text or "…"
+        msg = await self._api.create_message(channel, head)
         mid = str(msg.get("id", ""))
         if not mid:
             return ""
-        st = _StreamState(channel, mid)
+        st = _StreamState(channel, mid, head)
         st.last_edit = self._now()
-        st.last_text = text
         self._streams[f"{channel}:{mid}"] = st
         return mid
 
     async def append_stream_task(
         self, channel: str, stream_ts: str, task_id: str, title: str, status: str,
     ) -> None:
-        """Append a progress line to the streamed message, throttled.
+        """Show a task's progress line in the streamed message, throttled.
 
         Discord has no task-animation primitive, so a task update is folded into the
-        streamed text as a status line and edited in — at most one edit per
+        streamed text as a status line, the task's own (a finished task's line replaces
+        its "in progress" one), and edited in — at most one edit per
         :data:`_EDIT_MIN_INTERVAL`. The final flush happens in :meth:`stop_stream`,
         so a throttled-away update is never lost."""
         st = self._streams.get(f"{channel}:{stream_ts}")
         if st is None:
             return
         mark = "✅" if status in ("complete", "completed", "done") else "⏳"
-        st.pending_text = f"{st.last_text}\n{mark} {title}".strip()
+        st.tasks[task_id] = f"{mark} {title}".strip()
         await self._maybe_edit(st, force=False)
 
     async def stop_stream(self, channel: str, stream_ts: str) -> None:
+        """Leave the streamed message holding the task lines, or remove it when it only ever
+        held its placeholder: the reply is a message of its own, and a "Thinking…" left above
+        it reads as a turn that never finished."""
         st = self._streams.pop(f"{channel}:{stream_ts}", None)
         if st is None:
             return
+        final = st.text(final=True)
+        if not final:
+            try:
+                await self._api.delete_message(st.channel_id, st.message_id)
+            except Exception:
+                logger.warning(
+                    "discord: the stream placeholder %s in %s could not be removed",
+                    st.message_id, st.channel_id, exc_info=True,
+                )
+            return
         # Always flush the exact final text, throttle be damned.
-        await self._maybe_edit(st, force=True)
+        await self._edit(st, final, self._now())
 
     async def _maybe_edit(self, st: _StreamState, *, force: bool) -> None:
-        text = st.pending_text or st.last_text
-        if text == st.last_text and not force:
+        """Show the running stream's text now, unless an edit landed inside the throttle
+        window (``force`` ignores it)."""
+        text = st.text()
+        if text == st.last_text:
             return
         now = self._now()
         if not force and (now - st.last_edit) < _EDIT_MIN_INTERVAL:
-            return  # throttled — the pending text rides until the next edit/flush
+            return  # throttled — the text rides until the next edit/flush
+        await self._edit(st, text, now)
+
+    async def _edit(self, st: _StreamState, text: str, now: float) -> None:
         try:
-            await self._api.edit_message(st.channel_id, st.message_id, text[:DISCORD_MAX_TEXT])
-            st.last_edit = now
-            st.last_text = text
-            st.pending_text = ""
+            await self._api.edit_message(st.channel_id, st.message_id, text)
         except Exception:
-            logger.debug("discord: stream edit failed", exc_info=True)
+            logger.warning("discord: stream edit failed", exc_info=True)
+            return
+        st.last_edit = now
+        st.last_text = text
 
     # ── approval via message components ──
     async def request_approval(
@@ -503,10 +542,15 @@ class DiscordDelivery:
 
         request_id = str(getattr(event, "request_id", ""))
         title = _safe(str(getattr(event, "title", "")))
-        prompt = f"🔐 [{source}] Approve: {title}?"
-        msg = await self._api.create_message(
-            channel_id, prompt[:DISCORD_MAX_TEXT], components=_approval_components(request_id)
-        )
+        # Split like a reply, the buttons on the last part: the prompt was cut at 2,000
+        # characters, so the owner approved a command whose end they never saw.
+        parts = split_message(f"🔐 [{source}] Approve: {title}?")
+        msg: dict[str, Any] = {}
+        for index, part in enumerate(parts, 1):
+            last = index == len(parts)
+            msg = await self._api.create_message(
+                channel_id, part, components=_approval_components(request_id) if last else None
+            )
         message_id = str(msg.get("id", ""))
         pending = _PendingApproval(request_id, channel_id, message_id)
         self._pending[f"{channel_id}:{message_id}"] = pending
@@ -532,7 +576,7 @@ class DiscordDelivery:
             # components=[] strips the buttons: a decided request must not leave a
             # clickable Approve behind.
             await self._api.edit_message(
-                channel_id, message_id, f"🔐 {title} — {status}"[:DISCORD_MAX_TEXT], components=[]
+                channel_id, message_id, _answered(title, parts, status), components=[]
             )
         except Exception:
             logger.debug("discord: approval finalize edit failed", exc_info=True)
@@ -613,3 +657,11 @@ def _monotonic() -> float:
     import time
 
     return time.monotonic()
+
+
+def _answered(title: str, parts: list[str], status: str) -> str:
+    """What the prompt's last message says once it is answered, in one message: the prompt with
+    its outcome, or, for a prompt split over several, its last part with it, or the outcome
+    alone when that would not fit (the parts above keep the rest)."""
+    text = f"🔐 {title} — {status}" if len(parts) <= 1 else f"{parts[-1]} — {status}"
+    return text if len(text) <= DISCORD_MAX_TEXT else f"🔐 {status}"

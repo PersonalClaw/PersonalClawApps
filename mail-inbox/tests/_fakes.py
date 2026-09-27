@@ -15,22 +15,30 @@ class FakeImapClient:
     fetch_message/close), so a test injects it via ``provider._client_factory``.
 
     ``fail_connect`` makes ``connect`` raise the provider's ``ImapError``, the way a refused
-    login, an unreachable server or an untrusted certificate does."""
+    login, an unreachable server or an untrusted certificate does. ``uidvalidity`` is what
+    ``select_folder`` reports (0: the server did not say), and a test changes it to renumber
+    the folder."""
 
-    def __init__(self, messages: dict[str, dict[int, bytes]]) -> None:
+    UNREACHABLE = "the IMAP server imap.example.com:993 is unreachable (fake)"
+
+    def __init__(self, messages: dict[str, dict[int, bytes]], *, uidvalidity: int = 0) -> None:
         self._messages = messages
         self.connected = False
         self.closed = False
         self.fetch_calls: list[int] = []
         self.newest_calls: list[str] = []
         self.fail_connect = False
+        self.uidvalidity = uidvalidity
 
     def connect(self) -> None:
         if self.fail_connect:
             from mail_inbox_runtime.imap_client import ImapError
 
-            raise ImapError("the IMAP server imap.example.com:993 is unreachable (fake)")
+            raise ImapError(self.UNREACHABLE)
         self.connected = True
+
+    def select_folder(self, folder: str) -> int:
+        return self.uidvalidity
 
     def newest_uid(self, folder: str) -> int:
         self.newest_calls.append(folder)

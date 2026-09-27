@@ -20,6 +20,9 @@ class FakeAPI(TelegramAPI):
         self.edits: list[dict] = []
         self.answers: list[dict] = []
         self.uploads: list[dict] = []
+        self.deleted: list[dict] = []
+        #: An edit Telegram refuses: a ``TelegramAPIError`` raised instead of editing.
+        self.refuse_edit: Exception | None = None
         self._mid = 0
 
     def _next(self) -> int:
@@ -41,8 +44,14 @@ class FakeAPI(TelegramAPI):
 
     async def edit_message_text(self, chat_id, message_id, text, *, parse_mode=None,
                                 reply_markup=None, disable_web_page_preview=None):
+        if self.refuse_edit is not None:
+            raise self.refuse_edit
         self.edits.append({"chat_id": chat_id, "message_id": message_id, "text": text})
         return {"message_id": message_id}
+
+    async def delete_message(self, chat_id, message_id):
+        self.deleted.append({"chat_id": chat_id, "message_id": message_id})
+        return True
 
     async def send_document(self, chat_id, file_path, *, caption=None, reply_to_message_id=None):
         mid = self._next()
@@ -189,6 +198,83 @@ class TestStreamThrottle:
         assert d._api.edits == []
 
 
+class TestNoPlaceholderIsLeftBehind:
+    """Ledger 281: a turn's stream opens with "Thinking…" and its reply is a message of its own.
+    The final edit re-sent the same text, Telegram answered 400 "message is not modified", and
+    the "Thinking…" stayed above the reply for good, reading as a turn that never finished."""
+
+    @pytest.mark.asyncio
+    async def test_a_stream_that_only_held_its_placeholder_is_removed(self):
+        d = _delivery()
+        sts = await d.start_stream("123", initial_text="Thinking…")
+        await d.stop_stream("123", sts)
+        assert d._api.deleted == [{"chat_id": "123", "message_id": int(sts)}]
+        assert d._api.edits == [], "the placeholder was re-sent instead of removed"
+
+    @pytest.mark.asyncio
+    async def test_a_stream_with_tasks_keeps_only_their_lines(self):
+        d = _delivery()
+        clock = {"t": 0.0}
+        d._now = lambda: clock["t"]
+        sts = await d.start_stream("123", initial_text="Thinking…")
+        clock["t"] = 5.0
+        await d.append_stream_task("123", sts, "tool_1", "Read notes.md", "in_progress")
+        assert d._api.edits[-1]["text"] == "Thinking…\n⏳ Read notes\\.md"
+        await d.append_stream_task("123", sts, "tool_1", "Read notes.md", "complete")
+        await d.stop_stream("123", sts)
+        assert d._api.edits[-1]["text"] == "✅ Read notes\\.md", (
+            "the placeholder, or the task's in-progress line, was left behind"
+        )
+        assert d._api.deleted == []
+
+    @pytest.mark.asyncio
+    async def test_not_modified_is_the_text_already_there(self, caplog):
+        import logging
+
+        from telegram_runtime.api import TelegramAPIError
+
+        d = _delivery()
+        sts = await d.start_stream("123", initial_text="Thinking…")
+        await d.append_stream_task("123", sts, "t1", "Step", "complete")
+        d._api.refuse_edit = TelegramAPIError(
+            "Bad Request: message is not modified: specified new message content and reply "
+            "markup are exactly the same as a current content", error_code=400,
+            method="editMessageText",
+        )
+        with caplog.at_level(logging.WARNING, logger="telegram_runtime.delivery"):
+            await d.stop_stream("123", sts)
+        assert "stream edit failed" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_an_edit_that_really_failed_says_so(self, caplog):
+        import logging
+
+        from telegram_runtime.api import TelegramAPIError
+
+        d = _delivery()
+        sts = await d.start_stream("123", initial_text="Thinking…")
+        await d.append_stream_task("123", sts, "t1", "Step", "complete")
+        d._api.refuse_edit = TelegramAPIError(
+            "Bad Request: message to edit not found", error_code=400, method="editMessageText"
+        )
+        with caplog.at_level(logging.WARNING, logger="telegram_runtime.delivery"):
+            await d.stop_stream("123", sts)
+        assert "stream edit failed: Bad Request: message to edit not found" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_a_long_task_list_still_fits_one_message(self):
+        from telegram_runtime.format import TELEGRAM_MAX_TEXT, utf16_len
+
+        d = _delivery()
+        sts = await d.start_stream("123", initial_text="Thinking…")
+        for i in range(120):
+            await d.append_stream_task("123", sts, f"t{i}", f"Step number {i} " + "x" * 40, "complete")
+        await d.stop_stream("123", sts)
+        final = d._api.edits[-1]["text"]
+        assert utf16_len(final) <= TELEGRAM_MAX_TEXT
+        assert final.startswith("…") and "Step number 119" in final
+
+
 class _Event:
     def __init__(self, request_id="req1", title="delete files"):
         self.request_id = request_id
@@ -271,6 +357,29 @@ class TestApproval:
         await d.resolve_callback({"id": "o1", "data": "deny:reqS", "from": {"id": 42}})
         assert await asyncio.wait_for(task, timeout=1.0) is False
         assert len(events) == 1, "the owner's press is not an event"
+
+    @pytest.mark.asyncio
+    async def test_a_long_prompt_is_split_like_a_reply_with_the_buttons_last(self):
+        """Ledger 281: the prompt went out as one message, which Telegram refuses past 4,096
+        characters, so a long command was never asked about on Telegram at all."""
+        from telegram_runtime.format import TELEGRAM_MAX_TEXT, utf16_len
+
+        d = _delivery(owner="42")
+        command = "bash: " + " && ".join(f"echo step-{i}" for i in range(700))
+        task = asyncio.ensure_future(d.request_approval(_Event("reqL", command), source="tool"))
+        await asyncio.sleep(0)
+        sent = d._api.sent
+        assert len(sent) >= 2
+        assert all(utf16_len(m["text"]) <= TELEGRAM_MAX_TEXT for m in sent)
+        assert [m["reply_markup"] is not None for m in sent] == [False] * (len(sent) - 1) + [True]
+        # MarkdownV2 escapes the hyphen: each part is the prompt's own text, rendered.
+        assert "step\\-699" in sent[-1]["text"] and "step\\-0 " in sent[0]["text"]
+
+        await d.resolve_callback({"id": "c", "data": "approve:reqL", "from": {"id": 42}})
+        assert await asyncio.wait_for(task, timeout=1.0) is True
+        final = d._api.edits[-1]
+        assert final["message_id"] == sent[-1]["message_id"], "the buttons' message was not the one answered"
+        assert final["text"].endswith("✅ Approved") and utf16_len(final["text"]) <= TELEGRAM_MAX_TEXT
 
     @pytest.mark.asyncio
     async def test_callback_for_unknown_request_just_acks(self):

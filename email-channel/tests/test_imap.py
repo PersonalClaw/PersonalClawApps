@@ -292,22 +292,32 @@ class TestConnectUsesTlsAndTimeout:
         Imap4Client("mail.test", 993, "u", "p", use_ssl=True).connect()
         assert seen["ssl"] == ("mail.test", 993, IMAP_TIMEOUT_SECS)
 
-    def test_plain_path_used_when_ssl_is_off(self, monkeypatch):
-        seen = {}
+    def test_plain_path_used_when_ssl_is_off_and_upgraded_before_the_login(self, monkeypatch):
+        seen: dict = {"order": []}
         # The client's ``except (imaplib.IMAP4.error, OSError)`` resolves the class off
         # the (about-to-be-patched) module attribute, so the fake must carry it.
         real_error = imaplib.IMAP4.error
 
         class FakePlain(FakeConn):
             error = real_error
+            capabilities = ("IMAP4REV1", "STARTTLS", "LOGINDISABLED")
 
             def __init__(self, host, port, timeout=None):
                 super().__init__()
                 seen["plain"] = (host, port, timeout)
 
+            def starttls(self, ssl_context=None):
+                seen["order"].append("starttls")
+                return ("OK", [b""])
+
+            def login(self, user, pw):
+                seen["order"].append("login")
+                return super().login(user, pw)
+
         monkeypatch.setattr(imaplib, "IMAP4", FakePlain)
         Imap4Client("mail.test", 143, "u", "p", use_ssl=False).connect()
         assert seen["plain"] == ("mail.test", 143, IMAP_TIMEOUT_SECS)
+        assert seen["order"] == ["starttls", "login"], "the password went out before the upgrade"
 
 
 class TestProbeLogin:

@@ -99,7 +99,8 @@ def _registry_built():
 
 
 async def _poll(source):
-    return await source.poll(["C1"], {}, "U_ME")
+    # A channel polled before (empty then): a first poll only records where it is.
+    return await source.poll(["C1"], {"C1": "0"}, "U_ME")
 
 
 @pytest.mark.asyncio
