@@ -1,8 +1,8 @@
 {
   "name": "voice-clone-tts",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "displayName": "Voice Clone TTS",
-  "description": "Clone a voice from a short clip and speak with it, on your own machine. It needs the OmniVoice engine (torch, several GB), which PersonalClaw does not install: put it in this app's own Python environment with the command its card in Settings → Providers shows, then download OmniVoice in Settings → Models. The engine runs in a process of its own, so a crash in it leaves the gateway up. A clone-kind voice profile routes here instead of being refused.",
+  "description": "Clone a voice from a short clip and speak with it, on your own machine. It needs the OmniVoice engine (torch, several GB), which Install engine on its card in Settings → Providers puts in this app's own Python environment; then download OmniVoice in Settings → Models. The engine runs in a process of its own, so a crash in it leaves the gateway up. A clone-kind voice profile routes here instead of being refused.",
   "icon": "AudioLines",
   "author": "PersonalClaw",
   "license": "MIT",
@@ -13,6 +13,9 @@
   "dependencies": {
     "pythonDependencies": [
       "huggingface-hub>=0.23"
+    ],
+    "sidecarDependencies": [
+      "omnivoice>=0.2.1,<0.3"
     ]
   },
   "provider": {

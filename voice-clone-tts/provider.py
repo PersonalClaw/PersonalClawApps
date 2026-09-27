@@ -17,13 +17,13 @@ cloning_unsupported:<provider>``. The engine's model cards (``runtime: torch``,
 ``matrix.supports_cloning``) are declared in the bundled ``catalog.json``, the single
 source of truth for what this app offers.
 
-SCOPE (MI-6 remainder, formerly "MI-2c"): the heavy ML engine is an OPTIONAL, lazily
-detected dependency — it is NOT pinned in ``app.json`` ``pythonDependencies`` (an app's
-Python dependencies are installed into the gateway's own packages, and the engine belongs
-in this app's sidecar environment), and no model weights are vendored, so the
+SCOPE (MI-6 remainder, formerly "MI-2c"): the heavy ML engine is declared in ``app.json``
+``sidecarDependencies``, which Install engine puts in this app's own Python environment where
+the sidecar runs, never in ``pythonDependencies`` (those go into the gateway's own packages).
+Nothing installs it before the owner asks, and no model weights are vendored, so the
 manifest/contract tests run everywhere. When no engine is installed the provider degrades
 gracefully (``is_available`` → False, ``synthesize`` → None) rather than raising, and
-``availability()`` names the two commands that install it. The spike CHOSE OmniVoice (bake-off
+``availability()`` sends the owner to Install engine. The spike CHOSE OmniVoice (bake-off
 0.906 vs 0.658 — see the core plan doc); real zero-shot inference runs in the app's
 ``worker.py`` through the SDK sidecar runner, weights download resumably with a
 completion receipt, and a sidecar killed mid-synthesis surfaces its typed crash
@@ -37,7 +37,6 @@ import json
 import logging
 import os
 import shutil
-import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -118,28 +117,6 @@ def _detect_engine() -> str:
         except (ImportError, ValueError):
             continue
     return ""
-
-
-def _engine_install_steps() -> str:
-    """One command that puts the engine where the sidecar runs, with this machine's paths.
-
-    The environment is made from the interpreter PersonalClaw runs on, as core's own sidecar
-    install does: OmniVoice needs Python 3.10 or newer, and a bare ``python3`` can be older
-    (macOS ships 3.9). One ``cd`` rather than the environment's path three times, because the
-    Providers card shows at most 500 characters of the reason this ends up in.
-    """
-    try:
-        from personalclaw.sdk.sidecar import sidecar_venv_dir
-
-        app_dir = str(sidecar_venv_dir("voice-clone-tts").parent)
-    except ImportError:
-        app_dir = "<PersonalClaw home>/apps/voice-clone-tts"
-    pip = "venv\\Scripts\\pip" if os.name == "nt" else "venv/bin/pip"
-    return f"`cd {app_dir} && {sys.executable} -m venv venv && {pip} install omnivoice`"
-
-
-#: Core keeps this much of an availability reason (``providers/availability.py``).
-_REASON_BUDGET = 500
 
 
 def _worker_path() -> Path:
@@ -389,20 +366,15 @@ def create_provider(config: dict[str, Any] | None = None) -> VoiceCloneTtsProvid
 
 
 def availability() -> tuple[bool, str]:
-    """Whether cloning synthesis can run here — i.e. a candidate engine is installed."""
-    engine = _detect_engine()
-    if engine:
+    """Whether cloning synthesis can run here — i.e. a candidate engine is installed.
+
+    The engine is ``dependencies.sidecarDependencies``, which Install engine puts in this app's
+    own Python environment, so the reason sends the owner there rather than to a shell.
+    """
+    if _detect_engine():
         return True, ""
-    head = (
-        "The OmniVoice cloning engine is not installed, and PersonalClaw does not install it "
-        "for you. Put it in this app's own Python environment: "
+    return False, (
+        "The OmniVoice cloning engine is not installed. Install engine, on this app's card in "
+        "Settings → Providers, puts it in the app's own Python environment (it brings torch, "
+        "several GB). Then download OmniVoice in Settings → Models."
     )
-    tail = (
-        " (it brings torch, several GB). Then press Check again, and download OmniVoice in "
-        "Settings → Models."
-    )
-    reason = head + _engine_install_steps() + tail
-    if len(reason) > _REASON_BUDGET:
-        # Paths too long for the card: a command cut short is worse than none.
-        reason = head + "the commands are in the app's README, under Installing the engine." + tail
-    return False, reason

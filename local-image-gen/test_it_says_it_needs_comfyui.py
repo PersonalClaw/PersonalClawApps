@@ -44,6 +44,21 @@ def test_the_store_card_says_it_runs_on_a_comfyui_you_run():
     assert "Configure page" in _MANIFEST["description"]
 
 
+def test_install_consent_and_the_store_card_name_comfyui_before_anything_installs():
+    """🔴 Red on main: no ``requires``, so install consent had no "What it needs that
+    PersonalClaw doesn't install" row and the Store card no "Needs ComfyUI". The core manifest
+    reads it and holds each string to what those surfaces show."""
+    from personalclaw.apps.manifest import AppManifest
+
+    [comfy] = _MANIFEST["requires"]
+    assert comfy["name"] == "ComfyUI"
+    assert "on this machine" in comfy["why"]
+    assert _ENDPOINT["default"] in comfy["how"] and "Configure page" in comfy["how"]
+    parsed = AppManifest.from_dict(_MANIFEST)
+    assert [p.name for p in parsed.requires] == ["ComfyUI"]
+    assert parsed.validate() == []
+
+
 def test_the_address_is_a_required_field_not_an_advanced_one():
     """🔴 Red on main: the field was tagged ``advanced``. It is ``required`` instead, the
     repo's one convention for an app whose whole job is to talk to your server (vLLM,
