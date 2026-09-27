@@ -81,6 +81,9 @@ class BotAPI(TelegramAPI):
                                 reply_markup=None, disable_web_page_preview=None):
         return {"message_id": message_id}
 
+    async def delete_message(self, chat_id, message_id):
+        return True
+
     async def send_document(self, chat_id, file_path, *, caption=None, reply_to_message_id=None):
         return {}
 

@@ -52,6 +52,9 @@ class _ScriptedAPI(TelegramAPI):
     async def edit_message_text(self, *a, **k):
         return {}
 
+    async def delete_message(self, *a, **k):
+        return True
+
     async def send_document(self, *a, **k):
         return {}
 

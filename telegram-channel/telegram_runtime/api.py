@@ -3,7 +3,8 @@
 The plan mandates the raw Bot API over ``httpx`` (already a core dependency), not a
 third-party Telegram library. This module is the whole surface the transport +
 delivery need: typed thin wrappers for ``getMe``, ``getUpdates``, ``sendMessage``,
-``editMessageText``, ``sendDocument``, ``sendPhoto`` and ``answerCallbackQuery``,
+``editMessageText``, ``deleteMessage``, ``sendDocument``, ``sendPhoto`` and
+``answerCallbackQuery``,
 with the one piece of real logic Telegram forces on every caller — the ``429 Too
 Many Requests`` ``retry_after`` backoff.
 
@@ -78,6 +79,10 @@ class TelegramAPI(ABC):
         disable_web_page_preview: bool | None = None,
     ) -> dict[str, Any]:
         """``editMessageText`` — edit an already-sent message (used for streaming)."""
+
+    @abstractmethod
+    async def delete_message(self, chat_id: int | str, message_id: int) -> bool:
+        """``deleteMessage`` — remove a message the bot sent (a streamed placeholder)."""
 
     @abstractmethod
     async def send_document(
@@ -273,6 +278,11 @@ class HTTPTelegramAPI(TelegramAPI):
                 "disable_web_page_preview": disable_web_page_preview,
             },
         ) or {}
+
+    async def delete_message(self, chat_id: int | str, message_id: int) -> bool:
+        return bool(
+            await self._call("deleteMessage", data={"chat_id": chat_id, "message_id": message_id})
+        )
 
     async def send_document(
         self, chat_id: int | str, file_path: str, *,

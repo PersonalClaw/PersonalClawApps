@@ -122,6 +122,11 @@ class DiscordAPI(ABC):
         approval prompt drops its now-stale buttons."""
 
     @abstractmethod
+    async def delete_message(self, channel_id: str, message_id: str) -> None:
+        """``DELETE /channels/{id}/messages/{id}`` — remove a message the bot sent (a
+        streamed placeholder)."""
+
+    @abstractmethod
     async def create_dm(self, user_id: str) -> dict[str, Any]:
         """``POST /users/@me/channels`` — open (or resolve) the DM channel with a user.
 
@@ -427,6 +432,9 @@ class HTTPDiscordAPI(DiscordAPI):
                 "PATCH", f"/channels/{channel_id}/messages/{message_id}", json=payload
             )
         )
+
+    async def delete_message(self, channel_id: str, message_id: str) -> None:
+        await self._call("DELETE", f"/channels/{channel_id}/messages/{message_id}")
 
     async def create_dm(self, user_id: str) -> dict[str, Any]:
         return self._as_dict(

@@ -68,6 +68,9 @@ class _FakeAPI(TelegramAPI):
         self.edits.append({"chat_id": str(chat_id), "text": text})
         return {"message_id": message_id}
 
+    async def delete_message(self, chat_id, message_id):
+        return True
+
     async def send_document(self, chat_id, file_path, *, caption=None, reply_to_message_id=None):
         return {"message_id": 0}
 

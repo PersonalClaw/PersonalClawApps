@@ -21,6 +21,17 @@ equality skip the earlier draft needed is unnecessary. Advancing the cursor is
 deliberately decoupled from FILTERING: a bot/own message still moves the cursor
 (it was seen and judged), while a channel whose fetch RAISED keeps its old cursor
 so the next poll retries the same window rather than silently skipping messages.
+
+**A channel's first poll starts after its newest message.** A channel with no cursor yet
+(newly watched, or the first poll after the app is enabled) records the ts of its newest
+message and surfaces nothing: those messages were not sent to PersonalClaw, and every one
+surfaced raises an inbox event, so the channel's backlog would fire the owner's inbox
+automations at once. Mail Inbox and Email Channel start the same way (ledger 250).
+
+**A poll that can read no watched channel RAISES**, with a sentence naming each channel and
+Slack's reason, which core's inbox shows as this source's health; it used to log at debug
+and return nothing, so a revoked token read like a quiet workspace. A channel that fails
+while others read is logged at WARNING and read again at the next poll.
 """
 
 from __future__ import annotations
@@ -45,9 +56,24 @@ from slack_runtime.settings import LiveConfig, load_tokens
 
 logger = logging.getLogger(__name__)
 
-#: Slack returns newest-first; cap a single poll so a long-quiet channel cannot
-#: flood the Inbox on the first run after enable.
+#: Slack returns newest-first; cap a single poll. (A channel's first poll surfaces nothing:
+#: it only records where the channel is.)
 _POLL_LIMIT = 50
+
+
+class SlackUnreadable(Exception):
+    """No watched channel could be read. Its message is the sentence the inbox shows."""
+
+
+def _slack_reason(exc: BaseException) -> str:
+    """Slack's own word for a failed call (``not_in_channel``, ``invalid_auth``), else the
+    exception's text: ``SlackApiError`` spells its reply over two lines around a URL."""
+    response = getattr(exc, "response", None)
+    try:
+        said = response.get("error") if response is not None else None
+    except Exception:  # noqa: BLE001 - a response that cannot be read says nothing
+        said = None
+    return str(said or exc or type(exc).__name__)
 
 
 class SlackInboxSource(MessageSourceProvider):
@@ -93,20 +119,39 @@ class SlackInboxSource(MessageSourceProvider):
     ) -> tuple[list[IncomingMessage], dict[str, str]]:
         """Fetch messages newer than each channel's checkpoint.
 
-        Returns ``(messages, updated_checkpoints)``. A channel whose fetch fails
-        keeps its old checkpoint, so the next poll retries the same window instead
-        of skipping past unread messages.
+        Returns ``(messages, updated_checkpoints)``. A channel with no checkpoint yet only
+        records where it is (see the module docstring). A channel whose fetch fails keeps
+        its old checkpoint, so the next poll retries the same window instead of skipping
+        past unread messages; when every watched channel fails, the poll raises.
         """
         out: list[IncomingMessage] = []
         cursors = dict(checkpoints)
+        failed: list[str] = []
         for channel_id in watched_channels:
+            first = channel_id not in checkpoints
             since = checkpoints.get(channel_id, "0")
             try:
-                raw = await self._client.fetch_history(channel_id, since, _POLL_LIMIT)
-            except Exception:
+                limit = 1 if first else _POLL_LIMIT
+                raw = await self._client.fetch_history(channel_id, since, limit)
+            except Exception as exc:  # noqa: BLE001 - one channel's failure is reported, not fatal
                 # Keep the old cursor: a transient API error must not look like
                 # "nothing new" and consume the unread window.
-                logger.debug("inbox poll failed for %s", channel_id, exc_info=True)
+                reason = _slack_reason(exc)
+                failed.append(f"{channel_id} ({reason})")
+                logger.warning(
+                    "slack inbox: channel %s could not be read (%s); it is read again at the "
+                    "next poll",
+                    channel_id, reason,
+                )
+                continue
+            if first:
+                start = max((str(m.get("ts", "")) for m in raw), key=_ts_epoch, default="0")
+                cursors[channel_id] = start if _ts_epoch(start) else "0"
+                logger.info(
+                    "slack inbox: first poll of %s — starting after %s, so the messages already "
+                    "there are not surfaced",
+                    channel_id, cursors[channel_id],
+                )
                 continue
             newest = since
             # Slack returns newest-first; reverse so the Inbox reads oldest-first.
@@ -137,15 +182,24 @@ class SlackInboxSource(MessageSourceProvider):
                     )
                 )
             cursors[channel_id] = newest
+        if failed and len(failed) == len(watched_channels):
+            raise SlackUnreadable(
+                "none of the watched Slack channels could be read: " + ", ".join(failed)
+            )
         return out, cursors
 
-    async def send_reply(self, channel_id: str, text: str, thread_ts: str | None = None) -> bool:
+    async def send_reply(
+        self, channel_id: str, text: str, thread_ts: str | None = None
+    ) -> "bool | ReplyNotPosted":
+        """``True`` once Slack took the reply; otherwise a falsy :class:`ReplyNotPosted`
+        whose ``str()`` is Slack's reason, which core's inbox shows the owner who pressed
+        Send (a plain ``False`` told them nothing)."""
         try:
             await self._client.post_message(channel_id, text, thread_ts)
             return True
-        except Exception:
-            logger.debug("inbox send_reply failed for %s", channel_id, exc_info=True)
-            return False
+        except Exception as exc:  # noqa: BLE001 - the reason is the owner's answer
+            logger.warning("slack inbox: the reply to %s was not posted", channel_id, exc_info=True)
+            return ReplyNotPosted(channel_id, _slack_reason(exc))
 
     async def add_reaction(self, channel_id: str, ts: str, emoji: str) -> bool:
         try:
@@ -183,6 +237,21 @@ class SlackInboxSource(MessageSourceProvider):
             name = user_id
         self._names[user_id] = name
         return name
+
+
+class ReplyNotPosted:
+    """A reply Slack did not take: falsy, and its ``str()`` says why (Email Channel's
+    ``SendRefused`` convention, which core's inbox reads)."""
+
+    def __init__(self, channel_id: str, reason: str) -> None:
+        self.channel_id = channel_id
+        self.reason = reason
+
+    def __bool__(self) -> bool:
+        return False
+
+    def __str__(self) -> str:
+        return f"Slack refused it in {self.channel_id} ({self.reason})."
 
 
 def _ts_epoch(ts: str) -> float:

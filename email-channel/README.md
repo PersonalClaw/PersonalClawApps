@@ -116,7 +116,7 @@ other app. (Or [install it from a shell](../docs/third-party-install.md#installi
 
 | Key | Label | Notes |
 |---|---|---|
-| `imap_host` / `imap_port` / `imap_user` / `imap_use_ssl` | IMAP | Inbound. 993 + SSL by default. |
+| `imap_host` / `imap_port` / `imap_user` / `imap_use_ssl` | IMAP | Inbound. 993 + SSL by default. With IMAP SSL off (usually 143), the connection is upgraded with STARTTLS before the login. |
 | `imap_password` | IMAP App Password | Write-only. An app password, never your account password. |
 | `folder` | Folder | Polled **read-only** — your mail is never marked read. |
 | `smtp_host` / `smtp_port` / `smtp_user` / `smtp_security` | SMTP | Outbound. 587 + STARTTLS by default. |
@@ -137,7 +137,9 @@ removes them. Passwords an earlier release's setup saved under `EMAIL_IMAP_PASS`
   STARTTLS all check the server's certificate and host name against this machine's
   certificate authorities, plus the one **CA Certificate File** names. Nothing turns the
   check off: a server nothing vouches for is refused, and the channel's status says
-  which server, why, and that the password was not sent.
+  which server, why, and that the password was not sent. With **IMAP SSL** off, the IMAP
+  connection is upgraded with STARTTLS before the login, and a server that does not offer
+  STARTTLS is refused the same way: the password is never sent in the clear.
 - **A first connection starts after the newest message.** The mail already in the folder
   when you set the channel up is never answered; mail that arrives after it is. The same
   happens when the server renumbers the folder (`UIDVALIDITY` changes).
@@ -208,7 +210,13 @@ channel cannot stream". Both halves are asserted together in
 Approvals arrive as a **reply token**: the prompt mail carries `APPROVE <token>` /
 `DENY <token>`, and only a reply from an already-allowed sender can resolve one. Both the
 verb and the token must be present, and an explicit `DENY` wins over a body containing
-both.
+both. A chat that started in this mailbox is asked here first; *Settings → Notifications →
+Send approvals to* decides for the rest.
+
+Notifications can reach the mailbox too. A notification rule with the **Channel DM** target
+sends its note to the owner on the first connected channel that reaches them, in name order,
+so here when Email is that channel (`deliver_text`); a schedule's or heartbeat's result for
+the owner is sent the same way, through `deliver_notification`.
 
 ## Deferred, on purpose
 
@@ -220,10 +228,6 @@ both.
   registration, and no browser round-trip in a headless gateway. OAuth2 would add a
   per-provider registration story and a refresh-token lifecycle before it improved
   anything; when a provider we care about drops app passwords, it becomes worth building.
-- **Digest delivery target.** `deliver_notification` is the hook plan 42's notification
-  rules use for a `channel_dm` / digest target; the core rules engine's `channel_dm`
-  target has no dispatcher wired yet, so nothing in this app needs to change when it
-  lands.
 
 ## License
 

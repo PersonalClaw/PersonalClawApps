@@ -21,6 +21,10 @@ ships as a self-contained directory:
   - `transport.py` — the `getUpdates` long-poll inbound loop + outbound `send`.
   - `delivery.py` — the `ChannelDelivery` the gateway delivers results through
     (MarkdownV2 rendering, throttled edit-streaming, inline-keyboard approvals).
+    A turn's progress message keeps only its task lines when the turn ends, each
+    task's line updated in place, and is removed when it only ever said "Thinking…":
+    the reply is a message of its own. An approval prompt too long for one message
+    is split like a reply, its buttons on the last part.
     Only the owner's press answers an approval: in a tracked group every member sees
     the buttons, and anyone else's press is refused and logged.
   - `format.py` — the MarkdownV2 escaper (the classic Telegram footgun, contained), and

@@ -95,7 +95,7 @@ DRAFT_SEND_DISABLED = "sending is off (send_enabled=false) — draft-by-default"
 DRAFT_NO_SMTP_CONFIG = "SMTP host/login not configured"
 DRAFT_NO_CREDENTIAL = "no SMTP password set"
 SEND_FAILED = "SMTP send failed"
-NO_TARGET = "no known reply target for this channel/thread"
+NO_TARGET = "no known mail to reply to (the reply names no Message-ID this source surfaced)"
 
 
 def draft_reason(
@@ -138,6 +138,45 @@ class ReplyOutcome:
     #: The composed message. Present whenever composition happened — the proof that
     #: draft mode composed something rather than doing nothing at all.
     message: EmailMessage | None = None
+
+
+#: Each reason a reply was not sent, as the owner who pressed Send reads it after "Mail Inbox
+#: didn't send the reply: ". The reasons above stay what the log and the SEL trail record.
+_NOT_SENT = {
+    DRAFT_DRY_RUN: "this was a dry run, so it kept the reply as a draft.",
+    DRAFT_LIVE_WRITES_DISABLED: (
+        f"live writes are off on this machine ({_LIVE_WRITES_ENV} is set), so it kept the "
+        "reply as a draft."
+    ),
+    DRAFT_SEND_DISABLED: (
+        "Send Replies is off, so it kept the reply as a draft. Turn Send Replies on in Mail "
+        "Inbox's Configure form to send."
+    ),
+    DRAFT_NO_SMTP_CONFIG: (
+        "its SMTP Host and SMTP Username aren't set, so it kept the reply as a draft."
+    ),
+    DRAFT_NO_CREDENTIAL: "no SMTP password is saved, so it kept the reply as a draft.",
+    NO_TARGET: "it has no record of that mail, so there is no one to reply to.",
+}
+
+
+@dataclass(frozen=True)
+class ReplyNotSent:
+    """What ``send_reply`` returns for a reply it did not send: FALSY, so a caller reading
+    "was it delivered" still reads no, and its ``str()`` says why, which core's inbox shows
+    the owner who pressed Send. The convention Email Channel's ``SendRefused`` follows."""
+
+    reason: str
+    draft_path: str = ""
+
+    def __bool__(self) -> bool:
+        return False
+
+    def __str__(self) -> str:
+        if self.reason.startswith(f"{SEND_FAILED}: "):
+            # The SMTP error is already a sentence (``tls.describe_failure``).
+            return f"{self.reason[len(SEND_FAILED) + 2:]}, so it kept the reply as a draft."
+        return _NOT_SENT.get(self.reason, self.reason)
 
 
 # ── the reply-target store ──────────────────────────────────────────────────────────
@@ -214,22 +253,20 @@ def remember_target(target: ReplyTarget) -> None:
 
 
 def lookup_target(channel_id: str, thread_ts: str | None = None) -> ReplyTarget | None:
-    """The message a reply on *channel_id* should answer, or None.
+    """The mail a reply on *channel_id* answers, or None.
 
-    ``thread_ts`` carries the parent's ``Message-ID`` when the caller knows it (that is
-    what the provider puts on ``IncomingMessage.id``). Without it, fall back to the most
-    recent message on that channel — never to "some message", and never across channels:
-    replying to the wrong sender is worse than not replying."""
-    rows = load_targets()
-    if thread_ts:
-        wanted = thread_ts.strip()
-        for row in reversed(rows):
-            if row.message_id == wanted:
-                return row
-        # An explicit id that is not known is a refusal, not an invitation to guess.
+    ``thread_ts`` is that mail's ``Message-ID``: what the provider put on
+    ``IncomingMessage.id``, which PersonalClaw's inbox keeps on the row and hands back. A reply
+    that names no mail is refused, and so is one naming a mail this source has no record of, or
+    one from another channel. It used to fall back to the most recent mail on the channel, and
+    every mail this source surfaces arrives on the same channel (the receiving address), so a
+    reply to one mail went to whoever wrote there last: replying to the wrong sender is worse
+    than not replying."""
+    wanted = (thread_ts or "").strip()
+    if not wanted:
         return None
-    for row in reversed(rows):
-        if row.channel_id == channel_id:
+    for row in reversed(load_targets()):
+        if row.message_id == wanted and row.channel_id == channel_id:
             return row
     return None
 

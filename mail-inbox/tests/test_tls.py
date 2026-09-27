@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import imaplib
-import logging
 import smtplib
 import ssl
 from email.message import EmailMessage
@@ -30,7 +29,7 @@ from mail_inbox_runtime.settings import MailInboxSettings, _APP
 from mail_inbox_runtime.smtp_client import SmtpError, SmtplibSender
 from mail_inbox_runtime.smtp_client import probe_login as smtp_probe
 
-from _tls_servers import ImapsServer, StarttlsSmtpServer, mint
+from _tls_servers import ImapsServer, StarttlsImapServer, StarttlsSmtpServer, mint
 
 
 @pytest.fixture
@@ -124,19 +123,23 @@ class TestTheSourceUsesTheSetting:
             },
         )
 
-    def test_refused_without_it_then_polling_with_it(self, imaps, ca, caplog):
+    def test_refused_without_it_then_polling_with_it(self, imaps, ca):
+        """Refused, the poll fails with the sentence core's inbox shows for this source."""
         self._configure(imaps.port)
-        with caplog.at_level(logging.WARNING, logger="mail_inbox_runtime"):
-            messages, checkpoints = asyncio.run(MailInboxProvider().poll([], {}, "me"))
-        assert messages == [] and checkpoints == {}
+        with pytest.raises(ImapError) as refused:
+            asyncio.run(MailInboxProvider().poll([], {}, "me"))
         assert imaps.logins == []
-        assert "is not trusted" in caplog.text and "so the password was not sent" in caplog.text
+        said = str(refused.value)
+        assert "is not trusted" in said and "so the password was not sent" in said
 
         self._configure(imaps.port, str(ca.ca))
         messages, checkpoints = asyncio.run(MailInboxProvider().poll([], {}, "me"))
         assert len(imaps.logins) == 1
-        key = MailInboxProvider._checkpoint_key(MailInboxSettings.load())
-        assert checkpoints == {key: "0"}, "the empty folder was read and its start recorded"
+        settings = MailInboxSettings.load()
+        assert checkpoints == {
+            MailInboxProvider._checkpoint_key(settings): "0",
+            MailInboxProvider._validity_key(settings): "7",
+        }, "the empty folder was read and its start recorded, in the numbering it is in"
 
     def test_the_sender_gets_it_too(self, ca):
         self._configure(993, str(ca.ca))
@@ -243,3 +246,95 @@ class TestTheDoctorSaysWhatIsTrusted:
     def test_a_ca_file_that_cannot_be_loaded_fails(self, tmp_path):
         line = self._line(str(tmp_path / "nope.pem"))
         assert line.status == "fail" and "could not be loaded" in line.detail
+
+
+class TestWithSslOffTheConnectionIsUpgradedFirst:
+    """Ledger 282: with Use SSL off, ``imaplib.IMAP4`` logged in on the plain connection, so
+    the password crossed the network in the clear. It is upgraded with STARTTLS through the
+    verifying context first now, and a server that cannot upgrade is refused before the
+    login. There is no setting that sends the password in the clear."""
+
+    @pytest.fixture
+    def plain(self, ca):
+        server = StarttlsImapServer(ca)
+        yield server
+        server.close()
+
+    @pytest.fixture
+    def no_upgrade(self, ca):
+        server = StarttlsImapServer(ca, offer_starttls=False)
+        yield server
+        server.close()
+
+    def test_the_login_goes_over_tls(self, plain, ca):
+        client = Imap4Client("127.0.0.1", plain.port, "u", "pw", use_ssl=False, ca_file=str(ca.ca))
+        client.connect()
+        assert client.select_folder("INBOX") == 7
+        client.close()
+        assert len(plain.logins) == 1
+        assert plain.clear_logins == []
+
+    def test_a_server_that_cannot_upgrade_never_gets_the_password(self, no_upgrade, ca):
+        client = Imap4Client(
+            "127.0.0.1", no_upgrade.port, "u", "pw", use_ssl=False, ca_file=str(ca.ca)
+        )
+        with pytest.raises(ImapError) as refused:
+            client.connect()
+        assert str(refused.value) == (
+            f"the IMAP server 127.0.0.1:{no_upgrade.port} doesn't offer STARTTLS, so the "
+            "password was not sent: with Use SSL off, the connection must be upgraded to TLS "
+            "before the login. Turn Use SSL on (usually port 993), or use a server that offers "
+            "STARTTLS"
+        )
+        assert no_upgrade.clear_logins == [] and no_upgrade.logins == []
+
+    def test_the_upgrade_checks_the_certificate_like_implicit_tls(self, plain):
+        client = Imap4Client("127.0.0.1", plain.port, "u", "pw", use_ssl=False)
+        with pytest.raises(ImapError) as refused:
+            client.connect()
+        assert "is not trusted" in str(refused.value)
+        assert "so the password was not sent" in str(refused.value)
+        assert plain.clear_logins == [] and plain.logins == []
+
+    def test_the_source_polls_through_the_upgrade(self, plain, ca):
+        from personalclaw.sdk.settings import ProviderSettings
+
+        ProviderSettings.update(
+            _APP,
+            {
+                "host": "127.0.0.1", "port": plain.port, "use_ssl": False,
+                "username": "me@example.com", "address": "me@example.com", "folder": "INBOX",
+                "allow_senders": ["*@example.com"], "password": "secret",
+                "tls_ca_file": str(ca.ca),
+            },
+        )
+        messages, checkpoints = asyncio.run(MailInboxProvider().poll([], {}, "me"))
+        assert messages == [] and len(plain.logins) == 1 and plain.clear_logins == []
+        settings = MailInboxSettings.load()
+        assert checkpoints == {
+            MailInboxProvider._checkpoint_key(settings): "0",
+            MailInboxProvider._validity_key(settings): "7",
+        }
+
+    def test_imaplib_is_given_a_timeout_both_ways(self, monkeypatch):
+        seen = []
+
+        class Capture:
+            capabilities = ("IMAP4REV1", "STARTTLS")
+
+            def __init__(self, host, port, ssl_context=None, timeout=None):
+                seen.append(timeout)
+
+            def starttls(self, ssl_context=None):
+                return ("OK", [b""])
+
+            def login(self, user, password):
+                return ("OK", [b""])
+
+        monkeypatch.setattr(imaplib, "IMAP4_SSL", Capture)
+        monkeypatch.setattr(imaplib, "IMAP4", Capture)
+        Imap4Client("mail.test", 993, "u", "p").connect()
+        Imap4Client("mail.test", 143, "u", "p", use_ssl=False).connect()
+        from mail_inbox_runtime.imap_client import IMAP_TIMEOUT_SECS
+
+        assert seen == [IMAP_TIMEOUT_SECS, IMAP_TIMEOUT_SECS]

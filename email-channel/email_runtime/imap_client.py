@@ -28,7 +28,10 @@ skip the whole mailbox. The client reports the value so the transport can reset.
 **The server is verified before it is trusted with the password.** ``IMAP4_SSL`` is given
 :func:`~email_runtime.tls.client_context` (system CAs, host name checked, plus the
 ``tls_ca_file`` setting's authority), where it used to build a context that checks
-nothing. A connection failure is raised as an :class:`ImapError` whose ``kind`` says which
+nothing. With ``imap_use_ssl`` off, the plain connection is upgraded with STARTTLS through
+the same context before the login, and a server that does not offer STARTTLS is refused
+with the password unsent: it used to be sent in the clear, and no setting sends it that way
+now. A connection failure is raised as an :class:`ImapError` whose ``kind`` says which
 stage failed — ``tls``, ``unreachable`` or ``auth`` — and whose text is the sentence the
 channel's health shows.
 """
@@ -123,25 +126,10 @@ class Imap4Client:
         """Open the connection, verify the server, and log in.
 
         Raises :class:`ImapError` on any failure, its ``kind`` naming the stage. The
-        certificate is checked in the handshake, so a server that fails it never sees the
+        certificate is checked in the handshake (implicit TLS, or STARTTLS with
+        ``imap_use_ssl`` off), so a server that fails it, or cannot upgrade, never sees the
         login."""
-        try:
-            conn: imaplib.IMAP4 = (
-                imaplib.IMAP4_SSL(
-                    self._host, self._port, ssl_context=client_context(self._ca_file),
-                    timeout=IMAP_TIMEOUT_SECS,
-                )
-                if self._use_ssl
-                else imaplib.IMAP4(self._host, self._port, timeout=IMAP_TIMEOUT_SECS)
-            )
-        except (imaplib.IMAP4.error, OSError) as exc:
-            if isinstance(exc, (ssl.SSLError, CaFileError)):
-                kind = "tls"
-            elif isinstance(exc, OSError):
-                kind = "unreachable"
-            else:
-                kind = "protocol"  # it answered, and not as an IMAP server greets
-            raise ImapError(self._describe(exc), kind=kind) from exc
+        conn = self._open()
         try:
             conn.login(self._username, self._password)
         except imaplib.IMAP4.error as exc:
@@ -155,6 +143,41 @@ class Imap4Client:
             _logout_quietly(conn)
             raise ImapError(self._describe(exc), kind="unreachable") from exc
         self._conn = conn
+
+    def _open(self) -> imaplib.IMAP4:
+        """A connection the password may be sent on: implicit TLS, or plain IMAP upgraded
+        with STARTTLS. Nothing else is returned, so nothing else is logged in on."""
+        try:
+            if self._use_ssl:
+                return imaplib.IMAP4_SSL(
+                    self._host, self._port, ssl_context=client_context(self._ca_file),
+                    timeout=IMAP_TIMEOUT_SECS,
+                )
+            conn = imaplib.IMAP4(self._host, self._port, timeout=IMAP_TIMEOUT_SECS)
+        except (imaplib.IMAP4.error, OSError) as exc:
+            raise ImapError(self._describe(exc), kind=_stage(exc)) from exc
+        where = f"the IMAP server {self._host}:{self._port}"
+        if "STARTTLS" not in conn.capabilities:
+            _logout_quietly(conn)
+            raise ImapError(
+                f"{where} doesn't offer STARTTLS, so the password was not sent: with IMAP SSL "
+                "off, the connection must be upgraded to TLS before the login. Turn IMAP SSL "
+                "on (usually port 993), or use a server that offers STARTTLS",
+                kind="tls",
+            )
+        try:
+            conn.starttls(ssl_context=client_context(self._ca_file))
+        except OSError as exc:  # the certificate refused, the handshake failed, a CA file bad
+            _logout_quietly(conn)
+            raise ImapError(self._describe(exc), kind=_stage(exc)) from exc
+        except imaplib.IMAP4.error as exc:
+            _logout_quietly(conn)
+            raise ImapError(
+                f"{where} could not upgrade the connection with STARTTLS "
+                f"({_server_text(exc)}), so the password was not sent",
+                kind="tls",
+            ) from exc
+        return conn
 
     def select_folder(self, folder: str) -> int:
         """Select *folder* read-only and return its ``UIDVALIDITY`` (0 if unreported).
@@ -290,6 +313,15 @@ class Imap4Client:
             conn.logout()
         except (imaplib.IMAP4.error, OSError):
             logger.debug("email: IMAP logout error", exc_info=True)
+
+
+def _stage(exc: BaseException) -> str:
+    """Which stage a connection attempt that raised *exc* failed at (:class:`ImapError`)."""
+    if isinstance(exc, (ssl.SSLError, CaFileError)):
+        return "tls"
+    if isinstance(exc, OSError):
+        return "unreachable"
+    return "protocol"  # it answered, and not as an IMAP server greets
 
 
 def _logout_quietly(conn: imaplib.IMAP4) -> None:

@@ -45,6 +45,17 @@ Three things this deliberately does *not* do:
 - **Prose never lands in `meta`.** `meta` is matched, not narrated, and core does not fence
   it — so a sender's Slack profile name is not there.
 
+## Messages in your Inbox
+
+The bundle's third provider is an **inbox source** (`slack_runtime.inbox_source:create_provider`):
+PersonalClaw's Inbox polls it while the app is enabled, for the channel ids listed in the
+Inbox's `inbox.watched_channels` (in `config.json`; no settings page edits it yet). Each new
+message in one of them becomes a row you can draft and send a reply to, posted in its
+thread. A channel's first poll starts after its newest message, so its history is not
+surfaced and fires none of your inbox automations; what is posted after it is. When no
+watched channel can be read (a revoked token, the bot not in the channel), the Inbox says so
+under Slack's name, with Slack's own reason for each channel.
+
 ## Results from your schedules
 
 A schedule can send its results here too. In the schedule's Advanced → Notify channel, pick

@@ -36,6 +36,10 @@ ships as a self-contained directory:
     outbound `send`.
   - `delivery.py` — the `ChannelDelivery` the gateway delivers results through
     (message splitting, throttled edit-streaming, button approvals, reactions).
+    A turn's progress message keeps only its task lines when the turn ends, each
+    task's line updated in place, and is removed when it only ever said "Thinking…":
+    the reply is a message of its own. An approval prompt too long for one message
+    is split like a reply, its buttons on the last part.
     Only the owner's press answers an approval: in a tracked channel everyone in it
     sees the buttons, and anyone else's press is refused and logged.
   - `settings.py` — the app's own DM-activation / application-id config + the
