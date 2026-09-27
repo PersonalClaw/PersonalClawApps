@@ -5,6 +5,9 @@ Alibaba Cloud Model Studio (DashScope) provider for PersonalClaw.
 ## Capabilities
 
 - **Chat** — Qwen family models via OpenAI-compatible endpoint
+- **Image input** — the Qwen-VL, QVQ and Qwen-Omni models are sent an attached image as the
+  image itself (`takes_images` in `provider.py` names the ones whose ids don't say so); every
+  other model gets the image's text instead
 - **Embedding** — text-embedding-v3, text-embedding-v2
 - **Image Generation** — qwen-image-2.0, qwen-image-2.0-pro, wan2.7-image, wan2.7-image-pro
 

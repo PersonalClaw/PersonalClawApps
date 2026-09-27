@@ -16,7 +16,9 @@ One server, three dialects:
 - Bedrock Converse (``POST /model/<id>/converse-stream``), answered in AWS's binary event-stream
   framing, for a boto3 client pointed here with ``AWS_ENDPOINT_URL_BEDROCK_RUNTIME``.
 
-``GET …/models`` answers too, so a provider that discovers a model at ``start()`` finds one.
+``GET …/models`` answers too, so a provider that discovers a model at ``start()`` finds one. It
+lists :data:`MODEL`, or the ids a test names (``RecordingModelServer(models=…)``) when what a
+catalog makes of each id is the point.
 
 Build the instance the way the product builds it: :func:`form_options` is what the Add-instance
 form saves (the app's own settings fields, no pinned model), and core calls a bound model with the
@@ -40,16 +42,23 @@ MODEL = "wire-test-model"
 #: The text every reply carries, so a test can tell the call completed.
 REPLY = "ok"
 
+#: A 1×1 PNG as the data URL core puts in an image part.
+PNG_DATA_URL = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
 
 class RecordingModelServer:
     """A chat endpoint on ``127.0.0.1`` that answers every dialect above and keeps every request.
 
     ``with RecordingModelServer() as server:`` starts it; ``server.url`` is its base URL and
     ``server.requests`` the ``{"method", "path", "headers", "body"}`` of each request, oldest
-    first (header names lower-cased).
+    first (header names lower-cased). ``models`` is what ``GET …/models`` lists.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, models: tuple[str, ...] = (MODEL,)) -> None:
+        self.models = tuple(models)
         self.requests: list[dict[str, Any]] = []
         self._lock = threading.Lock()
         self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), _handler_for(self))
@@ -100,6 +109,19 @@ def model_sent(request: dict[str, Any]) -> object:
     return body.get("model")
 
 
+def images_sent(request: dict[str, Any]) -> list[str]:
+    """The image URLs one recorded Chat Completions call carried, in message order: every
+    ``image_url`` content part, as the model receives it."""
+    body = request["body"] if isinstance(request["body"], dict) else {}
+    urls: list[str] = []
+    for message in body.get("messages") or []:
+        content = message.get("content") if isinstance(message, dict) else None
+        for part in content if isinstance(content, list) else []:
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                urls.append(str((part.get("image_url") or {}).get("url", "")))
+    return urls
+
+
 def sampling_sent(request: dict[str, Any]) -> tuple[object, object]:
     """``(temperature, output cap)`` as one recorded model call carried them — ``None`` for a
     field the request left out. Read in the request's own dialect: Converse nests both under
@@ -119,6 +141,30 @@ async def one_call(provider: Any, prompt: str = "hi") -> str:
     text = ""
     try:
         async for event in provider.stream(prompt):
+            if getattr(event, "kind", "") == "text_chunk":
+                text += getattr(event, "text", "") or ""
+    finally:
+        await provider.shutdown()
+    return text
+
+
+async def image_call(provider: Any) -> str:
+    """Drive ``provider`` through one model call carrying an image, the way core's native loop
+    makes it: ``start()``, one ``complete()`` whose user turn is a text part and an ``image_url``
+    part (core's neutral shape), ``shutdown()``. Returns the text it streamed."""
+    await provider.start()
+    text = ""
+    try:
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this image?"},
+                    {"type": "image_url", "image_url": {"url": PNG_DATA_URL}},
+                ],
+            }
+        ]
+        async for event in provider.complete(messages):
             if getattr(event, "kind", "") == "text_chunk":
                 text += getattr(event, "text", "") or ""
     finally:
@@ -276,21 +322,22 @@ def _converse_stream_reply() -> tuple[str, bytes]:
     )
 
 
-def _models_reply() -> tuple[str, bytes]:
+def _models_reply(models: tuple[str, ...]) -> tuple[str, bytes]:
     body = {
         "object": "list",
         "data": [
             {
-                "id": MODEL,
+                "id": model,
                 "object": "model",
                 "type": "model",
-                "display_name": MODEL,
+                "display_name": model,
                 "created_at": "2026-01-01T00:00:00Z",
             }
+            for model in models
         ],
         "has_more": False,
-        "first_id": MODEL,
-        "last_id": MODEL,
+        "first_id": models[0] if models else None,
+        "last_id": models[-1] if models else None,
     }
     return "application/json", json.dumps(body).encode()
 
@@ -317,7 +364,7 @@ def _handler_for(server: RecordingModelServer) -> type[BaseHTTPRequestHandler]:
             path = self.path.split("?", 1)[0]
             server.record("GET", path, self._headers(), None)
             if path.rstrip("/").endswith("/models"):
-                self._reply(200, *_models_reply())
+                self._reply(200, *_models_reply(server.models))
             else:
                 self._reply(404, "application/json", b'{"error": "not found"}')
 

@@ -2,6 +2,8 @@
 
 Provides:
   - **Chat/Code/Streaming** via OpenAI-compatible endpoint (``register_branded_app``)
+  - **Image input** on the Qwen models that read images (``Capability.VISION``; per model on the
+    catalog rows, see :func:`takes_images`)
   - **Embedding** via the same OpenAI-compat endpoint (``/embeddings``)
   - **Image generation** via OpenAI-compat ``/images/generations`` (Qwen-Image, Wan)
 
@@ -16,6 +18,7 @@ Auth: ``Authorization: Bearer {key}`` with the API key from config or
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import os
@@ -30,9 +33,13 @@ from personalclaw.sdk.image import (
 from personalclaw.sdk.model import (
     BrandedProviderSpec,
     Capability,
+    ConnectionResult,
     MediaCatalog,
     MediaModel,
+    ModelCatalog,
+    ModelInfo,
     PromptCache,
+    get_default_registry,
     register_branded_app,
     register_media_catalog,
 )
@@ -69,7 +76,7 @@ SPEC = BrandedProviderSpec(
     default_model="",  # resolved from live model discovery
     capabilities=frozenset({
         Capability.CHAT, Capability.CODE_TOOLS, Capability.STREAMING,
-        Capability.EMBEDDING,
+        Capability.VISION, Capability.EMBEDDING,
     }),
     fallback_models=(),
     # NONE - Qwen DOES cache, but only behind an EXPLICIT per-message breakpoint
@@ -81,7 +88,50 @@ SPEC = BrandedProviderSpec(
     notes="Alibaba Model Studio (DashScope) — Qwen chat + embedding. Select your regional endpoint.",
 )
 
-_factory, _create_chat_provider, create_catalog = register_branded_app(SPEC)
+_factory, _create_chat_provider, _branded_catalog = register_branded_app(SPEC)
+
+
+def takes_images(model_id: str) -> bool:
+    """Whether a DashScope model reads images though its id carries no marker core's classifier
+    knows: the QVQ visual-reasoning models (``qvq-max``) and the Omni models (``qwen-omni-turbo``,
+    ``qwen3-omni-flash``), which Model Studio documents as taking image input. The Qwen-VL family
+    (``qwen-vl-max``, ``qwen3-vl-plus``) is already tagged by its ``-vl`` marker."""
+    mid = model_id.lower()
+    return mid.startswith("qvq-") or "omni" in mid
+
+
+class AlibabaCatalog(ModelCatalog):
+    """DashScope's live model list, with image input stated where :func:`takes_images` says so.
+
+    Discovery, its fallback and the connection test are the branded catalog's, unchanged.
+    """
+
+    def __init__(self, branded: ModelCatalog) -> None:
+        self._branded = branded
+
+    async def list_models(self) -> list[ModelInfo]:
+        return [_declare_vision(row) for row in await self._branded.list_models()]
+
+    async def test_connection(self) -> ConnectionResult:
+        return await self._branded.test_connection()
+
+
+def _declare_vision(row: ModelInfo) -> ModelInfo:
+    """``row`` with ``image_modality`` added when it is a chat model that takes images."""
+    caps = list(row.capabilities)
+    if not takes_images(row.id) or "chat" not in caps or "image_modality" in caps:
+        return row
+    return dataclasses.replace(row, capabilities=[*caps, "image_modality"])
+
+
+def create_catalog(options: dict[str, Any] | None = None, *, model: str = "") -> AlibabaCatalog:
+    """Catalog factory (registry contract): the branded catalog, with the models that read images."""
+    return AlibabaCatalog(_branded_catalog(options, model=model))
+
+
+# register_branded_app registered its stock catalog under this type; register_catalog is
+# last-wins by contract, so this swaps in the one that states which models read images.
+get_default_registry().register_catalog(SPEC.type, create_catalog)
 
 # Register embedding catalog so the embedding adapter resolves `alibaba:model` refs.
 register_media_catalog(
