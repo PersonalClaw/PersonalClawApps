@@ -67,8 +67,12 @@ FORBIDDEN_NAMES = frozenset(
     }
 )
 
-#: Core's own trigger store file. An app that writes one has forked the source of truth for
-#: what automations exist — the failure the ``trigger`` provider type exists to prevent.
+#: Core's trigger store, by the two filenames that write it. ``triggers.json`` is the store.
+#: ``event_triggers.json`` is the second store core retired in #3640, and writing it still writes
+#: the first: any gateway boot that finds the file absorbs its rows into ``triggers.json``
+#: (``boot_migrate.absorb_event_triggers``) as the user's own triggers, a write-capable action's
+#: capability frozen in as the user's opt-in. An app that writes either has forked the source of
+#: truth for what automations exist — the failure the ``trigger`` provider type exists to prevent.
 FORBIDDEN_FILENAMES = frozenset({"triggers.json", "event_triggers.json"})
 
 #: Vacuity floor. A rail that discovered no channel apps would print "clean" while measuring

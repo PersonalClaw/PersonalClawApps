@@ -5,17 +5,23 @@ payload and ends at a real action provider receiving a fire, through: the real t
 inbound method, the REAL core guarded door (``channel_inbound.deliver_inbound`` over the
 real trust store in the isolated tmp home), this bundle's inbound tap, this bundle's
 trigger source, the ``emit`` callable core's own registered ``TriggerSourceTypeHandler``
-supplies, core's namespacing + origin fence, the event bus, and core's ``matches``. Nothing
-is hand-built: a declared-but-dead provider — the trap
-``test_manifest_types_match_handlers`` exists for — would see no call at all here.
+supplies, core's namespacing + origin fence, the event bus, and the gateway's event router:
+core's ``matches``, the gate walk and the one store dispatch. Nothing is hand-built: a
+declared-but-dead provider — the trap ``test_manifest_types_match_handlers`` exists for —
+would see no call at all here.
 
-Two hazards this file is shaped around.
+Three hazards this file is shaped around.
 
-**Process-global state.** ``trigger_sources``' registry, the event-trigger engine's memoized
-store and the guarded door's admission cache are all process-global. Every fixture restores
-unconditionally; the engine singleton is reset before AND after, because a leak in either
-direction shows up as a confusing red in an unrelated test (the lesson core's own
-``tests/test_trigger_sources.py`` records).
+**Process-global state.** ``trigger_sources``' registry, the bus's router and the guarded
+door's admission cache are all process-global. Every fixture restores unconditionally, and the
+router is attached only inside :func:`_fire_through_the_gateway`, which detaches it on the way
+out.
+
+**A no-fire assertion needs the router attached too.** An event trigger fires only where the
+gateway's router is attached; anywhere else the event is spooled for the gateway's next tick. A
+security clause driven without the router would pass even if a denied sender got through the
+door, because nothing fires in either case. So every clause that drives traffic goes through
+:func:`_fire_through_the_gateway`.
 
 **A test that proves the provider is DECLARED is not a test that it FIRES.** The manifest
 assertion is one test out of this file, deliberately; the rest drive traffic.
@@ -43,6 +49,7 @@ from discord_runtime.trigger_source import (
 from discord_runtime.transport import DiscordTransport
 
 _MANIFEST = Path(__file__).resolve().parents[1] / "app.json"
+_TRIGGER_ID = "dc-app-trigger"
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -50,23 +57,19 @@ _MANIFEST = Path(__file__).resolve().parents[1] / "app.json"
 
 @pytest.fixture
 def event_store(tmp_path, monkeypatch):
-    """An event-trigger store in the tmp home, with the engine singleton reset.
+    """Core's one trigger store in the tmp home. An event trigger is a ``kind: "event"`` row.
 
     BOTH ``PERSONALCLAW_HOME`` and ``config_dir`` are pinned: patching ``config_dir`` alone
-    still lets an import-bound store reach the developer's real ``~/.personalclaw``.
+    still lets an import-bound store reach the developer's real ``~/.personalclaw``. This home
+    is where the gateway's router reads the rows and records each fire.
     """
-    import personalclaw.event_triggers as et
-    from personalclaw.event_triggers import EventTriggerStore
+    from personalclaw.sdk.channel import TriggerStore
 
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("PERSONALCLAW_HOME", str(home))
     monkeypatch.setattr("personalclaw.config.loader.config_dir", lambda: home)
-    et._engine = None
-    try:
-        yield EventTriggerStore(home / "event_triggers.json")
-    finally:
-        et._engine = None
+    return TriggerStore(base_dir=home)
 
 
 @pytest.fixture
@@ -188,18 +191,47 @@ def _message_create(
     return payload
 
 
-def _armed_trigger(event_glob: str, trigger_id: str = "dc-app-trigger"):
+def _armed_trigger(event_glob: str, trigger_id: str = _TRIGGER_ID):
     """An ``AppEvent`` trigger bound to this app, with a READ-ONLY action."""
-    from personalclaw.event_triggers import APP_EVENT, SOURCE_APP, EventTrigger
+    from personalclaw.event_triggers import APP_EVENT, event_spec
+    from personalclaw.sdk.channel import Trigger
 
-    return EventTrigger(
+    return Trigger(
         id=trigger_id,
-        pattern=APP_EVENT,
-        source=SOURCE_APP,
-        event_glob=event_glob,
-        action_provider="notify",
-        debounce_secs=0.0,
+        name=trigger_id,
+        kind="event",
+        spec=event_spec(APP_EVENT, event_glob),
+        workflow={"inline": {"provider": "notify", "config": {}}},
     )
+
+
+def _run_count(store, trigger_id: str = _TRIGGER_ID) -> int:
+    """The fires core's gate walk admitted for the trigger: the meter ``max_fires`` reads."""
+    loaded = store.get(trigger_id)
+    assert loaded is not None, f"{trigger_id} is not in the trigger store"
+    return loaded.trigger.run_count
+
+
+def _fire_through_the_gateway(drive) -> None:
+    """Run ``drive()`` with the gateway's real event router attached, then wait out every fire.
+
+    The SDK publishes the trigger store and its rows but nothing that attaches the router, so
+    this reaches the gateway the way core's own ``tests/fakes.py::with_event_router`` does: a
+    bare orchestrator whose router dispatches through the real store dispatch, attached and
+    detached exactly as the gateway's boot and shutdown do.
+    """
+    from personalclaw.gateway import GatewayOrchestrator
+
+    async def _run() -> None:
+        orch = object.__new__(GatewayOrchestrator)
+        orch._start_event_triggers()
+        try:
+            await drive()
+            await orch._event_router.settle()
+        finally:
+            orch._stop_event_triggers()
+
+    asyncio.run(_run())
 
 
 def _capturing_action(calls):
@@ -283,12 +315,8 @@ def test_a_real_inbound_message_FIRES_AN_ARMED_TRIGGER_END_TO_END(
         await transport._on_message_create(
             _message_create(text="the quarterly deck is ready", author_id="42", message_id="77")
         )
-        for _ in range(50):
-            await asyncio.sleep(0)
-            if calls:
-                break
 
-    asyncio.run(_drive())
+    _fire_through_the_gateway(_drive)
 
     assert calls, "a real inbound Discord message never reached the action provider"
     ctx = calls[0]
@@ -298,7 +326,7 @@ def test_a_real_inbound_message_FIRES_AN_ARMED_TRIGGER_END_TO_END(
     assert is_fenced(ctx.payload["value"])
     assert "the quarterly deck is ready" in ctx.payload["value"]
     assert f"app:{APP_NAME}" in ctx.payload["value"]
-    assert event_store.load()[0].fire_count == 1
+    assert _run_count(event_store) == 1
 
 
 def test_a_tracked_guild_message_fires_the_GUILD_event(
@@ -322,12 +350,8 @@ def test_a_tracked_guild_message_fires_the_GUILD_event(
         await transport._on_message_create(
             _message_create(text="deploy now", guild_id="777", author_id="55")
         )
-        for _ in range(50):
-            await asyncio.sleep(0)
-            if calls:
-                break
 
-    asyncio.run(_drive())
+    _fire_through_the_gateway(_drive)
 
     assert calls, "a tracked-guild message never fired the guild event"
     assert calls[0].payload["event_type"] == f"{NAMESPACE_PREFIX}:{APP_NAME}:{EVENT_GUILD_MESSAGE}"
@@ -353,15 +377,13 @@ def test_a_DENIED_sender_arms_NOTHING(transport, registered_source, event_store,
 
     async def _drive():
         await transport._on_message_create(_message_create(text="run this", author_id="99"))
-        for _ in range(50):
-            await asyncio.sleep(0)
 
-    asyncio.run(_drive())
+    _fire_through_the_gateway(_drive)
 
     assert transport._delivery.texts, "the door did not refuse — this test proves nothing"
     assert "pairing code" in transport._delivery.texts[-1][1]
     assert not calls, "a DENIED sender fired an automation"
-    assert event_store.load()[0].fire_count == 0
+    assert _run_count(event_store) == 0
 
 
 def test_an_untracked_guild_message_arms_NOTHING(
@@ -381,13 +403,12 @@ def test_an_untracked_guild_message_arms_NOTHING(
         await transport._on_message_create(
             _message_create(text="spam", channel_id="999", guild_id="777", author_id="66")
         )
-        for _ in range(50):
-            await asyncio.sleep(0)
 
-    asyncio.run(_drive())
+    _fire_through_the_gateway(_drive)
 
     assert transport._delivery.texts == [], "an untracked guild must get no reply either"
     assert not calls
+    assert _run_count(event_store) == 0
 
 
 def test_the_event_NAME_is_NEVER_TAKEN_FROM_THE_MESSAGE(registered_source):
