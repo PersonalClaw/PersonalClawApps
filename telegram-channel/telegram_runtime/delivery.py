@@ -11,6 +11,9 @@ message repeatedly edited via ``editMessageText``. Telegram rate-limits edits
 hard, so :class:`TelegramDelivery` throttles to at most one edit per
 :data:`_EDIT_MIN_INTERVAL` seconds and always flushes the exact final text on
 ``stop_stream`` — the contract the fake-API tests pin.
+
+Every text that can outgrow one message goes out through :func:`send_parts`, which
+splits it into parts Telegram accepts and never lets one go missing quietly.
 """
 
 from __future__ import annotations
@@ -26,10 +29,72 @@ from personalclaw.sdk.channel import (
     sel,
 )
 
-from telegram_runtime.api import TelegramAPI
-from telegram_runtime.format import split_message, to_markdown_v2
+from telegram_runtime.api import TelegramAPI, TelegramAPIError
+from telegram_runtime.format import render_parts, to_markdown_v2
 
 logger = logging.getLogger(__name__)
+
+#: Telegram's code for a request it will not take as sent: for a MarkdownV2 text, the
+#: formatting it cannot parse.
+_BAD_REQUEST = 400
+
+
+async def send_parts(
+    api: TelegramAPI,
+    chat_id: int | str,
+    text: str,
+    *,
+    reply_markup: dict[str, Any] | None = None,
+    disable_web_page_preview: bool | None = None,
+    reply_to_message_id: int | None = None,
+) -> str:
+    """Send *text* as as many messages as it takes. Returns the last message id ("" for none).
+
+    Each part (:func:`~telegram_runtime.format.render_parts`) goes out as MarkdownV2. One the
+    Bot API refuses as a bad request is sent again as its plain source text, so the reader
+    loses that part's formatting rather than the part. Any other refusal, or a plain re-send
+    that is refused too, is logged naming the part and raised: a reply is never cut short
+    without a trace. A keyboard rides the last part, where the reader ends up; a reply-to
+    anchors the first."""
+    parts = render_parts(text)
+    last = ""
+    for index, part in enumerate(parts, 1):
+        options: dict[str, Any] = {
+            "reply_markup": reply_markup if index == len(parts) else None,
+            "disable_web_page_preview": disable_web_page_preview,
+            "reply_to_message_id": reply_to_message_id if index == 1 else None,
+        }
+        try:
+            msg = await api.send_message(
+                chat_id, part.markdown_v2, parse_mode="MarkdownV2", **options
+            )
+        except TelegramAPIError as exc:
+            if exc.error_code != _BAD_REQUEST:
+                logger.warning(
+                    "telegram: part %d of %d to %s was not delivered: %s",
+                    index, len(parts), chat_id, exc.description,
+                )
+                raise
+            logger.warning(
+                "telegram: part %d of %d to %s was refused as MarkdownV2 (%s); sending it as "
+                "plain text", index, len(parts), chat_id, exc.description,
+            )
+            try:
+                msg = await api.send_message(chat_id, part.plain, **options)
+            except Exception as plain_exc:
+                logger.warning(
+                    "telegram: part %d of %d to %s was not delivered, as plain text either: %s",
+                    index, len(parts), chat_id, plain_exc,
+                )
+                raise
+        except Exception as exc:
+            logger.warning(
+                "telegram: part %d of %d to %s was not delivered: %s",
+                index, len(parts), chat_id, exc,
+            )
+            raise
+        last = str(msg.get("message_id", "")) or last
+    return last
 
 # Minimum wall-clock seconds between two edits of the same streamed message. The
 # plan sets the floor at 1.1s; Telegram tolerates roughly one edit/second.
@@ -91,17 +156,11 @@ class TelegramDelivery:
         unfurl_links: bool | None = None, unfurl_media: bool | None = None,
         reply_broadcast: bool | None = None,
     ) -> str:
-        body_plain, _ = redact_exfiltration_urls(text)
-        body_plain, _ = redact_credentials(body_plain)
-        body = to_markdown_v2(body_plain)
-        last = ""
-        for part in split_message(body):
-            msg = await self._api.send_message(
-                channel, part, parse_mode="MarkdownV2",
-                disable_web_page_preview=(unfurl_links is False) or None,
-            )
-            last = str(msg.get("message_id", "")) or last
-        return last
+        body, _ = redact_exfiltration_urls(text)
+        body, _ = redact_credentials(body)
+        return await send_parts(
+            self._api, channel, body, disable_web_page_preview=(unfurl_links is False) or None,
+        )
 
     async def deliver_rich(
         self, channel: str, payload: Any, fallback_text: str, *,
@@ -111,32 +170,19 @@ class TelegramDelivery:
         # Telegram has no Block-Kit analogue; render the plain-text fallback. When a
         # caller hands a reply_markup dict through, pass it as an inline keyboard.
         markup = payload if isinstance(payload, dict) and "inline_keyboard" in payload else None
-        msg = await self._api.send_message(
-            channel, to_markdown_v2(fallback_text), parse_mode="MarkdownV2", reply_markup=markup,
-        )
-        return str(msg.get("message_id", ""))
+        return await send_parts(self._api, channel, fallback_text, reply_markup=markup)
 
     async def deliver_cron_result(
         self, channel: str, job_name: str, job_id: str, text: str, thread_ts: str = ""
     ) -> str:
         redacted, _ = redact_exfiltration_urls(text)
         redacted, _ = redact_credentials(redacted)
-        header = to_markdown_v2(f"⏰ Cron: {job_name}\n\n")
-        first = True
-        last = ""
-        for part in split_message(to_markdown_v2(redacted)):
-            body = (header + part) if first else part
-            first = False
-            msg = await self._api.send_message(channel, body, parse_mode="MarkdownV2")
-            last = str(msg.get("message_id", "")) or last
-        return last
+        return await send_parts(self._api, channel, f"⏰ Cron: {job_name}\n\n{redacted}")
 
     async def deliver_notification(
         self, channel: str, title: str, text: str, thread_ts: str = ""
     ) -> str:
-        body = to_markdown_v2(f"💓 {title}\n\n{text}")
-        msg = await self._api.send_message(channel, body, parse_mode="MarkdownV2")
-        return str(msg.get("message_id", ""))
+        return await send_parts(self._api, channel, f"💓 {title}\n\n{text}")
 
     async def deliver_chat_mirror(self, channel: str, text: str, thread_ts: str = "") -> None:
         from personalclaw.sdk.channel import extract_options
@@ -144,8 +190,7 @@ class TelegramDelivery:
         body, _ = redact_exfiltration_urls(text)
         body, _ = redact_credentials(body)
         body, options = extract_options(body)
-        for part in split_message(to_markdown_v2(body)):
-            await self._api.send_message(channel, part, parse_mode="MarkdownV2")
+        await send_parts(self._api, channel, body)
         if options:
             markup = {
                 "inline_keyboard": [[{"text": o[:64], "callback_data": f"opt:{i}"}] for i, o in enumerate(options)]
@@ -159,8 +204,7 @@ class TelegramDelivery:
     ) -> None:
         body, _ = redact_exfiltration_urls(text)
         body, _ = redact_credentials(body)
-        for part in split_message(to_markdown_v2(body)):
-            await self._api.send_message(channel, part, parse_mode="MarkdownV2")
+        await send_parts(self._api, channel, body)
         if elapsed_secs:
             footer = to_markdown_v2(f"_took {elapsed_secs:.1f}s_")
             await self._api.send_message(channel, footer, parse_mode="MarkdownV2")

@@ -35,7 +35,7 @@ from mail_inbox_runtime.outbound import (
     reply_subject,
 )
 from mail_inbox_runtime.provider import MailInboxProvider
-from mail_inbox_runtime.settings import _APP
+from mail_inbox_runtime.settings import MailInboxSettings, _APP
 from mail_inbox_runtime.smtp_client import SmtpError
 
 from _fakes import FakeImapClient, FakeSmtpSender, build_message
@@ -101,7 +101,9 @@ def _poll_one(provider: MailInboxProvider, *, to_addr: str = MAILBOX, references
         references=references,
     )
     provider._client_factory = lambda settings, password: FakeImapClient({FOLDER: {5: raw}})
-    messages, _ = asyncio.run(provider.poll([], {}, MAILBOX))
+    # A mailbox polled before, at an empty folder: a first poll surfaces nothing.
+    polled_before = {MailInboxProvider._checkpoint_key(MailInboxSettings.load()): "0"}
+    messages, _ = asyncio.run(provider.poll([], polled_before, MAILBOX))
     return messages
 
 

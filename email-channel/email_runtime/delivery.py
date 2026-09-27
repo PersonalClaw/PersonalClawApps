@@ -203,6 +203,9 @@ class EmailDelivery:
         # keyed by the uppercase reply token; the transport matches an inbound body
         # against these to resolve an approval.
         self._pending: dict[str, _PendingApproval] = {}
+        #: Why the most recent send failed, or "" when it went out (or none was tried). The
+        #: channel's health reads it: SMTP holds no connection, so the last send IS its state.
+        self.send_failure = ""
 
     # ── thread bookkeeping (the transport feeds inbound; sends feed themselves) ──
 
@@ -230,13 +233,16 @@ class EmailDelivery:
         """Hand one built message to SMTP in a thread executor. Never raises."""
         try:
             await asyncio.to_thread(self._sender.send, msg)
-            return True
         except SmtpError as exc:
             logger.warning("email: send failed: %s", exc)
+            self.send_failure = str(exc)
             return False
-        except Exception:
+        except Exception as exc:
             logger.warning("email: unexpected send failure", exc_info=True)
+            self.send_failure = f"an unexpected error ({exc.__class__.__name__}); the log has it"
             return False
+        self.send_failure = ""
+        return True
 
     async def _deliver(
         self, channel: str, thread_ts: str, subject: str, body: str, *,

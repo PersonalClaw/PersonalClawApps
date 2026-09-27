@@ -131,6 +131,38 @@ class TestSplitMessage:
         parts = split_message("y" * 2500)
         assert len(parts[0]) == DISCORD_MAX_TEXT
 
+    def test_a_code_block_cut_in_two_is_closed_and_reopened(self):
+        """Discord renders each message's markdown on its own. A cut inside a code block left
+        the first message with its fence open and the next showing the rest of the code as
+        markdown — `*`, `_` and `#` lines formatted, indentation gone."""
+        code = "    total = price * qty  # __init__ stays literal\n" * 120
+        text = "Here is the fix:\n```python\n" + code + "```\nThat is all."
+        parts = split_message(text)
+        assert len(parts) >= 3
+        assert all(len(p) <= DISCORD_MAX_TEXT for p in parts)
+        for part in parts:
+            fences = [line for line in part.split("\n") if line.lstrip().startswith("```")]
+            assert len(fences) % 2 == 0, f"a part leaves a code block open: {part[-60:]!r}"
+        for part in parts[1:]:
+            assert part.startswith("```python\n"), "the code block was not reopened"
+        joined = "\n".join(parts)
+        assert joined.count("total = price * qty") == 120
+        assert parts[-1].endswith("```\nThat is all.")
+
+    def test_a_line_longer_than_a_part_is_cut_between_words(self):
+        parts = split_message("words " * 800)
+        assert len(parts) >= 3
+        assert all(len(p) <= DISCORD_MAX_TEXT for p in parts)
+        assert all(token == "words" for p in parts for token in p.split())
+        assert sum(len(p.split()) for p in parts) == 800
+
+    def test_a_code_line_longer_than_a_part_stays_code(self):
+        parts = split_message("```\n" + "z" * 4500 + "\n```")
+        assert len(parts) == 3
+        assert all(len(p) <= DISCORD_MAX_TEXT for p in parts)
+        assert all(p.startswith("```\n") and p.endswith("\n```") for p in parts)
+        assert "".join(p[4:-4] for p in parts) == "z" * 4500
+
 
 class TestTextDelivery:
     @pytest.mark.asyncio

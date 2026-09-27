@@ -83,7 +83,8 @@ class TestTextDelivery:
     async def test_deliver_text_splits_long_body(self):
         d = _delivery()
         await d.deliver_text("123", "x" * 5000)
-        assert len(d._api.sent) == 2
+        assert [len(m["text"]) for m in d._api.sent] == [4096, 904]
+        assert all(m["parse_mode"] == "MarkdownV2" for m in d._api.sent)
 
     @pytest.mark.asyncio
     async def test_open_dm_returns_user_id(self):

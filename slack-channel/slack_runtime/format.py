@@ -295,29 +295,122 @@ SLACK_BLOCK_SECTION_LIMIT = 3000
 TRUNCATION_NOTICE = "\n\n⚠️ _Response truncated (Slack message limit)_"
 CONTINUATION = "\n\n_(continued…)_"
 
+#: A line that opens or closes a fenced code block (CommonMark allows three spaces of indent).
+_FENCE_LINE_RE = re.compile(r"^ {0,3}```")
+#: The longest info string carried onto a code block reopened in the next message. Anything
+#: longer, or with a space or backtick in it, is not a language tag.
+_MAX_FENCE_INFO = 32
+_CLOSE_FENCE = "```"
+
+
 def split_message(text: str, limit: int = SLACK_MSG_LIMIT) -> list[str]:
     """Split text into chunks that fit within Slack's message limit.
 
-    Splits on newline boundaries when possible to avoid breaking mid-line.
+    Splits at line breaks where it can, and every chunk but the last ends with
+    :data:`CONTINUATION`. Slack renders each message's mrkdwn on its own, so a code block cut
+    in two is closed at the end of one chunk and opened again at the start of the next, with
+    the marker after the closing fence: cut anywhere, the first message kept its fence open
+    (the marker inside the code) and the next showed the rest of the code as mrkdwn. A line
+    longer than a whole chunk is cut at its last space that fits, or where it has to be in code
+    (whose spaces are content) and in a run with no space.
     """
     if len(text) <= limit:
         return [text]
 
+    lines = text.split("\n")
     parts: list[str] = []
-    while text:
-        if len(text) <= limit:
-            parts.append(text)
+    i = 0
+    #: The opening line of the code block line ``i`` is in; "" outside one.
+    fence = ""
+    while i < len(lines):
+        if not fence:
+            # Outside code, the break between two messages already separates them: a
+            # chunk does not start on blank lines.
+            while i < len(lines) and not lines[i].strip():
+                i += 1
+            if i == len(lines):
+                break
+        head = [_reopening(fence)] if fence else []
+        # The last chunk carries no marker, so it may use the whole limit.
+        final_state = fence
+        for line in lines[i:]:
+            final_state = _fence_after(final_state, line)
+        rest = lines[i:]
+        if not final_state:
+            while rest and not rest[-1].strip():
+                rest = rest[:-1]
+        final = _chunk(head + rest, final_state)
+        if len(final) <= limit:
+            parts.append(final)
             break
-        # Reserve space for continuation marker on non-final chunks
-        chunk_limit = limit - len(CONTINUATION)
-        # Try to split at last newline within limit
-        cut = text.rfind("\n", 0, chunk_limit)
-        if cut <= 0:
-            cut = chunk_limit
-        remainder = text[cut:].lstrip("\n")
-        if remainder:
-            parts.append(text[:cut] + CONTINUATION)
-        else:
-            parts.append(text[:cut])
-        text = remainder
-    return parts
+
+        room = limit - len(CONTINUATION)
+        body: list[str] = []
+        state = fence
+        while i < len(lines):
+            after = _fence_after(state, lines[i])
+            if len(_chunk(head + body + [lines[i]], after)) > room:
+                break
+            body.append(lines[i])
+            state = after
+            i += 1
+        if i < len(lines) and len(body) > 1 and _opens(body[-1], state):
+            # A chunk does not end on the line that opens a code block: the block would
+            # arrive empty, and its code as the next chunk's.
+            body.pop()
+            i -= 1
+            state = ""
+        if i < len(lines) and (not body or _opens(body[-1], state)):
+            # The next line does not fit even at the start of a chunk: its longest piece
+            # that does ends this one, and the rest of it starts the next.
+            before = len("\n".join(head + body + [""]))
+            size = max(1, room - before - (len(_CLOSE_FENCE) + 1 if state else 0))
+            piece, lines[i] = _cut(lines[i], size, in_code=bool(state))
+            body.append(piece)
+        if not state:
+            while body and not body[-1].strip():
+                body.pop()
+        chunk = _chunk(head + body, state)
+        if not state and not any(line.strip() for line in lines[i:]):
+            # Only blank lines are left: this chunk is the last.
+            parts.append(chunk)
+            break
+        parts.append(chunk + CONTINUATION)
+        fence = state
+    return parts or [""]
+
+
+def _chunk(lines: list[str], fence: str) -> str:
+    """*lines* as one message, its code block closed when the message ends inside one."""
+    text = "\n".join(lines)
+    return f"{text}\n{_CLOSE_FENCE}" if fence else text
+
+
+def _fence_after(fence: str, line: str) -> str:
+    """The code block the text is in after *line*: a fence line opens one, or closes it."""
+    if not _FENCE_LINE_RE.match(line):
+        return fence
+    return "" if fence else line.strip()
+
+
+def _opens(line: str, fence: str) -> bool:
+    """Whether *line* opened the block *fence* (the state after it) is in."""
+    return bool(fence) and bool(_FENCE_LINE_RE.match(line))
+
+
+def _reopening(fence: str) -> str:
+    """The line that reopens the code block *fence* opened, in the next message."""
+    info = fence[3:].strip()
+    if info and len(info) <= _MAX_FENCE_INFO and " " not in info and "`" not in info:
+        return f"{_CLOSE_FENCE}{info}"
+    return _CLOSE_FENCE
+
+
+def _cut(line: str, size: int, *, in_code: bool) -> tuple[str, str]:
+    """``(piece, rest)``: the first *size* characters of *line*, ended at the last space in
+    them outside code (the cut drops that space, as a line break is dropped at a cut)."""
+    prefix = line[:size]
+    space = prefix.rfind(" ")
+    if not in_code and space > 0 and prefix[:space].strip():
+        return prefix[:space], line[space + 1:]
+    return prefix, line[size:]

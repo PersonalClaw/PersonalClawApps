@@ -22,6 +22,10 @@ Two things this module does that a read-only inbox source does not have to:
   becomes a conversational turn. Every mail client quotes the whole previous message;
   feeding that back each round would re-inject the entire thread — including our own
   earlier output — into every turn.
+* **Mail a program sent is marked** (:func:`automated_reason`, RFC 3834): auto-replies,
+  bulk and list mail, delivery reports and no-reply senders. Nothing may answer those —
+  an answer to an auto-reply loops, and one to a list or a no-reply address is
+  backscatter — so the transport drops them before anything could reply.
 
 **Outbound** (:func:`build_outbound`) sets the threading headers the channel's thread
 identity depends on: a fresh ``Message-ID``, ``In-Reply-To`` = the parent's id, and
@@ -50,6 +54,23 @@ _BLOCK_TAGS = frozenset(
 )
 #: Cap extracted body text so one pathological mail can't blow up a session turn.
 MAX_BODY_CHARS = 100_000
+
+#: RFC 2369 / RFC 2919 headers a mailing list adds to what it distributes.
+_LIST_HEADERS = (
+    "List-Id", "List-Unsubscribe", "List-Post", "List-Help", "List-Subscribe",
+    "List-Owner", "List-Archive",
+)
+#: ``Precedence`` values that mark mail sent to many (the long-standing convention RFC 3834
+#: §3.1.8 describes).
+_BULK_PRECEDENCE = frozenset({"bulk", "list", "junk"})
+#: Senders that are programs, by the local part of their address: no-reply addresses, and
+#: the daemons and list robots RFC 3834 §2 names (MAILER-DAEMON, LISTSERV, majordomo,
+#: ``-request`` and ``owner-`` addresses).
+_ROBOT_SENDER_RE = re.compile(
+    r"^(?:no[-_.]?reply|do[-_.]?not[-_.]?reply|mailer[-_.]?daemon|postmaster|listserv"
+    r"|majordomo|bounces?)(?:[-+_.].*)?$|-request$|^owner-",
+    re.IGNORECASE,
+)
 
 # Quoted-history markers, in the order a client emits them. Everything from the first
 # match onward is previous-message quotation, not new user text.
@@ -202,6 +223,30 @@ def extract_body(msg: Message) -> str:
     return body[:MAX_BODY_CHARS]
 
 
+def automated_reason(msg: Message, from_addr: str) -> str:
+    """Why *msg* is mail no responder may answer, or ``""`` when a person sent it.
+
+    RFC 3834 §2: no automatic response to a message carrying ``Auto-Submitted`` other than
+    ``no``, and none to a null ``Return-Path`` (a delivery report, whose answer would go
+    nowhere or back to a daemon). The common conventions it describes beside them: none to
+    ``Precedence: bulk``/``list``/``junk``, to mailing-list mail (``List-*``), or to a
+    no-reply or daemon address. The reason reads as the end of "not answered: …"."""
+    auto = str(msg.get("Auto-Submitted", "") or "").strip()
+    if auto and auto.split(";", 1)[0].strip().lower() != "no":
+        return f"it is automatic (Auto-Submitted: {auto})"
+    if str(msg.get("Return-Path", "") or "").strip() == "<>":
+        return "it is a delivery report (an empty Return-Path)"
+    precedence = str(msg.get("Precedence", "") or "").strip().lower()
+    if precedence in _BULK_PRECEDENCE:
+        return f"it was sent to many (Precedence: {precedence})"
+    for header in _LIST_HEADERS:
+        if msg.get(header) is not None:
+            return f"it came from a mailing list ({header})"
+    if _ROBOT_SENDER_RE.search(from_addr.partition("@")[0]):
+        return f"{from_addr} is an address nobody reads replies at"
+    return ""
+
+
 def attachment_names(msg: Message) -> list[str]:
     """Filenames of the message's attachment parts (decoded), in order."""
     names: list[str] = []
@@ -256,13 +301,14 @@ class InboundMail:
 
     __slots__ = (
         "uid", "message_id", "from_addr", "from_name", "subject", "body",
-        "in_reply_to", "references", "to_addrs", "attachments", "ts",
+        "in_reply_to", "references", "to_addrs", "attachments", "ts", "automated",
     )
 
     def __init__(
         self, *, uid: int = 0, message_id: str = "", from_addr: str = "", from_name: str = "",
         subject: str = "", body: str = "", in_reply_to: str = "", references: str = "",
         to_addrs: list[str] | None = None, attachments: list[str] | None = None, ts: float = 0.0,
+        automated: str = "",
     ) -> None:
         self.uid = uid
         self.message_id = message_id
@@ -275,6 +321,8 @@ class InboundMail:
         self.to_addrs = to_addrs or []
         self.attachments = attachments or []
         self.ts = ts
+        #: :func:`automated_reason` — ``""`` for mail a person sent.
+        self.automated = automated
 
     @property
     def thread_root(self) -> str:
@@ -327,6 +375,7 @@ def parse_inbound(raw: bytes, uid: int = 0) -> InboundMail | None:
             to_addrs=to_addrs,
             attachments=attachment_names(msg),
             ts=_parse_date(msg),
+            automated=automated_reason(msg, from_addr),
         )
     except Exception:
         logger.debug("email: message mapping failed for uid %s", uid, exc_info=True)

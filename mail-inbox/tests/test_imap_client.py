@@ -92,6 +92,49 @@ def test_search_failure_raises_imap_error():
         _client(_Boom(("OK", []), ("OK", []))).fetch_uids_since("INBOX", 0)
 
 
+class _Folder(_FakeConn):
+    """A folder holding ``exists`` messages that records every UID command."""
+
+    def __init__(self, exists, search_result=("OK", [b""])):
+        super().__init__(search_result, ("OK", []))
+        self._exists = exists
+        self.uid_calls: list[tuple] = []
+
+    def select(self, folder, readonly=False):
+        super().select(folder, readonly)
+        return ("OK", [str(self._exists).encode()])
+
+    def uid(self, command, *args):
+        self.uid_calls.append((command, args))
+        return super().uid(command, *args)
+
+
+def test_newest_uid_asks_for_the_largest_uid_in_use():
+    conn = _Folder(3, search_result=("OK", [b"42"]))
+    assert _client(conn).newest_uid("INBOX") == 42
+    assert conn.uid_calls == [("SEARCH", (None, "UID *"))]
+    assert conn.readonly is True
+
+
+def test_newest_uid_of_an_empty_folder_is_zero_without_a_search():
+    """Servers answer ``UID *`` in an empty folder differently — some with BAD, which
+    ``imaplib`` raises — so a new, empty mailbox must not depend on it to start."""
+    conn = _Folder(0)
+    assert _client(conn).newest_uid("INBOX") == 0
+    assert conn.uid_calls == []
+
+
+def test_a_select_that_loses_the_connection_is_an_imap_error():
+    """The provider degrades on an ``ImapError``; anything else escaped the poll."""
+
+    class _Dropped(_FakeConn):
+        def select(self, folder, readonly=False):
+            raise OSError(54, "Connection reset by peer")
+
+    with pytest.raises(ImapError):
+        _client(_Dropped(("OK", []), ("OK", []))).newest_uid("INBOX")
+
+
 def test_not_connected_raises():
     c = Imap4Client("h", 993, "u", "p")
     with pytest.raises(ImapError):

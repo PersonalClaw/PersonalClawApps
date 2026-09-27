@@ -62,7 +62,7 @@ def _imap_lines(settings: EmailSettings, password: str) -> list[DoctorLine]:
         ]
     ok, detail = imap_probe(
         settings.imap_host, settings.imap_port, settings.imap_user, password,
-        settings.folder, use_ssl=settings.imap_use_ssl,
+        settings.folder, use_ssl=settings.imap_use_ssl, ca_file=settings.tls_ca_file,
     )
     return [
         DoctorLine("imap", "ok", where),
@@ -84,7 +84,7 @@ def _smtp_lines(settings: EmailSettings, password: str) -> list[DoctorLine]:
         ]
     ok, detail = smtp_probe(
         settings.smtp_host, settings.smtp_port, settings.smtp_user, password,
-        security=settings.smtp_security,
+        security=settings.smtp_security, ca_file=settings.tls_ca_file,
     )
     return [
         DoctorLine("smtp", "ok", where),

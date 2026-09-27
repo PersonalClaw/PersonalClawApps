@@ -299,12 +299,12 @@ class TestDoctor:
         self.imap_result = (True, "IMAP login OK; folder 'INBOX' selectable")
         self.smtp_result = (True, "SMTP login OK (starttls)")
 
-        def fake_imap(host, port, user, password, folder, *, use_ssl=True):
-            self.imap_calls.append((host, port, user, folder, use_ssl))
+        def fake_imap(host, port, user, password, folder, *, use_ssl=True, ca_file=""):
+            self.imap_calls.append((host, port, user, folder, use_ssl, ca_file))
             return self.imap_result
 
-        def fake_smtp(host, port, user, password, *, security="starttls"):
-            self.smtp_calls.append((host, port, user, security))
+        def fake_smtp(host, port, user, password, *, security="starttls", ca_file=""):
+            self.smtp_calls.append((host, port, user, security, ca_file))
             return self.smtp_result
 
         monkeypatch.setattr(cli_doctor, "imap_probe", fake_imap)
@@ -346,6 +346,16 @@ class TestDoctor:
         cli_doctor.probe()
         assert self.imap_calls[0][3] == "Agent"
 
+    def test_both_probes_trust_the_configured_ca_file(self):
+        """A private mail server's authority reaches the doctor's probes, as it reaches the
+        channel's own connections — or the doctor would fail a server the channel accepts."""
+        self._configured()
+        ProviderSettings.update(_APP, {"tls_ca_file": "/etc/mail/ca.pem"})
+        save_credential(CRED_IMAP_PASS, "pw")
+        cli_doctor.probe()
+        assert self.imap_calls[0][5] == "/etc/mail/ca.pem"
+        assert self.smtp_calls[0][4] == "/etc/mail/ca.pem"
+
     def test_a_failed_imap_probe_reports_fail(self):
         self._configured()
         save_credential(CRED_IMAP_PASS, "pw")
@@ -375,7 +385,7 @@ class TestDoctor:
         ProviderSettings.update(_APP, {"imap_password": "store-pw"})
         used: list[str] = []
 
-        def fake_imap(host, port, user, password, folder, *, use_ssl=True):
+        def fake_imap(host, port, user, password, folder, *, use_ssl=True, ca_file=""):
             used.append(password)
             return self.imap_result
 

@@ -1121,6 +1121,33 @@ class TestSplitMessage:
         assert len(parts) == 1
         assert not parts[-1].endswith(CONTINUATION)
 
+    def test_a_code_block_cut_in_two_is_reopened_with_the_marker_outside_it(self):
+        """Slack renders each message's mrkdwn on its own. A cut inside a code block left the
+        first message with its fence open (the continuation marker inside the code) and the
+        next showing the rest of the code as mrkdwn: `*`, `_` and `~` spans formatted."""
+        code = "total = price * qty  # a_b_c ~stays~ literal\n" * 200
+        text = "Here is the fix:\n```\n" + code + "```\nThat is all."
+        parts = split_message(text)
+        assert len(parts) >= 3
+        assert all(len(p) <= SLACK_MSG_LIMIT for p in parts)
+        for part in parts:
+            body = part[: -len(CONTINUATION)] if part.endswith(CONTINUATION) else part
+            fences = [line for line in body.split("\n") if line.lstrip().startswith("```")]
+            assert len(fences) % 2 == 0, f"a part leaves a code block open: {part[-60:]!r}"
+        for part in parts[:-1]:
+            assert part.endswith("\n```" + CONTINUATION), "the marker is inside the code block"
+        for part in parts[1:]:
+            assert part.startswith("```\n"), "the code block was not reopened"
+        assert "\n".join(parts).count("total = price * qty") == 200
+        assert parts[-1].endswith("```\nThat is all.")
+
+    def test_a_line_longer_than_a_part_is_cut_between_words(self):
+        parts = split_message("words " * 1500)
+        assert len(parts) >= 3
+        assert all(len(p) <= SLACK_MSG_LIMIT for p in parts)
+        tokens = [t for p in parts for t in p.replace(CONTINUATION, " ").split()]
+        assert tokens == ["words"] * 1500
+
 
 class TestCronMessageSplitting:
     """Tests for cron message splitting — long cron output sent as multiple messages."""

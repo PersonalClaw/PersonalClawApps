@@ -42,8 +42,15 @@ def _provider_with(messages):
     return p, client
 
 
+def _polled_before() -> dict[str, str]:
+    """A mailbox this source has polled before, whose folder was empty then — where every
+    steady-state test starts. A first poll (no cursor at all) is ``test_first_poll.py``'s."""
+    return {MailInboxProvider._checkpoint_key(_load_settings()): "0"}
+
+
 def _poll(provider, checkpoints=None):
-    return asyncio.run(provider.poll([], checkpoints or {}, "me@example.com"))
+    cursor = _polled_before() if checkpoints is None else checkpoints
+    return asyncio.run(provider.poll([], cursor, "me@example.com"))
 
 
 def test_poll_surfaces_allowlisted_message():
@@ -99,7 +106,7 @@ def test_empty_allowlist_surfaces_nothing_and_never_connects():
     _configure(allow_senders=())
     provider, client = _provider_with({FOLDER: {5: build_message()}})
 
-    messages, checkpoints = _poll(provider)
+    messages, checkpoints = _poll(provider, {})
     assert messages == []
     assert client.connected is False  # fail-closed: never even connects
     assert checkpoints == {}  # cursor untouched
@@ -135,7 +142,7 @@ def test_rejected_sender_still_advances_cursor():
 def test_no_password_does_not_poll():
     _configure(password=None)  # settings written, but no credential
     provider, client = _provider_with({FOLDER: {5: build_message()}})
-    messages, checkpoints = _poll(provider)
+    messages, checkpoints = _poll(provider, {})
     assert messages == [] and client.connected is False and checkpoints == {}
 
 

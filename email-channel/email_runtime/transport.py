@@ -26,7 +26,18 @@ poll loop started by :meth:`start_inbound`, which the gateway calls once at boot
 held-open connection is a second failure mode to supervise. DEFERRED per the plan
 ("IDLE optional later"); the poll cadence is user-configurable.
 
-Two inbound facts shape this file:
+Four inbound facts shape this file:
+
+* **A first connection starts after the newest message.** The folder already holds mail
+  when the channel is set up — often a whole inbox — and none of it was written to the
+  agent. Starting the cursor at 0 answered all of it: the pairing nudge from the owner's
+  own address to every sender, no-reply addresses included, and an owner notification for
+  each. The first cycle records the newest UID as the cursor and dispatches nothing; mail
+  that arrives after it is the channel's.
+* **Mail a program sent is never answered** (RFC 3834): auto-replies, bulk and list mail,
+  delivery reports and no-reply senders (:func:`~email_runtime.mime.automated_reason`).
+  It never reaches the door, which would answer it; an allowed correspondent's still
+  reaches this bundle's automations, which answer nobody.
 
 * **The mailbox sees its own mail.** Most providers copy sent mail into the account, and
   an auto-responder on the far side mails straight back. :meth:`_is_self_authored` drops
@@ -46,7 +57,7 @@ import logging
 from dataclasses import replace
 import sys as _sys
 from pathlib import Path as _Path
-from typing import Any
+from typing import Any, NamedTuple
 
 # The app loader only keeps this app's dir on sys.path while it execs the entry module.
 # This is a multi-module package whose modules import each other for the life of the
@@ -98,6 +109,18 @@ _CURSOR_FILE = "imap_cursor.json"
 _MAX_BACKOFF = 900.0
 
 
+class _Batch(NamedTuple):
+    """What one blocking IMAP cycle brought back (:meth:`EmailTransport._fetch_batch`)."""
+
+    messages: list[tuple[int, bytes]]
+    uidvalidity: int
+    #: The newest UID, to start after without reading anything: on a first connection, and
+    #: when UIDVALIDITY changed. ``None`` in an ordinary cycle.
+    restart_at: int | None
+    #: Why the cycle could not read the folder (the sentence health shows); ``""`` when it could.
+    failure: str
+
+
 class EmailTransport(ChannelTransportProvider):
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         # Per-instance config wins for the non-secret connection fields until the app store is
@@ -108,8 +131,13 @@ class EmailTransport(ChannelTransportProvider):
         self._delivery: EmailDelivery | None = None
         self._poll_task: asyncio.Task | None = None
         self._stopping = False
-        self._cursor = 0
+        #: The last UID dispatched, or ``None`` before the first connection has set one.
+        self._cursor: int | None = None
         self._uidvalidity = 0
+        #: Why the last IMAP cycle failed, ``""`` when it read the folder. Health reports it.
+        self._poll_failure = ""
+        #: Whether this instance's IMAP poll loop is running (``start_inbound`` → ``stop_inbound``).
+        self._receiving = False
         # Test seams: inject a fake IMAP client factory / a fake SMTP sender, so no test
         # touches a socket. Dependency injection rather than monkeypatching the stdlib.
         self._client_factory: Any = None
@@ -188,18 +216,23 @@ class EmailTransport(ChannelTransportProvider):
     def _cursor_path(self) -> _Path:
         return app_data_dir(_APP) / _CURSOR_FILE
 
-    def _load_cursor(self) -> tuple[int, int]:
-        """``(last_uid, uidvalidity)`` from the app's data dir; ``(0, 0)`` when absent."""
+    def _load_cursor(self) -> tuple[int | None, int]:
+        """``(last_uid, uidvalidity)`` from the app's data dir.
+
+        ``(None, 0)`` when there is none — never connected — and when it cannot be read:
+        ``0`` would mean "answer everything in the folder", and a lost cursor must not turn
+        into a reply to every mail the mailbox holds. The next cycle starts after the newest
+        message instead."""
         try:
             data = json.loads(self._cursor_path().read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return 0, 0
+            return None, 0
         if not isinstance(data, dict):
-            return 0, 0
+            return None, 0
         try:
-            return int(data.get("last_uid", 0)), int(data.get("uidvalidity", 0))
-        except (TypeError, ValueError):
-            return 0, 0
+            return int(data["last_uid"]), int(data.get("uidvalidity", 0))
+        except (KeyError, TypeError, ValueError):
+            return None, 0
 
     def _save_cursor(self, last_uid: int, uidvalidity: int) -> None:
         from personalclaw.sdk.channel import atomic_write
@@ -219,7 +252,7 @@ class EmailTransport(ChannelTransportProvider):
             return self._client_factory(settings, password)
         return Imap4Client(
             settings.imap_host, settings.imap_port, settings.imap_user, password,
-            use_ssl=settings.imap_use_ssl,
+            use_ssl=settings.imap_use_ssl, ca_file=settings.tls_ca_file,
         )
 
     def _make_sender(self, settings: EmailSettings, password: str) -> Any:
@@ -227,7 +260,7 @@ class EmailTransport(ChannelTransportProvider):
             return self._sender_factory(settings, password)
         return SmtplibSender(
             settings.smtp_host, settings.smtp_port, settings.smtp_user, password,
-            security=settings.smtp_security,
+            security=settings.smtp_security, ca_file=settings.tls_ca_file,
         )
 
     # ── Inbound: the gateway drives this once at boot ──
@@ -264,14 +297,19 @@ class EmailTransport(ChannelTransportProvider):
 
         self._cursor, self._uidvalidity = self._load_cursor()
         self._stopping = False
+        self._poll_failure = ""
+        self._receiving = True
         self._poll_task = asyncio.ensure_future(self._poll_loop())
         logger.info(
-            "EmailTransport: IMAP poll inbound started (folder=%s cursor=%d every %ds)",
-            settings.folder, self._cursor, settings.poll_secs,
+            "EmailTransport: IMAP poll inbound started (folder=%s cursor=%s every %ds)",
+            settings.folder,
+            "none yet: starts after the newest message" if self._cursor is None else self._cursor,
+            settings.poll_secs,
         )
 
     async def stop_inbound(self) -> None:
         self._stopping = True
+        self._receiving = False
         if self._poll_task is not None:
             self._poll_task.cancel()
             try:
@@ -282,22 +320,36 @@ class EmailTransport(ChannelTransportProvider):
                 logger.debug("email: poll task stop error", exc_info=True)
 
     async def _poll_loop(self) -> None:
-        """Poll IMAP on the configured cadence. Degrades on error, never crashes."""
+        """Poll IMAP on the configured cadence. Degrades on error, never crashes.
+
+        A cycle that could not read the folder — the server unreachable, its certificate
+        refused, the login refused — backs off like one that raised: a mail server down
+        for an hour is not retried every minute, and a wrong password is not tried against
+        the account sixty times an hour. It used to be logged and retried at the plain
+        cadence, and health went on reading ready."""
         backoff = 0.0
         while not self._stopping:
             settings = get_settings()
+            raised: BaseException | None = None
             try:
                 await self._poll_once(settings)
-                backoff = 0.0
-                delay = float(settings.poll_secs)
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
+                raised = exc
+                self._poll_failure = (
+                    f"an unexpected error ({exc.__class__.__name__}); the gateway log has it"
+                )
+            if self._poll_failure:
                 backoff = min(backoff * 2, _MAX_BACKOFF) if backoff else float(settings.poll_secs)
                 logger.warning(
-                    "email: poll cycle failed — retrying in %ss", backoff, exc_info=True
+                    "email: IMAP poll failed: %s — trying again in %gs",
+                    self._poll_failure, backoff, exc_info=raised,
                 )
                 delay = backoff
+            else:
+                backoff = 0.0
+                delay = float(settings.poll_secs)
             try:
                 await asyncio.sleep(delay)
             except asyncio.CancelledError:
@@ -314,29 +366,41 @@ class EmailTransport(ChannelTransportProvider):
             logger.warning("email: no IMAP password in the credential store — cannot poll")
             return
 
-        fetched, uidvalidity, reset_to = await asyncio.to_thread(
+        batch = await asyncio.to_thread(
             self._fetch_batch, settings, imap_pass, self._cursor, self._uidvalidity
         )
+        self._poll_failure = batch.failure
 
-        # UIDVALIDITY changed ⇒ every stored UID is meaningless. The worker already
-        # re-derived the newest UID under the NEW numbering (it must, because a search
-        # from the stale cursor would return nothing and leave the mailbox skipped
-        # forever). 0 means "server didn't report it" — not a change.
-        if reset_to is not None:
-            logger.warning(
-                "email: UIDVALIDITY changed (%d → %d) — cursor reset to %d",
-                self._uidvalidity, uidvalidity, reset_to,
-            )
-            self._cursor = reset_to
-            self._uidvalidity = uidvalidity
+        # Start after the newest message without reading anything. On a first connection,
+        # so no mail that was there before the channel is answered. On a UIDVALIDITY
+        # change, because every stored UID is then meaningless: the worker re-derived the
+        # newest UID under the NEW numbering (a search from the stale cursor would return
+        # nothing and leave the mailbox skipped forever). 0 means "server didn't report
+        # it" — not a change.
+        if batch.restart_at is not None:
+            if self._cursor is None:
+                logger.info(
+                    "email: first connection to %s — starting after uid %d, so the mail "
+                    "already there is not answered",
+                    settings.folder, batch.restart_at,
+                )
+            else:
+                logger.warning(
+                    "email: UIDVALIDITY changed (%d → %d) — cursor reset to %d",
+                    self._uidvalidity, batch.uidvalidity, batch.restart_at,
+                )
+            self._cursor = batch.restart_at
+            self._uidvalidity = batch.uidvalidity
             self._save_cursor(self._cursor, self._uidvalidity)
             return
-        if uidvalidity and not self._uidvalidity:
-            self._uidvalidity = uidvalidity
+        if self._cursor is None:
+            return  # the first connection failed: nothing was read, no start was set
+        if batch.uidvalidity and not self._uidvalidity:
+            self._uidvalidity = batch.uidvalidity
 
         advanced = False
         try:
-            for uid, raw in fetched:
+            for uid, raw in batch.messages:
                 # Advance PAST this uid BEFORE dispatch so a handler that dies can't wedge
                 # the loop on the same message forever (the offset-before-dispatch rule the
                 # Telegram/Discord transports follow). ``except Exception`` covers an
@@ -358,15 +422,16 @@ class EmailTransport(ChannelTransportProvider):
                 self._save_cursor(self._cursor, self._uidvalidity)
 
     def _fetch_batch(
-        self, settings: EmailSettings, password: str, last_uid: int, known_uidvalidity: int
-    ) -> tuple[list[tuple[int, bytes]], int, int | None]:
+        self, settings: EmailSettings, password: str, last_uid: int | None,
+        known_uidvalidity: int,
+    ) -> _Batch:
         """BLOCKING: connect, select, search, fetch.
 
-        Returns ``([(uid, raw)], uidvalidity, reset_to)``. ``reset_to`` is ``None`` in the
-        normal case and the mailbox's newest UID when UIDVALIDITY changed — the check
-        happens HERE, before the search, because a search from the stale cursor under new
-        numbering returns nothing and would leave the cursor (and the mailbox) stuck
-        forever.
+        ``restart_at`` is the folder's newest UID, and nothing is fetched, when there is no
+        cursor yet (``last_uid`` is ``None``: the first connection) or UIDVALIDITY changed —
+        the check happens HERE, before the search, because a search from a stale cursor
+        under new numbering returns nothing and would leave the mailbox stuck forever.
+        ``failure`` is the sentence for a cycle that could not read the folder.
 
         Runs on a worker thread. A per-UID fetch that comes back empty STOPS the batch so
         the cursor never advances past a message we never read — the next cycle resumes
@@ -377,12 +442,11 @@ class EmailTransport(ChannelTransportProvider):
         try:
             client.connect()
             uidvalidity = client.select_folder(settings.folder)
-            if uidvalidity and known_uidvalidity and uidvalidity != known_uidvalidity:
-                # Re-derive the cursor from scratch under the new numbering: the newest
-                # UID, so the renumbered mailbox neither replays its whole history nor
-                # stays permanently skipped.
-                newest = max(client.fetch_uids_since(settings.folder, 0), default=0)
-                return out, uidvalidity, newest
+            renumbered = bool(
+                uidvalidity and known_uidvalidity and uidvalidity != known_uidvalidity
+            )
+            if last_uid is None or renumbered:
+                return _Batch(out, uidvalidity, client.newest_uid(settings.folder), "")
             for uid in client.fetch_uids_since(settings.folder, last_uid):
                 raw = client.fetch_message(settings.folder, uid)
                 if not raw:
@@ -390,13 +454,13 @@ class EmailTransport(ChannelTransportProvider):
                     break
                 out.append((uid, raw))
         except ImapError as exc:
-            logger.warning("email: IMAP poll failed: %s — will retry next cycle", exc)
+            return _Batch(out, uidvalidity, None, str(exc))
         finally:
             try:
                 client.close()
             except Exception:
                 logger.debug("email: IMAP client close error", exc_info=True)
-        return out, uidvalidity, None
+        return _Batch(out, uidvalidity, None, "")
 
     # ── per-message handling ──
 
@@ -449,6 +513,22 @@ class EmailTransport(ChannelTransportProvider):
 
         cm = self._to_channel_message(mail)
 
+        from personalclaw.sdk.channel import is_allowed_sender
+
+        if mail.automated:
+            # RFC 3834: nothing may answer mail a program sent. The door would — the pairing
+            # nudge to a stranger, the agent's answer to a correspondent — and would tell the
+            # owner someone is writing, so the mail never reaches it: an answer to an
+            # auto-reply loops, and one to a list or a no-reply address is backscatter. An
+            # allowed correspondent's mail still reaches this bundle's automations (the same
+            # allowlist the door reads), which answer nobody.
+            if is_allowed_sender(PROVIDER, cm.sender):
+                publish_inbound(cm, text=text)
+            logger.info(
+                "email: not answering uid %s from %s: %s", uid, mail.from_addr, mail.automated
+            )
+            return
+
         # A reply from a not-yet-allowed sender that CONTAINS an active pairing code
         # redeems it (the plan's "pairing code = a reply containing the code"). Checked
         # before the door so the pairing reply doesn't get the canned nudge again —
@@ -465,8 +545,6 @@ class EmailTransport(ChannelTransportProvider):
             # consumes the message (it is an answer, not a new turn). Gated on the
             # allowlist read, never on the raw body: an unknown sender must not be
             # able to resolve an approval by mailing a token.
-            from personalclaw.sdk.channel import is_allowed_sender
-
             if is_allowed_sender(PROVIDER, cm.sender) and self._delivery.resolve_reply_token(text):
                 return
 
@@ -560,6 +638,14 @@ class EmailTransport(ChannelTransportProvider):
         return bool(sent)
 
     async def health(self) -> dict[str, Any]:
+        """What the channel is doing, from what its connections last did (the F-24 contract).
+
+        It read "ready" whenever the settings and passwords were there — so it said ready
+        while every IMAP login was refused. Now it is ready only while the poll loop runs
+        and its last cycle read the folder, and the last send (SMTP holds no connection, so
+        the last send is its state) went out. Anything else is ``error`` with the sentence
+        saying what failed: the certificate refused, the server unreachable, the login
+        refused. Reads state only — core asks it with a five-second budget."""
         settings = self._settings()
         if not settings.inbound_configured and not settings.outbound_configured:
             return {"state": "offline", "detail": "No IMAP/SMTP configuration"}
@@ -571,8 +657,31 @@ class EmailTransport(ChannelTransportProvider):
             missing.append("SMTP password")
         if missing:
             return {"state": "error", "detail": f"Missing: {', '.join(missing)}"}
+        inbound = settings.inbound_configured and settings.dm_activation != ACTIVATION_OFF
+        if not inbound and not settings.outbound_configured:
+            return {
+                "state": "offline",
+                "detail": "Inbound Activation is off and no SMTP server is configured",
+            }
+        problems = []
+        if inbound and not self._receiving:
+            problems.append(
+                "Inbound NOT STARTED — PersonalClaw starts the IMAP poll when it turns the "
+                "channel on, and Configure → Save starts it now"
+            )
+        elif inbound and self._poll_failure:
+            problems.append(
+                f"Inbound NOT RECEIVING — the last IMAP poll failed: {self._poll_failure}. "
+                "It tries again, waiting longer after each failure, up to "
+                f"{_MAX_BACKOFF / 60:g} minutes"
+            )
+        send_failure = self._delivery.send_failure if self._delivery is not None else ""
+        if settings.outbound_configured and send_failure:
+            problems.append(f"Outbound NOT SENDING — the last send failed: {send_failure}")
+        if problems:
+            return {"state": "error", "detail": " · ".join(problems) + "."}
         halves = []
-        if settings.inbound_configured:
+        if inbound:
             halves.append(f"IMAP {settings.imap_host}")
         if settings.outbound_configured:
             halves.append(f"SMTP {settings.smtp_host}")
@@ -599,6 +708,7 @@ class EmailTransport(ChannelTransportProvider):
                 good, detail = await asyncio.to_thread(
                     imap_probe, settings.imap_host, settings.imap_port, settings.imap_user,
                     imap_pass, settings.folder, use_ssl=settings.imap_use_ssl,
+                    ca_file=settings.tls_ca_file,
                 )
                 ok = ok and good
                 results.append(detail)
@@ -609,13 +719,20 @@ class EmailTransport(ChannelTransportProvider):
             else:
                 good, detail = await asyncio.to_thread(
                     smtp_probe, settings.smtp_host, settings.smtp_port, settings.smtp_user,
-                    smtp_pass, security=settings.smtp_security,
+                    smtp_pass, security=settings.smtp_security, ca_file=settings.tls_ca_file,
                 )
                 ok = ok and good
                 results.append(detail)
 
         if not results:
             return {"ok": False, "detail": "No IMAP/SMTP configuration"}
+        # The channel contract: Test is not ok while health is not ready. Two logins that
+        # work now say nothing about a poll loop that is not running, or that the next
+        # cycle has not caught up with — so a green Test never sits beside a red status.
+        health = await self.health()
+        if ok and health["state"] != "ready":
+            ok = False
+            results.append(f"but {health['detail']}")
         return {"ok": ok, "detail": " · ".join(results)}
 
 

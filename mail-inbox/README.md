@@ -13,7 +13,12 @@ mail is irreversible and leaves your machine, so it is off by default. See
 
 - **Polls IMAP** (`IMAP4_SSL` by default) for messages newer than a persisted UID
   cursor, so a restart never reprocesses or skips mail. A duplicate `Message-ID` is
-  dropped as a second belt.
+  dropped as a second belt. The first poll of a mailbox (or of a folder you switch to)
+  starts after its newest message: the mail already there is not surfaced, so it fires
+  none of your inbox automations. What arrives after it is.
+- **Verifies the server before it gets the password.** IMAP and SMTP both check the
+  server's certificate and host name against this machine's certificate authorities, plus
+  the one **CA Certificate File** names. Nothing turns the check off.
 - **Fail-closed sender allowlist.** Only senders matching your allow-glob patterns are
   ever surfaced. An **empty allowlist surfaces nothing at all** — never "everything".
   This is the security posture, not a bug: an unknown sender can never trigger anything.
@@ -52,11 +57,15 @@ setup step prompts for:
 
 - **SMTP for replies** (optional) — host / port / TLS mode / username, plus an SMTP
   password, a secret of its own. Configuring it does **not** start sending; see below.
+- **CA Certificate File** (optional) — the PEM certificate of the authority your mail
+  server's certificate comes from, when it is not a public one (a company relay, a home
+  server). Trusted in addition to this machine's authorities, for IMAP and SMTP alike.
 
-`personalclaw doctor` reports the connection, whether the password is set, the allowlist
-posture (including a warning when it is empty and therefore surfacing nothing), and the
-reply posture — `DRAFT only` with the exact reason, or a **warning** when replies are
-going out live.
+`personalclaw doctor` reports the connection, what the server's certificate is checked
+against (and a CA Certificate File that cannot be loaded), whether the password is set,
+the allowlist posture (including a warning when it is empty and therefore surfacing
+nothing), and the reply posture — `DRAFT only` with the exact reason, or a **warning**
+when replies are going out live.
 
 ### Gmail example
 
@@ -168,9 +177,11 @@ carries no address, so the app records how to answer each message while polling 
 reply names a channel or thread it has no record of, it is **refused** — nothing is
 composed and nothing is sent. Answering the wrong person is worse than not answering.
 
-TLS is verified, not attempted: in `starttls` mode a failed upgrade **aborts** the send
-rather than continuing in the clear, so an app password is never put on a plaintext
-socket. SMTP error text is scrubbed of the password before it reaches a log.
+TLS is verified, not attempted: the server's certificate and host name are checked before
+the login, and in `starttls` mode a failed upgrade **aborts** the send rather than
+continuing in the clear, so an app password is never put on a plaintext socket or handed
+to a server nothing vouches for. SMTP error text is scrubbed of the password before it
+reaches a log.
 
 ## Security
 
@@ -190,7 +201,8 @@ python -m pytest mail-inbox -q
 ```
 
 Tests run against core installed from the repo with no live mail server: the IMAP client
-and the SMTP sender are both injected as in-memory fakes, and the sender-trust /
+and the SMTP sender are both injected as in-memory fakes (the certificate tests complete
+real TLS handshakes with throwaway servers on 127.0.0.1), and the sender-trust /
 security-log surfaces are the real core seams writing into an isolated tmp home. **No test
 sends real mail** — the outbound tests assert on the captured `EmailMessage` and on the
 `.eml` written to a tmp home, and `sender.sent == []` is how "nothing left the machine" is

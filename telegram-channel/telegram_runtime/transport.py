@@ -54,7 +54,7 @@ from personalclaw.sdk.channel import (
 # ``from telegram_runtime.X import`` inside a method would run LATER, off the path,
 # and fail. Binding them here, during exec, captures them for the process life.
 from telegram_runtime.api import DEFAULT_POLL_TIMEOUT, HTTPTelegramAPI, TelegramAPI, TelegramAPIError
-from telegram_runtime.delivery import TelegramDelivery
+from telegram_runtime.delivery import TelegramDelivery, send_parts
 from telegram_runtime.inbound_tap import publish as publish_inbound
 from telegram_runtime.settings import (
     ACTIVATION_OFF,
@@ -373,14 +373,14 @@ class TelegramTransport(ChannelTransportProvider):
         borrowed = self._api is not None and self._inbound_token in (None, token)
         api = self._api if borrowed else HTTPTelegramAPI(token)
         try:
-            from telegram_runtime.format import to_markdown_v2
-
-            await api.send_message(  # type: ignore[union-attr]
-                message.channel_id, to_markdown_v2(message.text),
-                parse_mode="MarkdownV2",
+            # A text that renders to no message at all ("", ANSI codes, blank lines) sends
+            # nothing and says so, instead of reporting a delivery that did not happen.
+            sent = await send_parts(
+                api,  # type: ignore[arg-type]
+                message.channel_id, message.text,
                 reply_to_message_id=int(message.thread_id) if message.thread_id.isdigit() else None,
             )
-            return True
+            return bool(sent)
         except Exception as exc:
             logger.warning("TelegramTransport.send failed: %s", exc)
             return False

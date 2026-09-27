@@ -14,6 +14,7 @@ from personalclaw.sdk.cli import DoctorLine
 
 from mail_inbox_runtime.outbound import draft_reason
 from mail_inbox_runtime.settings import MailInboxSettings, load_passwords
+from mail_inbox_runtime.tls import CaFileError, client_context
 
 
 def probe() -> list[DoctorLine]:
@@ -29,6 +30,7 @@ def probe() -> list[DoctorLine]:
     lines = [
         DoctorLine("host", "ok", f"{settings.host}:{settings.port} ({settings.username})"),
         DoctorLine("folder", "ok", settings.folder),
+        _tls_line(settings),
     ]
 
     imap_password, smtp_password = load_passwords()
@@ -57,6 +59,20 @@ def probe() -> list[DoctorLine]:
     lines.extend(_bound_address_lines(settings))
     lines.extend(_outbound_lines(settings, bool(smtp_password)))
     return lines
+
+
+def _tls_line(settings: MailInboxSettings) -> DoctorLine:
+    """What the server's certificate is checked against. A CA Certificate File that cannot
+    be loaded refuses every connection, and this source has no status card: without this
+    line the poll log would be the only place that says so."""
+    trusted = "the server's certificate is checked against this machine's authorities"
+    if not settings.tls_ca_file:
+        return DoctorLine("tls", "ok", trusted)
+    try:
+        client_context(settings.tls_ca_file)
+    except CaFileError as exc:
+        return DoctorLine("tls", "fail", str(exc))
+    return DoctorLine("tls", "ok", f"{trusted} and {settings.tls_ca_file}")
 
 
 def _outbound_lines(settings: MailInboxSettings, has_smtp_password: bool) -> list[DoctorLine]:
