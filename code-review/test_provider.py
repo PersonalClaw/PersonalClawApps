@@ -409,7 +409,7 @@ def test_one_finding_per_line(tmp_path) -> None:
 
 
 def test_static_findings_strip_control_characters_from_evidence() -> None:
-    """ARCC SAX-06: attacker-authored evidence must not forge a second log record."""
+    """Log injection: attacker-authored evidence must not forge a second log record."""
     src = ("diff --git a/src/a.py b/src/a.py\n@@ -1 +1,2 @@\n"
            '+api_key = "abcdefgh12345"\r\n')
     found = static_findings(blast_radius(parse_diff(src)))

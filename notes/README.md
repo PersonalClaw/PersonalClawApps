@@ -90,8 +90,8 @@ writes to your ambient git config.
 ## Security posture
 
 Notes are user data, and a note is exactly where pasted web text, a quoted email or a
-snippet from an issue ends up. Applying the ARCC input-validation guidance (SAX-04 boundary
-validation, SAX-06 log injection) to each untrusted edge:
+snippet from an issue ends up. Applying two input-validation rules (validate at the
+boundary, and never let untrusted text forge a log record) to each untrusted edge:
 
 - **The note reference** becomes both a filename and a `git` argv element, so it is
   validated first: one strict regex per path segment, every segment starting with an

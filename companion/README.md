@@ -95,8 +95,8 @@ watching.
 ## Security posture
 
 Every value in this store arrives from outside — typed by a person, written by an agent, or
-read back from a file that may have been edited. Applying the ARCC input-validation guidance
-(SAX-04 boundary validation, SAX-06 log injection) edge by edge:
+read back from a file that may have been edited. Applying two input-validation rules
+(validate at the boundary, and never let untrusted text forge a log record) edge by edge:
 
 - **A watch path becomes a filesystem glob core walks**, so it is validated per *segment*
   before it is ever a path. Each segment is `[one optional dot]alphanumeric…`, which makes `.`,

@@ -16,8 +16,7 @@ unclear is the kind that quietly goes vacuous:
   size budget. Includes the rail's own negative case.
 * **Clause 5** — declared-but-not-pulled degrades to a calm message, never a 500.
 
-Plus the egress posture the ARCC SSRF guidance asks for on an operator-configured
-endpoint.
+Plus the egress posture SSRF defence asks for on an operator-configured endpoint.
 """
 
 from __future__ import annotations
@@ -679,14 +678,14 @@ class TestClause5CalmNoModelState:
         assert "NOT RECOMMENDED" not in rows[RECOMMENDED_MODEL].description
 
 
-# ══ Egress posture (ARCC SSRF guidance) ══════════════════════════════════════
+# ══ Egress posture (SSRF defence) ════════════════════════════════════════════
 
 
 class TestEgressPosture:
     def test_the_policy_is_loopback_only_and_cannot_redirect(self):
         """Pinned so a later widening is a build failure, not a silent change.
 
-        Each flag maps to one control the ARCC SSRF guidance names: host
+        Each flag maps to one standard SSRF control: host
         allowlisting (``loopback_only``), DNS-rebinding defeat
         (``pin_resolved_ip``), redirect control (``max_redirects``), and
         fail-closed handling (``on_violation``).

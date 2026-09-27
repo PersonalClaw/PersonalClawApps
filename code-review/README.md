@@ -99,8 +99,8 @@ review of the same PR appends rather than overwrites, and `review_findings` read
 
 ## Security posture
 
-Applying the ARCC input-validation guidance (SAX-04 boundary validation, SAX-06 log
-injection) to the three untrusted edges:
+Applying two input-validation rules (validate at the boundary, and never let untrusted
+text forge a log record) to the three untrusted edges:
 
 - **The PR reference** becomes both a `gh` argument and a filename, so it is validated
   against one strict regex before either. `gh` is invoked with a fixed argv list — never a

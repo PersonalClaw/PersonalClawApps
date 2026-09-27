@@ -124,8 +124,8 @@ tool works without it.
 ## Security posture
 
 A spec is exactly where a pasted issue, a quoted design doc or somebody else's README ends up,
-and `spec_seed` fetches file content outright. Applying the ARCC input-validation guidance
-(SAX-04 boundary validation, SAX-06 log injection) to each untrusted edge:
+and `spec_seed` fetches file content outright. Applying two input-validation rules (validate
+at the boundary, and never let untrusted text forge a log record) to each untrusted edge:
 
 - **The spec id** becomes a directory name AND the compiled definition's name, so it is held to
   core's own definition-name grammar: lowercase letters, digits and hyphens, starting and ending

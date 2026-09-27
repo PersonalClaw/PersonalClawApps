@@ -30,8 +30,8 @@ APP_NAME = "code-review"
 
 # ── PR reference ────────────────────────────────────────────────────────────
 #
-# One shape in, validated before it is ever handed to `gh` (ARCC SAX-04: validate at the
-# boundary, not at the point of use). GitHub's own rules: owner/repo are
+# One shape in, validated before it is ever handed to `gh` (validate at the boundary, not
+# at the point of use). GitHub's own rules: owner/repo are
 # alphanumerics + `.`/`-`/`_`, the number is digits. Anything else is refused with a
 # message rather than passed through — the reference becomes argv AND a filename, so a
 # loose regex here would be both a command-argument and a path-traversal hole.
@@ -444,7 +444,7 @@ def static_findings(files: list[ChangedFile]) -> list[Finding]:
 def _clean(text: str) -> str:
     """Strip control characters, CR and LF from a value bound for the findings log.
 
-    ARCC SAX-06 (log injection): the evidence field is attacker-authored text landing in
+    Log injection: the evidence field is attacker-authored text landing in
     a line-delimited log. A newline in it would forge a second record; a carriage return
     would hide the rest of the line from a terminal reader. JSON escaping alone stops the
     first but not the second, so both go.

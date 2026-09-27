@@ -1,6 +1,6 @@
 # Kiro CLI
 
-Run the kiro-cli agent (acp:kiro-cli) over ACP. kiro-cli is an Amazon-internal CLI; this provider activates only when the `kiro-cli` binary is present on the machine, and is unavailable otherwise.
+Run the kiro-cli agent (acp:kiro-cli) over ACP. This provider activates only when the `kiro-cli` binary is present on the machine, and is unavailable otherwise.
 
 **Kiro CLI** is an **ACP agent bundle** — it registers an `acp:<cli>` agent via `personalclaw.sdk.acp` and appears in the Agents list.
 

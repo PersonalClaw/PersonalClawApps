@@ -321,7 +321,7 @@ class CodeReviewProvider(ToolProvider):
 
         Fixed argv — never a shell string, and every interpolated value comes off a
         regex-validated ``PrRef``, so no part of the reference can become a flag or a
-        second command (ARCC SAX-04: validate at the boundary, then pass structurally).
+        second command (validate at the boundary, then pass structurally).
         """
         argv = [
             "gh", "pr", "diff", str(ref.number),
