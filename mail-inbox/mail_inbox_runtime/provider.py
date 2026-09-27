@@ -10,7 +10,11 @@ On each ``poll`` the provider:
    is diagnosable (§2.7, guardrail 1);
 3. UID-SEARCHes the folder for messages newer than the checkpoint cursor (the dict
    ``poll`` returns is the resume mechanism — the highest processed UID per folder), so a
-   restart neither reprocesses nor skips;
+   restart neither reprocesses nor skips. A mailbox with no checkpoint yet — the first poll
+   after setup — starts after its newest message and surfaces nothing: the mail already
+   there was not sent to PersonalClaw, and every item surfaced emits an inbox event, so the
+   whole folder would have fired the owner's inbox automations (and a prompt-bound
+   address's stored prompt) at once;
 4. drops a message whose ``From`` is not allowlisted (a per-rejection SEL
    ``mail_sender_rejected`` event fires) and a duplicate ``Message-ID`` (a second belt
    over the UID cursor);
@@ -275,7 +279,8 @@ class MailInboxProvider(MessageSourceProvider):
         if self._client_factory is not None:
             return self._client_factory(settings, password)
         return Imap4Client(
-            settings.host, settings.port, settings.username, password, use_ssl=settings.use_ssl
+            settings.host, settings.port, settings.username, password, use_ssl=settings.use_ssl,
+            ca_file=settings.tls_ca_file,
         )
 
     def _make_sender(self, settings: MailInboxSettings, password: str) -> SmtpSender:
@@ -290,6 +295,7 @@ class MailInboxProvider(MessageSourceProvider):
             settings.smtp_login,
             password,
             security=settings.smtp_security,
+            ca_file=settings.tls_ca_file,
         )
 
     @staticmethod
@@ -325,6 +331,8 @@ class MailInboxProvider(MessageSourceProvider):
         self, settings: MailInboxSettings, password: str, checkpoints: dict[str, str]
     ) -> tuple[list[IncomingMessage], dict[str, str]]:
         key = self._checkpoint_key(settings)
+        if key not in checkpoints:
+            return [], self._first_poll(settings, password, checkpoints, key)
         last_uid = _parse_int(checkpoints.get(key, "0"))
         cursor = last_uid
         seen_ids = self._load_seen_ids()
@@ -360,6 +368,34 @@ class MailInboxProvider(MessageSourceProvider):
         if new_ids:
             self._save_seen_ids(seen_ids, new_ids)
         return messages, checkpoints
+
+    def _first_poll(
+        self, settings: MailInboxSettings, password: str, checkpoints: dict[str, str], key: str
+    ) -> dict[str, str]:
+        """Record the folder's newest UID as the cursor, reading no message.
+
+        Only a start that was read is recorded. A poll that cannot connect leaves the key
+        absent, so the next one starts after the newest message too — a missing checkpoint
+        must never turn into "surface everything"."""
+        client = self._make_client(settings, password)
+        try:
+            client.connect()
+            newest = client.newest_uid(settings.folder)
+        except ImapError as exc:
+            logger.warning("mail-inbox: IMAP poll failed: %s — will retry next cycle", exc)
+            return checkpoints
+        finally:
+            try:
+                client.close()
+            except Exception:
+                logger.debug("mail-inbox: client close error", exc_info=True)
+        logger.info(
+            "mail-inbox: first poll of %s — starting after uid %d, so the mail already there "
+            "is not surfaced",
+            settings.folder, newest,
+        )
+        checkpoints[key] = str(newest)
+        return checkpoints
 
     def _process_message(
         self,

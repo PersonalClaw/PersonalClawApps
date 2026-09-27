@@ -11,12 +11,16 @@ import pytest
 
 from telegram_runtime.format import (
     TELEGRAM_MAX_TEXT,
+    MessagePart,
     escape_code,
     escape_link_url,
     escape_markdown_v2,
-    split_message,
+    render_parts,
     to_markdown_v2,
+    utf16_len,
 )
+
+from _v2 import parse_markdown_v2
 
 # The full MarkdownV2 reserved set (Bot API docs, "MarkdownV2 style").
 _RESERVED = list("_*[]()~`>#+-=|{}.!")
@@ -120,29 +124,93 @@ class TestToMarkdownV2:
         assert out.endswith(r"\.")
 
 
-class TestSplitMessage:
-    def test_short_text_single_part(self):
-        assert split_message("hi") == ["hi"]
+class TestRenderParts:
+    """The source is split, then each part rendered on its own — never the rendering split."""
 
-    def test_empty_is_no_parts(self):
-        assert split_message("") == []
+    def test_short_text_is_one_part(self):
+        assert render_parts("Hello. **bold**") == [MessagePart(r"Hello\. *bold*", "Hello. **bold**")]
 
-    def test_splits_on_newline_boundary(self):
+    def test_empty_and_blank_text_is_no_parts(self):
+        assert render_parts("") == []
+        assert render_parts("\n\n  \n") == []
+        assert render_parts("\x1b[31m\x1b[0m") == []
+
+    def test_ansi_is_stripped_from_both_halves(self):
+        [part] = render_parts("\x1b[31mred\x1b[0m")
+        assert part == MessagePart("red", "red")
+
+    def test_splits_at_a_line_break(self):
         text = "a" * 3000 + "\n" + "b" * 3000
-        parts = split_message(text, limit=4096)
-        assert len(parts) == 2
-        assert parts[0] == "a" * 3000
-        assert parts[1] == "b" * 3000
-        assert all(len(p) <= 4096 for p in parts)
+        parts = render_parts(text)
+        assert [p.plain for p in parts] == ["a" * 3000, "b" * 3000]
 
-    def test_hard_split_when_no_newline(self):
-        text = "x" * 5000
-        parts = split_message(text, limit=4096)
-        assert len(parts) == 2
-        assert len(parts[0]) == 4096
-        assert len(parts[1]) == 904
+    def test_blank_lines_at_a_cut_are_not_sent(self):
+        text = "a" * 3000 + "\n\n\n" + "b" * 3000
+        assert [p.plain for p in render_parts(text)] == ["a" * 3000, "b" * 3000]
+
+    def test_the_rendering_is_what_must_fit(self):
+        """Every `.` gains a backslash: 3,000 dots are 6,000 characters of MarkdownV2."""
+        parts = render_parts(".\n" * 3000)
+        assert len(parts) >= 2
+        assert all(utf16_len(p.markdown_v2) <= TELEGRAM_MAX_TEXT for p in parts)
+        assert sum(p.plain.count(".") for p in parts) == 3000
+
+    def test_limit_is_counted_in_utf16_units(self):
+        parts = render_parts(("🙂" * 30 + "\n") * 100, limit=1000)
+        assert all(utf16_len(p.markdown_v2) <= 1000 for p in parts)
+        assert all(utf16_len(p.plain) <= 1000 for p in parts)
+        assert sum(p.plain.count("🙂") for p in parts) == 3000
+
+    def test_every_part_parses_on_its_own(self):
+        text = ("Step 1. Run `make test` — see [docs](https://x.com/a_b).\n" * 120)
+        for part in render_parts(text):
+            parse_markdown_v2(part.markdown_v2)  # raises if Telegram would refuse it
+
+    def test_a_cut_code_block_is_closed_and_reopened_with_its_language(self):
+        text = "intro\n```python\n" + "x = 1\n" * 1000 + "```\nafter"
+        parts = render_parts(text)
+        assert len(parts) >= 2
+        assert parts[0].plain.startswith("intro\n```python\n")
+        for part in parts[:-1]:
+            assert part.plain.endswith("\n```")
+        for part in parts[1:]:
+            assert part.plain.startswith("```python\n")
+        assert parts[-1].plain.endswith("```\nafter")
+        for part in parts:
+            plain, entities = parse_markdown_v2(part.markdown_v2)
+            assert [e["type"] for e in entities] == ["pre"]
+        assert sum(p.plain.count("x = 1") for p in parts) == 1000
+
+    def test_a_long_or_spaced_info_string_is_not_carried_over(self):
+        for info in ("a" * 33, "python title=x.py"):
+            parts = render_parts(f"```{info}\n" + "y\n" * 3000 + "```")
+            assert len(parts) >= 2
+            assert all(p.plain.startswith("```\n") for p in parts[1:])
+
+    def test_a_part_does_not_end_on_the_line_that_opens_a_block(self):
+        text = "p" * 4080 + "\n```\ncode line\n```"
+        parts = render_parts(text)
+        assert parts[0].plain == "p" * 4080
+        assert parts[1].plain == "```\ncode line\n```"
+
+    def test_a_line_longer_than_a_part_is_cut_at_a_space(self):
+        parts = render_parts("word " * 2000)
+        assert len(parts) >= 3
+        assert all(token == "word" for p in parts for token in p.plain.split())
+        assert sum(len(p.plain.split()) for p in parts) == 2000
+
+    def test_a_run_with_no_space_is_cut_where_it_must_be(self):
+        parts = render_parts("x" * 5000)
+        assert [len(p.plain) for p in parts] == [TELEGRAM_MAX_TEXT, 5000 - TELEGRAM_MAX_TEXT]
+
+    def test_a_code_line_longer_than_a_part_is_cut_whole_and_stays_code(self):
+        parts = render_parts("```\n" + "z " * 3000 + "\n```")
+        assert len(parts) >= 2
+        assert "".join(parse_markdown_v2(p.markdown_v2)[0] for p in parts) == "z " * 3000
+        for part in parts:
+            assert part.plain.startswith("```\n") and part.plain.endswith("\n```")
 
     def test_default_limit_is_telegram_max(self):
         assert TELEGRAM_MAX_TEXT == 4096
-        assert split_message("x" * 4096) == ["x" * 4096]
-        assert len(split_message("x" * 4097)) == 2
+        assert len(render_parts("x" * 4096)) == 1
+        assert len(render_parts("x" * 4097)) == 2

@@ -60,6 +60,7 @@ async def _configure_save(values: dict) -> None:
 @pytest.mark.asyncio
 async def test_a_mailbox_saved_after_enable_is_the_one_health_reports(installed):
     transport = create_provider(ProviderSettings.load(_APP))  # what the registry does at enable
+    transport._receiving = True  # and core starts its receiver; health reports the mailbox then
     assert "imap.old.test" in (await transport.health())["detail"]
 
     await _configure_save({**_MAILBOX, "imap_host": "imap.new.test", "smtp_host": "smtp.new.test"})

@@ -151,6 +151,7 @@ def wired(tmp_path):
     transport = EmailTransport()
     transport._client_factory = lambda settings, password: imap
     transport._sender_factory = lambda settings, password: smtp
+    transport._cursor = 0  # connected once to an empty folder: the tests' mail is all new
     transport._services = _FakeServices(FakeState())
     transport._delivery = EmailDelivery(
         smtp, AGENT, owner_id=AGENT,

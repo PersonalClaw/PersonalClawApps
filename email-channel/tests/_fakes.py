@@ -18,7 +18,7 @@ class FakeImapServer:
     """An in-memory IMAP mailbox: ``{folder: {uid: raw_bytes}}`` plus a UIDVALIDITY.
 
     Implements the narrow ``ImapClient`` protocol the transport depends on
-    (connect/select_folder/fetch_uids_since/fetch_message/close), and records every call
+    (connect/select_folder/newest_uid/fetch_uids_since/fetch_message/close), and records every call
     so a test can assert *how* it was driven — notably that the search used a UID range
     and not a sequence range.
     """
@@ -34,27 +34,37 @@ class FakeImapServer:
         self.messages = messages if messages is not None else {}
         self.uidvalidity = uidvalidity
         self.fail_connect = fail_connect
+        #: The sentence and stage a refused connect raises with (the real client's shapes).
+        self.fail_connect_with = "fake: connect refused"
+        self.fail_connect_kind = "unreachable"
         #: UIDs whose fetch returns b"" — the transient-failure case that must pause the
         #: cursor rather than skip the message.
         self.empty_fetch_uids = empty_fetch_uids or set()
         self.connected = False
+        self.connect_calls = 0
         self.closed = False
         self.selected: list[str] = []
         self.search_calls: list[tuple[str, int]] = []
+        self.newest_calls: list[str] = []
         self.fetch_calls: list[int] = []
 
     # ── the ImapClient protocol ──
 
     def connect(self) -> None:
+        self.connect_calls += 1
         if self.fail_connect:
             from email_runtime.imap_client import ImapError
 
-            raise ImapError("fake: connect refused")
+            raise ImapError(self.fail_connect_with, kind=self.fail_connect_kind)
         self.connected = True
 
     def select_folder(self, folder: str) -> int:
         self.selected.append(folder)
         return self.uidvalidity
+
+    def newest_uid(self, folder: str) -> int:
+        self.newest_calls.append(folder)
+        return max(self.messages.get(folder, {}), default=0)
 
     def fetch_uids_since(self, folder: str, last_uid: int) -> list[int]:
         self.search_calls.append((folder, last_uid))

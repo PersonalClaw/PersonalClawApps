@@ -11,7 +11,10 @@ the composed ``EmailMessage``. The real :class:`SmtplibSender` wraps
 upgrade fails rather than continuing in the clear — a silent downgrade would put the app
 password and the reply body on the wire in plaintext, which is the exact failure this
 check exists to prevent. ``plain`` exists only for a relay on loopback and is never a
-default.
+default. And the server is verified before it gets the password: implicit TLS and STARTTLS
+both use :func:`~mail_inbox_runtime.tls.client_context` (system CAs, host name checked, plus
+the ``tls_ca_file`` setting's authority), where both used to build a context that checks
+nothing.
 
 A connection is opened per send rather than held open: providers drop idle SMTP sessions
 aggressively (Gmail at ~a minute), so a cached session is usually dead by the time the
@@ -29,6 +32,8 @@ import logging
 import smtplib
 from email.message import EmailMessage
 from typing import Protocol
+
+from mail_inbox_runtime.tls import client_context, describe_failure
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +77,53 @@ class SmtpSender(Protocol):
     def send(self, msg: EmailMessage) -> None: ...
 
 
+def _quit_quietly(client: smtplib.SMTP) -> None:
+    try:
+        client.quit()
+    except (smtplib.SMTPException, OSError):
+        logger.debug("mail-inbox: SMTP quit error", exc_info=True)
+
+
+def _connect(
+    host: str, port: int, username: str, password: str, *, security: str, ca_file: str
+) -> smtplib.SMTP:
+    """Open a session, verify the server, upgrade, and log in. BLOCKING.
+
+    Every error is raised as :class:`SmtpError` with the password scrubbed out of it."""
+    try:
+        client: smtplib.SMTP = (
+            smtplib.SMTP_SSL(
+                host, port, timeout=SMTP_TIMEOUT_SECS, context=client_context(ca_file)
+            )
+            if security == SMTP_SSL
+            else smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT_SECS)
+        )
+    except (smtplib.SMTPException, OSError) as exc:
+        raise SmtpError(
+            scrub_secret(describe_failure(exc, protocol="SMTP", host=host, port=port), password)
+        ) from exc
+    try:
+        if security != SMTP_SSL:
+            client.ehlo()
+            if security == SMTP_STARTTLS:
+                # No fallback on purpose: a failed upgrade aborts, never continues to a
+                # plaintext AUTH.
+                client.starttls(context=client_context(ca_file))
+                # RFC 3207: the session resets on upgrade — re-EHLO so the AUTH
+                # capabilities read are the post-TLS ones.
+                client.ehlo()
+        if username and password:
+            client.login(username, password)
+    except (smtplib.SMTPException, OSError) as exc:
+        _quit_quietly(client)
+        if isinstance(exc, smtplib.SMTPAuthenticationError):
+            why = f"SMTP login failed: {exc}"
+        else:
+            why = describe_failure(exc, protocol="SMTP", host=host, port=port)
+        raise SmtpError(scrub_secret(why, password)) from exc
+    return client
+
+
 class SmtplibSender:
     """The real sender — wraps ``smtplib.SMTP`` / ``SMTP_SSL``.
 
@@ -86,63 +138,36 @@ class SmtplibSender:
         password: str,
         *,
         security: str = SMTP_STARTTLS,
+        ca_file: str = "",
     ) -> None:
         self._host = host
         self._port = port
         self._username = username
         self._password = password
         self._security = security
+        self._ca_file = ca_file
 
     def send(self, msg: EmailMessage) -> None:
-        client: smtplib.SMTP | None = None
+        client = _connect(
+            self._host, self._port, self._username, self._password,
+            security=self._security, ca_file=self._ca_file,
+        )
         try:
-            if self._security == SMTP_SSL:
-                client = smtplib.SMTP_SSL(self._host, self._port, timeout=SMTP_TIMEOUT_SECS)
-            else:
-                client = smtplib.SMTP(self._host, self._port, timeout=SMTP_TIMEOUT_SECS)
-                client.ehlo()
-                if self._security == SMTP_STARTTLS:
-                    # No try/except around the upgrade on purpose: a failure must abort
-                    # the send, never fall through to a plaintext AUTH.
-                    client.starttls()
-                    # RFC 3207: the session resets on upgrade — re-EHLO so the AUTH
-                    # capabilities read are the post-TLS ones.
-                    client.ehlo()
-            if self._username and self._password:
-                client.login(self._username, self._password)
             client.send_message(msg)
         except (smtplib.SMTPException, OSError) as exc:
             raise SmtpError(scrub_secret(f"SMTP send failed: {exc}", self._password)) from exc
         finally:
-            if client is not None:
-                try:
-                    client.quit()
-                except (smtplib.SMTPException, OSError):
-                    logger.debug("mail-inbox: SMTP quit error", exc_info=True)
+            _quit_quietly(client)
 
 
 def probe_login(
-    host: str, port: int, username: str, password: str, *, security: str = SMTP_STARTTLS
+    host: str, port: int, username: str, password: str, *, security: str = SMTP_STARTTLS,
+    ca_file: str = "",
 ) -> tuple[bool, str]:
     """The doctor probe: connect, upgrade, log in. **No mail is sent.** BLOCKING."""
-    client: smtplib.SMTP | None = None
     try:
-        if security == SMTP_SSL:
-            client = smtplib.SMTP_SSL(host, port, timeout=SMTP_TIMEOUT_SECS)
-        else:
-            client = smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT_SECS)
-            client.ehlo()
-            if security == SMTP_STARTTLS:
-                client.starttls()
-                client.ehlo()
-        if username and password:
-            client.login(username, password)
-        return True, f"SMTP login OK ({security})"
-    except (smtplib.SMTPException, OSError) as exc:
-        return False, scrub_secret(f"SMTP login failed: {exc}", password)
-    finally:
-        if client is not None:
-            try:
-                client.quit()
-            except (smtplib.SMTPException, OSError):
-                logger.debug("mail-inbox: SMTP probe quit error", exc_info=True)
+        client = _connect(host, port, username, password, security=security, ca_file=ca_file)
+    except SmtpError as exc:
+        return False, str(exc)
+    _quit_quietly(client)
+    return True, f"SMTP login OK ({security})"

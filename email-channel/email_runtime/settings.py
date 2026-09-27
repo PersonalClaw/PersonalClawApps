@@ -56,6 +56,10 @@ KEY_IMAP_USER = "imap_user"
 KEY_SMTP_HOST = "smtp_host"
 KEY_SMTP_PORT = "smtp_port"
 KEY_SMTP_USER = "smtp_user"
+#: A PEM file of the certificate authority a private mail server's certificate comes from.
+#: Trusted in addition to the system's authorities (``email_runtime.tls``); empty trusts the
+#: system's alone. There is deliberately no setting that turns verification off.
+KEY_TLS_CA_FILE = "tls_ca_file"
 
 DEFAULT_IMAP_PORT = 993
 DEFAULT_SMTP_PORT = 587
@@ -148,6 +152,7 @@ class EmailSettings:
     address: str = ""
     poll_secs: int = DEFAULT_POLL_SECS
     dm_activation: str = ACTIVATION_ALWAYS
+    tls_ca_file: str = ""
 
     @property
     def mailbox_address(self) -> str:
@@ -189,6 +194,7 @@ class EmailSettings:
             address=str(d.get("address", "")).strip(),
             poll_secs=_coerce_poll_secs(d.get("poll_secs", DEFAULT_POLL_SECS)),
             dm_activation=_validate_activation(str(d.get("dm_activation", ACTIVATION_ALWAYS))),
+            tls_ca_file=str(d.get(KEY_TLS_CA_FILE, "") or "").strip(),
         )
 
     @classmethod

@@ -91,6 +91,10 @@ def wired(monkeypatch, tmp_path):
     transport = EmailTransport()
     transport._client_factory = lambda settings, password: imap
     transport._sender_factory = lambda settings, password: smtp
+    # Already connected once, to an empty folder: every message a test adds arrived after the
+    # channel was set up. (A first connection starts after the newest message — see
+    # test_first_connection.py.)
+    transport._cursor = 0
 
     state = FakeState()
     transport._services = FakeServices(state, captured)
@@ -327,23 +331,31 @@ class TestUidPersistence:
         await transport._poll_once(transport._settings())
         assert transport._cursor == 1  # stopped at the gap, did not jump to 3
 
+    # A cursor that cannot be read starts after the newest message, never from 0: 0 means
+    # "answer everything in the folder", which is how the first connection mailed every
+    # sender already in the mailbox (test_first_connection.py drives the whole path).
     @pytest.mark.asyncio
-    async def test_a_corrupt_cursor_file_starts_from_zero(self, wired):
+    async def test_a_corrupt_cursor_file_starts_after_the_newest_message(self, wired):
         transport, imap, _, _, _ = wired
         transport._cursor_path().write_text("{not json", encoding="utf-8")
-        assert transport._load_cursor() == (0, 0)
+        assert transport._load_cursor() == (None, 0)
 
     @pytest.mark.asyncio
-    async def test_a_non_dict_cursor_file_starts_from_zero(self, wired):
+    async def test_a_non_dict_cursor_file_starts_after_the_newest_message(self, wired):
         transport, _, _, _, _ = wired
         transport._cursor_path().write_text("[1,2]", encoding="utf-8")
-        assert transport._load_cursor() == (0, 0)
+        assert transport._load_cursor() == (None, 0)
 
     @pytest.mark.asyncio
-    async def test_a_non_numeric_cursor_file_starts_from_zero(self, wired):
+    async def test_a_non_numeric_cursor_file_starts_after_the_newest_message(self, wired):
         transport, _, _, _, _ = wired
         transport._cursor_path().write_text('{"last_uid": "abc"}', encoding="utf-8")
-        assert transport._load_cursor() == (0, 0)
+        assert transport._load_cursor() == (None, 0)
+
+    @pytest.mark.asyncio
+    async def test_no_cursor_file_means_never_connected(self, wired):
+        transport, _, _, _, _ = wired
+        assert transport._load_cursor() == (None, 0)
 
     @pytest.mark.asyncio
     async def test_uidvalidity_change_resets_the_cursor_to_the_newest_message(self, wired):
@@ -849,6 +861,7 @@ class TestExecutorDiscipline:
     @pytest.mark.asyncio
     async def test_the_test_probes_run_in_threads(self, wired, monkeypatch):
         transport, _, _, _, _ = wired
+        transport._receiving = True  # its receiver runs, so health is ready and Test may be ok
         names: list[str] = []
 
         async def spy(fn, *a, **k):
@@ -869,8 +882,10 @@ class TestHealthAndTest:
         assert transport.connected is False
 
     @pytest.mark.asyncio
-    async def test_ready_when_both_halves_are_configured(self, wired):
+    async def test_ready_when_its_receiver_runs_and_the_last_poll_read_the_folder(self, wired):
         transport, _, _, _, _ = wired
+        transport._receiving = True
+        await transport._poll_once(transport._settings())
         health = await transport.health()
         assert health["state"] == "ready"
         assert "imap.test" in health["detail"] and "smtp.test" in health["detail"]
@@ -896,13 +911,15 @@ class TestHealthAndTest:
         transport, _, _, _, _ = wired
         seen: list[tuple] = []
 
-        def fake_imap_probe(host, port, user, password, folder, *, use_ssl=True):
+        def fake_imap_probe(host, port, user, password, folder, *, use_ssl=True, ca_file=""):
             seen.append(("imap", host, folder))
             return True, f"IMAP login OK; folder {folder!r} selectable"
 
-        def fake_smtp_probe(host, port, user, password, *, security="starttls"):
+        def fake_smtp_probe(host, port, user, password, *, security="starttls", ca_file=""):
             seen.append(("smtp", host, security))
             return True, "SMTP login OK (starttls)"
+
+        transport._receiving = True  # its receiver runs, so health is ready and Test may be ok
 
         monkeypatch.setattr("email_runtime.transport.imap_probe", fake_imap_probe)
         monkeypatch.setattr("email_runtime.transport.smtp_probe", fake_smtp_probe)

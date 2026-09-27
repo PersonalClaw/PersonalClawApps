@@ -29,11 +29,15 @@ class FakeSmtp:
 
     last: "FakeSmtp | None" = None
 
-    def __init__(self, host, port, timeout=None, fail_on: str = "", error_text: str = ""):
+    def __init__(
+        self, host, port, timeout=None, fail_on: str = "", error_text: str = "", context=None
+    ):
         self.host, self.port, self.timeout = host, port, timeout
         self.fail_on, self.error_text = fail_on, error_text
         self.calls: list[str] = []
         self.sent: list[EmailMessage] = []
+        #: every TLS context the sender handed smtplib (the implicit-TLS one, or STARTTLS's)
+        self.contexts: list = [context] if context is not None else []
         FakeSmtp.last = self
 
     def _step(self, name: str) -> None:
@@ -44,7 +48,8 @@ class FakeSmtp:
     def ehlo(self):
         self._step("ehlo")
 
-    def starttls(self):
+    def starttls(self, context=None):
+        self.contexts.append(context)
         self._step("starttls")
 
     def login(self, username, password):
@@ -65,9 +70,9 @@ def _install(monkeypatch, **kwargs):
     made: list[str] = []
 
     def factory(kind):
-        def build(host, port, timeout=None):
+        def build(host, port, timeout=None, context=None):
             made.append(kind)
-            return FakeSmtp(host, port, timeout, **kwargs)
+            return FakeSmtp(host, port, timeout, context=context, **kwargs)
 
         return build
 

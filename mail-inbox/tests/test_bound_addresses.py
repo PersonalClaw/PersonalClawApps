@@ -78,7 +78,10 @@ def _poll(messages, checkpoints=None):
     provider = MailInboxProvider()
     client = FakeImapClient(messages)
     provider._client_factory = lambda settings, password: client
-    polled, cps = asyncio.run(provider.poll([], checkpoints or {}, "me@example.com"))
+    # A mailbox polled before, at an empty folder: a first poll surfaces nothing.
+    if checkpoints is None:
+        checkpoints = {MailInboxProvider._checkpoint_key(MailInboxSettings.load()): "0"}
+    polled, cps = asyncio.run(provider.poll([], checkpoints, "me@example.com"))
     return polled, cps, client
 
 

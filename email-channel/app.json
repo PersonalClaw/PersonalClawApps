@@ -1,6 +1,6 @@
 {
   "name": "email-channel",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Email Channel",
   "description": "Two-way email channel over stdlib IMAP/SMTP. Converse with your agent by email, replies thread back, and results arrive in the same conversation. No streaming; approvals answer by reply token.",
   "icon": "Mails",
@@ -126,6 +126,14 @@
           "x-meta": {
             "label": "SMTP Security",
             "help": "starttls (587), ssl (465), or plain. A failed STARTTLS aborts the send — it never falls back to plaintext."
+          }
+        },
+        "tls_ca_file": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "CA Certificate File",
+            "help": "Only for a mail server whose certificate comes from your own certificate authority: the path to that authority's certificate (PEM). It is trusted as well as this machine's own authorities. The server's certificate and name are always checked, and a server nothing vouches for is refused before the password is sent."
           }
         },
         "address": {

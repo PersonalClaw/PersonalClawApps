@@ -22,13 +22,15 @@ Two Discord-specific shapes drive this module:
 
 Discord renders standard markdown, so unlike Telegram's MarkdownV2 there is no
 escaping layer: the model's markdown goes out as-is. Length is the only rendering
-constraint, hence :func:`split_message`.
+constraint, hence :func:`split_message` — which keeps a code block whole in every
+message it spans, because Discord renders each message's markdown on its own.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any, Callable
 
 from personalclaw.sdk.channel import (
@@ -64,25 +66,104 @@ _DENY = "deny"
 INTERACTION_TYPE_COMPONENT = 3
 
 
-def split_message(text: str, limit: int = DISCORD_MAX_TEXT) -> list[str]:
-    """Split *text* into parts no longer than *limit*, preferring newline breaks.
+#: A line that opens or closes a fenced code block (CommonMark allows three spaces of indent).
+_FENCE_LINE_RE = re.compile(r"^ {0,3}```")
+#: The longest info string (a code block's language) carried onto a block reopened in the next
+#: message. Anything longer, or with a space or backtick in it, is not a language tag.
+_MAX_FENCE_INFO = 32
+_CLOSE_FENCE = "```"
 
-    Discord rejects a message body over 2000 chars with ``50035 Invalid Form Body``,
-    so long replies stream across several messages. Splits on the last newline
-    before the limit when possible, else hard-splits."""
+
+def split_message(text: str, limit: int = DISCORD_MAX_TEXT) -> list[str]:
+    """Split *text* into messages of at most *limit* characters, at line breaks where it can.
+
+    Discord rejects a message body over 2000 chars with ``50035 Invalid Form Body``, so a long
+    reply goes out as several messages, and Discord renders each one's markdown on its own. A
+    code block cut in two is therefore closed at the end of one message and opened again, with
+    its language, at the start of the next: cut anywhere, the first message kept its fence open
+    and the second showed the rest of the code as markdown. A line longer than a whole message is
+    cut at its last space that fits, or where it has to be in code (whose spaces are content) and
+    in a run with no space."""
     if len(text) <= limit:
         return [text] if text else []
+    lines = text.split("\n")
     parts: list[str] = []
-    remaining = text
-    while len(remaining) > limit:
-        cut = remaining.rfind("\n", 0, limit)
-        if cut <= 0:
-            cut = limit
-        parts.append(remaining[:cut])
-        remaining = remaining[cut:].lstrip("\n")
-    if remaining:
-        parts.append(remaining)
+    i = 0
+    #: The opening line of the code block line ``i`` is in; "" outside one.
+    fence = ""
+    while i < len(lines):
+        if not fence:
+            # Outside code, the break between two messages already separates them: a
+            # message does not start on blank lines.
+            while i < len(lines) and not lines[i].strip():
+                i += 1
+            if i == len(lines):
+                break
+        head = [_reopening(fence)] if fence else []
+        body: list[str] = []
+        state = fence
+        while i < len(lines):
+            after = _fence_after(state, lines[i])
+            if len(_part(head + body + [lines[i]], after)) > limit:
+                break
+            body.append(lines[i])
+            state = after
+            i += 1
+        if i < len(lines) and len(body) > 1 and _opens(body[-1], state):
+            # A message does not end on the line that opens a code block: the block would
+            # arrive empty, and its code as the next message's.
+            body.pop()
+            i -= 1
+            state = ""
+        if i < len(lines) and (not body or _opens(body[-1], state)):
+            # The next line does not fit even at the start of a message: its longest piece
+            # that does ends this one, and the rest of it starts the next.
+            before = len("\n".join(head + body + [""]))
+            room = max(1, limit - before - (len(_CLOSE_FENCE) + 1 if state else 0))
+            piece, lines[i] = _cut(lines[i], room, in_code=bool(state))
+            body.append(piece)
+        if not state:
+            while body and not body[-1].strip():
+                body.pop()
+        parts.append(_part(head + body, state))
+        fence = state
     return parts
+
+
+def _part(lines: list[str], fence: str) -> str:
+    """*lines* as one message, its code block closed when the message ends inside one."""
+    text = "\n".join(lines)
+    return f"{text}\n{_CLOSE_FENCE}" if fence else text
+
+
+def _fence_after(fence: str, line: str) -> str:
+    """The code block the text is in after *line*: a fence line opens one, or closes it."""
+    if not _FENCE_LINE_RE.match(line):
+        return fence
+    return "" if fence else line.strip()
+
+
+def _opens(line: str, fence: str) -> bool:
+    """Whether *line* opened the block *fence* (the state after it) is in."""
+    return bool(fence) and bool(_FENCE_LINE_RE.match(line))
+
+
+def _reopening(fence: str) -> str:
+    """The line that reopens the code block *fence* opened, in the next message."""
+    info = fence[3:].strip()
+    if info and len(info) <= _MAX_FENCE_INFO and " " not in info and "`" not in info:
+        return f"{_CLOSE_FENCE}{info}"
+    return _CLOSE_FENCE
+
+
+def _cut(line: str, room: int, *, in_code: bool) -> tuple[str, str]:
+    """``(piece, rest)``: the first *room* characters of *line*, ended at the last space in
+    them outside code (the cut drops that space, as a line break is dropped at a cut)."""
+    prefix = line[:room]
+    space = prefix.rfind(" ")
+    if not in_code and space > 0 and prefix[:space].strip():
+        return prefix[:space], line[space + 1:]
+    return prefix, line[room:]
 
 
 def _safe(text: str) -> str:

@@ -109,6 +109,35 @@ class TestUidNotSequenceNumbers:
         assert "PEEK" in args[1]
 
 
+class TestNewestUid:
+    """Where a first connection starts: after the folder's newest message (ledger 250)."""
+
+    def test_it_asks_for_the_largest_uid_in_use(self):
+        conn = FakeConn(search=("OK", [b"42"]))
+        assert _client(conn).newest_uid("INBOX") == 42
+        assert conn.uid_calls == [("SEARCH", (None, "UID *"))]
+        assert conn.selected == [("INBOX", True)]
+
+    def test_an_empty_folder_is_zero_without_a_search(self):
+        """Servers answer ``UID *`` in an empty folder differently — some with BAD, which
+        ``imaplib`` raises — so a new, empty mailbox must not depend on it to start."""
+
+        class Empty(FakeConn):
+            def select(self, folder, readonly=False):
+                super().select(folder, readonly)
+                return ("OK", [b"0"])
+
+        conn = Empty(raise_on="SEARCH")
+        assert _client(conn).newest_uid("INBOX") == 0
+        assert conn.uid_calls == []
+
+    def test_a_failed_search_is_an_imap_error_not_zero(self):
+        """Zero would start the channel at the top of a full mailbox: every message in it
+        answered on the next cycle."""
+        with pytest.raises(ImapError):
+            _client(FakeConn(raise_on="SEARCH")).newest_uid("INBOX")
+
+
 class TestResumeContract:
     def test_filters_strictly_greater_than_the_cursor(self):
         """``UID n:*`` always returns at least the highest UID even when nothing is
@@ -214,11 +243,14 @@ class TestErrorContainment:
 
     def test_login_failure_is_wrapped(self, monkeypatch):
         class BoomSSL:
-            def __init__(self, host, port, timeout=None):
+            def __init__(self, host, port, ssl_context=None, timeout=None):
                 self.timeout = timeout
 
             def login(self, u, p):
                 raise imaplib.IMAP4.error("auth denied")
+
+            def logout(self):
+                return ("BYE", [b""])
 
         monkeypatch.setattr(imaplib, "IMAP4_SSL", BoomSSL)
         with pytest.raises(ImapError):
@@ -252,7 +284,7 @@ class TestConnectUsesTlsAndTimeout:
         seen = {}
 
         class FakeSSL(FakeConn):
-            def __init__(self, host, port, timeout=None):
+            def __init__(self, host, port, ssl_context=None, timeout=None):
                 super().__init__()
                 seen["ssl"] = (host, port, timeout)
 
@@ -283,7 +315,7 @@ class TestProbeLogin:
 
     def test_ok_when_login_and_select_both_succeed(self, monkeypatch):
         monkeypatch.setattr(
-            imaplib, "IMAP4_SSL", lambda host, port, timeout=None: FakeConn()
+            imaplib, "IMAP4_SSL", lambda host, port, ssl_context=None, timeout=None: FakeConn()
         )
         ok, detail = probe_login("h", 993, "u", "p", "INBOX")
         assert ok is True
@@ -291,7 +323,9 @@ class TestProbeLogin:
 
     def test_fails_when_the_folder_is_not_selectable(self, monkeypatch):
         monkeypatch.setattr(
-            imaplib, "IMAP4_SSL", lambda host, port, timeout=None: FakeConn(select_ok=False)
+            imaplib, "IMAP4_SSL", lambda host, port, ssl_context=None, timeout=None: FakeConn(
+                select_ok=False
+            )
         )
         ok, detail = probe_login("h", 993, "u", "p", "Missing")
         assert ok is False
@@ -299,7 +333,9 @@ class TestProbeLogin:
 
     def test_fails_when_the_login_is_rejected(self, monkeypatch):
         monkeypatch.setattr(
-            imaplib, "IMAP4_SSL", lambda host, port, timeout=None: FakeConn(login_ok=False)
+            imaplib, "IMAP4_SSL", lambda host, port, ssl_context=None, timeout=None: FakeConn(
+                login_ok=False
+            )
         )
         ok, detail = probe_login("h", 993, "u", "p", "INBOX")
         assert ok is False
