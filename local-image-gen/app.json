@@ -1,8 +1,8 @@
 {
   "name": "local-image-gen",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Local Image Generation",
-  "description": "Generate images on your own machine — no cloud, no API key. Runs through a local ComfyUI server, so no prompt or pixel leaves the host. Bind a locally-installed checkpoint to the Image Generation use case in Models. Weights are user-pulled: this app ships code only and downloads nothing. Recommended permissive default: FLUX.1-schnell (Apache-2.0).",
+  "description": "Generate images with a ComfyUI server you run on your own machine. PersonalClaw does not install or start ComfyUI: start it yourself on this machine, then set its address on this app's Configure page (default http://127.0.0.1:8188). Bind a checkpoint you pulled into ComfyUI to the Image Generation use case in Models. No cloud and no API key: no prompt or pixel leaves the host, and this app downloads no weights. Recommended permissive default: FLUX.1-schnell (Apache-2.0).",
   "icon": "Image",
   "author": "PersonalClaw",
   "license": "MIT",
@@ -29,11 +29,8 @@
           "type": "string",
           "default": "http://127.0.0.1:8188",
           "x-meta": {
-            "label": "ComfyUI endpoint",
-            "help": "Where your local ComfyUI server listens. Must be a loopback or private-network address — a public host is refused, because this backend exists to keep generation on your own machine.",
-            "tags": [
-              "advanced"
-            ]
+            "label": "ComfyUI server address",
+            "help": "PersonalClaw does not install or start ComfyUI. Start it yourself on this machine (it listens on http://127.0.0.1:8188 unless you changed that) and put its address here. Only an address on this machine works, such as http://127.0.0.1:8188: any other host is refused, even one on your own network, because this app exists to keep generation on your own machine."
           }
         },
         "steps": {
@@ -47,7 +44,10 @@
             ]
           }
         }
-      }
+      },
+      "required": [
+        "endpoint"
+      ]
     }
   }
 }

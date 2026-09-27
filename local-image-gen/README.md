@@ -1,7 +1,11 @@
 # Local Image Generation
 
-Generate images entirely on your own machine. No cloud provider, no API key, and no
-prompt or pixel leaves the host.
+Generate images with a [ComfyUI](https://github.com/comfyanonymous/ComfyUI) server you run
+on your own machine. No cloud provider, no API key, and no prompt or pixel leaves the host.
+
+**It needs ComfyUI running.** PersonalClaw does not install or start ComfyUI, and this app
+does nothing without it. Start ComfyUI first, then set its address on this app's Configure
+page (**ComfyUI server address**, default `http://127.0.0.1:8188`).
 
 **Local Image Generation** is a **model provider** — it registers under
 Settings → Models against the **Image Generation** use case, exactly as the hosted
@@ -28,8 +32,9 @@ It imports only the PersonalClaw **SDK**, never core internals:
 
 ## Setup
 
-1. **Install and run ComfyUI.** Leave it on its default address,
-   `http://127.0.0.1:8188`, or set yours in this app's settings.
+1. **Install and run ComfyUI on this machine.** PersonalClaw does not do this for you.
+   Leave it on its default address, `http://127.0.0.1:8188`, or set yours on this app's
+   Configure page.
 2. **Pull a model.** Download **FLUX.1-schnell** (Apache-2.0, about 6.8 GB) into
    ComfyUI's `models/checkpoints` directory. PersonalClaw ships no model weights and
    fetches none — the model you run is the model you chose to download.
@@ -48,7 +53,7 @@ lifecycle exactly like any other app. (Or
 
 | Key | Label | Notes |
 |---|---|---|
-| `endpoint` | ComfyUI endpoint | Where your local ComfyUI listens. Default `http://127.0.0.1:8188`. Must be a loopback or private-network address — a public host is refused. |
+| `endpoint` | ComfyUI server address | Where your ComfyUI listens. Default `http://127.0.0.1:8188`. PersonalClaw does not install or start ComfyUI. Only an address on this machine works (`127.0.0.1`): any other host is refused, even one on your own network. |
 | `steps` | Sampling steps | Denoising steps per image. Default 4, which suits FLUX.1-schnell's 1–4-step distillation. |
 
 ## Which model to use

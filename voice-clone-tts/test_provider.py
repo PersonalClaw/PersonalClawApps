@@ -33,10 +33,12 @@ class TestManifestAndCatalog:
 
     def test_manifest_does_not_pin_heavy_engine(self):
         # Scope rule: the multi-GB engine is an OPTIONAL lazy dep — never pip-installed
-        # at app-install, so the contract tests run everywhere.
+        # at app-install (that installs into the gateway's own packages, and the engine
+        # belongs in the sidecar's environment), so the contract tests run everywhere. The
+        # one declared dependency is the weights download library, which runs in the gateway.
         mf = json.loads((_BUNDLE / "app.json").read_text())
         deps = (mf.get("dependencies") or {}).get("pythonDependencies") or []
-        assert deps == [], f"no heavy pythonDependencies expected, got {deps}"
+        assert deps == ["huggingface-hub>=0.23"], f"only the download library, got {deps}"
 
     def test_catalog_cards_declare_cloning_and_torch(self):
         raw = json.loads((_BUNDLE / "catalog.json").read_text())

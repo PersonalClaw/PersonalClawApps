@@ -26,6 +26,10 @@ PersonalClaw gateway via the platform's typed provider contracts. Full contract:
   must fit 90 characters** — the card clamps to two lines, so a longer lead is shown
   cut mid-phrase. Put the detail in later sentences (the detail panel and search read
   the whole field). The `store-card-copy` job enforces it.
+- **UI bundles ship built:** an app with a `ui/package.json` commits its built
+  `ui/bundle/`, because an install copies the app as it is and never runs npm. After
+  editing `ui/src/`, run `npm ci && npm run build` in `ui/` and commit the result. The
+  `ui-bundles` job rebuilds every bundle and fails on any difference.
 
 ## Per-app deliverables
 

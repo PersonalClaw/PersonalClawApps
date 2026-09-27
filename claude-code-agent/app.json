@@ -1,8 +1,8 @@
 {
   "name": "claude-code-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "displayName": "Claude Code",
-  "description": "Run Anthropic's Claude Code as an agent (acp:claude-code) via the Zed ACP adapter. Claude self-authenticates with your `claude` login; PersonalClaw stores no key. Spawned Claude is hardened: an isolated CLAUDE_CONFIG_DIR strips inherited auto-approve permissions so every tool routes through the host approval gate.",
+  "description": "Run Anthropic's Claude Code as an agent (acp:claude-code) via the Zed ACP adapter. It runs with a Claude config of its own that starts empty, so none of your auto-approve rules come along and every tool asks through PersonalClaw's approval gate. Sign in to Claude once for it (Settings \u2192 Providers \u2192 Claude Code \u2192 Sign in); PersonalClaw stores no key. Turn off Isolated Claude settings to use your own ~/.claude, rules included.",
   "icon": "SquareTerminal",
   "author": "PersonalClaw",
   "license": "MIT",
@@ -20,6 +20,14 @@
     "settingsSchema": {
       "type": "object",
       "properties": {
+        "isolated_config": {
+          "type": "boolean",
+          "default": true,
+          "x-meta": {
+            "label": "Isolated Claude settings",
+            "help": "On: Claude runs with a config of its own under PersonalClaw's folder that starts empty, so none of your auto-approve rules come along and every tool asks here first. Sign in to Claude once for it. Off: Claude uses your own ~/.claude, auto-approve rules included."
+          }
+        },
         "model": {
           "type": "string",
           "default": "",

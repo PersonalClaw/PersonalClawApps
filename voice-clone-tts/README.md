@@ -1,7 +1,8 @@
 # Voice Clone TTS
 
 Cloning-capable text-to-speech beside Piper: **zero-shot voice cloning** from a short
-reference clip, run as an isolated **sidecar**.
+reference clip, run as an isolated **sidecar**. It needs the OmniVoice engine, which
+PersonalClaw does not install for you: see [Installing the engine](#installing-the-engine).
 
 **Voice Clone TTS** is a **model provider (TTS) + local-model manager**. Unlike Piper
 (a fixed voice bank), it conditions synthesis on a reference clip — the
@@ -24,28 +25,40 @@ A standalone PersonalClaw app bundle. It ships as a self-contained directory:
 It imports only the PersonalClaw **SDK** (`personalclaw.sdk.tts`), never core internals,
 so core can evolve without breaking it.
 
-## The engine is optional
+## Installing the engine
 
-The cloning engine is a **multi-GB torch dependency** and is **not** pinned in
-`app.json` — it is detected lazily at runtime. With no engine installed the app degrades
-gracefully: `is_available()` is `False` and `synthesize()` returns `None` (never raises),
-so the manifest/contract tests run everywhere. Install an engine and download a model
-card's weights to enable cloning.
+Cloning needs the **OmniVoice** engine, a torch stack of several GB. **PersonalClaw does not
+install it for you**: the Store installs this app without it, and the app stays unavailable
+until the engine is in place. It goes in this app's own Python environment, which is where
+the sidecar runs it, so none of it loads into the gateway:
 
-## Status (roadmap atom MI-2b)
+```sh
+cd ~/.personalclaw/apps/voice-clone-tts
+# The Python PersonalClaw runs on: OmniVoice needs 3.10 or newer.
+python3 -m venv venv
+venv/bin/pip install omnivoice
+```
 
-This bundle is the **APPS half** of atom MI-2. The CORE half — MI-2a, the cloning
-*capability surface* (`supports_cloning`/`supports_voice_design` on `CapabilityMatrix`
-and `TtsProvider`; the `route_synthesis` / `guard_synthesis_capability` 409 gate) —
-merged as PersonalClaw/PersonalClaw#2351, and this app consumes that contract.
+Use your `PERSONALCLAW_HOME` in place of `~/.personalclaw` if you set one. The app's card in
+**Settings → Providers** shows the same command with the exact paths for your machine. Then
+press **Check again** on that card, and download **OmniVoice** in **Settings → Models**
+(about 3.3 GB of weights).
 
-**Deferred to MI-2c** (needs a working engine spike that does not fit MI-2b's scope):
+Updating the app replaces its folder, and today that removes this environment with it. The
+app then reads as unavailable again and its card shows the command again; the weights stay,
+because they live in `models/tts-clone/` under your PersonalClaw home.
 
-- The OmniVoice-vs-CosyVoice spike on fixtures (clip length, MPS latency, RAM) that picks
-  **one** engine and records the loser's notes in the plan dir; this bundle ships both as
-  *candidate* catalog cards until then.
-- Real zero-shot inference in `synthesize` (the engine API is pinned by the spike).
-- Real resumable weight download and the LMM-V2 through-clone selftest.
+With no engine installed the app degrades quietly: `is_available()` is `False` and
+`synthesize()` returns `None` (it never raises), so the manifest and contract tests run
+everywhere.
+
+## Status
+
+The CORE half of the cloning capability (`supports_cloning`/`supports_voice_design` on
+`CapabilityMatrix` and `TtsProvider`, and the `route_synthesis` /
+`guard_synthesis_capability` 409 gate) merged as PersonalClaw/PersonalClaw#2351, and this app
+consumes that contract. The engine spike chose OmniVoice; `worker.py` runs its zero-shot
+inference in the sidecar, and the weights download resumes after an interruption.
 
 ## Install
 

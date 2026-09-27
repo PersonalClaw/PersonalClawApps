@@ -1,6 +1,6 @@
 {
   "name": "growth",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Growth Tracker",
   "description": "Turn your real work into evidenced growth artifacts. It draws on your chat sessions, the projects you ran, the tasks you closed, and your notes. Track growth areas, score against a customizable rubric, and generate a shareable accomplishment doc that cites its evidence.",
   "icon": "TrendingUp",
@@ -153,13 +153,13 @@
     ]
   },
   "ui": {
-    "entry": "dist/index.mjs",
+    "entry": "bundle/index.mjs",
     "pages": [
       {
         "route": "/apps/growth",
         "label": "Growth",
         "icon": "TrendingUp",
-        "entryPoint": "dist/index.mjs",
+        "entryPoint": "bundle/index.mjs",
         "mountFunction": "mount"
       }
     ],
@@ -199,10 +199,5 @@
       "silent": true,
       "persistent_session": false
     }
-  ],
-  "setup": {
-    "onInstall": "bash setup.sh",
-    "onUpdate": "bash setup.sh",
-    "onEnableTimeout": 60
-  }
+  ]
 }

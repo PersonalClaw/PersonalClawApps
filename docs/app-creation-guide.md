@@ -495,6 +495,12 @@ DATA_DIR = Path(os.environ.get("PERSONALCLAW_APP_DATA_DIR", "/tmp/my-app"))  # o
 Your `ui` entry is an ESM bundle exporting a mount function. The host resolves
 bare imports of `react` and `@personalclaw/app-sdk` for you (no bundling them).
 
+Ship that bundle built. An install copies your app as it is and never builds anything, so
+a page written in TSX is built ahead of time and its output committed: Minutes and Growth
+build into `ui/bundle/`, and the `ui-bundles` CI job rebuilds them and fails when the
+committed file differs. Don't build it from an install hook: the hook has 60 seconds, and
+the user may have no Node at all.
+
 ```js
 import { createAppApi, createAppEvents, notify } from '@personalclaw/app-sdk'
 
