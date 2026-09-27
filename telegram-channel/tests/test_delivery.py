@@ -82,13 +82,6 @@ class TestTextDelivery:
         assert sent["text"] == r"Hello\. *bold*"
 
     @pytest.mark.asyncio
-    async def test_deliver_text_redacts_credentials(self):
-        d = _delivery()
-        await d.deliver_text("123", "token sk-ABC123DEF456GHI789JKL012MNO345PQR")
-        # the raw secret must not survive into the wire text
-        assert "sk-ABC123DEF456GHI789JKL012MNO345PQR" not in d._api.sent[0]["text"]
-
-    @pytest.mark.asyncio
     async def test_deliver_text_splits_long_body(self):
         d = _delivery()
         await d.deliver_text("123", "x" * 5000)
@@ -386,3 +379,65 @@ class TestApproval:
         d = _delivery()
         await d.resolve_callback({"id": "c3", "data": "approve:ghost"})
         assert d._api.answers[-1]["id"] == "c3"  # acked, no crash
+
+
+# ── core masks what it hands this channel ──────────────────────────────────────────────────
+
+#: A key, assembled at runtime so the literal is not in the file, and its tail, which no
+#: rendering escapes: the wire is searched for the tail, since a channel's markup may escape
+#: the key's punctuation and hide the key from a search for all of it.
+TAIL = "A" * 20 + "B" * 20 + "C" * 15
+SECRET = "sk-" + "ant-api03-" + TAIL
+
+#: Every way core hands this channel text, each carrying a key.
+_HANDED = {
+    "deliver_text": lambda h: h.deliver_text("123", f"token {SECRET}"),
+    "deliver_notification": lambda h: h.deliver_notification(
+        "123", f"Nightly {SECRET}", f"result {SECRET}"
+    ),
+    "deliver_rich": lambda h: h.deliver_rich(
+        "123",
+        {"inline_keyboard": [[{"text": f"Open {SECRET}", "callback_data": "open"}]]},
+        f"fallback {SECRET}",
+    ),
+    "deliver_cron_result": lambda h: h.deliver_cron_result(
+        "123", f"backup {SECRET}", "job-1", f"done {SECRET}"
+    ),
+    "deliver_chat_mirror": lambda h: h.deliver_chat_mirror("123", f"answer {SECRET}"),
+    "deliver_subagent_reply": lambda h: h.deliver_subagent_reply(
+        "123", f"reply {SECRET}", elapsed_secs=1.5
+    ),
+    "upload_attachment": lambda h: h.upload_attachment(
+        "123", "report.txt", title=f"report {SECRET}"
+    ),
+    "start_stream": lambda h: h.start_stream("123", initial_text=f"thinking {SECRET}"),
+    "request_approval": lambda h: h.request_approval(
+        _Event("reqK", f"deploy {SECRET}"), source="tool"
+    ),
+}
+
+
+@pytest.fixture
+def through_core(monkeypatch):
+    """This delivery as core holds it: registered with core, and read back the way core reads it."""
+    from personalclaw import channel_delivery
+
+    monkeypatch.setattr("telegram_runtime.delivery._APPROVAL_TIMEOUT", 0.01)
+    d = _delivery()
+    channel_delivery.register(d, provider="telegram")
+    yield d, channel_delivery.delivery_for("telegram")
+    channel_delivery.register(None, provider="telegram")
+
+
+class TestCoreMasksWhatItHandsThisChannel:
+    """Core masks every text it hands a channel, so this app masks nothing again: a key in anything
+    core sends through it never reaches the Bot API."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("method", sorted(_HANDED))
+    async def test_no_key_reaches_the_bot_api(self, through_core, method):
+        d, handle = through_core
+        await _HANDED[method](handle)
+        wire = repr((d._api.sent, d._api.edits, d._api.uploads))
+        assert TAIL not in wire
+        assert "REDACTED" in wire, "nothing was sent"

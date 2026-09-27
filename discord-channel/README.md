@@ -51,7 +51,10 @@ It imports core **only** via the PersonalClaw **SDK** (never core internals), so
 core can evolve without breaking it:
 
 - `personalclaw.sdk.channel` — transport ABC, `ChannelMessage`, the sender-trust
-  seam (`guard_inbound`), redaction, `run_chat`, `ProviderSettings`.
+  seam (`guard_inbound`), `run_chat`, `ProviderSettings`.
+
+Core masks every text it hands the delivery handle (keys and exfiltration URLs), so the app
+masks nothing itself.
 - `personalclaw.sdk.cli` — `SetupContext` / `DoctorLine`.
 
 Both wire protocols are implemented directly against libraries that are **already

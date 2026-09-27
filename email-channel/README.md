@@ -56,10 +56,13 @@ It imports core **only** via the PersonalClaw **SDK** (never core internals), so
 evolve without breaking it:
 
 - `personalclaw.sdk.channel` — the transport ABC, `ChannelMessage`, the sender-trust seam
-  (`guard_inbound`, `redeem_pairing_code`, `is_tracked_channel`), redaction, `run_chat`,
+  (`guard_inbound`, `redeem_pairing_code`, `is_tracked_channel`), `run_chat`,
   `ProviderSettings`, `AppConfig`, `atomic_write`.
 - `personalclaw.sdk.util` — `app_data_dir` (the UID cursor + thread state).
 - `personalclaw.sdk.cli` — `SetupContext` / `DoctorLine`.
+
+Core masks every text it hands the delivery handle (keys and exfiltration URLs), the words of a
+subject included, so the app masks nothing itself.
 
 **No vendor SDK and no new dependencies:** `imaplib`, `smtplib` and `email` are stdlib.
 The manifest declares no `pythonDependencies`.

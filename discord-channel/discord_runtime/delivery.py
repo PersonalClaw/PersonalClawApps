@@ -28,6 +28,9 @@ Discord renders standard markdown, so unlike Telegram's MarkdownV2 there is no
 escaping layer: the model's markdown goes out as-is. Length is the only rendering
 constraint, hence :func:`split_message` — which keeps a code block whole in every
 message it spans, because Discord renders each message's markdown on its own.
+
+Core masks every text it hands this handle, keys and exfiltration URLs included, before
+any method here is called, so nothing here masks it again.
 """
 
 from __future__ import annotations
@@ -37,12 +40,7 @@ import logging
 import re
 from typing import Any, Callable
 
-from personalclaw.sdk.channel import (
-    is_tracked_channel,
-    redact_credentials,
-    redact_exfiltration_urls,
-    sel,
-)
+from personalclaw.sdk.channel import is_tracked_channel, sel
 
 from discord_runtime.api import (
     BUTTON_STYLE_DANGER,
@@ -170,16 +168,6 @@ def _cut(line: str, room: int, *, in_code: bool) -> tuple[str, str]:
     return prefix, line[room:]
 
 
-def _safe(text: str) -> str:
-    """Redact before anything reaches the wire (exfil URLs, then credentials).
-
-    Every delivery path funnels through here — an unredacted path is the whole
-    class of bug this centralization prevents."""
-    body, _ = redact_exfiltration_urls(text)
-    body, _ = redact_credentials(body)
-    return body
-
-
 class _StreamState:
     """Bookkeeping for one edit-streamed message: its placeholder, and one line per task.
 
@@ -274,7 +262,7 @@ class DiscordDelivery:
         reply_broadcast: bool | None = None,
     ) -> str:
         last = ""
-        for part in split_message(_safe(text)):
+        for part in split_message(text):
             msg = await self._api.create_message(channel, part)
             last = str(msg.get("id", "")) or last
         return last
@@ -292,7 +280,7 @@ class DiscordDelivery:
         if isinstance(payload, dict) and isinstance(payload.get("components"), list):
             components = payload["components"]
         msg = await self._api.create_message(
-            channel, _safe(fallback_text)[:DISCORD_MAX_TEXT], components=components
+            channel, fallback_text[:DISCORD_MAX_TEXT], components=components
         )
         return str(msg.get("id", ""))
 
@@ -300,7 +288,7 @@ class DiscordDelivery:
         self, channel: str, job_name: str, job_id: str, text: str, thread_ts: str = ""
     ) -> str:
         header = f"**Cron: {job_name}**\n\n"
-        parts = split_message(_safe(text), DISCORD_MAX_TEXT - len(header))
+        parts = split_message(text, DISCORD_MAX_TEXT - len(header))
         last = ""
         for i, part in enumerate(parts or [""]):
             msg = await self._api.create_message(channel, (header + part) if i == 0 else part)
@@ -310,9 +298,8 @@ class DiscordDelivery:
     async def deliver_notification(
         self, channel: str, title: str, text: str, thread_ts: str = ""
     ) -> str:
-        body = _safe(f"**{title}**\n\n{text}")
         last = ""
-        for part in split_message(body):
+        for part in split_message(f"**{title}**\n\n{text}"):
             msg = await self._api.create_message(channel, part)
             last = str(msg.get("id", "")) or last
         return last
@@ -321,7 +308,7 @@ class DiscordDelivery:
         """Mirror a dashboard reply, rendering a trailing ``[OPTIONS: …]`` as buttons."""
         from personalclaw.sdk.channel import extract_options
 
-        body, options = extract_options(_safe(text))
+        body, options = extract_options(text)
         for part in split_message(body):
             await self._api.create_message(channel, part)
         if options:
@@ -346,7 +333,7 @@ class DiscordDelivery:
     async def deliver_subagent_reply(
         self, channel: str, text: str, thread_ts: str = "", elapsed_secs: float = 0.0
     ) -> None:
-        for part in split_message(_safe(text)):
+        for part in split_message(text):
             await self._api.create_message(channel, part)
         if elapsed_secs:
             await self._api.create_message(channel, f"_took {elapsed_secs:.1f}s_")
@@ -421,7 +408,7 @@ class DiscordDelivery:
     ) -> str:
         """Upload a file. Discord renders images inline from the attachment itself,
         so there is no photo-vs-document split to make (unlike Telegram)."""
-        caption = _safe(initial_comment or title or "")
+        caption = initial_comment or title or ""
         msg = await self._api.upload_file(
             channel, file_path, filename=filename, content=caption[:DISCORD_MAX_TEXT]
         )
@@ -541,7 +528,7 @@ class DiscordDelivery:
             return None
 
         request_id = str(getattr(event, "request_id", ""))
-        title = _safe(str(getattr(event, "title", "")))
+        title = str(getattr(event, "title", ""))
         # Split like a reply, the buttons on the last part: the prompt was cut at 2,000
         # characters, so the owner approved a command whose end they never saw.
         parts = split_message(f"🔐 [{source}] Approve: {title}?")
