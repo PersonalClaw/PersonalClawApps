@@ -13,7 +13,7 @@ builtin/in-process core tools, and ``invoke`` routes back to the owning server.
 
 from typing import Any
 
-from personalclaw.sdk.tool import RiskLevel, ToolDefinition, ToolProvider, ToolResult
+from personalclaw.sdk.tool import ToolDefinition, ToolProvider, ToolResult
 
 _TOOL_PREFIX = "mcp"
 
@@ -48,16 +48,15 @@ class McpToolProvider(ToolProvider):
         registry = self._get_registry()
         if not registry:
             return []
-        from personalclaw.sdk.mcp import infer_risk_from_name
+        from personalclaw.sdk.mcp import declared_risk
 
         tools: list[ToolDefinition] = []
         for server_name, conn in registry.items():
             for tool in await conn.list_tools():
-                # MCP tools declare no risk (the spec's readOnlyHint/destructiveHint
-                # annotations aren't plumbed through McpToolSpec yet), so infer a
-                # declared risk from the tool name — a `*_delete`/`*_send` reads as
-                # caution/destructive instead of silently defaulting SAFE. The
-                # approval gate still downgrades read-only invocations per call.
+                # What the server's annotations declare, never what the tool is called: a
+                # read-only label counts only from a server the owner trusts (Tools page), a
+                # destructive one from any server, and a tool that says nothing is a change,
+                # so it asks.
                 tools.append(
                     ToolDefinition(
                         name=f"{_TOOL_PREFIX}/{server_name}/{tool.name}",
@@ -65,7 +64,7 @@ class McpToolProvider(ToolProvider):
                         provider="mcp",
                         parameters=tool.input_schema,
                         requires_approval=True,
-                        risk_level=RiskLevel(infer_risk_from_name(tool.name)),
+                        risk_level=declared_risk(server_name, tool),
                     )
                 )
         return tools

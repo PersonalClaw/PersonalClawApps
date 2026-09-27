@@ -22,6 +22,7 @@
     "routes": [
       {
         "op": "list_meetings",
+        "readOnly": true,
         "method": "GET",
         "path": "/meetings",
         "summary": "List meetings."
@@ -40,6 +41,7 @@
       },
       {
         "op": "get_meeting",
+        "readOnly": true,
         "method": "GET",
         "path": "/meetings/{id}",
         "summary": "Get one meeting with its members, participants, and outputs."
@@ -74,6 +76,7 @@
       },
       {
         "op": "list_participants",
+        "readOnly": true,
         "method": "GET",
         "path": "/meetings/{id}/participants",
         "summary": "List a meeting's participants."
@@ -104,12 +107,14 @@
       },
       {
         "op": "roster",
+        "readOnly": true,
         "method": "GET",
         "path": "/roster",
         "summary": "List the known participant roster across meetings."
       },
       {
         "op": "list_templates",
+        "readOnly": true,
         "method": "GET",
         "path": "/templates",
         "summary": "List minutes/summary generation templates."
@@ -141,6 +146,7 @@
       },
       {
         "op": "list_outputs",
+        "readOnly": true,
         "method": "GET",
         "path": "/meetings/{id}/outputs",
         "summary": "List generated minutes/summaries for a meeting."
@@ -173,6 +179,7 @@
       },
       {
         "op": "list_extractions",
+        "readOnly": true,
         "method": "GET",
         "path": "/meetings/{id}/extractions",
         "summary": "List extracted action items, decisions, and follow-ups for a meeting."
