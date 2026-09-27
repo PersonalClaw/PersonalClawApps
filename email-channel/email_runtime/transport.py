@@ -541,11 +541,13 @@ class EmailTransport(ChannelTransportProvider):
         # door's canned nudge — threads under the sender's own message.
         if self._delivery is not None:
             self._delivery.note_inbound(mail)
-            # An ALLOWED sender's body may carry an approval reply-token; resolving it
-            # consumes the message (it is an answer, not a new turn). Gated on the
-            # allowlist read, never on the raw body: an unknown sender must not be
+            # An ALLOWED sender's body may carry an approval reply-token; an answer is
+            # consumed (it is not a new turn), and only the owner's decides anything. Gated
+            # on the allowlist read, never on the raw body: an unknown sender must not be
             # able to resolve an approval by mailing a token.
-            if is_allowed_sender(PROVIDER, cm.sender) and self._delivery.resolve_reply_token(text):
+            if is_allowed_sender(PROVIDER, cm.sender) and self._delivery.resolve_reply_token(
+                text, cm.sender
+            ):
                 return
 
         # The guarded door (EA-7). Core applies the trust gate, the non-owner-content

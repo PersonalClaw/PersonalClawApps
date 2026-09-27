@@ -95,6 +95,12 @@ the "any allowed user" tier — `!stop`, `!title`, `!compact`, `sessions`, and `
 which DMs them a dashboard session link. Everything else stays owner-only. Add people
 deliberately.
 
+Approvals are the owner's alone. Only the owner's press on **Approve**, **Trust session** or
+**Reject** answers a tool approval, whether it is asked in a DM or in a linked channel thread
+where everyone in the channel sees the buttons. Anyone else's press, an allowlisted user's
+included, answers nothing. They are told "Only the owner can answer this", and the press is
+logged to the security event log.
+
 ### Settings that currently do nothing
 
 Two keys are visible in the Configure form and have no effect. They are listed here rather
