@@ -7,12 +7,11 @@ which nothing has written since core's S108, so a real user's `cron list` showed
 remove/pause/resume answered "not found" for every live id.
 
 The contract under test is unchanged — the relative next-run rendering, and that a job's message is
-redacted before it reaches Slack. Both now go through a real `TriggerStore`.
+masked before it reaches Slack. Both now go through a real `TriggerStore`.
 """
 
 import re
 import time
-from unittest.mock import patch
 
 import pytest
 
@@ -109,23 +108,14 @@ class TestHandleCronList:
         assert "⚠️" in result
         assert "clock:broken" in result
 
-    def test_the_message_is_redacted(self, store) -> None:
+    def test_a_key_in_the_message_reaches_slack_masked(self, store) -> None:
+        """What reaches Slack, not which functions ran: the row arrives masked from core's
+        `to_schedule_row`, so the reply shows core's marker where the key was, and never the key."""
         _seed(store, message="token=AKIAIOSFODNN7EXAMPLE")
-        with (
-            patch(
-                "slack_runtime.handler.redact_exfiltration_urls",
-                return_value=("[URL_REDACTED]", True),
-            ) as mock_url,
-            patch(
-                "slack_runtime.handler.redact_credentials", return_value=("[REDACTED]", True)
-            ) as mock_cred,
-        ):
-            result = _handle_cron_command("cron list", store, "C123", "t123")
-        mock_url.assert_called_once_with("token=AKIAIOSFODNN7EXAMPLE")
-        mock_cred.assert_called_once_with("[URL_REDACTED]")
+        result = _handle_cron_command("cron list", store, "C123", "t123")
         assert result is not None
-        assert "[REDACTED]" in result
         assert "AKIAIOSFODNN7EXAMPLE" not in result
+        assert re.search(r"token=\[REDACTED:[^\]]*\]", result), result
 
 
 class TestHandleCronMutations:
