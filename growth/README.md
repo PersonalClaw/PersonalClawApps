@@ -11,8 +11,10 @@ as a self-contained directory:
 
 - `app.json` — the manifest (identity, provider/backend/UI declarations, permissions).
 - `backend/server.py` — the app's backend (subprocess behind the gateway proxy).
-- `ui/` — the contributed UI (built to `ui/dist/index.mjs` by `setup.sh` on install).
-- `setup.sh` — the `onInstall`/`onUpdate` hook (builds the UI bundle if missing).
+- `ui/` — the contributed UI: its sources in `ui/src/`, and the built page in
+  `ui/bundle/index.mjs`. The bundle is committed, so installing the app copies it and never
+  needs Node or npm. After editing `ui/src/`, run `npm ci && npm run build` in `ui/` and
+  commit the bundle; CI rebuilds it and fails when the committed file differs.
 - `test_server.py` — the app's own tests.
 
 It imports only the PersonalClaw **SDK** (never core internals), so core can evolve

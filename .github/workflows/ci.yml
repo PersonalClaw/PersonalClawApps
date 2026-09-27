@@ -2,7 +2,8 @@
 # Tests install each bundle's declared dependencies; undeclared vendor SDKs remain
 # absent so apps that intentionally omit them must stub them. Jobs per CI-RELEASE-ENGINEERING §"apps repo":
 # manifest-validate · tests · quality-declarations · boundary · live-writes-posture ·
-# prompt-cache-posture · settings-schema-posture · readme-census · store-card-copy · dco (PR-only).
+# prompt-cache-posture · settings-schema-posture · readme-census · store-card-copy · ui-bundles ·
+# dco (PR-only).
 name: CI
 
 on:
@@ -416,6 +417,26 @@ jobs:
           python-version: "3.12"
       - name: Every lead sentence fits the Store card
         run: python .github/scripts/check_store_card_copy.py
+
+  ui-bundles:
+    # Cross-app rail: an app's UI ships BUILT, in `<app>/ui/bundle/`, because an install copies
+    # the app as it is and must never need npm (the hook that ran `npm install && npx vite
+    # build` left a user without Node a page that could not load). The bundle is what users
+    # run and the sources are what reviewers read, so this job rebuilds every UI from its
+    # lockfile and fails when a committed bundle differs, stale or edited by hand. Rides here
+    # with the other cross-app sweeps: the `tests` job runs pytest per bundle and has no Node.
+    # The script's vacuity floor fails a scan that found nothing to compare.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - name: Every committed UI bundle is the build of its sources
+        run: python .github/scripts/check_ui_bundles.py
 
   publication-hygiene:
     # Cross-repo rail: this repository is PUBLIC, so `git ls-files` is exactly what every

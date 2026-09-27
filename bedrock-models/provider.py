@@ -149,16 +149,42 @@ def _bare_model_id(model: str | None, fallback: str) -> str:
     return mid
 
 
-def _friendly_bedrock_error(error: Exception, model_id: str) -> Exception:
-    """Map an opaque botocore Bedrock error to an actionable message.
+#: The IAM action an ``AccessDeniedException`` names when the identity's policy lacks it:
+#: "... is not authorized to perform: bedrock:InvokeModelWithResponseStream on resource: ...".
+_NOT_AUTHORIZED_RE = re.compile(r"not authorized to perform:\s*(?P<action>[\w:*-]+)", re.IGNORECASE)
+#: The codes AWS answers with when it does not accept the credentials themselves.
+_REJECTED_CREDENTIAL_CODES = frozenset(
+    {"UnrecognizedClientException", "ExpiredTokenException", "ExpiredToken", "InvalidClientTokenId"}
+)
 
-    Some models carry account/policy restrictions that no request parameter can
-    satisfy — e.g. a model whose mandatory data-retention policy isn't enabled
-    for this AWS account fails ``Converse``/``ConverseStream`` with
-    ``ValidationException: data retention mode 'default' is not available for
-    this model``. There's no per-request fix; surface a clear message telling
-    the user to pick a different Bedrock model rather than a raw botocore dump.
-    Other errors pass through unchanged.
+
+def _aws_error_code(error: Exception) -> str:
+    """The AWS error code of a botocore ``ClientError`` (``AccessDeniedException``), else ""."""
+    response = getattr(error, "response", None)
+    if isinstance(response, dict):
+        code = str((response.get("Error") or {}).get("Code") or "")
+        if code:
+            return code
+    found = re.search(r"\((\w+)\) when calling", str(error))
+    return found.group(1) if found else ""
+
+
+def _friendly_bedrock_error(error: Exception, model_id: str, *, region: str = "") -> Exception:
+    """Map an opaque botocore Bedrock error to the sentence that names its fix.
+
+    Returned as the SDK's ``ProviderResolutionError``, which the chat shows as written: the fix
+    for each of these is outside PersonalClaw, and only this app knows where.
+
+    * A model whose mandatory data-retention policy isn't enabled for this account
+      (``ValidationException: data retention mode 'default' is not available for this model``).
+    * ``AccessDeniedException`` naming an IAM action: the identity's policy lacks it, so the fix is
+      that action in the policy, not a new key.
+    * ``AccessDeniedException`` without one: the account has no access to that model in the
+      region (model access is granted per account and region).
+    * The credentials themselves turned down (an invalid or expired security token): sign in to
+      AWS again.
+
+    Everything else passes through unchanged.
     """
     msg = str(error)
     if "data retention" in msg and "not available for this model" in msg:
@@ -167,6 +193,27 @@ def _friendly_bedrock_error(error: Exception, model_id: str) -> Exception:
             f"it requires a data-retention policy that isn't enabled here. "
             f"Choose a different Bedrock model in Settings → Models (most models "
             f"work with no extra setup)."
+        )
+    code = _aws_error_code(error)
+    where = f" in {region}" if region else ""
+    if code == "AccessDeniedException":
+        named = _NOT_AUTHORIZED_RE.search(msg)
+        if named:
+            return ProviderResolutionError(
+                f"Your AWS credentials aren't allowed to call {named['action']} on the Bedrock "
+                f"model '{model_id}'{where}. Add that action to the IAM policy of the identity "
+                "Bedrock signs in as, or pick a different model in Settings → Models."
+            )
+        return ProviderResolutionError(
+            f"This AWS account has no access to the Bedrock model '{model_id}'{where}. Request "
+            "access to it in the Amazon Bedrock console for that region, or pick a different "
+            "model in Settings → Models."
+        )
+    if code in _REJECTED_CREDENTIAL_CODES or "security token included in the request is" in msg:
+        return ProviderResolutionError(
+            "AWS turned down the credentials Bedrock used: their security token is invalid or "
+            "has expired. Sign in to AWS again (`aws sso login` for an SSO profile), or pick a "
+            "different model in Settings → Models."
         )
     return error
 
@@ -765,7 +812,7 @@ class BedrockProvider(ModelProvider):
             await worker  # ensure the thread is joined even on cancellation
 
         if error is not None:
-            raise _friendly_bedrock_error(error, self._model_id)
+            raise _friendly_bedrock_error(error, self._model_id, region=self._region)
 
         if input_tokens > 0:
             ctx = _model_window(self._model_id, _DEFAULT_CONTEXT_WINDOW)
@@ -935,7 +982,7 @@ class BedrockProvider(ModelProvider):
             await worker  # ensure the thread is joined even on cancellation
 
         if error is not None:
-            raise _friendly_bedrock_error(error, model or self._model_id)
+            raise _friendly_bedrock_error(error, model or self._model_id, region=self._region)
 
         # Defensive flush — emit any unfinalized tool blocks.
         for block_index, bucket in tool_blocks.items():
@@ -1364,16 +1411,28 @@ def _resolve_profile(config: dict | None) -> str | None:
 # so the loop stalls (symptoms: the composer's model list empties on send, new
 # tabs spin). Run it on a worker thread AND cache the boolean per (profile,
 # region) so repeated probes are instant.
+#
+# Cached for a while, not for the process: the answer was kept forever, so credentials that
+# came back (an SSO login, a fixed profile) left embeddings, images, video and speech
+# unavailable until a restart. A missing credential is asked about again soon, so recovery is
+# seen on the next use after it; a working one is re-checked less often, so an expired one is
+# noticed too.
 
-_cred_cache: dict[tuple[str, str], bool] = {}
+#: Seconds one answer stands: a credential that resolved, and one that did not.
+_CRED_OK_TTL = 300.0
+_CRED_MISSING_TTL = 30.0
+_cred_cache: dict[tuple[str, str], tuple[float, bool]] = {}
 
 
 async def _creds_ok(region: str, profile: str | None) -> bool:
-    """Whether the AWS credential chain resolves for this profile — cached,
-    and run off the event loop so it never blocks."""
+    """Whether the AWS credential chain resolves for this profile — cached for a while
+    (``_CRED_OK_TTL`` / ``_CRED_MISSING_TTL``), and run off the event loop so it never blocks."""
     key = (profile or "", region or "")
-    if key in _cred_cache:
-        return _cred_cache[key]
+    hit = _cred_cache.get(key)
+    if hit is not None:
+        at, ok = hit
+        if _time.monotonic() - at < (_CRED_OK_TTL if ok else _CRED_MISSING_TTL):
+            return ok
 
     def _probe() -> bool:
         try:
@@ -1385,7 +1444,7 @@ async def _creds_ok(region: str, profile: str | None) -> bool:
             return False
 
     ok = await asyncio.to_thread(_probe)
-    _cred_cache[key] = ok
+    _cred_cache[key] = (_time.monotonic(), ok)
     return ok
 
 

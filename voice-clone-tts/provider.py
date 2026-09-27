@@ -18,10 +18,12 @@ cloning_unsupported:<provider>``. The engine's model cards (``runtime: torch``,
 source of truth for what this app offers.
 
 SCOPE (MI-6 remainder, formerly "MI-2c"): the heavy ML engine is an OPTIONAL, lazily
-detected dependency — it is NOT pinned in ``app.json`` ``pythonDependencies`` and no
-model weights are vendored, so the manifest/contract tests run everywhere. When no
-engine is installed the provider degrades gracefully (``is_available`` → False,
-``synthesize`` → None) rather than raising. The spike CHOSE OmniVoice (bake-off
+detected dependency — it is NOT pinned in ``app.json`` ``pythonDependencies`` (an app's
+Python dependencies are installed into the gateway's own packages, and the engine belongs
+in this app's sidecar environment), and no model weights are vendored, so the
+manifest/contract tests run everywhere. When no engine is installed the provider degrades
+gracefully (``is_available`` → False, ``synthesize`` → None) rather than raising, and
+``availability()`` names the two commands that install it. The spike CHOSE OmniVoice (bake-off
 0.906 vs 0.658 — see the core plan doc); real zero-shot inference runs in the app's
 ``worker.py`` through the SDK sidecar runner, weights download resumably with a
 completion receipt, and a sidecar killed mid-synthesis surfaces its typed crash
@@ -35,6 +37,7 @@ import json
 import logging
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -65,21 +68,78 @@ def _weights_dir() -> Path:
     return d
 
 
+def _engine_venv() -> Path | None:
+    """This app's own Python environment, ``<home>/apps/voice-clone-tts/venv``, when it exists.
+
+    ``SidecarRunner`` runs the worker under that environment's interpreter whenever it has
+    one, and under the gateway's only when it does not, so it is where the engine has to be.
+    None on a core too old to vend ``sidecar_venv_dir``.
+    """
+    try:
+        from personalclaw.sdk.sidecar import sidecar_venv_dir
+    except ImportError:
+        return None
+    venv = sidecar_venv_dir("voice-clone-tts")
+    python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    return venv if python.is_file() else None
+
+
+def _installed_in(venv: Path, module: str) -> bool:
+    """Whether *module* is installed in *venv*, read off disk: its package directory, or the
+    ``.dist-info`` an editable install leaves. Nothing is imported or run."""
+    for site in [*venv.glob("lib/python*/site-packages"), venv / "Lib" / "site-packages"]:
+        if (site / module).is_dir() or any(site.glob(f"{module}-*.dist-info")):
+            return True
+    return False
+
+
 def _detect_engine() -> str:
     """Return the import name of the first installed candidate cloning engine, else "".
 
-    Uses :func:`importlib.util.find_spec` so detection never imports (and never loads)
-    the multi-GB engine just to answer "is it here?". A namespace/partial-install edge
-    that raises is treated as absent (fail-closed), consistent with the capability
-    surface's fail-closed footing.
+    Looked for where the sidecar will import it. With this app's own environment present,
+    the worker runs there and nowhere else, so only that environment counts. It used to ask
+    the gateway's interpreter in every case, so an engine installed where the sidecar runs
+    left the app unavailable, and one installed into the gateway was reported ready for a
+    worker that could not import it.
+
+    Never imports the multi-GB engine to answer "is it here?": the environment is read off
+    disk, and the gateway's interpreter through :func:`importlib.util.find_spec`. A
+    namespace/partial-install edge that raises is treated as absent (fail-closed).
     """
+    venv = _engine_venv()
     for mod in _CANDIDATE_ENGINE_MODULES:
+        if venv is not None:
+            if _installed_in(venv, mod):
+                return mod
+            continue
         try:
             if importlib.util.find_spec(mod) is not None:
                 return mod
         except (ImportError, ValueError):
             continue
     return ""
+
+
+def _engine_install_steps() -> str:
+    """One command that puts the engine where the sidecar runs, with this machine's paths.
+
+    The environment is made from the interpreter PersonalClaw runs on, as core's own sidecar
+    install does: OmniVoice needs Python 3.10 or newer, and a bare ``python3`` can be older
+    (macOS ships 3.9). One ``cd`` rather than the environment's path three times, because the
+    Providers card shows at most 500 characters of the reason this ends up in.
+    """
+    try:
+        from personalclaw.sdk.sidecar import sidecar_venv_dir
+
+        app_dir = str(sidecar_venv_dir("voice-clone-tts").parent)
+    except ImportError:
+        app_dir = "<PersonalClaw home>/apps/voice-clone-tts"
+    pip = "venv\\Scripts\\pip" if os.name == "nt" else "venv/bin/pip"
+    return f"`cd {app_dir} && {sys.executable} -m venv venv && {pip} install omnivoice`"
+
+
+#: Core keeps this much of an availability reason (``providers/availability.py``).
+_REASON_BUDGET = 500
 
 
 def _worker_path() -> Path:
@@ -333,8 +393,16 @@ def availability() -> tuple[bool, str]:
     engine = _detect_engine()
     if engine:
         return True, ""
-    return False, (
-        "No cloning engine detected. Voice Clone TTS needs a torch-based zero-shot engine "
-        "(OmniVoice or CosyVoice, selected by the MI-2c spike); install it and download a "
-        "model card's weights to enable cloning."
+    head = (
+        "The OmniVoice cloning engine is not installed, and PersonalClaw does not install it "
+        "for you. Put it in this app's own Python environment: "
     )
+    tail = (
+        " (it brings torch, several GB). Then press Check again, and download OmniVoice in "
+        "Settings → Models."
+    )
+    reason = head + _engine_install_steps() + tail
+    if len(reason) > _REASON_BUDGET:
+        # Paths too long for the card: a command cut short is worse than none.
+        reason = head + "the commands are in the app's README, under Installing the engine." + tail
+    return False, reason
