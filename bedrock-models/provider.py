@@ -1209,10 +1209,16 @@ class BedrockCatalog(ModelCatalog):
             # Discovery failed/empty → return [] (no hardcoded floor). The catalog is
             # authoritative; a keyless/misconfigured account shows an empty list, not
             # fake ids.
-        return [
+        models = [
             ModelInfo(id=r["id"], name=r.get("name", r["id"]), capabilities=list(r.get("capabilities", ["chat"])))
             for r in rows
         ]
+        if models:
+            # Amazon Transcribe, which the speech-to-text adapter runs, is no foundation model,
+            # so no listing names it, and Settings → Models had nothing to bind speech-to-text
+            # to. Listed for an account the listings reached, so a binding can name it.
+            models.append(ModelInfo(id=TRANSCRIBE_MODEL, name="Amazon Transcribe", capabilities=["stt"]))
+        return models
 
     async def test_connection(self) -> ConnectionResult:
         # A successful control-plane list is the connectivity signal. The fallback
@@ -1415,15 +1421,16 @@ async def _creds_ok(region: str, profile: str | None) -> bool:
     return ok
 
 
+# ── Bedrock media providers ──────────────────────────────────────────────────
+#
+# Like chat, a media call names its model: the binding in Settings → Models for that use case
+# (``Bedrock:amazon.nova-canvas-v1:0``). One that names none is refused before anything is sent
+# (the SDK's ``require_model``). Each adapter used to put Bedrock's first model of its kind in
+# its place (Titan Embed, Nova Canvas, Nova Reel), and the speech adapter ran Transcribe for a
+# binding that named no model at all.
+
+
 # ── Bedrock Embedding Provider ───────────────────────────────────────────────
-
-
-_EMBEDDING_MODELS = [
-    ("amazon.titan-embed-text-v2:0", 1024),
-    ("amazon.titan-embed-text-v1", 1536),
-    ("cohere.embed-v4:0", 1024),
-]
-_DEFAULT_EMBED_MODEL = "amazon.titan-embed-text-v2:0"
 
 
 class BedrockEmbeddingProvider(EmbeddingProvider):
@@ -1462,10 +1469,9 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
         """True if the AWS credential chain resolves (cached, off-loop)."""
         return await _creds_ok(self._region, self._profile)
 
-    def _invoke_embed_sync(self, text: str, model: str) -> list[float] | None:
+    def _invoke_embed_sync(self, text: str, model_id: str) -> list[float] | None:
         """Blocking invoke_model for embedding — run via to_thread."""
         client = self._get_client()
-        model_id = model or _DEFAULT_EMBED_MODEL
 
         # Build request body per model family
         if model_id.startswith("cohere"):
@@ -1486,15 +1492,25 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
             return result.get("embedding")
 
     async def embed(self, text: str, model: str = "") -> list[float] | None:
-        """Embed a single text string."""
+        """Embed a single text string with ``model``. ``None`` when it names none, or fails."""
         try:
-            return await asyncio.to_thread(self._invoke_embed_sync, text, model)
+            model_id = require_model(model)
+        except ProviderResolutionError as exc:
+            logger.warning("Bedrock embedding on %r refused: %s", self._name, exc)
+            return None
+        try:
+            return await asyncio.to_thread(self._invoke_embed_sync, text, model_id)
         except Exception:
             logger.debug("Bedrock embedding failed", exc_info=True)
             return None
 
     async def embed_batch(self, texts: list[str], model: str = "") -> list[list[float]]:
         """Embed multiple texts (sequential calls — Bedrock has no native batch)."""
+        try:
+            require_model(model)
+        except ProviderResolutionError as exc:
+            logger.warning("Bedrock embedding on %r refused: %s", self._name, exc)
+            return [[] for _ in texts]
         results: list[list[float]] = []
         for text in texts:
             vec = await self.embed(text, model)
@@ -1553,10 +1569,9 @@ class BedrockImageProvider(ImageGenProvider):
     async def list_models(self) -> list[ImageGenModel]:
         return list(_IMAGE_MODELS)
 
-    def _generate_sync(self, prompt: str, model: str, size: str, n: int) -> list[dict]:
+    def _generate_sync(self, prompt: str, model_id: str, size: str, n: int) -> list[dict]:
         """Blocking image generation — run via to_thread."""
         client = self._get_client()
-        model_id = model or "amazon.nova-canvas-v1:0"
 
         # Parse size
         width, height = 1024, 1024
@@ -1590,9 +1605,13 @@ class BedrockImageProvider(ImageGenProvider):
         n: int = 1,
         **opts: Any,
     ) -> list[ImageResult]:
-        """Generate images from a text prompt via Nova Canvas."""
+        """Generate images from a text prompt with ``model`` (Nova Canvas)."""
         try:
-            images_b64 = await asyncio.to_thread(self._generate_sync, prompt, model, size, n)
+            model_id = require_model(model)
+        except ProviderResolutionError as exc:
+            raise ImageGenError(str(exc)) from exc
+        try:
+            images_b64 = await asyncio.to_thread(self._generate_sync, prompt, model_id, size, n)
         except Exception as exc:
             raise ImageGenError(f"Bedrock image generation failed: {exc}") from exc
 
@@ -1691,7 +1710,7 @@ class BedrockVideoProvider(VideoGenProvider):
     async def list_models(self) -> list[VideoGenModel]:
         return list(_VIDEO_MODELS)
 
-    def _generate_sync(self, prompt: str, model: str, duration_seconds: float) -> str:
+    def _generate_sync(self, prompt: str, model_id: str, duration_seconds: float) -> str:
         """Blocking submit → poll → download. Returns local file path to the MP4."""
         if not self._s3_bucket:
             raise VideoGenError(
@@ -1700,7 +1719,6 @@ class BedrockVideoProvider(VideoGenProvider):
             )
 
         client = self._get_runtime_client()
-        model_id = model or "amazon.nova-reel-v1:1"
         duration = max(6, min(int(duration_seconds), 6))  # Nova Reel supports 6s clips
 
         s3_prefix = f"bedrock-video/{int(_time.time())}/"
@@ -1757,10 +1775,14 @@ class BedrockVideoProvider(VideoGenProvider):
         aspect_ratio: str = "",
         **opts: Any,
     ) -> list[VideoResult]:
-        """Generate a video from a text prompt via Nova Reel (async invoke)."""
+        """Generate a video from a text prompt with ``model`` (Nova Reel, async invoke)."""
+        try:
+            model_id = require_model(model)
+        except ProviderResolutionError as exc:
+            raise VideoGenError(str(exc)) from exc
         try:
             local_path = await asyncio.to_thread(
-                self._generate_sync, prompt, model, duration_seconds
+                self._generate_sync, prompt, model_id, duration_seconds
             )
         except VideoGenError:
             raise
@@ -1780,8 +1802,10 @@ class BedrockVideoProvider(VideoGenProvider):
 # Amazon Transcribe works via a batch job: upload audio to S3 → start_transcription_job
 # → poll → download transcript JSON. For short clips (< 30s, the composer mic path),
 # this completes in 3-8 seconds. No hallucination, handles all formats natively.
-_STT_MODELS = ["amazon-transcribe"]
-_DEFAULT_STT_MODEL = "amazon-transcribe"
+#: The id a speech-to-text binding names for it (``Bedrock:amazon-transcribe``), listed by the
+#: catalog so Settings → Models can offer it. Transcribe has one model, so the adapter needs no
+#: more than that the binding names it.
+TRANSCRIBE_MODEL = "amazon-transcribe"
 
 
 class BedrockSTTProvider(SttProvider):
@@ -1884,7 +1908,12 @@ class BedrockSTTProvider(SttProvider):
                 pass
 
     async def transcribe(self, audio_path: str, model: str = "", language: str = "") -> str | None:
-        """Transcribe an audio file via Amazon Transcribe."""
+        """Transcribe an audio file via Amazon Transcribe, for a call that names its model."""
+        try:
+            require_model(model)
+        except ProviderResolutionError as exc:
+            logger.error("Amazon Transcribe on %r refused: %s", self._name, exc)
+            return None
         try:
             return await asyncio.to_thread(self._transcribe_sync, audio_path, model, language)
         except Exception:

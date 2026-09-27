@@ -8,6 +8,7 @@ from typing import Any
 
 from personalclaw.sdk.credentials import resolve_token
 from personalclaw.sdk.local_model import LocalModelProvider
+from personalclaw.sdk.model import ProviderResolutionError, require_model
 from personalclaw.sdk.stt import (
     SttModel,
     SttProvider,
@@ -287,14 +288,22 @@ class FasterWhisperProvider(SttProvider, LocalModelProvider):
     ) -> "TranscriptResult | None":
         """Rich transcription with VAD (silence removal → fewer hallucinations, tighter
         timestamps), per-word timestamps, and optional Lexicon bias (initial_prompt +
-        hotwords). Maps native faster-whisper Segment/Word objects → TranscriptResult."""
+        hotwords). Maps native faster-whisper Segment/Word objects → TranscriptResult.
+
+        ``model`` is the speech-to-text binding's model. Like chat, a call that names none is
+        refused before anything is loaded; this used to load ``turbo`` in its place.
+        """
+        try:
+            model_name = require_model(model)
+        except ProviderResolutionError as exc:
+            logger.error("faster-whisper refused: %s", exc)
+            return None
         try:
             from faster_whisper import WhisperModel
         except ImportError:
             return None
 
         ensure_ffmpeg_in_path()
-        model_name = model or "turbo"
         lang = language.split("-")[0] if language else None
         # Whisper's decoder caps the PROMPT window at max_length//2 = 224 tokens; a bias
         # string that (with the forced decoder tokens) pushes a position >= 448 raises

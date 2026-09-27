@@ -1,6 +1,6 @@
 {
   "name": "alibaba-models",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Alibaba Model Studio",
   "description": "Alibaba Cloud Model Studio (DashScope) \u2014 Qwen chat and embedding models. Image generation too (Qwen-Image, Wan), and more. Select your regional endpoint.",
   "icon": "Cloud",
@@ -40,6 +40,14 @@
             "label": "API Key",
             "help": "Your Alibaba Model Studio API key. Falls back to ALIBABA_API_KEY env var.",
             "sensitive": true
+          }
+        },
+        "default_model": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Default Model",
+            "help": "A Model Studio model id, such as qwen-plus. The model this instance answers with when nothing in Settings \u2192 Models names one. Leave it empty to choose its models in Settings \u2192 Models."
           }
         },
         "endpoint": {

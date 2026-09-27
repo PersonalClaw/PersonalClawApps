@@ -17,6 +17,10 @@ for it when their own factories were handed none: bedrock-models took one from l
 So each chat-model app also runs ``blank_model_report`` (refused with nothing sent when no model is
 chosen, the Default Model named when one is set, through both of its build paths), and its Default
 Model help says that in one sentence shared by every app, the one core's bundled Ollama app uses.
+
+Every chat-model app has a Default Model field. alibaba-models had none, so an instance of it could
+serve chat only through a binding in Settings → Models, and the rail read an app without the field
+as one with nothing to check.
 """
 
 from __future__ import annotations
@@ -87,11 +91,11 @@ def _settings_fields(bundle: Path) -> dict:
 
 
 def _default_model_help_faults(bundle: Path) -> list[str]:
-    """Why this app's Default Model help does not say what an empty one does. ``[]`` when it
-    does, or when the app's form has no Default Model."""
+    """Why this app's Default Model is missing or its help does not say what an empty one does.
+    ``[]`` when the field is there and says it."""
     fields = _settings_fields(bundle)
     if "default_model" not in fields:
-        return []
+        return ["app.json has no Default Model field (`default_model`)"]
     help_text = str(((fields["default_model"].get("x-meta") or {}).get("help")) or "")
     faults = []
     lead = help_text[: -len(DEFAULT_MODEL_HELP)].rstrip()
@@ -132,13 +136,10 @@ def test_every_chat_model_app_proves_it_picks_no_model():
     )
 
 
-def test_every_default_model_help_says_what_an_empty_one_does():
+def test_every_chat_model_app_has_a_default_model_that_says_what_an_empty_one_does():
     apps = _chat_model_apps(ROOT)
-    # Vacuity floor: every chat-model app but alibaba-models has a Default Model field as this
-    # lands. A schema key that moved would leave nothing to check and pass.
-    with_field = [app for app in apps if "default_model" in _settings_fields(app)]
-    assert len(with_field) >= 14, f"only {len(with_field)} apps have a Default Model field"
-    faults = {app.name: _default_model_help_faults(app) for app in with_field}
+    assert len(apps) >= 15, f"only {len(apps)} chat-model apps found — did the manifest keys move?"
+    faults = {app.name: _default_model_help_faults(app) for app in apps}
     assert not {name: f for name, f in faults.items() if f}
 
 
@@ -155,20 +156,26 @@ def test_the_rail_sees_an_app_without_one(tmp_path):
 
 
 def test_the_rail_sees_a_help_that_promises_a_pick(tmp_path):
-    """Positive control: the Default Model help every app carried before this rail, and a README
-    that disagrees with its form."""
+    """Positive control: a form with no Default Model, the Default Model help every app carried
+    before this rail, and a README that disagrees with its form."""
     bundle = tmp_path / "probe-models"
     bundle.mkdir()
     old = "A Groq model id. Empty = resolved from live /v1/models discovery."
     field = {"type": "string", "x-meta": {"label": "Default Model", "help": old}}
-    manifest = {
+    manifest: dict = {
         "name": "probe-models",
         "provider": {
             "type": "model",
             "capabilities": ["chat"],
-            "settingsSchema": {"properties": {"default_model": field}},
+            "settingsSchema": {"properties": {"api_key": {"type": "string"}}},
         },
     }
+    (bundle / "app.json").write_text(json.dumps(manifest), encoding="utf-8")
+    assert _default_model_help_faults(bundle) == [
+        "app.json has no Default Model field (`default_model`)"
+    ]
+
+    manifest["provider"]["settingsSchema"]["properties"]["default_model"] = field
     (bundle / "app.json").write_text(json.dumps(manifest), encoding="utf-8")
     (bundle / "README.md").write_text(f"| `default_model` | Default Model | {old} |\n")
     faults = _default_model_help_faults(bundle)

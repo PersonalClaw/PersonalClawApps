@@ -186,33 +186,15 @@ except ProviderResolutionError:
 get_default_registry().register_catalog("openai", create_catalog)
 
 
-# ── OpenAI media-model catalogs (stt / tts / image-gen) ───────────────────────
-# The OpenAI-compatible audio/images PROTOCOL clients live in core; this app owns
-# OpenAI's VENDOR catalog + unpinned defaults, contributed under the ``openai``
-# provider type. Core's remote adapters look these up by type (no hard-coded OpenAI
-# model ids / api.openai.com host-sniff in core). A different-vendor openai-compatible
-# endpoint (Alibaba, Groq, …) contributes its own (or none → user pins a model).
-register_media_catalog(
-    "stt", "openai",
-    MediaCatalog(
-        models=(
-            MediaModel(name="whisper-1", description="OpenAI Whisper (transcription)"),
-            MediaModel(name="gpt-4o-transcribe", description="OpenAI GPT-4o transcription"),
-        ),
-        default_model="whisper-1",
-    ),
-)
-register_media_catalog(
-    "tts", "openai",
-    MediaCatalog(
-        models=(
-            MediaModel(name="tts-1", description="OpenAI TTS (standard)"),
-            MediaModel(name="tts-1-hd", description="OpenAI TTS (HD)"),
-            MediaModel(name="gpt-4o-mini-tts", description="OpenAI GPT-4o-mini TTS"),
-        ),
-        default_model="tts-1",
-    ),
-)
+# ── OpenAI image-model catalog ─────────────────────────────────────────────────
+# The OpenAI-compatible images PROTOCOL client lives in core; this app owns OpenAI's VENDOR
+# catalog of image models, contributed under the ``openai`` provider type, which core's image
+# adapter lists in Settings → Models to bind (no hard-coded OpenAI model ids /
+# api.openai.com host-sniff in core). A different-vendor openai-compatible endpoint (Alibaba,
+# Groq, …) contributes its own, or none. Like chat, a media call names its model: none of these
+# is a default, and a call that names no model is refused. OpenAI's speech models are listed by
+# this app's own model catalog; the speech catalogs it used to contribute carried only the
+# defaults (whisper-1, tts-1) core sent for a call that named none.
 register_media_catalog(
     "image_gen", "openai",
     MediaCatalog(
@@ -224,6 +206,5 @@ register_media_catalog(
             MediaModel(name="dall-e-2", description="OpenAI DALL-E 2 (generation + editing)",
                        extra={"sizes": ["256x256", "512x512", "1024x1024"], "supports_edit": True}),
         ),
-        default_model="gpt-image-1",
     ),
 )
