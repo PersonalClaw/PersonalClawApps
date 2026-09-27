@@ -10,7 +10,8 @@ lifetime after the link is made, not after it is opened. And the app shortened a
 long with a sentence saying why.
 
 Written to pass against a core from before the 90-day limit as well as after it: the refusal is
-driven with a stubbed ``generate_token``, and the no-clamp test reads the installed limit.
+driven with a stubbed ``owner_sign_in_token``, and the no-clamp test reads the installed limit.
+Every caller here is the channel's owner (the ``owner`` fixture): a link goes to nobody else.
 """
 
 from __future__ import annotations
@@ -29,6 +30,16 @@ REFUSAL = (
     "long-lived credential, because the longer a link or token keeps working, the longer anyone "
     "who copies it can use your dashboard. Ask for 90 days or less, such as 90d or 2160h."
 )
+
+
+@pytest.fixture(autouse=True)
+def owner(monkeypatch):
+    """U001, who asks for every link here, is this channel's owner."""
+    import slack_runtime.handler as h
+    from personalclaw.sdk.channel import owner_id_credential
+
+    monkeypatch.setattr(h, "_owner_id", "U001")
+    monkeypatch.setenv(owner_id_credential("slack"), "U001")
 
 
 def _slack() -> MagicMock:
@@ -144,7 +155,7 @@ async def test_a_refused_lifetime_is_answered_with_the_gateways_sentence_and_not
     with ExitStack() as stack:
         log = _local_dashboard(stack)
         stack.enter_context(
-            patch("slack_runtime.allowlist.generate_token", side_effect=ValueError(REFUSAL))
+            patch("slack_runtime.allowlist.owner_sign_in_token", side_effect=ValueError(REFUSAL))
         )
         await _handle_slash_command(
             "!dashboard 2h", slack, sessions, "C123", "ts1", "ts2", "sess1", "U001"
@@ -153,7 +164,11 @@ async def test_a_refused_lifetime_is_answered_with_the_gateways_sentence_and_not
     replies = [c[0][1] for c in slack.post_message.call_args_list]
     assert replies == [f"❌ {REFUSAL}"]
     log.assert_called_once_with(
-        caller="U001", operation="slack.dashboard_token", outcome="denied", resources="ttl=7200"
+        caller="U001",
+        operation="slack.dashboard_token",
+        outcome="denied",
+        resources="ttl=7200",
+        error=REFUSAL,
     )
 
 
@@ -169,7 +184,7 @@ async def test_the_slash_command_relays_the_refusal_too():
     with ExitStack() as stack:
         _local_dashboard(stack)
         stack.enter_context(
-            patch("slack_runtime.allowlist.generate_token", side_effect=ValueError(REFUSAL))
+            patch("slack_runtime.allowlist.owner_sign_in_token", side_effect=ValueError(REFUSAL))
         )
         await _handle_dashboard(orch, "U001", "2h", respond)
     slack.open_dm.assert_not_called()
@@ -197,7 +212,7 @@ async def test_the_slash_command_reply_says_how_long_the_link_lasts():
 
 @pytest.mark.asyncio
 async def test_the_app_does_not_shorten_a_lifetime_itself():
-    """The lifetime asked for reaches ``generate_token`` as asked, even past the installed
+    """The lifetime asked for reaches ``owner_sign_in_token`` as asked, even past the installed
     limit, so the gateway refuses it rather than the app quietly granting less."""
     from personalclaw.sdk.channel import MAX_SESSION_TTL_SECS
     from slack_runtime.allowlist import send_dashboard_link
@@ -205,13 +220,13 @@ async def test_the_app_does_not_shorten_a_lifetime_itself():
     asked = MAX_SESSION_TTL_SECS + 3600
     seen: list[int] = []
 
-    def _mint(user_id: str, ttl_seconds: int = 3600, *, app: str = "") -> str:
+    def _mint(provider: str, user_id: str, ttl_seconds: int = 3600) -> str:
         seen.append(ttl_seconds)
         raise ValueError(REFUSAL)
 
     with ExitStack() as stack:
         _local_dashboard(stack)
-        stack.enter_context(patch("slack_runtime.allowlist.generate_token", side_effect=_mint))
+        stack.enter_context(patch("slack_runtime.allowlist.owner_sign_in_token", side_effect=_mint))
         with pytest.raises(ValueError, match="at most 90 days"):
             await send_dashboard_link(_slack(), "U001", asked)
     assert seen == [asked]

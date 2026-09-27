@@ -54,9 +54,9 @@ class _FakeClient:
         self.token = token
         _FakeClient.built_with.append(token)
 
-    async def fetch_history(self, channel, oldest, limit=200):
+    async def fetch_history(self, channel, oldest, limit=200, *, latest=""):
         _FakeClient.used.append(("fetch_history", self.token))
-        return [{"ts": "1700000001.000100", "user": "U_ALICE", "text": "hello"}]
+        return [{"ts": "1700000001.000100", "user": "U_ALICE", "text": "hello"}], False
 
     async def get_user_info(self, user_id):
         _FakeClient.used.append(("get_user_info", self.token))

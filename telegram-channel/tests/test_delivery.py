@@ -269,9 +269,23 @@ class TestNoPlaceholderIsLeftBehind:
 
 
 class _Event:
-    def __init__(self, request_id="req1", title="delete files"):
+    def __init__(self, request_id="req1", title="delete files", tool_input="", brief=None):
         self.request_id = request_id
         self.title = title
+        self.tool_input = tool_input
+        self.tool_purpose = ""
+        self.tool_meta = {} if brief is None else {"approval_brief": brief}
+
+
+#: What core stamps on an approval it asks a channel: the call, masked, as the dashboard's card
+#: shows it (``personalclaw.sdk.channel.approval_brief_for``).
+_BRIEF = {
+    "tool": "execute_bash",
+    "input": '{"command": "deploy --token [REDACTED: credential] --env staging"}',
+    "purpose": "ship the staging build",
+    "risk": "destructive",
+    "summary": "Can: runs a command · Risk: Destructive",
+}
 
 
 class TestApproval:
@@ -352,21 +366,70 @@ class TestApproval:
         assert len(events) == 1, "the owner's press is not an event"
 
     @pytest.mark.asyncio
+    async def test_the_prompt_shows_what_will_run_as_the_dashboard_card_does(self):
+        """The prompt was "Approve: execute_bash?" and nothing else, so a command was approved on
+        the phone without being seen. It shows the tool, its arguments, the purpose and what the
+        call can touch, from core's brief, as they are: core masked them."""
+        from telegram_runtime.format import to_markdown_v2
+
+        d = _delivery(owner="42")
+        task = asyncio.ensure_future(
+            d.request_approval(_Event("reqB", "execute_bash", brief=_BRIEF), source="subagent")
+        )
+        await asyncio.sleep(0)
+        (prompt,) = d._api.sent
+        source = (
+            "🔐 [subagent] Approve `execute_bash`?\n"
+            "```\n"
+            '{"command": "deploy --token [REDACTED: credential] --env staging"}\n'
+            "```\n"
+            "ship the staging build\n"
+            "Can: runs a command · Risk: Destructive"
+        )
+        assert prompt["text"] == to_markdown_v2(source)
+        assert prompt["parse_mode"] == "MarkdownV2"
+
+        await d.resolve_callback({"id": "c", "data": "approve:reqB", "from": {"id": 42}})
+        assert await asyncio.wait_for(task, timeout=1.0) is True
+        # Answered, the prompt keeps what was approved, with the outcome under it.
+        assert d._api.edits[-1]["text"] == to_markdown_v2(f"{source}\n✅ Approved")
+
+    @pytest.mark.asyncio
+    async def test_arguments_holding_a_code_fence_cannot_close_the_block(self):
+        from telegram_runtime.format import to_markdown_v2
+
+        d = _delivery(owner="42")
+        brief = {**_BRIEF, "input": "echo ```; echo done", "purpose": "", "summary": ""}
+        task = asyncio.ensure_future(d.request_approval(_Event("reqF", brief=brief), source="t"))
+        await asyncio.sleep(0)
+        (prompt,) = d._api.sent
+        assert prompt["text"] == to_markdown_v2(
+            "🔐 [t] Approve `execute_bash`?\n```\necho `\u200b`\u200b`; echo done\n```"
+        )
+        await d.resolve_callback({"id": "c", "data": "deny:reqF", "from": {"id": 42}})
+        assert await asyncio.wait_for(task, timeout=1.0) is False
+
+    @pytest.mark.asyncio
     async def test_a_long_prompt_is_split_like_a_reply_with_the_buttons_last(self):
         """Ledger 281: the prompt went out as one message, which Telegram refuses past 4,096
-        characters, so a long command was never asked about on Telegram at all."""
+        characters, so a long command was never asked about on Telegram at all. Every line of the
+        arguments arrives, the buttons on the last part."""
         from telegram_runtime.format import TELEGRAM_MAX_TEXT, utf16_len
 
         d = _delivery(owner="42")
-        command = "bash: " + " && ".join(f"echo step-{i}" for i in range(700))
-        task = asyncio.ensure_future(d.request_approval(_Event("reqL", command), source="tool"))
+        command = "\n".join(f"echo step-{i}" for i in range(700))
+        task = asyncio.ensure_future(
+            d.request_approval(_Event("reqL", "execute_bash", tool_input=command), source="tool")
+        )
         await asyncio.sleep(0)
         sent = d._api.sent
         assert len(sent) >= 2
         assert all(utf16_len(m["text"]) <= TELEGRAM_MAX_TEXT for m in sent)
         assert [m["reply_markup"] is not None for m in sent] == [False] * (len(sent) - 1) + [True]
-        # MarkdownV2 escapes the hyphen: each part is the prompt's own text, rendered.
-        assert "step\\-699" in sent[-1]["text"] and "step\\-0 " in sent[0]["text"]
+        # Inside a code block MarkdownV2 escapes only backslashes and backticks.
+        shown = "\n".join(m["text"] for m in sent)
+        for i in range(700):
+            assert f"echo step-{i}\n" in shown, f"step {i} was not shown"
 
         await d.resolve_callback({"id": "c", "data": "approve:reqL", "from": {"id": 42}})
         assert await asyncio.wait_for(task, timeout=1.0) is True

@@ -55,12 +55,14 @@ from personalclaw.sdk.channel import (
     ModelProvider,
 )
 from personalclaw.sdk.channel import parse_title, session_restrictions, trust_mode
+from personalclaw.sdk.channel import approval_brief_for
 from personalclaw.sdk.channel import is_sensitive_path, redact_credentials, redact_exfiltration_urls
 from personalclaw.sdk.channel import sel
 from personalclaw.sdk.channel import SessionManager
 from slack_runtime.blocks import deprecation_warning_block
 from slack_runtime.client import SlackClientOps
 from slack_runtime.format import (
+    SLACK_BLOCK_SECTION_LIMIT,
     SLACK_MSG_LIMIT,
     TRUNCATION_NOTICE,
     split_message,
@@ -108,12 +110,12 @@ _EDIT_INTERVAL = 1.0
 # Timeout for user to click approve/reject before auto-rejecting
 _APPROVAL_TIMEOUT = 120.0
 
-# Slack Block Kit section text limit (3000 chars max); leave room for
-# markdown fences (``` ... ```) that wrap the tool input.
-_SLACK_SECTION_TEXT_LIMIT = 2900
+# Block Kit's cap on the blocks in one message: an approval prompt whose arguments need more
+# code sections than that runs over several messages (`_approval_messages`).
+_MAX_BLOCKS = 50
 
-# Truncation marker appended when tool_input exceeds the limit
-_TRUNCATION_MARKER = "\n… [truncated]"
+# Three or more backticks: a run that would end the code block the arguments are shown in.
+_FENCE_RUN = re.compile(r"`{3,}")
 
 # Slack UX strings
 _THINKING = "_Thinking…_"
@@ -1206,7 +1208,7 @@ async def _handle_slash_command(
         await _add_phase_reaction(slack, channel, msg_ts, "done")
         return ""
 
-    # ── !dashboard [duration] ──
+    # ── !dashboard [duration] — the owner's sign-in link, DM'd; anyone else is told why not ──
     if cmd == "!dashboard":
         from personalclaw.sdk.channel import parse_duration
         from slack_runtime.allowlist import send_dashboard_link
@@ -1879,7 +1881,8 @@ async def handle_message(
     # DM:       "!agent foo"                    → "!agent foo"       (no-op)
     # @mention: "<@UBOT|personalclaw> !agent foo"   → "!agent foo"      (strip prefix)
     if _cmd_text.startswith("!"):
-        # !dashboard and !stop are available to any allowed user
+        # !stop and !title are any allowed user's. !dashboard reaches them too, and sends its
+        # link to the owner alone (send_dashboard_link): anyone else is told why not.
         _cmd_word = _cmd_text.split()[0]
         if _cmd_word in ("!dashboard", "!stop", "!title"):
             if is_owner(user_id) or is_allowed_user(user_id):
@@ -2838,8 +2841,7 @@ async def _request_approval(
     is_dm: bool = True,
 ) -> str:
     """Post approval buttons, wait for click, return 'approved' or 'rejected'."""
-    blocks = _build_approval_blocks(event, is_dm=is_dm)
-    approval_ts = await slack.post_blocks(channel, blocks, "Manual approval required", thread_ts)
+    approval_ts = await _post_approval(slack, channel, thread_ts, event, is_dm=is_dm)
 
     key = f"{channel}:{approval_ts}"
     pending = _PendingApproval(provider, event.request_id, session_key)
@@ -2857,9 +2859,8 @@ async def _request_approval(
         await slack.delete_message(channel, approval_ts)
     except Exception:
         status = "✅ Approved" if outcome == _OUTCOME_APPROVED else "🚫 Rejected"
-        title_safe, _ = redact_exfiltration_urls(event.title)
-        title_safe, _ = redact_credentials(title_safe)
-        await _safe_update(slack, channel, approval_ts, f"🔐 *{title_safe}* — {status}")
+        tool = str((approval_brief_for(event) or {}).get("tool") or "") or "a tool"
+        await _safe_update(slack, channel, approval_ts, f"🔐 *{tool}* — {status}")
 
     return outcome
 
@@ -3016,80 +3017,24 @@ async def handle_interaction(channel: str, msg_ts: str, action_id: str, user_id:
     return action_id
 
 
-#: The key the CORE stamps its approval brief onto ``event.tool_meta`` under — the value
-#: of ``personalclaw.approval_brief.APPROVAL_BRIEF_META_KEY``. Read as a literal because
-#: the brief is ADDITIVE meta the SDK does not export: a core that composes none simply
-#: leaves the key absent, and this channel then prompts exactly as it did before.
-_APPROVAL_BRIEF_META_KEY = "approval_brief"
+def _approval_messages(event: LLMEvent, is_dm: bool = True, source: str = "") -> list[list[dict]]:
+    """The approval prompt, as the Block Kit messages it takes: what will run, then the decision.
 
-#: The one facet that is NOT a consequence: ``readOnly`` claims what a call does not do,
-#: so it must never be framed as something the call "can" do. Named as the EXCEPTION
-#: rather than listing the consequences, so a facet core adds later is framed as a
-#: consequence automatically instead of silently reading as a reassurance.
-_READ_CLAIM_FACET = "readOnly"
+    Everything shown comes from core's brief (``approval_brief_for``): the tool, its arguments,
+    the purpose the runner gave and the summary line (what the call can touch, and its risk),
+    each already masked. That is what the dashboard's approval card shows. The arguments are
+    shown whole, in code sections split to fit a section; they used to be cut at a section's
+    limit, so a command was approved whose end nobody saw. When they need more blocks than one
+    message holds, the prompt runs over several messages and the buttons ride the last, where
+    the reader ends up. Almost always it is one.
 
-
-def _approval_brief_line(event: LLMEvent) -> str:
-    """One line saying what this call can TOUCH, or ``""`` to show no such line.
-
-    Slack is the surface with no room, so the core-composed brief collapses to a single
-    line next to the effective risk; the dashboard stays the rich surface (per-facet
-    cards carrying each facet's ``detail`` sentence). Nothing is re-derived here — every
-    word comes from ``event.tool_meta``, so a hint added to the core gate reaches Slack
-    without a change in this repo, and this renderer cannot drift into a second
-    vocabulary.
-
-    Two rules, both from the ``ChannelDelivery.request_approval`` contract:
-
-    * an ABSENT blast radius renders NO line. "Nothing was established" reads to a
-      person as "nothing happens", which is the opposite of what an unrecognized tool
-      means. Silence is the honest render, and the caller must not fill it.
-    * only ESTABLISHED facets are ever named. ``blastRadiusLine`` already contains
-      exactly the ``True`` ones, so a ``False`` can never be painted as an all-clear
-      ("no network") — absence of evidence never becomes evidence of absence.
-
-    The returned text is plain (no mrkdwn, no emoji) so the approval block and the
-    notification fallback can render the same string without diverging.
+    In DMs: Approve / Trust / Reject. In group channels: Approve / Reject only (Trust excluded
+    to limit blast radius — it escalates permissions for the session). YOLO is owner-only via
+    ``!yolo on`` — no button.
     """
-    meta = getattr(event, "tool_meta", None)
-    if not isinstance(meta, dict):
-        return ""
-    brief = meta.get(_APPROVAL_BRIEF_META_KEY)
-    if not isinstance(brief, dict):
-        return ""
-    facets = str(brief.get("blastRadiusLine") or "")
-    if not facets:
-        return ""
-    radius = brief.get("blastRadius")
-    consequence = isinstance(radius, dict) and any(
-        v for k, v in radius.items() if k != _READ_CLAIM_FACET
-    )
-    line = f"Can: {facets}" if consequence else f"{facets[:1].upper()}{facets[1:]}"
-    risk = str(brief.get("risk") or "")
-    if risk:
-        line += f" · Risk: {risk}"
-    return line
-
-
-def _build_approval_blocks(event: LLMEvent, is_dm: bool = True, source: str = "") -> list[dict]:
-    """Build Block Kit blocks for tool approval prompt.
-
-    Args:
-        event: The permission-request event from the LLM provider.
-        is_dm: True when posting to a DM (adds Trust button).
-        source: Optional label for background agents (e.g. "subagent",
-            "cron").  Prefixed to the header so users can tell main-agent
-            approvals apart from background ones.
-
-    Shows the full command text (from tool_input) in a code block so users
-    can see exactly what will run before approving.  Falls back to the
-    truncated title when tool_input is unavailable.
-
-    In DMs: Approve / Trust / Reject
-    In group channels: Approve / Reject only (Trust excluded
-    to limit blast radius — it escalates permissions for the session).
-    YOLO is owner-only via ``!yolo on`` command — no button.
-    """
+    brief = approval_brief_for(event) or {}
+    tool = str(brief.get("tool") or "") or "a tool"
+    tag = f"[{source}] " if source else ""
     buttons: list[dict] = [
         {
             "type": "button",
@@ -3118,56 +3063,54 @@ def _build_approval_blocks(event: LLMEvent, is_dm: bool = True, source: str = ""
         },
     )
 
-    blocks: list[dict] = []
+    blocks: list[dict] = [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"🔐 *{tag}Tool approval requested:* `{tool}`"},
+        },
+    ]
+    arguments = str(brief.get("input") or "")
+    if arguments:
+        unfenced = _FENCE_RUN.sub(lambda m: "\u200b".join(m.group(0)), arguments)
+        for part in split_message(f"```\n{unfenced}\n```", SLACK_BLOCK_SECTION_LIMIT):
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": part}})
+    # Why, and what it can touch, go ABOVE the buttons: they are the reasons to press one, so a
+    # reader must meet them before the decision, not after it.
+    tail: list[dict] = [
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": str(brief[k])}]}
+        for k in ("purpose", "summary")
+        if brief.get(k)
+    ]
+    tail.append({"type": "actions", "elements": buttons})
+    messages: list[list[dict]] = []
+    while len(blocks) + len(tail) > _MAX_BLOCKS:
+        messages.append(blocks[:_MAX_BLOCKS])
+        blocks = blocks[_MAX_BLOCKS:]
+    messages.append(blocks + tail)
+    return messages
 
-    tag = f"[{source}] " if source else ""
-    title_safe, _ = redact_exfiltration_urls(event.title)
-    title_safe, _ = redact_credentials(title_safe)
-    footer = f":lock: {tag}*{title_safe}*"
-    if event.tool_purpose:
-        purpose, _ = redact_exfiltration_urls(event.tool_purpose)
-        purpose, _ = redact_credentials(purpose)
-        footer += f" — {purpose}"
 
-    # When full tool_input is available, show a simple header and the
-    # complete command in a code block below.
-    # When tool_input is missing, fall back to the truncated title.
-    if event.tool_input:
-        blocks.append(
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": f"🔐 *{tag}Tool approval requested:*"},
-            },
-        )
-        # Security: scan for exfiltration URLs and credentials before posting
-        sanitized, _ = redact_exfiltration_urls(event.tool_input)
-        sanitized, _ = redact_credentials(sanitized)
-        # Truncate with marker if exceeds Slack limit
-        if len(sanitized) > _SLACK_SECTION_TEXT_LIMIT:
-            detail = (
-                sanitized[: _SLACK_SECTION_TEXT_LIMIT - len(_TRUNCATION_MARKER)]
-                + _TRUNCATION_MARKER
-            )
-        else:
-            detail = sanitized
-        blocks.append(
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": f"```{detail}```"},
-            },
-        )
+def _approval_fallback(event: LLMEvent, source: str = "") -> str:
+    """The prompt's notification text: the first thing the owner reads, and often the only thing
+    (a lock screen shows no blocks). The same words the prompt's summary line says."""
+    brief = approval_brief_for(event) or {}
+    tool = str(brief.get("tool") or "") or "a tool"
+    text = f"🔐 [{source}] Approval needed: {tool}" if source else f"🔐 Approval needed: {tool}"
+    summary = str(brief.get("summary") or "")
+    return f"{text} — {summary}" if summary else text
 
-    # The blast radius goes ABOVE the buttons: it is the reason to press one, so a
-    # reader must meet it before the decision, not after it.
-    brief_line = _approval_brief_line(event)
-    if brief_line:
-        blocks.append(
-            {"type": "context", "elements": [{"type": "mrkdwn", "text": brief_line}]},
-        )
 
-    blocks.append({"type": "actions", "elements": buttons})
-    blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": footer}]})
-    return blocks
+async def _post_approval(
+    slack: SlackClientOps, channel: str, thread_ts: str | None, event: LLMEvent, *,
+    is_dm: bool = True, source: str = "",
+) -> str:
+    """Post the approval prompt (:func:`_approval_messages`) and return the ts of its last
+    message, the one with the buttons."""
+    fallback = _approval_fallback(event, source)
+    ts = ""
+    for blocks in _approval_messages(event, is_dm=is_dm, source=source):
+        ts = await slack.post_blocks(channel, blocks, fallback, thread_ts)
+    return ts
 
 
 def _remove_all_jobs(store: TriggerStore) -> str:

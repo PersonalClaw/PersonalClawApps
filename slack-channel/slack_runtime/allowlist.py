@@ -25,14 +25,17 @@ from personalclaw.sdk.channel import (
     resolve_bind_host,
     resolve_dashboard_host,
 )
-from personalclaw.sdk.channel import generate_token
+from personalclaw.sdk.channel import owner_sign_in_token
 from personalclaw.sdk.channel import sel
-from slack_runtime.handler import is_tracked_channel
+from slack_runtime.handler import get_owner_id, is_owner, is_tracked_channel
 
 if TYPE_CHECKING:
     from slack_runtime.client import SlackClientOps
 
 logger = logging.getLogger(__name__)
+
+#: This channel's provider key: core keeps its owner under it (``owner_id_for``).
+_PROVIDER = "slack"
 
 # Block Kit action IDs shared with the interaction router
 ACTION_ALLOWLIST_APPROVE = "allowlist_approve"
@@ -135,19 +138,25 @@ async def send_dashboard_link(
     user_id: str,
     ttl: int = 3600,
 ) -> str:
-    """Generate a presigned dashboard URL and DM it to *user_id*.
+    """Generate a presigned dashboard URL and DM it to *user_id*, who must be the owner.
 
     Returns the generated URL (for logging), or an empty string when the DM failed.
     The link is always sent as a DM to prevent token leakage in channels.
+
+    **Only the owner is sent one.** The link signs in as the owner, whatever id it names, and it
+    was minted for anyone who asked: an allowed user's ``!dashboard`` got a link to the owner's
+    whole dashboard. Core's ``owner_sign_in_token`` mints it for this channel's owner alone
+    (an Enterprise Grid ``W…`` id is the same person as its ``U…`` form, as ``is_owner`` reads
+    it) and refuses anyone else with ``ValueError`` carrying ``NOT_THE_OWNER_SENTENCE``, which
+    propagates with nothing minted or sent: the caller shows it.
 
     The link can be opened until the sooner of the gateway's link window
     (``LINK_WINDOW_SECS``, 24 hours) and *ttl*, and the sign-in it starts ends *ttl* seconds
     after the link is made. The DM says both (``blocks.link_lifetime_text``).
 
-    A *ttl* longer than the gateway lets a sign-in last is refused, never shortened here:
-    ``generate_token`` raises ``ValueError``, whose message is the sentence to show the person
-    who asked, and it propagates with nothing sent. (A core from before that limit shortened
-    the lifetime itself, without a word.)
+    A *ttl* longer than the gateway lets a sign-in last is refused the same way, never
+    shortened here: the ``ValueError``'s message is the sentence to show the person who asked.
+    (A core from before that limit shortened the lifetime itself, without a word.)
     """
     from personalclaw.sdk.channel import LINK_WINDOW_SECS
     from slack_runtime.blocks import link_lifetime_text
@@ -158,14 +167,16 @@ async def send_dashboard_link(
     host = resolve_dashboard_host(local_only, configured_host)
 
     try:
-        token = generate_token(user_id, ttl)
-    except ValueError:
+        who = get_owner_id() if is_owner(user_id) else user_id
+        token = owner_sign_in_token(_PROVIDER, who, ttl)
+    except ValueError as exc:
         try:
             sel().log_api_access(
                 caller=user_id,
                 operation="slack.dashboard_token",
                 outcome="denied",
                 resources=f"ttl={ttl}",
+                error=str(exc),
             )
         except Exception:
             logger.debug("could not audit a refused dashboard link", exc_info=True)

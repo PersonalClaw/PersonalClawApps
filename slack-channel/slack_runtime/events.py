@@ -225,10 +225,11 @@ def _build_help_text(cmd_name: str = "personalclaw") -> str:
 async def _handle_dashboard(
     orch: "GatewayServices", caller_id: str, args: str, respond: Callable
 ) -> None:
-    """Generate presigned dashboard link and DM to caller.
+    """Generate presigned dashboard link and DM it to the caller, when the caller is the owner.
 
-    A lifetime longer than the gateway allows is answered with the gateway's own sentence
-    (``send_dashboard_link`` relays ``generate_token``'s refusal), never quietly shortened.
+    Anyone else, and a lifetime longer than the gateway allows, is answered with core's own
+    sentence (``send_dashboard_link`` relays ``owner_sign_in_token``'s refusal), and nothing is
+    minted or sent; a lifetime is never quietly shortened.
     """
     from personalclaw.sdk.channel import LINK_WINDOW_SECS
     from slack_runtime.blocks import dashboard_link_block

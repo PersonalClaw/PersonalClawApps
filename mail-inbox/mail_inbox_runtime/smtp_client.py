@@ -7,11 +7,12 @@ Mirrors ``imap_client.py``: :mod:`mail_inbox_runtime.outbound` depends on the na
 the composed ``EmailMessage``. The real :class:`SmtplibSender` wraps
 ``smtplib.SMTP_SSL`` / ``smtplib.SMTP`` + STARTTLS.
 
-**TLS is verified, never merely attempted.** ``starttls`` ABORTS the send when the
-upgrade fails rather than continuing in the clear — a silent downgrade would put the app
-password and the reply body on the wire in plaintext, which is the exact failure this
-check exists to prevent. ``plain`` exists only for a relay on loopback and is never a
-default. And the server is verified before it gets the password: implicit TLS and STARTTLS
+**Every session is TLS before anything is sent.** ``ssl`` is implicit TLS from the first byte;
+``starttls`` upgrades the session, and a server that does not offer STARTTLS, or an upgrade that
+fails, ABORTS before the login and before the mail: a downgrade would put the app password and
+the reply body on the wire in plaintext. There is no mode without TLS. A ``plain`` mode used to
+send both in the clear to whatever answered, and a setting that still names it reads as
+``starttls``. And the server is verified before it gets the password: implicit TLS and STARTTLS
 both use :func:`~mail_inbox_runtime.tls.client_context` (system CAs, host name checked, plus
 the ``tls_ca_file`` setting's authority), where both used to build a context that checks
 nothing.
@@ -41,14 +42,12 @@ logger = logging.getLogger(__name__)
 #: worker thread forever.
 SMTP_TIMEOUT_SECS = 60
 
-#: Transport modes. ``starttls`` (587) upgrades an established plaintext session;
-#: ``ssl`` (465) is implicit TLS from the first byte; ``plain`` is unencrypted and only
-#: sane against a relay on loopback. Defined here — the module that ACTS on them — and
+#: Transport modes. ``starttls`` (587) upgrades the session before anything is sent; ``ssl``
+#: (465) is implicit TLS from the first byte. Defined here — the module that ACTS on them — and
 #: imported by ``settings.py`` for validation, so there is one definition of the set.
 SMTP_STARTTLS = "starttls"
 SMTP_SSL = "ssl"
-SMTP_PLAIN = "plain"
-VALID_SMTP_SECURITY = frozenset({SMTP_STARTTLS, SMTP_SSL, SMTP_PLAIN})
+VALID_SMTP_SECURITY = frozenset({SMTP_STARTTLS, SMTP_SSL})
 
 #: Default submission port for the default (STARTTLS) mode.
 DEFAULT_SMTP_PORT = 587
@@ -105,13 +104,20 @@ def _connect(
     try:
         if security != SMTP_SSL:
             client.ehlo()
-            if security == SMTP_STARTTLS:
-                # No fallback on purpose: a failed upgrade aborts, never continues to a
-                # plaintext AUTH.
-                client.starttls(context=client_context(ca_file))
-                # RFC 3207: the session resets on upgrade — re-EHLO so the AUTH
-                # capabilities read are the post-TLS ones.
-                client.ehlo()
+            if not client.has_extn("starttls"):
+                _quit_quietly(client)
+                raise SmtpError(
+                    f"the SMTP server {host}:{port} doesn't offer STARTTLS, so nothing was sent "
+                    "to it: the connection must be upgraded to TLS before the login and the "
+                    "mail. Set SMTP TLS Mode to ssl (usually port 465), or use a server that "
+                    "offers STARTTLS"
+                )
+            # No fallback on purpose: a failed upgrade aborts, never continues to a
+            # plaintext AUTH.
+            client.starttls(context=client_context(ca_file))
+            # RFC 3207: the session resets on upgrade — re-EHLO so the AUTH
+            # capabilities read are the post-TLS ones.
+            client.ehlo()
         if username and password:
             client.login(username, password)
     except (smtplib.SMTPException, OSError) as exc:

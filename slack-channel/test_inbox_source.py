@@ -56,16 +56,21 @@ class StubClient(SlackClientOps):
         self.history_calls: list[tuple] = []
         self.user_info_calls: list[str] = []
 
-    async def fetch_history(self, channel, oldest, limit=200):
-        self.history_calls.append((channel, oldest, limit))
+    async def fetch_history(self, channel, oldest, limit=200, *, latest=""):
+        self.history_calls.append((channel, oldest, latest, limit))
         if channel in self._fail:
             raise RuntimeError("slack api down")
         if channel in self._raw:
-            return list(self._raw[channel])
-        # Return only messages strictly newer than `oldest`, newest-first — what
-        # conversations.history does with an exclusive `oldest`.
-        msgs = [m for m in self._history.get(channel, []) if float(m["ts"]) > float(oldest)]
-        return sorted(msgs, key=lambda m: float(m["ts"]), reverse=True)[:limit]
+            return list(self._raw[channel]), False
+        # What conversations.history does with exclusive bounds: the page of messages strictly
+        # between `oldest` and `latest` (now, when absent) closest to `latest`, newest-first,
+        # and whether there are more below it.
+        top = float(latest) if latest else float("inf")
+        msgs = [
+            m for m in self._history.get(channel, []) if float(oldest) < float(m["ts"]) < top
+        ]
+        msgs.sort(key=lambda m: float(m["ts"]), reverse=True)
+        return msgs[:limit], len(msgs) > limit
 
     async def post_message(self, channel, text, thread_ts=None, unfurl_links=None, unfurl_media=None):
         if channel == "C_BAD":
@@ -173,7 +178,7 @@ def test_poll_passes_the_checkpoint_as_oldest_and_does_not_redeliver():
     src = _source(history={"C1": [_msg("1700000001.000100"), _msg("1700000002.000200")]})
     msgs, cursors = asyncio.run(src.poll(["C1"], {"C1": "1700000001.000100"}, "U_ME"))
 
-    assert src._client.history_calls == [("C1", "1700000001.000100", 50)]
+    assert src._client.history_calls == [("C1", "1700000001.000100", "", 200)]
     assert [m.id for m in msgs] == ["1700000002.000200"]
     assert cursors["C1"] == "1700000002.000200"
 
@@ -243,6 +248,67 @@ def test_poll_ignores_a_malformed_ts_for_the_cursor():
     assert cursors["C1"] == "1700000001.000100"
 
 
+# ── nothing is skipped, however much arrived (ledger: 50 per poll) ─────────────
+
+
+def _burst(n, start=1700001000):
+    """``n`` messages, a second apart, after ``start``."""
+    return [_msg(f"{start + i}.000100", text=f"m{i}") for i in range(n)]
+
+
+def test_more_new_messages_than_one_page_all_arrive_in_one_poll():
+    """A poll read one page of 50, newest-first, and moved the cursor past the rest: 450 new
+    messages surfaced 50 and skipped 400. It pages down to the cursor now."""
+    src = _source(history={"C1": _burst(450)})
+    msgs, cursors = asyncio.run(src.poll(["C1"], {"C1": "1700000000.000000"}, "U_ME"))
+
+    assert [m.text for m in msgs] == [f"m{i}" for i in range(450)]  # every one, oldest first
+    assert cursors["C1"] == "1700001449.000100"
+    assert "slack-gap:C1" not in cursors
+
+
+def test_more_than_a_poll_reads_arrive_over_the_next_polls_none_skipped(monkeypatch):
+    """Past the per-poll bound, the newest arrive now, the rest is the channel's gap, and the next
+    polls read the gap before anything newer: every message arrives once."""
+    import slack_runtime.inbox_source as mod
+
+    monkeypatch.setattr(mod, "_PAGE_SIZE", 10)
+    monkeypatch.setattr(mod, "_PAGES_PER_POLL", 2)
+    history = _burst(55)
+    src = _source(history={"C1": history})
+    cursors = {"C1": "1700000000.000000"}
+    seen: list[str] = []
+    polls = 0
+    while True:
+        msgs, cursors = asyncio.run(src.poll(["C1"], cursors, "U_ME"))
+        polls += 1
+        if not msgs:
+            break
+        seen += [m.text for m in msgs]
+        if polls == 1:
+            assert [m.text for m in msgs] == [f"m{i}" for i in range(35, 55)]  # the newest 20
+            assert cursors["slack-gap:C1"] == "1700000000.000000:1700001035.000100"
+        if polls == 2:
+            # Arrived while the gap is open: read after it closes, never skipped.
+            history.append(_msg("1700009999.000100", text="late"))
+    assert sorted(seen) == sorted([f"m{i}" for i in range(55)] + ["late"])
+    assert len(seen) == len(set(seen)), "a message arrived twice"
+    assert cursors["slack-gap:C1"] == "", "the gap never closed"
+    assert cursors["C1"] == "1700009999.000100"
+
+
+def test_a_failed_read_keeps_the_gap_and_the_cursor():
+    src = _source(fail_channels=["C1"], history={"C_OK": [_msg("1700000005.000500")]})
+    before = {
+        "C1": "1700001050.000100",
+        "slack-gap:C1": "1700000000.000000:1700001030.000100",
+        "C_OK": "0",
+    }
+    _, cursors = asyncio.run(src.poll(["C1", "C_OK"], before, "U_ME"))
+    assert cursors["C1"] == before["C1"]
+    assert cursors["slack-gap:C1"] == before["slack-gap:C1"]
+
+
 # ── reply / react / history / names ───────────────────────────────────────────
 
 
@@ -270,7 +336,7 @@ def test_a_channels_first_poll_surfaces_none_of_its_backlog():
     msgs, cursors = asyncio.run(src.poll(["C1"], {}, "U_ME"))
     assert msgs == []
     assert cursors == {"C1": "1700000002.000200"}
-    assert src._client.history_calls == [("C1", "0", 1)], "it read more than where it is"
+    assert src._client.history_calls == [("C1", "0", "", 1)], "it read more than where it is"
 
     src._client._history["C1"].append(_msg("1700000003.000300", text="after"))
     msgs, _ = asyncio.run(src.poll(["C1"], cursors, "U_ME"))

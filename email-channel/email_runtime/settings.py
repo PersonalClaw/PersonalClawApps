@@ -68,13 +68,12 @@ DEFAULT_FOLDER = "INBOX"
 #: transport's module docstring).
 DEFAULT_POLL_SECS = 60
 
-# SMTP transport modes. "starttls" (587) upgrades a plaintext connection; "ssl" (465)
-# is implicit TLS from the first byte; "plain" is unencrypted and only sane against a
-# local relay on loopback.
+# SMTP transport modes. "starttls" (587) upgrades the session before the login and the mail;
+# "ssl" (465) is implicit TLS from the first byte. There is no mode without TLS: "plain" sent the
+# app password and the mail in the clear, and a setting that still names it reads as starttls.
 SMTP_STARTTLS = "starttls"
 SMTP_SSL = "ssl"
-SMTP_PLAIN = "plain"
-_VALID_SMTP_SECURITY = frozenset({SMTP_STARTTLS, SMTP_SSL, SMTP_PLAIN})
+_VALID_SMTP_SECURITY = frozenset({SMTP_STARTTLS, SMTP_SSL})
 
 # DM activation modes, mirroring the telegram/discord apps: "always" answers every
 # paired sender's mail; "off" disables inbound entirely (outbound delivery still works,
@@ -112,6 +111,7 @@ class LiveConfig:
 
 
 def _validate_smtp_security(value: str) -> str:
+    """A mode this app does not have (a typo, or the ``plain`` that is gone) reads as STARTTLS."""
     return value if value in _VALID_SMTP_SECURITY else SMTP_STARTTLS
 
 

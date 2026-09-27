@@ -30,10 +30,12 @@ class FakeSmtp:
     last: "FakeSmtp | None" = None
 
     def __init__(
-        self, host, port, timeout=None, fail_on: str = "", error_text: str = "", context=None
+        self, host, port, timeout=None, fail_on: str = "", error_text: str = "", context=None,
+        offers_starttls: bool = True,
     ):
         self.host, self.port, self.timeout = host, port, timeout
         self.fail_on, self.error_text = fail_on, error_text
+        self.offers_starttls = offers_starttls
         self.calls: list[str] = []
         self.sent: list[EmailMessage] = []
         #: every TLS context the sender handed smtplib (the implicit-TLS one, or STARTTLS's)
@@ -47,6 +49,9 @@ class FakeSmtp:
 
     def ehlo(self):
         self._step("ehlo")
+
+    def has_extn(self, name):
+        return name.lower() == "starttls" and self.offers_starttls
 
     def starttls(self, context=None):
         self.contexts.append(context)
@@ -121,6 +126,30 @@ def test_starttls_failure_aborts_before_any_credential_or_message_is_sent(monkey
     assert not any(c.startswith("login") for c in calls)
     assert "send_message" not in calls
     assert FakeSmtp.last.sent == []
+
+
+def test_a_server_that_offers_no_starttls_is_refused_before_anything_is_sent(monkeypatch):
+    """Ledger 282's SMTP half: the password and the reply never reach a session that is not TLS,
+    whatever the mode was saved as (``plain`` is gone, and reads as STARTTLS)."""
+    for security in (SMTP_STARTTLS, "plain"):
+        _install(monkeypatch, offers_starttls=False)
+        sender = SmtplibSender("relay.example.com", 25, "me@example.com", PASSWORD, security=security)
+        with pytest.raises(SmtpError) as err:
+            sender.send(_message())
+        assert str(err.value) == (
+            "the SMTP server relay.example.com:25 doesn't offer STARTTLS, so nothing was sent to "
+            "it: the connection must be upgraded to TLS before the login and the mail. Set SMTP "
+            "TLS Mode to ssl (usually port 465), or use a server that offers STARTTLS"
+        )
+        assert FakeSmtp.last.calls == ["ehlo", "quit"], "something reached the server first"
+        assert FakeSmtp.last.sent == []
+
+
+def test_a_saved_plain_mode_reads_as_starttls():
+    from mail_inbox_runtime.settings import _coerce_security
+
+    assert _coerce_security("plain") == SMTP_STARTTLS
+    assert _coerce_security("ssl") == SMTP_SSL
 
 
 def test_ssl_mode_uses_implicit_tls_and_never_calls_starttls(monkeypatch):

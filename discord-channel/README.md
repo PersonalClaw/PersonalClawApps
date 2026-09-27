@@ -38,8 +38,12 @@ ships as a self-contained directory:
     (message splitting, throttled edit-streaming, button approvals, reactions).
     A turn's progress message keeps only its task lines when the turn ends, each
     task's line updated in place, and is removed when it only ever said "Thinking…":
-    the reply is a message of its own. An approval prompt too long for one message
-    is split like a reply, its buttons on the last part.
+    the reply is a message of its own. An approval prompt says what will run, as
+    PersonalClaw's own approval card does: the tool, its arguments in a code block, why the
+    agent is calling it, and what the call can touch with its risk (from core's brief, already
+    masked). One too long for one message is split like a reply, its buttons on the last part.
+    Once answered, the outcome is added under the last part, or takes its place when the two
+    would not fit one message, so the chat keeps what was approved.
     Only the owner's press answers an approval: in a tracked channel everyone in it
     sees the buttons, and anyone else's press is refused and logged.
   - `settings.py` — the app's own DM-activation / application-id config + the

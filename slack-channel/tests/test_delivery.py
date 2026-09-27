@@ -204,11 +204,11 @@ class TestTransportWiresChannelDelivery:
 
 
 class TestApprovalBriefOnTheNotification:
-    """The blast-radius line also rides the notification fallback.
+    """The summary line also rides the notification fallback.
 
-    A lock screen renders no Block Kit, so the fallback is often the ONLY thing the
-    owner reads before opening Slack. It reuses the exact string the prompt shows, so
-    the push and the prompt cannot say different things about what a call would touch.
+    A lock screen renders no Block Kit, so the fallback is often the ONLY thing the owner reads
+    before opening Slack. It carries core's summary (what the call can touch, and its risk), the
+    string the prompt shows, so the push and the prompt cannot say different things.
     """
 
     @staticmethod
@@ -226,9 +226,10 @@ class TestApprovalBriefOnTheNotification:
 
     _BRIEF = {
         "tool": "bash",
+        "input": '{"command": "rm -rf build"}',
+        "purpose": "",
         "risk": "destructive",
-        "blastRadius": {"writes": True, "network": False, "shell": True, "readOnly": False},
-        "blastRadiusLine": "writes files, runs a command",
+        "summary": "Can: writes files, runs a command · Risk: Destructive",
     }
 
     @staticmethod
@@ -251,7 +252,7 @@ class TestApprovalBriefOnTheNotification:
         verdict, fallback = await self._prompt(self._BRIEF, "approved")
         assert verdict is True
         assert fallback == (
-            "🔐 [cron] Approve: bash? — Can: writes files, runs a command · Risk: destructive"
+            "🔐 [cron] Approval needed: bash — Can: writes files, runs a command · Risk: Destructive"
         )
 
     @pytest.mark.asyncio
@@ -259,15 +260,32 @@ class TestApprovalBriefOnTheNotification:
         """Refusing is a decision too — the owner needs the same facts to refuse well."""
         verdict, fallback = await self._prompt(self._BRIEF, "rejected")
         assert verdict is False
-        assert "Can: writes files, runs a command · Risk: destructive" in fallback
+        assert "Can: writes files, runs a command · Risk: Destructive" in fallback
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("outcome,verdict", [("approved", True), ("rejected", False)])
-    async def test_no_brief_leaves_the_notification_untouched(self, outcome, verdict):
-        """VACUITY TWIN for both decisions: no brief, no added clause."""
+    async def test_no_brief_is_composed_from_the_event(self, outcome, verdict):
+        """No brief stamped: core composes one from the event, so the push still says it."""
         got, fallback = await self._prompt(None, outcome)
         assert got is verdict
-        assert fallback == "🔐 [cron] Approve: bash?"
+        assert fallback == "🔐 [cron] Approval needed: bash — Can: runs a command · Risk: Destructive"
+
+    @pytest.mark.asyncio
+    async def test_the_arguments_and_the_purpose_are_in_the_prompt(self):
+        client = MagicMock()
+        client.open_dm = AsyncMock(return_value="D1")
+        client.post_blocks = AsyncMock(return_value="1.1")
+        client.update_message = AsyncMock()
+        await _delivery(client).request_approval(
+            self._event({**self._BRIEF, "purpose": "clear the old build"}),
+            source="cron",
+            on_prompted=lambda pending: pending.future.set_result("approved"),
+        )
+        blocks = client.post_blocks.call_args[0][1]
+        texts = [b["text"]["text"] for b in blocks if b["type"] == "section"]
+        assert texts == ["🔐 *[cron] Tool approval requested:* `bash`", '```\n{"command": "rm -rf build"}\n```']
+        context = [e["text"] for b in blocks if b["type"] == "context" for e in b["elements"]]
+        assert context == ["clear the old build", "Can: writes files, runs a command · Risk: Destructive"]
 
 
 # ── core masks what it hands this channel ──────────────────────────────────────────────────

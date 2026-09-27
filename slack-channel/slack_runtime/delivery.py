@@ -16,6 +16,8 @@ import asyncio
 import logging
 from typing import Any
 
+from personalclaw.sdk.channel import approval_brief_for
+
 from slack_runtime.client import RealSlackClient
 from slack_runtime.format import (
     SLACK_BLOCK_SECTION_LIMIT,
@@ -241,12 +243,7 @@ class SlackDelivery:
         caller race a dashboard prompt against the Slack one."""
         import re
 
-        from slack_runtime.handler import (
-            _approval_brief_line,
-            _build_approval_blocks,
-            _pending_approvals,
-            _PendingApproval,
-        )
+        from slack_runtime.handler import _pending_approvals, _PendingApproval, _post_approval
 
         if not self._owner_id:
             return None
@@ -265,15 +262,11 @@ class SlackDelivery:
         if not channel:
             return None
 
-        blocks = _build_approval_blocks(event, is_dm=is_dm, source=source)
-        fallback = f"🔐 [{source}] Approve: {event.title}?"
-        # The notification preview is the FIRST thing the owner reads, and often the only
-        # thing (a lock screen shows no blocks). Same composed line as the block, so the
-        # push and the prompt can never say different things about the blast radius.
-        brief_line = _approval_brief_line(event)
-        if brief_line:
-            fallback += f" — {brief_line}"
-        approval_ts = await self._client.post_blocks(channel, blocks, fallback, thread_ts)
+        # What will run, as the dashboard's card shows it, over as many messages as it takes;
+        # the buttons are on the last one, whose ts this is.
+        approval_ts = await _post_approval(
+            self._client, channel, thread_ts, event, is_dm=is_dm, source=source
+        )
 
         pending = _PendingApproval(
             provider=None, request_id=request_id, session_key=parent_session_key,  # type: ignore[arg-type]
@@ -291,10 +284,9 @@ class SlackDelivery:
             _pending_approvals.pop(key, None)
 
         status = "✅ Approved" if outcome == "approved" else "🚫 Rejected"
+        tool = str((approval_brief_for(event) or {}).get("tool") or "") or "a tool"
         try:
-            await self._client.update_message(
-                channel, approval_ts, text=f"🔐 *{event.title}* — {status}"
-            )
+            await self._client.update_message(channel, approval_ts, text=f"🔐 *{tool}* — {status}")
         except Exception:
             pass
         return outcome == "approved"

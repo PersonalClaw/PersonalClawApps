@@ -9,6 +9,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+def _owner_is(monkeypatch, user_id: str) -> None:
+    """*user_id* is this channel's owner: the only person a dashboard link is sent to."""
+    import slack_runtime.handler as h
+    from personalclaw.sdk.channel import owner_id_credential
+
+    monkeypatch.setattr(h, "_owner_id", user_id)
+    monkeypatch.setenv(owner_id_credential("slack"), user_id)
+
+
 # -- URL uses hostname for remote access, localhost for local-only --
 
 
@@ -20,9 +29,13 @@ import pytest
         ("", "localhost"),  # no URL → localhost-only default
     ],
 )
-async def test_dashboard_url_host_selection(dashboard_url: str, expected_host: str) -> None:
+async def test_dashboard_url_host_selection(
+    dashboard_url: str, expected_host: str, monkeypatch
+) -> None:
     """!dashboard sends presigned link via DM, never in channel."""
     from slack_runtime.handler import _handle_slash_command
+
+    _owner_is(monkeypatch, "U001")
 
     slack = MagicMock()
     slack.post_message = AsyncMock(return_value=None)
@@ -63,9 +76,11 @@ async def test_dashboard_url_host_selection(dashboard_url: str, expected_host: s
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("duration_arg, expected_ttl", [("", 3600), ("2h", 7200), ("30m", 1800)])
-async def test_dashboard_sel_log(duration_arg: str, expected_ttl: int) -> None:
+async def test_dashboard_sel_log(duration_arg: str, expected_ttl: int, monkeypatch) -> None:
     """!dashboard logs SEL with operation='slack.dashboard_token', caller, and ttl."""
     from slack_runtime.handler import _handle_slash_command
+
+    _owner_is(monkeypatch, "U_TEST")
 
     slack = MagicMock()
     slack.post_message = AsyncMock(return_value=None)

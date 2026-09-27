@@ -73,6 +73,7 @@ from personalclaw.sdk.channel import (
     ChannelMessage,
     ChannelTransportProvider,
     OutboundMessage,
+    redeem_owner_pairing_code,
     redeem_pairing_code,
 )
 from personalclaw.sdk.util import app_data_dir
@@ -172,10 +173,24 @@ class EmailTransport(ChannelTransportProvider):
         * ``max_text_len`` → 0 (unbounded): SMTP imposes no practical body limit that a
           chat reply would hit, so claiming a number would be a lie in the other
           direction.
+        * ``owner_pairing`` → the code Configure → Pair as owner shows is mailed to the
+          mailbox from the owner's address, anywhere in the message, and redeemed by
+          :meth:`_try_pairing` (``redeem_owner_pairing_code``); core reads the owner with
+          ``owner_id_for`` each time it asks (:meth:`owner_pairing_hint` says how, over the
+          code). The owner id was otherwise a variable set by hand.
         """
         return ChannelCapabilities(
             inbound=True, threads=True, attachments=True, reactions=False,
             edits=False, rich_text=True, typing_indicator=False, max_text_len=0,
+            owner_pairing=True,
+        )
+
+    def owner_pairing_hint(self) -> str:
+        """How the owner sends the pairing code here: a mail to the mailbox, not a DM to a bot."""
+        address = self._settings().mailbox_address or "the mailbox this channel reads"
+        return (
+            f"Mail this code to {address} from the address that should get your approvals. "
+            "It can be anywhere in the message"
         )
 
     # ── settings + credentials ──
@@ -583,27 +598,45 @@ class EmailTransport(ChannelTransportProvider):
 
         The plan's pairing UX for email is "a reply containing the code", so the code is
         searched for inside the body rather than required to be the whole message — a
-        mail client's quoting and signature make an exact-match rule unusable."""
+        mail client's quoting and signature make an exact-match rule unusable.
+
+        Two codes, in the gate's order for each code-shaped word: a sender's code
+        (``personalclaw pair email``), for a sender not yet allowed; then the OWNER's code
+        (Configure → Pair as owner), for anyone, so a correspondent already allowed can
+        become the owner. The owner's code makes the sender the channel's owner, the one
+        address approvals go to, and a word that matches neither counts against its five
+        wrong guesses (``redeem_owner_pairing_code``)."""
         from personalclaw.sdk.channel import is_allowed_sender
 
-        if is_allowed_sender(PROVIDER, cm.sender):
-            return False
+        allowed = is_allowed_sender(PROVIDER, cm.sender)
         import re
 
         for candidate in re.findall(r"\b\d{8}\b", text):
-            if redeem_pairing_code(PROVIDER, cm.sender, candidate):
-                if self._delivery is not None:
-                    try:
-                        await self._delivery.deliver_text(
-                            cm.channel_id,
-                            "Paired — you can talk to me by replying to this thread.",
-                            cm.thread_id,
-                        )
-                    except Exception:
-                        logger.debug("email: pairing confirmation send failed", exc_info=True)
+            if not allowed and redeem_pairing_code(PROVIDER, cm.sender, candidate):
+                await self._confirm_pairing(
+                    cm, "Paired — you can talk to me by replying to this thread."
+                )
                 logger.info("email: sender %s paired via code", cm.sender)
                 return True
+            name = str((cm.metadata or {}).get("sender_name") or "")
+            if redeem_owner_pairing_code(PROVIDER, cm.sender, candidate, name):
+                await self._confirm_pairing(
+                    cm,
+                    "Paired — you're my owner here now. Approvals and anything else for you "
+                    "come to this address.",
+                )
+                logger.info("email: %s paired as the owner", cm.sender)
+                return True
         return False
+
+    async def _confirm_pairing(self, cm: ChannelMessage, sentence: str) -> None:
+        """Say in the sender's thread that the pairing happened."""
+        if self._delivery is None:
+            return
+        try:
+            await self._delivery.deliver_text(cm.channel_id, sentence, cm.thread_id)
+        except Exception:
+            logger.debug("email: pairing confirmation send failed", exc_info=True)
 
     # ── outbound / health ──
 

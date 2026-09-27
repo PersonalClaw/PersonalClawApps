@@ -18,7 +18,9 @@ refuses as "message is not modified" is the text already being there, not a fail
 
 Every text that can outgrow one message goes out through :func:`send_parts`, which
 splits it into parts Telegram accepts and never lets one go missing quietly. An
-approval prompt does too, its buttons on the last part.
+approval prompt does too, its buttons on the last part. The prompt shows what will run,
+as the dashboard's approval card does (:func:`_approval_text`): the tool, its arguments, the
+purpose and what the call can touch, from core's brief.
 
 Core masks every text it hands this handle, keys and exfiltration URLs included, before
 any method here is called, so nothing here masks it again.
@@ -28,9 +30,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any, Callable
 
-from personalclaw.sdk.channel import is_tracked_channel, sel
+from personalclaw.sdk.channel import approval_brief_for, is_tracked_channel, sel
 
 from telegram_runtime.api import TelegramAPI, TelegramAPIError
 from telegram_runtime.format import TELEGRAM_MAX_TEXT, render_parts, to_markdown_v2, utf16_len
@@ -40,6 +43,9 @@ logger = logging.getLogger(__name__)
 #: Telegram's code for a request it will not take as sent: for a MarkdownV2 text, the
 #: formatting it cannot parse.
 _BAD_REQUEST = 400
+
+#: Three or more backticks: a run that would end a code block.
+_FENCE_RUN = re.compile(r"`{3,}")
 
 
 async def send_parts(
@@ -376,16 +382,16 @@ class TelegramDelivery:
             return None
 
         request_id = str(getattr(event, "request_id", ""))
-        title = str(getattr(event, "title", ""))
         markup = {
             "inline_keyboard": [[
                 {"text": "✅ Approve", "callback_data": f"{_APPROVE}:{request_id}"},
                 {"text": "🚫 Deny", "callback_data": f"{_DENY}:{request_id}"},
             ]]
         }
-        # Split like a reply, the buttons on the last part: one message of it all was refused
-        # as too long, and the owner was never asked.
-        prompt = f"🔐 [{source}] Approve: {title}?"
+        # What will run, as the dashboard's card shows it. Split like a reply, the buttons on
+        # the last part: one message of it all was refused as too long, and the owner was
+        # never asked.
+        prompt = _approval_text(approval_brief_for(event) or {}, source)
         parts = render_parts(prompt)
         mid = int(await send_parts(self._api, chat_id, prompt, reply_markup=markup) or 0)
         key = f"{chat_id}:{mid}"
@@ -410,7 +416,7 @@ class TelegramDelivery:
         status = "✅ Approved" if outcome == "approved" else "🚫 Rejected"
         try:
             await self._api.edit_message_text(
-                chat_id, mid, to_markdown_v2(_answered(title, parts, status)),
+                chat_id, mid, to_markdown_v2(_answered(parts, status)),
                 parse_mode="MarkdownV2",
             )
         except Exception:
@@ -453,12 +459,32 @@ class TelegramDelivery:
                 logger.debug("telegram: answerCallbackQuery failed", exc_info=True)
 
 
-def _answered(title: str, parts: list, status: str) -> str:
-    """What the prompt's last message says once it is answered, in one message: the prompt with
-    its outcome, or, for a prompt split over several, its last part's text with it, or the
-    outcome alone when that would not fit (the parts above keep the rest)."""
-    text = f"🔐 {title} — {status}" if len(parts) <= 1 else f"{parts[-1].plain} — {status}"
-    return text if len(render_parts(text)) == 1 else f"🔐 {status}"
+def _approval_text(brief: dict, source: str) -> str:
+    """The approval prompt, from core's brief (``approval_brief_for``): the tool, its arguments
+    in a code block, the purpose the runner gave and the summary line (what the call can touch,
+    and its risk). That is what the dashboard's approval card shows; the prompt used to show the
+    tool's name alone, so a command was approved unseen. Every string is already masked."""
+    tool = str(brief.get("tool") or "") or "a tool"
+    lines = [f"🔐 [{source}] Approve `{tool}`?"]
+    arguments = str(brief.get("input") or "")
+    if arguments:
+        lines += ["```", _unfenced(arguments), "```"]
+    lines += [str(brief[k]) for k in ("purpose", "summary") if brief.get(k)]
+    return "\n".join(lines)
+
+
+def _unfenced(text: str) -> str:
+    """*text* with every run of three or more backticks broken by zero-width spaces, so what is
+    shown cannot close the code block it is shown in."""
+    return _FENCE_RUN.sub(lambda m: "\u200b".join(m.group(0)), text)
+
+
+def _answered(parts: list, status: str) -> str:
+    """What the prompt's last message says once it is answered: its own text with the outcome
+    under it, so the chat keeps what was approved; or the outcome alone when that would not fit
+    one message (the parts above keep the rest)."""
+    text = f"{parts[-1].plain}\n{status}" if parts else status
+    return text if len(render_parts(text)) == 1 else status
 
 
 def _monotonic() -> float:

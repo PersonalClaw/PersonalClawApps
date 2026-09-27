@@ -212,7 +212,18 @@ class StarttlsImapServer(_Server):
 
 
 class StarttlsSmtpServer(_Server):
-    """SMTP submission: EHLO, STARTTLS, EHLO again, AUTH PLAIN, QUIT."""
+    """SMTP submission: EHLO, STARTTLS, EHLO again, AUTH PLAIN, QUIT. With
+    ``offer_starttls=False`` it is a server that cannot upgrade, which offers AUTH in the clear.
+
+    ``logins`` are the logins that arrived over TLS, ``clear_logins`` the ones that arrived in the
+    clear, and ``clear_commands`` every command it was sent before TLS: how a test proves nothing
+    but the greeting's EHLO reached a server the password must not be put on."""
+
+    def __init__(self, minted: Minted, *, offer_starttls: bool = True) -> None:
+        self.offer_starttls = offer_starttls
+        self.clear_logins: list[str] = []
+        self.clear_commands: list[str] = []
+        super().__init__(minted)
 
     def handle(self, raw: socket.socket) -> None:
         stream = raw.makefile("rwb")
@@ -225,10 +236,15 @@ class StarttlsSmtpServer(_Server):
                 return
             verb = line.decode("utf-8", "replace").strip().split(" ", 1)
             command = verb[0].upper()
+            if tls is None:
+                self.clear_commands.append(command)
             if command == "EHLO":
-                offer = b"250 AUTH PLAIN\r\n" if tls else b"250 STARTTLS\r\n"
+                if tls or not self.offer_starttls:
+                    offer = b"250 AUTH PLAIN\r\n"
+                else:
+                    offer = b"250 STARTTLS\r\n"
                 stream.write(b"250-test\r\n" + offer)
-            elif command == "STARTTLS":
+            elif command == "STARTTLS" and self.offer_starttls and tls is None:
                 stream.write(b"220 go ahead\r\n")
                 stream.flush()
                 tls = self._context.wrap_socket(raw, server_side=True)
@@ -236,7 +252,7 @@ class StarttlsSmtpServer(_Server):
                 continue
             elif command == "AUTH":
                 user = base64.b64decode(verb[1].split(" ", 1)[1]).split(b"\0")[1].decode()
-                self.logins.append(user)
+                (self.logins if tls else self.clear_logins).append(user)
                 stream.write(b"235 ok\r\n")
             elif command == "QUIT":
                 stream.write(b"221 bye\r\n")

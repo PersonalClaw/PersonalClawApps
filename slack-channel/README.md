@@ -48,13 +48,23 @@ Three things this deliberately does *not* do:
 ## Messages in your Inbox
 
 The bundle's third provider is an **inbox source** (`slack_runtime.inbox_source:create_provider`):
-PersonalClaw's Inbox polls it while the app is enabled, for the channel ids listed in the
-Inbox's `inbox.watched_channels` (in `config.json`; no settings page edits it yet). Each new
-message in one of them becomes a row you can draft and send a reply to, posted in its
-thread. A channel's first poll starts after its newest message, so its history is not
-surfaced and fires none of your inbox automations; what is posted after it is. When no
-watched channel can be read (a revoked token, the bot not in the channel), the Inbox says so
-under Slack's name, with Slack's own reason for each channel.
+PersonalClaw's Inbox polls it while the app is enabled, for the channels you list in
+**Settings → Inbox → Channels to read**, each by its id (like `C0123456789`, at the bottom of
+the channel's About tab; the bot has to be in the channel). Each new message in one of them
+becomes a row you can draft and send a reply to, posted in its thread. A channel's first poll
+starts after its newest message, so its history is not surfaced and fires none of your inbox
+automations; what is posted after it is. Nothing posted after it is skipped: a poll pages
+through everything new, up to 1,000 messages a channel, and a busier channel's older messages
+arrive over the next polls. When no watched channel can be read (a revoked token, the bot not in
+the channel), the Inbox says so under Slack's name, with Slack's own reason for each channel.
+
+## Approvals
+
+When an agent asks to run a tool, the prompt says what will run, as PersonalClaw's own
+approval card does: the tool, its arguments, why the agent is calling it, and what the call can
+touch with its risk (*Can: runs a command · Risk: Destructive*). Keys and exfiltration links in
+the arguments are masked by PersonalClaw before they reach Slack. Long arguments are split over
+as many code blocks, and messages, as they take, the buttons on the last.
 
 ## Results from your schedules
 
@@ -91,9 +101,10 @@ it cannot, the row says what Slack answered (`invalid_auth` means the App Token 
 regenerated; save the new one in Configure).
 
 An allowlisted (non-owner) user is authorized for conversation *and* for the commands in
-the "any allowed user" tier — `!stop`, `!title`, `!compact`, `sessions`, and `!dashboard`,
-which DMs them a dashboard session link. Everything else stays owner-only. Add people
-deliberately.
+the "any allowed user" tier — `!stop`, `!title`, `!compact` and `sessions`. Everything else
+stays owner-only. Add people deliberately. `!dashboard` and `/personalclaw dashboard` DM a
+dashboard link to the owner alone: the link signs in as the owner, so anyone else who asks is
+told *Only this channel's owner can get a dashboard link…* and is sent nothing.
 
 Approvals are the owner's alone. Only the owner's press on **Approve**, **Trust session** or
 **Reject** answers a tool approval, whether it is asked in a DM or in a linked channel thread
