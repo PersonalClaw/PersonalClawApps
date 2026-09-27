@@ -37,7 +37,7 @@ _BUNDLE = Path(__file__).resolve().parents[1]
 #: Made up per run: the installed copy of the bundle carries this file, so a literal would be
 #: found in it by every "where is the token on disk" check below.
 BOT = f"xoxb-{secrets.token_hex(12)}"
-APP_TOKEN = f"xapp-1-{secrets.token_hex(12)}"
+APP_TOKEN = f"fake-app-token-1{secrets.token_hex(12)}"
 
 
 @pytest.fixture

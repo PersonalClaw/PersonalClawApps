@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from slack_runtime.client import RealSlackClient
 from slack_runtime.format import (
@@ -33,12 +33,26 @@ logger = logging.getLogger(__name__)
 _CRON_MSG_LIMIT = SLACK_BLOCK_SECTION_LIMIT
 
 
+# How a progress line that did not end complete reads in Slack's task list, which knows only
+# pending, in progress, complete and error: an error, with the ending in its title
+# (``ChannelDelivery.append_stream_task``).
+_TASK_ENDINGS = {
+    "failed": "failed",
+    "rejected": "rejected",
+    "expired": "no answer in time, not run",
+    "cancelled": "cancelled, not run",
+}
+
+
 class SlackDelivery:
     """Renders + delivers gateway results to Slack. Implements ChannelDelivery."""
 
-    def __init__(self, client: RealSlackClient, owner_id: str) -> None:
+    def __init__(self, client: RealSlackClient, owner: Callable[[], str]) -> None:
         self._client = client
-        self._owner_id = owner_id
+        #: Who the owner is NOW, read each time it is needed. A fresh install claims its owner
+        #: when the first person messages the bot; a value kept from the start left that owner
+        #: unknown here until a restart, and every approval core asked skipped Slack.
+        self._owner = owner
 
     # ── raw client passthrough (used by the approval flow + session routing) ──
     @property
@@ -225,7 +239,22 @@ class SlackDelivery:
     async def append_stream_task(
         self, channel: str, stream_ts: str, task_id: str, title: str, status: str,
     ) -> None:
-        await self._client.append_task(channel, stream_ts, task_id, title, status)
+        """Show a call's progress in the stream's task list, and how it ended.
+
+        A call that ran and succeeded is complete. Any other ending is an error in Slack's list,
+        whose red mark cannot say which, so the title says it: a call you rejected must not read
+        as done. A status this app does not know is shown by its name, and not as done."""
+        if status in ("in_progress", "complete"):
+            await self._client.append_task(channel, stream_ts, task_id, title, status)
+            return
+        ending = _TASK_ENDINGS.get(status)
+        await self._client.append_task(
+            channel,
+            stream_ts,
+            task_id,
+            f"{title} ({ending or status})",
+            "error" if ending else "pending",
+        )
 
     async def stop_stream(self, channel: str, stream_ts: str) -> None:
         await self._client.stop_stream(channel, stream_ts)
@@ -234,21 +263,26 @@ class SlackDelivery:
         self, event: Any, *, source: str, parent_session_key: str = "",
         sessions: Any = None, on_prompted: Any = None,
     ) -> bool | None:
-        """Post the Slack approval prompt and wait for the owner's response.
+        """Post the Slack approval prompt and wait for the approval to end.
 
         Returns approved/rejected, or None when Slack can't prompt (caller falls
-        back to the dashboard). ``on_prompted(channel, ts, pending)`` lets the
-        caller race a dashboard prompt against the Slack one."""
+        back to the dashboard). ``on_prompted(pending)`` lets the caller race a dashboard
+        prompt against the Slack one: core resolves ``pending.future`` with how the approval
+        ended wherever it ended, so the wait keeps no timer of its own. Once it ends, the prompt
+        says how and loses its buttons (:func:`~slack_runtime.handler.close_prompt`), and so it
+        does when this wait is cancelled."""
         import re
 
         from slack_runtime.handler import (
-            _approval_brief_line,
-            _build_approval_blocks,
+            _close_prompt_later,
             _pending_approvals,
             _PendingApproval,
+            _post_approval,
+            close_prompt,
         )
 
-        if not self._owner_id:
+        owner = self._owner()
+        if not owner:
             return None
         request_id = str(event.request_id)
         thread_ts: str | None = None
@@ -260,20 +294,16 @@ class SlackDelivery:
                 thread_ts = parent_session_key
         is_dm = not channel
         if not channel:
-            channel = await self._client.open_dm(self._owner_id)
+            channel = await self._client.open_dm(owner)
             thread_ts = None
         if not channel:
             return None
 
-        blocks = _build_approval_blocks(event, is_dm=is_dm, source=source)
-        fallback = f"🔐 [{source}] Approve: {event.title}?"
-        # The notification preview is the FIRST thing the owner reads, and often the only
-        # thing (a lock screen shows no blocks). Same composed line as the block, so the
-        # push and the prompt can never say different things about the blast radius.
-        brief_line = _approval_brief_line(event)
-        if brief_line:
-            fallback += f" — {brief_line}"
-        approval_ts = await self._client.post_blocks(channel, blocks, fallback, thread_ts)
+        # What will run, as the dashboard's card shows it, over as many messages as it takes;
+        # the buttons are on the last one, whose ts this is.
+        approval_ts = await _post_approval(
+            self._client, channel, thread_ts, event, is_dm=is_dm, source=source, offer_trust=False
+        )
 
         pending = _PendingApproval(
             provider=None, request_id=request_id, session_key=parent_session_key,  # type: ignore[arg-type]
@@ -283,18 +313,16 @@ class SlackDelivery:
         if on_prompted:
             on_prompted(pending)
 
+        closing = {"is_dm": is_dm, "source": source}
         try:
-            outcome = await asyncio.wait_for(pending.future, timeout=7200)
-        except asyncio.TimeoutError:
-            outcome = "rejected"
+            outcome = await pending.future
+        except asyncio.CancelledError:
+            _close_prompt_later(
+                self._client, channel, approval_ts, event, outcome="cancelled", **closing
+            )
+            raise
         finally:
             _pending_approvals.pop(key, None)
 
-        status = "✅ Approved" if outcome == "approved" else "🚫 Rejected"
-        try:
-            await self._client.update_message(
-                channel, approval_ts, text=f"🔐 *{event.title}* — {status}"
-            )
-        except Exception:
-            pass
+        await close_prompt(self._client, channel, approval_ts, event, outcome=outcome, **closing)
         return outcome == "approved"

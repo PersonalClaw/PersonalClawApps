@@ -155,7 +155,7 @@ class TestSetupHappyPath:
         c = Ctx(
             [
                 "y", "", "bot@corp.test", "svc@corp.test", "mail.corp.test", "143",
-                "n", "Agent", "svc@corp.test", "relay.corp.test", "25", "plain",
+                "n", "Agent", "svc@corp.test", "relay.corp.test", "25", "starttls",
                 "pw", "", "60", "always",
             ]
         )
@@ -167,7 +167,19 @@ class TestSetupHappyPath:
         assert stored["folder"] == "Agent"
         assert stored["smtp_host"] == "relay.corp.test"
         assert stored["smtp_port"] == 25
-        assert stored["smtp_security"] == "plain"
+        assert stored["smtp_security"] == "starttls"
+
+    def test_there_is_no_plain_smtp_mode_to_choose(self):
+        """A typed ``plain`` is not a mode: setup keeps STARTTLS, and says so."""
+        c = Ctx(
+            [
+                "y", "", "bot@corp.test", "svc@corp.test", "mail.corp.test", "993",
+                "", "INBOX", "svc@corp.test", "relay.corp.test", "25", "plain",
+                "pw", "", "60", "always",
+            ]
+        )
+        cli_setup.run(c.ctx)
+        assert ProviderSettings.load(_APP)["smtp_security"] == "starttls"
 
     def test_a_separate_smtp_password_is_saved_under_its_own_key(self):
         answers = _gmail_answers()

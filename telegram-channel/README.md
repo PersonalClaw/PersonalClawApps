@@ -22,9 +22,19 @@ ships as a self-contained directory:
   - `delivery.py` — the `ChannelDelivery` the gateway delivers results through
     (MarkdownV2 rendering, throttled edit-streaming, inline-keyboard approvals).
     A turn's progress message keeps only its task lines when the turn ends, each
-    task's line updated in place, and is removed when it only ever said "Thinking…":
-    the reply is a message of its own. An approval prompt too long for one message
-    is split like a reply, its buttons on the last part.
+    task's line updated in place with how its call ended (✅ done, ❌ failed, 🚫 rejected,
+    ⌛ or ⏹️ not run), and is removed when it only ever said "Thinking…": the reply is a
+    message of its own. An approval prompt says what will run, as
+    PersonalClaw's own approval card does: the tool, its arguments in a code block, why the
+    agent is calling it, and what the call can touch with its risk (from core's brief, already
+    masked). One too long for one message is split like a reply, its buttons on the last part.
+    When the approval ends, however it ends (Approve or Deny here, an answer in PersonalClaw,
+    nobody answering within PersonalClaw's approval wait, or the work that asked for it
+    stopping first), the buttons come off and how it ended is added under the last part, or
+    takes its place when the two would not fit one message, so the chat keeps what happened.
+    A press after that is told how it ended, and one on a prompt from before a restart is told
+    the approval is no longer waiting. The wait is PersonalClaw's (*Settings → Agent defaults →
+    Approval wait*, up to a week); the prompt keeps no clock of its own.
     Only the owner's press answers an approval: in a tracked group every member sees
     the buttons, and anyone else's press is refused and logged.
   - `format.py` — the MarkdownV2 escaper (the classic Telegram footgun, contained), and

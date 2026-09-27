@@ -62,6 +62,7 @@ import asyncio
 import email
 import email.policy
 import email.utils
+import hashlib
 import json
 import logging
 import sys as _sys
@@ -464,7 +465,7 @@ class MailInboxProvider(MessageSourceProvider):
 
         if bound is not None:
             self._log_prompt_bound(bound, from_addr, uid)
-        incoming = self._to_incoming(msg, settings, from_addr, uid, message_id, bound)
+        incoming = self._to_incoming(msg, settings, from_addr, message_id, bound)
         self._remember_reply_target(msg, incoming, from_addr, message_id)
         return incoming
 
@@ -507,7 +508,6 @@ class MailInboxProvider(MessageSourceProvider):
         msg: "email.message.EmailMessage",
         settings: MailInboxSettings,
         from_addr: str,
-        uid: int,
         message_id: str,
         bound: BoundAddress | None = None,
     ) -> IncomingMessage:
@@ -539,7 +539,10 @@ class MailInboxProvider(MessageSourceProvider):
         channel_name = bound.label if bound is not None else settings.receiving_address
 
         return IncomingMessage(
-            id=message_id or f"{settings.folder}:{uid}",
+            # The mail's own id. One with no Message-ID is named by its content, never by its
+            # folder and UID: a folder renumbered (UIDVALIDITY) hands an old UID to another
+            # mail, which the Inbox would then take for the one it already has.
+            id=message_id or f"sha256:{hashlib.sha256(msg.as_bytes()).hexdigest()[:32]}",
             channel_id=channel_id,
             channel_name=channel_name or SOURCE_NAME,
             thread_id=thread_id or None,

@@ -367,3 +367,17 @@ def test_availability_reason_without_faster_whisper(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", _no_fw)
     ok, reason = prov.availability()
     assert ok is False and "stt" in reason.lower()
+
+
+def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
+    """A transcription names its model (the speech-to-text binding). Both calls that name none
+    are refused with the SDK's sentence, before a model loads or the audio is read."""
+    from apps_testkit.model_wire import (
+        media_adapters,
+        media_refusal_expected,
+        media_refusal_report,
+    )
+
+    adapters = media_adapters(Path(__file__).parent, prov.create_provider)
+    report = asyncio.run(media_refusal_report(adapters))
+    assert report == media_refusal_expected(adapters)

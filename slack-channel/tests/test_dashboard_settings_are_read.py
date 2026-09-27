@@ -229,7 +229,7 @@ async def test_store_tokens_start_inbound_and_outbound_from_one_source(store_onl
     different places.
     """
     store = _write_store(
-        store_only_home, bot_token="xoxb-fake-store-bot", app_token="xapp-1-fake-store-app"
+        store_only_home, bot_token="fake-bot-token-fake-store-bot", app_token="fake-app-token-1"
     )
     transport = SlackTransport(store)
     assert transport.connected, "outbound did not see the store tokens"
@@ -253,7 +253,7 @@ async def test_start_inbound_hands_the_store_to_the_runtime(store_only_home, mon
     path; the runtime is already built and attached by then, which is what this asserts.
     """
     store = _write_store(
-        store_only_home, bot_token="xoxb-fake-store-bot", app_token="xapp-1-fake-store-app"
+        store_only_home, bot_token="fake-bot-token-fake-store-bot", app_token="fake-app-token-1"
     )
     monkeypatch.setattr("slack_runtime.events.validate_enterprise", lambda *a, **k: False)
 
@@ -276,7 +276,7 @@ async def test_health_reports_inbound_offline_instead_of_a_green_row(store_only_
     #952's operator was misled by two true-but-irrelevant signals. ``health()`` claiming
     "ready — Tokens configured" off the bot token alone was one of them.
     """
-    store = _write_store(store_only_home, bot_token="xoxb-fake-store-bot")
+    store = _write_store(store_only_home, bot_token="fake-bot-token-fake-store-bot")
     transport = SlackTransport(store)
     await transport.start_inbound(_Services())
 
@@ -295,7 +295,7 @@ async def test_health_says_not_started_before_the_gateway_drives_inbound(store_o
     green the moment a token is saved and stays green over a receiver that does not exist.
     """
     store = _write_store(
-        store_only_home, bot_token="xoxb-fake-store-bot", app_token="xapp-1-fake-store-app"
+        store_only_home, bot_token="fake-bot-token-fake-store-bot", app_token="fake-app-token-1"
     )
     health = await SlackTransport(store).health()
     assert health["state"] == "error", health

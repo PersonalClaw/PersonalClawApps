@@ -121,3 +121,60 @@ def test_the_api_key_is_read_from_the_credential_store(monkeypatch):
     monkeypatch.delenv("skills_sh_api_key")  # read from the store, not the process environment
 
     assert SkillsShMarketplace()._api_key() == "key-from-the-store"
+
+
+# ── what the children this provider starts are handed ──
+
+#: What the gateway's environment may hold that `npx` (a package someone else publishes) and a
+#: clone of someone else's repository must not see. Plain words, not key-shaped strings.
+_PLANTED = {
+    "ANTHROPIC_API_KEY": "planted-provider-key",
+    "SLACK_BOT_TOKEN": "planted-bot-token",
+    "BILLING_SERVICE_PASSWORD": "planted-password",
+}
+
+
+def _handed_env(monkeypatch, call) -> tuple[list[str], dict]:
+    """``(names, a few chosen values)`` of the env the provider passes its one spawn."""
+    import subprocess as _sp
+    from unittest.mock import patch as _patch
+
+    for name, value in _PLANTED.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("npm_config_registry", "https://registry.example.invalid/")
+    seen: dict = {}
+
+    def fake_run(argv, **kwargs):
+        env = kwargs.get("env")
+        seen["names"] = sorted(env) if env is not None else None
+        seen["values"] = {k: env.get(k) for k in ("NO_COLOR", "GIT_TERMINAL_PROMPT")} if env else {}
+        seen["registry"] = (env or {}).get("npm_config_registry")
+        return _sp.CompletedProcess(args=argv, returncode=1, stdout="", stderr="")
+
+    with _patch("subprocess.run", side_effect=fake_run), _patch(
+        "shutil.which", side_effect=lambda name: f"/usr/bin/{name}"
+    ):
+        try:
+            call()
+        except RuntimeError:
+            pass  # the failed "clone" — only what it was handed matters here
+    assert seen.get("names") is not None, "the spawn inherited the gateway's environment"
+    return seen["names"], seen
+
+
+def test_the_cli_search_runs_npx_without_the_gateways_secrets(monkeypatch):
+    """Before, `npx -y skills find` ran with the gateway's whole environment."""
+    mkt = SkillsShMarketplace()
+    monkeypatch.setattr(mkt, "_api_key", lambda: None)
+    names, seen = _handed_env(monkeypatch, lambda: mkt.search("changelog"))
+    leaked = sorted(set(_PLANTED) & set(names))
+    assert leaked == [] and "PATH" in names
+    assert seen["values"]["NO_COLOR"] == "1" and seen["registry"] == "https://registry.example.invalid/"
+
+
+def test_the_skill_clone_runs_git_without_the_gateways_secrets(monkeypatch):
+    """Before, the clone of a skill's repository ran with the gateway's whole environment."""
+    mkt = SkillsShMarketplace()
+    names, seen = _handed_env(monkeypatch, lambda: mkt._fetch_via_cli("owner/repo@a-skill"))
+    leaked = sorted(set(_PLANTED) & set(names))
+    assert leaked == [] and "PATH" in names and seen["values"]["GIT_TERMINAL_PROMPT"] == "0"

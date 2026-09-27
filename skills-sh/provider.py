@@ -29,6 +29,7 @@ from personalclaw.sdk.skill import (
     get_default_skills_registry,
     read_skill_file_entry,
 )
+from personalclaw.sdk.util import child_process_env
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +147,10 @@ class SkillsShMarketplace(SkillsMarketplace):
                 capture_output=True,
                 text=True,
                 timeout=30,
-                env={**__import__("os").environ, "NO_COLOR": "1", "FORCE_COLOR": "0"},
+                # `npx -y` fetches and runs a package someone else publishes, and this provider
+                # runs inside the gateway, whose environment holds every secret saved in
+                # PersonalClaw: the child allowlist and npm's own settings, nothing more.
+                env=child_process_env({"NO_COLOR": "1", "FORCE_COLOR": "0"}, installer="npm"),
             )
             if result.returncode != 0:
                 logger.warning("npx skills find failed: %s", result.stderr[:200])
@@ -265,7 +269,8 @@ class SkillsShMarketplace(SkillsMarketplace):
         if not git:
             raise RuntimeError("skills.sh: no API key and git not found — set SKILLS_SH_API_KEY or install git")
 
-        env = {**__import__("os").environ, "GIT_TERMINAL_PROMPT": "0"}
+        # A clone of someone else's repository: the child allowlist, never the gateway's secrets.
+        env = child_process_env({"GIT_TERMINAL_PROMPT": "0"})
         source = skill_id.split("@")[0] if "@" in skill_id else "/".join(skill_id.strip("/").split("/")[:2])
         skill_name = skill_id.split("@")[-1] if "@" in skill_id else skill_id.strip("/").split("/")[-1]
         url = f"https://github.com/{source}.git"

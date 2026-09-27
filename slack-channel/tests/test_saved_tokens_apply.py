@@ -110,7 +110,7 @@ async def test_tokens_saved_after_enable_reach_connect_and_health(installed):
     transport = _registry_built()
     assert (await transport.health())["detail"] == "No bot token configured"
 
-    await _configure_save({"bot_token": "xoxb-saved", "app_token": "xapp-1-saved"})
+    await _configure_save({"bot_token": "fake-bot-token-saved", "app_token": "fake-app-token-1"})
 
     assert transport.connected is True
     assert await transport.connect() is True
@@ -124,39 +124,39 @@ async def test_tokens_saved_after_enable_reach_connect_and_health(installed):
 @pytest.mark.asyncio
 async def test_test_authenticates_with_the_saved_token(installed, fake_client):
     transport = _registry_built()
-    await _configure_save({"bot_token": "xoxb-saved", "app_token": "xapp-1-saved"})
+    await _configure_save({"bot_token": "fake-bot-token-saved", "app_token": "fake-app-token-1"})
 
     probe = await transport.test()
 
-    assert fake_client.built_with == ["xoxb-saved"]
+    assert fake_client.built_with == ["fake-bot-token-saved"]
     assert "Authenticated to Acme" in probe["detail"], probe
 
 
 @pytest.mark.asyncio
 async def test_send_goes_out_on_the_saved_token(installed, fake_client):
     transport = _registry_built()
-    await _configure_save({"bot_token": "xoxb-saved"})
+    await _configure_save({"bot_token": "fake-bot-token-saved"})
 
     from personalclaw.sdk.channel import OutboundMessage
 
     assert await transport.send(OutboundMessage(channel_id="C1", text="hi")) is True
-    assert fake_client.posted == [{"token": "xoxb-saved", "channel": "C1", "text": "hi", "thread_ts": None}]
+    assert fake_client.posted == [{"token": "fake-bot-token-saved", "channel": "C1", "text": "hi", "thread_ts": None}]
 
 
 @pytest.mark.asyncio
 async def test_a_rotated_token_sends_on_the_new_one_not_the_receivers(installed, fake_client):
     """The receiver's client carries the token inbound started with. Once the owner rotates the
     bot token, outbound must stop borrowing that client."""
-    await _configure_save({"bot_token": "xoxb-old", "app_token": "xapp-1-old"})
+    await _configure_save({"bot_token": "fake-bot-token-old", "app_token": "fake-app-token-2"})
     transport = _registry_built()
-    transport._inbound_tokens = ("xoxb-old", "xapp-1-old")
-    transport._runtime = type("_Rt", (), {"slack": _FakeClient("xoxb-old")})()
+    transport._inbound_tokens = ("fake-bot-token-old", "fake-app-token-2")
+    transport._runtime = type("_Rt", (), {"slack": _FakeClient("fake-bot-token-old")})()
 
-    await _configure_save({"bot_token": "xoxb-new", "app_token": "xapp-1-old"})
+    await _configure_save({"bot_token": "fake-bot-token-new", "app_token": "fake-app-token-2"})
     from personalclaw.sdk.channel import OutboundMessage
 
     await transport.send(OutboundMessage(channel_id="C1", text="hi"))
-    assert fake_client.posted[-1]["token"] == "xoxb-new"
+    assert fake_client.posted[-1]["token"] == "fake-bot-token-new"
 
 
 @pytest.mark.asyncio
@@ -168,7 +168,7 @@ async def test_the_boot_reason_does_not_outlive_the_token_it_was_about(installed
     await transport.start_inbound(_Services())
     assert "no Bot Token" in transport._inbound_offline_reason
 
-    await _configure_save({"bot_token": "xoxb-saved", "app_token": "xapp-1-saved"})
+    await _configure_save({"bot_token": "fake-bot-token-saved", "app_token": "fake-app-token-1"})
 
     health = await transport.health()
     assert health["state"] == "error", health
@@ -211,7 +211,7 @@ def test_an_explicit_config_is_not_replaced_by_an_unchanged_store(installed):
     """The conformance kit builds ``SlackTransport({})``; a store it never wrote must not leak in."""
     (installed / "apps" / _APP / "data").mkdir(parents=True, exist_ok=True)
     (installed / "apps" / _APP / "data" / "config.json").write_text(
-        json.dumps({"bot_token": "xoxb-machine"}), encoding="utf-8"
+        json.dumps({"bot_token": "fake-bot-token-machine"}), encoding="utf-8"
     )
     transport = create_provider({})
     assert transport.connected is False

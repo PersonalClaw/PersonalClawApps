@@ -208,7 +208,7 @@ def test_test_connection_rejects_a_bad_key_even_though_models_is_public(monkeypa
         "/key": _FakeFetchResponse(401, {"error": {"message": "User not found.", "code": 401}}),
         "/models": _FakeFetchResponse(200, {"data": [{"id": "a"}, {"id": "b"}]}),
     })
-    result = _run(prov.create_catalog({"api_key": "sk-or-v1-bad"}).test_connection())
+    result = _run(prov.create_catalog({"api_key": "fake-openrouter-bad"}).test_connection())
     assert result.ok is False, "a rejected key reported as connected"
     assert "key" in result.detail.lower()
     assert any("/key" in u for u in seen), "never probed the authenticated route"
@@ -216,7 +216,7 @@ def test_test_connection_rejects_a_bad_key_even_though_models_is_public(monkeypa
 
 def test_test_connection_ok_path_probes_key_then_counts_models(monkeypatch):
     seen = _patch_fetch_by_route(monkeypatch, {
-        "/key": _FakeFetchResponse(200, {"data": {"label": "sk-or-v1-...", "usage": 0}}),
+        "/key": _FakeFetchResponse(200, {"data": {"label": "fake-openrouter-1", "usage": 0}}),
         "/models": _FakeFetchResponse(200, {"data": [{"id": "a"}, {"id": "b"}]}),
     })
     result = _run(prov.create_catalog({"api_key": "k"}).test_connection())

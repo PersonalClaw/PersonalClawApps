@@ -65,27 +65,101 @@ class TestPiperCommand:
     def test_configured_path_preferred(self, tmp_path):
         bin_path = tmp_path / "my-piper"
         _make_executable(str(bin_path))
-        assert _piper_command(str(bin_path)) == ([str(bin_path)], None)
+        assert _piper_command(str(bin_path)) == ([str(bin_path)], False)
 
     def test_configured_missing_returns_none(self, tmp_path):
         assert _piper_command(str(tmp_path / "nope")) is None
 
     def test_falls_back_to_path(self):
         with patch("provider.shutil.which", return_value="/usr/local/bin/piper"):
-            assert _piper_command("") == (["/usr/local/bin/piper"], None)
+            assert _piper_command("") == (["/usr/local/bin/piper"], False)
 
     def test_the_declared_package_runs_as_a_module_that_can_import_itself(
         self, packages_outside_the_default_path
     ):
-        prefix, env = _piper_command("")
-        assert prefix == [sys.executable, "-m", "piper"]
-        assert str(packages_outside_the_default_path) in env["PYTHONPATH"].split(os.pathsep)
+        prefix, runs_declared_package = _piper_command("")
+        assert prefix == [sys.executable, "-m", "piper"] and runs_declared_package is True
 
     def test_nothing_found_returns_none(self, tmp_path, monkeypatch):
         monkeypatch.setenv("HOME", str(tmp_path))
         with patch("provider.shutil.which", return_value=None), \
              patch("provider.importlib.util.find_spec", return_value=None):
             assert _piper_command("") is None
+
+
+#: What the gateway's environment may hold, which piper (someone else's program, reading a voice
+#: someone else trained) must not see. Plain words, not key-shaped strings.
+_PLANTED = {
+    "ANTHROPIC_API_KEY": "planted-provider-key",
+    "SLACK_BOT_TOKEN": "planted-bot-token",
+    "BILLING_SERVICE_PASSWORD": "planted-password",
+}
+
+#: A piper that writes its WAV and, beside it, the NAMES of what it was started with and its
+#: PYTHONPATH (names only, so a failing assert never prints a value).
+_RECORDING_PIPER = """
+import json, os, sys
+out = sys.argv[sys.argv.index("-f") + 1]
+sys.stdin.read()
+with open(out, "wb") as f:
+    f.write(b"RIFF" + b"x" * 400)
+with open(out + ".env.json", "w") as f:
+    json.dump({"names": sorted(os.environ), "pythonpath": os.environ.get("PYTHONPATH", "")}, f)
+"""
+
+
+def _plant(monkeypatch) -> None:
+    for name, value in _PLANTED.items():
+        monkeypatch.setenv(name, value)
+
+
+def _recorded(wav: str) -> dict:
+    import json
+
+    with open(wav + ".env.json") as f:
+        return json.load(f)
+
+
+@pytest.mark.asyncio
+async def test_a_piper_binary_runs_without_the_gateways_secrets(tmp_path, monkeypatch):
+    """A REAL child: a piper on PATH is handed the child allowlist, never the gateway's
+    environment. Before, it inherited all of it (``env=None``)."""
+    _plant(monkeypatch)
+    piper = tmp_path / "piper"
+    piper.write_text(f"#!{sys.executable}\n" + _RECORDING_PIPER)
+    piper.chmod(0o755)
+    model = tmp_path / "voice.onnx"
+    model.write_bytes(b"m")
+    monkeypatch.setattr("provider.shutil.which", lambda _name: str(piper))
+    with patch("provider.sandbox_wrap_argv", side_effect=lambda c, mode: (c, None)):
+        result = await _synthesize_piper_chunk("hello", piper_model=str(model))
+    assert result is not None
+    seen = _recorded(result)
+    os.unlink(result)
+    leaked = sorted(set(_PLANTED) & set(seen["names"]))
+    assert leaked == [] and "PATH" in seen["names"] and "HOME" in seen["names"]
+
+
+@pytest.mark.asyncio
+async def test_the_declared_package_runs_with_the_app_packages_and_no_gateway_secret(
+    tmp_path, monkeypatch, packages_outside_the_default_path
+):
+    """The declared package's child gets the app packages on its PYTHONPATH, and nothing else of
+    the gateway's environment."""
+    _plant(monkeypatch)
+    (packages_outside_the_default_path / "piper" / "__main__.py").write_text(
+        _RECORDING_PIPER, encoding="utf-8"
+    )
+    model = tmp_path / "voice.onnx"
+    model.write_bytes(b"m")
+    with patch("provider.sandbox_wrap_argv", side_effect=lambda c, mode: (c, None)):
+        result = await _synthesize_piper_chunk("hello", piper_model=str(model))
+    assert result is not None
+    seen = _recorded(result)
+    os.unlink(result)
+    leaked = sorted(set(_PLANTED) & set(seen["names"]))
+    on_path = str(packages_outside_the_default_path) in seen["pythonpath"].split(os.pathsep)
+    assert leaked == [] and on_path
 
 
 @pytest.mark.asyncio
@@ -115,7 +189,7 @@ class TestSynthesizePiper:
     async def test_model_missing_returns_none(self, tmp_path):
         bin_path = tmp_path / "piper"
         _make_executable(str(bin_path))
-        with patch("provider._piper_command", return_value=([str(bin_path)], None)):
+        with patch("provider._piper_command", return_value=([str(bin_path)], False)):
             assert await _synthesize_piper_chunk("hi", piper_model="") is None
             assert await _synthesize_piper_chunk("hi", piper_model=str(tmp_path / "missing.onnx")) is None
 
@@ -132,7 +206,7 @@ class TestSynthesizePiper:
                 f.write(b"RIFF" + b"x" * 200)
             return proc
 
-        with patch("provider._piper_command", return_value=([str(bin_path)], None)), \
+        with patch("provider._piper_command", return_value=([str(bin_path)], False)), \
              patch("provider.sandbox_wrap_argv", side_effect=lambda c, mode: (c, None)), \
              patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
             result = await _synthesize_piper_chunk("hello", piper_model=str(model))
@@ -157,7 +231,7 @@ class TestSynthesizePiper:
                 f.write(b"x" * 200)
             return proc
 
-        with patch("provider._piper_command", return_value=([str(bin_path)], None)), \
+        with patch("provider._piper_command", return_value=([str(bin_path)], False)), \
              patch("provider.sandbox_wrap_argv", side_effect=fake_wrap), \
              patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
             result = await _synthesize_piper_chunk("hi", piper_model=str(model), length_scale=0.9)
@@ -171,7 +245,7 @@ class TestSynthesizePiper:
         model = tmp_path / "voice.onnx"
         model.write_bytes(b"m")
         proc = _mock_subprocess(returncode=1, stderr=b"bad voice")
-        with patch("provider._piper_command", return_value=([str(bin_path)], None)), \
+        with patch("provider._piper_command", return_value=([str(bin_path)], False)), \
              patch("provider.sandbox_wrap_argv", side_effect=lambda c, mode: (c, None)), \
              patch("asyncio.create_subprocess_exec", return_value=proc):
             assert await _synthesize_piper_chunk("hello", piper_model=str(model)) is None
@@ -189,7 +263,7 @@ class TestSynthesizePiper:
                 f.write(b"tiny")
             return proc
 
-        with patch("provider._piper_command", return_value=([str(bin_path)], None)), \
+        with patch("provider._piper_command", return_value=([str(bin_path)], False)), \
              patch("provider.sandbox_wrap_argv", side_effect=lambda c, mode: (c, None)), \
              patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
             assert await _synthesize_piper_chunk("hello", piper_model=str(model)) is None
@@ -209,7 +283,7 @@ class TestSynthesizePiper:
                 f.write(b"x" * 200)
             return proc
 
-        with patch("provider._piper_command", return_value=([str(bin_path)], None)), \
+        with patch("provider._piper_command", return_value=([str(bin_path)], False)), \
              patch("provider.sandbox_wrap_argv", side_effect=lambda c, mode: (c, str(cleanup))), \
              patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
             result = await _synthesize_piper_chunk("hello", piper_model=str(model))
@@ -239,3 +313,30 @@ class TestPiperProvider:
     async def test_synthesize_without_voice_returns_none(self):
         # No voice → no model path → None (graceful, never raises).
         assert await PiperTtsProvider().synthesize("hi", voice="") is None
+
+
+def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
+    """A synthesis names its voice (the text-to-speech binding's model). One that names none is
+    refused with the SDK's sentence, and can_synthesize says it cannot speak for it. It used to
+    return nothing and say nothing, and can_synthesize said it could.
+
+    A voice is on disk first, as on any home that downloaded one: an empty voice name used to
+    find the first ``.onnx`` under the voices folder, so a claim made for no voice read as
+    true there and only there."""
+    import asyncio
+    from pathlib import Path
+
+    from apps_testkit.model_wire import (
+        media_adapters,
+        media_refusal_expected,
+        media_refusal_report,
+    )
+
+    voice = prov._voices_dir() / "en_US-lessac-medium"
+    voice.mkdir(parents=True)
+    (voice / "en_US-lessac-medium.onnx").write_bytes(b"onnx")
+    assert prov.voice_model_path("") != "", "precondition: an empty name finds a downloaded voice"
+
+    adapters = media_adapters(Path(__file__).parent, prov.create_provider)
+    report = asyncio.run(media_refusal_report(adapters))
+    assert report == media_refusal_expected(adapters)

@@ -54,7 +54,7 @@ async def test_catalog_single_nongated_model():
 async def test_diarize_none_without_model(monkeypatch, tmp_path):
     f = tmp_path / "a.wav"; f.write_bytes(b"\x00" * 32)
     monkeypatch.setattr(P, "_downloaded", lambda: False)
-    assert await P.create_provider({}).diarize(str(f)) is None
+    assert await P.create_provider({}).diarize(str(f), model=P._MODEL) is None
 
 
 def test_cache_dir_exposed():
@@ -158,7 +158,7 @@ async def test_diarize_reads_the_pair_from_the_home(monkeypatch, tmp_path):
 
     f = tmp_path / "a.wav"
     f.write_bytes(b"\x00" * 32)
-    assert await P.create_provider({}).diarize(str(f)) == []
+    assert await P.create_provider({}).diarize(str(f), model=P._MODEL) == []
     assert seen["seg"] == str(P._models_dir() / P._SEG_REL)
     assert seen["emb"] == str(P._models_dir() / P._EMB_REL)
 
@@ -202,3 +202,20 @@ def test_half_a_pair_is_not_downloaded(monkeypatch, tmp_path):
     seg.parent.mkdir(parents=True)
     seg.write_bytes(b"\x00" * 16)
     assert P._downloaded() is False
+
+
+def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
+    """A diarization names its model (the diarization binding in Settings → Models). One that
+    names none is refused with the SDK's sentence before the model loads: it used to run with
+    this app's one model in its place."""
+    import asyncio
+
+    from apps_testkit.model_wire import (
+        media_adapters,
+        media_refusal_expected,
+        media_refusal_report,
+    )
+
+    adapters = media_adapters(Path(__file__).parent, P.create_provider)
+    report = asyncio.run(media_refusal_report(adapters))
+    assert report == media_refusal_expected(adapters)

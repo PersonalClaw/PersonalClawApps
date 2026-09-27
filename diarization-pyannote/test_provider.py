@@ -40,7 +40,7 @@ def test_app_setting_wins_over_the_cascade(monkeypatch):
     here, the declared ``sensitive`` setting would be a dead control.
     """
     monkeypatch.setattr(P, "resolve_token", lambda: "hf_from_cascade")
-    assert P.create_provider({"hf_token": "hf_explicit"})._hf_token() == "hf_explicit"
+    assert P.create_provider({"hf_token": "fake-hf-token-explicit"})._hf_token() == "fake-hf-token-explicit"
 
 
 def test_create_provider():
@@ -62,7 +62,7 @@ async def test_download_refused_without_token():
 @pytest.mark.asyncio
 async def test_diarize_none_without_token(tmp_path):
     f = tmp_path / "a.wav"; f.write_bytes(b"\x00" * 32)
-    assert await P.create_provider({}).diarize(str(f)) is None  # no token
+    assert await P.create_provider({}).diarize(str(f), model=P._MODEL) is None  # no token
 
 
 @pytest.mark.asyncio
@@ -99,7 +99,25 @@ async def test_diarize_unwraps_pyannote_4x_output(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "pyannote.audio", fake_mod)
 
     f = tmp_path / "a.wav"; f.write_bytes(b"\x00" * 32)
-    turns = await P.create_provider({"hf_token": "hf_test"}).diarize(str(f))
+    turns = await P.create_provider({"hf_token": "hf_test"}).diarize(str(f), model=P._MODEL)
     assert turns is not None and len(turns) == 2
     assert {t.speaker for t in turns} == {"SPEAKER_00", "SPEAKER_01"}
     assert turns[0].start == 0.0 and turns[1].end == 11.0
+
+
+def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
+    """A diarization names its model (the diarization binding in Settings → Models). One that
+    names none is refused with the SDK's sentence before the pipeline is fetched: it used to
+    fetch and run this app's one pipeline in its place."""
+    import asyncio
+    from pathlib import Path
+
+    from apps_testkit.model_wire import (
+        media_adapters,
+        media_refusal_expected,
+        media_refusal_report,
+    )
+
+    adapters = media_adapters(Path(__file__).parent, P.create_provider)
+    report = asyncio.run(media_refusal_report(adapters))
+    assert report == media_refusal_expected(adapters)

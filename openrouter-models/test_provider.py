@@ -1124,3 +1124,21 @@ def test_video_download_uses_a_policy_that_wont_truncate(monkeypatch, _no_sleep)
     _run(_video_provider().generate("x", model="google/veo-3.1-fast"))
     policy = calls[-1]["policy"]
     assert policy.max_bytes >= 256_000_000  # a 4K/15s clip dwarfs CONNECTOR's 10MB
+
+
+def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
+    """The image and video adapters an instance registers each refuse a call that names no
+    model, with the SDK's sentence, before discovery runs or anything is sent."""
+    from apps_testkit.model_wire import (
+        media_adapters,
+        media_refusal_expected,
+        media_refusal_report,
+    )
+
+    adapters = media_adapters(
+        Path(__file__).parent,
+        prov.create_provider,
+        scanners=(prov._scan_image, prov._scan_video),
+    )
+    report = asyncio.run(media_refusal_report(adapters))
+    assert report == media_refusal_expected(adapters)

@@ -1,6 +1,6 @@
 {
   "name": "mail-inbox",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "displayName": "Mail Inbox",
   "description": "IMAP mail as an inbox source. Polls a mailbox, surfaces messages from a fail-closed sender allowlist as inbox items, and extracts multipart/HTML/attachment text. Purpose-specific addresses can each carry a stored prompt, so mail to them runs it against the fenced mail body. Replies are composed as threaded drafts and are NOT sent until you turn sending on. Passwords are kept in the credential store, never in the settings file.",
   "icon": "Mail",
@@ -128,13 +128,12 @@
           "type": "string",
           "enum": [
             "starttls",
-            "ssl",
-            "plain"
+            "ssl"
           ],
           "default": "starttls",
           "x-meta": {
             "label": "SMTP TLS Mode",
-            "help": "starttls (587) upgrades the connection and ABORTS the send if the upgrade fails — it never falls back to plaintext. ssl (465) is implicit TLS. plain is unencrypted and only sane for a relay on localhost. An unrecognized value falls back to starttls."
+            "help": "starttls (587) upgrades the connection before the login and the mail, and refuses a server that does not offer it or an upgrade that fails: nothing is sent in the clear. ssl (465) is implicit TLS. Any other value reads as starttls."
           }
         },
         "smtp_username": {

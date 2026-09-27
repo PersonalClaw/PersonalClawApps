@@ -1,6 +1,6 @@
 # Gemini CLI
 
-Run Google's Gemini CLI as an agent (acp:gemini-cli) over ACP. Gemini enters ACP mode via its own `--experimental-acp` flag — no adapter package — and self-authenticates with your `gemini` login (Google OAuth) or a GEMINI_API_KEY in the environment; PersonalClaw stores no key. The provider activates only when the `gemini` binary is present, and is unavailable otherwise.
+Run Google's Gemini CLI as an agent (acp:gemini-cli) over ACP. Gemini enters ACP mode via its own `--experimental-acp` flag — no adapter package — and self-authenticates with your `gemini` login (Google OAuth) or a GEMINI_API_KEY you pass through to it by name (Settings → Security → Child environment passthrough); PersonalClaw stores no key. The provider activates only when the `gemini` binary is present, and is unavailable otherwise.
 
 **Gemini CLI** is an **ACP agent bundle** — it registers an `acp:<cli>` agent via `personalclaw.sdk.acp` and appears in the Agents list.
 
@@ -27,12 +27,32 @@ npm install -g @google/gemini-cli
 ```
 
 Then sign in once — the first interactive `gemini` run presents its auth picker
-(Google OAuth / Gemini API key / Vertex AI), and `/auth` re-runs it. Exporting
-`GEMINI_API_KEY` works too. The runtime's Sign-in terminal pre-types the resolved
-`gemini` binary for exactly that first run.
+(Google OAuth / Gemini API key / Vertex AI), and `/auth` re-runs it. A
+`GEMINI_API_KEY` in the gateway's environment works too, once you add its name under
+Settings → Security → Child environment passthrough: an agent CLI gets no variable from
+the gateway's environment that you have not passed through by name. The runtime's
+Sign-in terminal pre-types the resolved `gemini` binary for exactly that first run.
 
 There is no `npx` fallback: a per-spawn download would not share your OAuth state, so
 an unresolved binary is reported as unavailable instead.
+
+## Environment
+
+Gemini CLI runs with none of the gateway's environment except what it needs to start and the
+variables it reads to pick its provider, project, region and model. Each of these is passed when
+it is set in the gateway's environment, so Gemini CLI on Vertex AI or Code Assist keeps the
+provider you chose:
+
+| Variable | What Gemini CLI reads it for |
+|---|---|
+| `GOOGLE_GENAI_USE_VERTEXAI` | Run on Vertex AI instead of the Gemini API |
+| `GOOGLE_GENAI_USE_GCA` | Run on Gemini Code Assist |
+| `GOOGLE_CLOUD_PROJECT` | The Google Cloud project |
+| `GOOGLE_CLOUD_LOCATION` | The Vertex AI location |
+| `GEMINI_MODEL` | The model |
+
+No credential is passed: a `GEMINI_API_KEY` or `GOOGLE_API_KEY` reaches it only once you add its
+name under Settings → Security → Child environment passthrough, as described above.
 
 ## Settings
 

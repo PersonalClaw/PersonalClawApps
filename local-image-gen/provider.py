@@ -41,6 +41,7 @@ from personalclaw.sdk.image import (
     ImageGenProvider,
     ImageResult,
 )
+from personalclaw.sdk.model import ProviderResolutionError, require_model
 from personalclaw.sdk.net import EgressPolicy, fetch
 
 logger = logging.getLogger(__name__)
@@ -522,15 +523,15 @@ class LocalComfyImageProvider(ImageGenProvider):
         ``_image_generate`` catches ``ImageGenError`` and returns its message as
         tool output, so every raise below is a readable answer, never a 500.
         """
-        entry = by_name(model)
-        wanted = entry.checkpoint if entry else (model or "").strip()
-        if not wanted:
-            rec = recommended_model()
-            raise ImageGenError(
-                "No local image model is selected. "
-                f"Pull {rec.name} ({rec.license}) into ComfyUI's models/checkpoints "
-                "directory and bind it in Settings -> Models."
-            )
+        # Like every media call, an image names its model (the image binding in Settings →
+        # Models), and one that names none is refused with the SDK's sentence before the runtime
+        # is asked anything.
+        try:
+            named = require_model(model)
+        except ProviderResolutionError as exc:
+            raise ImageGenError(str(exc)) from exc
+        entry = by_name(named)
+        wanted = entry.checkpoint if entry else named
 
         try:
             installed = await self.installed_checkpoints()

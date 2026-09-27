@@ -17,7 +17,10 @@ shared home (core rejected a global home for its suite for the same reason). A b
 own per-test home still wins inside its test.
 
 The OS keychain is kept out as well: core reads it, and an uninstall's purge deletes from it,
-whenever ``keyring`` is importable, and one keychain serves every home on the machine.
+whenever ``keyring`` is importable, and one keychain serves every home on the machine. The switch
+is ``personalclaw.sdk.testing.keychain_off``, because this file imports core only through
+``personalclaw.sdk``, like the apps it tests. A core without that switch stops the run rather
+than letting it reach the real keychain.
 
 ``pytest.ini`` beside this file makes pytest load it however it is started, including by core's
 quality verifier, which runs each bundle with the bundle as its working directory.
@@ -28,12 +31,14 @@ from __future__ import annotations
 import itertools
 import shutil
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 _patch = pytest.MonkeyPatch()
 _base: list[Path] = []
+_restore: list[Callable[[], None]] = []
 _serial = itertools.count()
 
 
@@ -42,10 +47,12 @@ def pytest_configure(config):
     _base.append(base)
     _patch.setenv("PERSONALCLAW_HOME", str(base / "collect"))
     try:
-        from personalclaw.config import credentials
-    except ImportError:  # a bare environment without core: nothing reads a keychain
-        return
-    _patch.setattr(credentials, "_usable_keyring", lambda: None)
+        from personalclaw.sdk.testing import keychain_off
+    except ModuleNotFoundError as missing:
+        if missing.name != "personalclaw":
+            raise  # a core without the switch: this run would reach the real keychain
+        return  # a bare environment without core: nothing reads a keychain
+    _restore.append(keychain_off())
 
 
 @pytest.fixture(autouse=True)
@@ -56,6 +63,8 @@ def _scratch_home_per_test(monkeypatch):
 
 
 def pytest_unconfigure(config):
+    while _restore:
+        _restore.pop()()
     _patch.undo()
     while _base:
         shutil.rmtree(_base.pop(), ignore_errors=True)

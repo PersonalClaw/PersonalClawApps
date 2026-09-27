@@ -765,3 +765,20 @@ class TestGraphAndSizes:
         assert prov.display_name == "Local (ComfyUI)"
         assert prov.info()["local"] is True
         assert prov.info()["endpoint"] == "http://127.0.0.1:8188"
+
+
+def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
+    """An image call names its model (the image binding in Settings → Models). One that names
+    none is refused with the SDK's sentence before the local runtime is asked anything. It used
+    to answer in a sentence of its own. Editing is not built, so edit is left out."""
+    import asyncio
+
+    from apps_testkit.model_wire import (
+        media_adapters,
+        media_refusal_expected,
+        media_refusal_report,
+    )
+
+    adapters = media_adapters(Path(__file__).parent, app.create_provider)
+    report = asyncio.run(media_refusal_report(adapters, edit=False))
+    assert report == media_refusal_expected(adapters, edit=False)

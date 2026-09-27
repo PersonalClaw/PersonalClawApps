@@ -61,3 +61,24 @@ def test_a_video_that_names_no_model_is_refused(asked):
 def test_speech_that_names_no_model_is_refused(asked):
     assert asyncio.run(prov.GeminiTTSProvider(api_key="k").synthesize("hello")) is None
     assert asked == []
+
+
+def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
+    """The image, video and text-to-speech adapters an instance registers each refuse a call
+    that names no model, with the SDK's sentence, before anything is sent. Gemini image editing
+    is not built, so edit is left out."""
+    from pathlib import Path
+
+    from apps_testkit.model_wire import (
+        media_adapters,
+        media_refusal_expected,
+        media_refusal_report,
+    )
+
+    adapters = media_adapters(
+        Path(__file__).parent,
+        prov.create_provider,
+        scanners=(prov._scan_image, prov._scan_video, prov._scan_tts),
+    )
+    report = asyncio.run(media_refusal_report(adapters, edit=False))
+    assert report == media_refusal_expected(adapters, edit=False)

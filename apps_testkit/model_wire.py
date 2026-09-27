@@ -306,6 +306,263 @@ def blank_model_expected(app_dir: Path) -> dict[str, object]:
     return expected
 
 
+# ── A media call no model is chosen for ───────────────────────────────────────────────────
+
+
+def _media_kind(adapter: Any) -> str | None:
+    """Which media contract *adapter* serves: ``image``, ``video``, ``stt``, ``tts``,
+    ``embedding`` or ``diarization``, or ``None`` for a chat provider. Read from the SDK's
+    contracts, and for text-to-speech from the call too: an adapter a scanner registers need not
+    subclass the SDK's class to be called like one."""
+    from personalclaw.sdk.diarization import DiarizationProvider
+    from personalclaw.sdk.embedding import EmbeddingProvider
+    from personalclaw.sdk.image import ImageGenProvider
+    from personalclaw.sdk.stt import SttProvider
+    from personalclaw.sdk.tts import TtsProvider
+    from personalclaw.sdk.video import VideoGenProvider
+
+    for contract, kind in (
+        (ImageGenProvider, "image"),
+        (VideoGenProvider, "video"),
+        (SttProvider, "stt"),
+        (TtsProvider, "tts"),
+        (EmbeddingProvider, "embedding"),
+        (DiarizationProvider, "diarization"),
+    ):
+        if isinstance(adapter, contract):
+            return kind
+    return "tts" if callable(getattr(adapter, "synthesize", None)) else None
+
+
+def media_adapters(
+    app_dir: Path, create_provider: Any, *, scanners: tuple[Any, ...] = ()
+) -> list[Any]:
+    """Every media adapter core builds for one instance of the app at *app_dir*, saved the way
+    its Add-instance form saves it with the Default Model left empty and fake credentials: the
+    adapters ``create_provider`` returns, and the ones each of the app's media *scanners* (the
+    functions it hands the SDK's ``register_scanner``) builds for that instance's config entry.
+    Chat providers are left out; nothing here reaches the network."""
+    import inspect
+
+    manifest = json.loads((app_dir / "app.json").read_text(encoding="utf-8"))
+    provider = manifest.get("provider") or {}
+    fields = (provider.get("settingsSchema") or {}).get("properties") or {}
+    fakes = {
+        "api_key": "k-wire",
+        "endpoint": "http://127.0.0.1:9",
+        "region": "us-east-1",
+        "hf_token": "hf-wire",
+    }
+    options = {key: value for key, value in fakes.items() if key in fields}
+    takes_config = bool(inspect.signature(create_provider).parameters)
+    made = create_provider(dict(options)) if takes_config else create_provider()
+    adapters = list(made) if isinstance(made, (list, tuple)) else [made]
+    entry = {"name": "wire", "type": provider.get("providerType") or app_dir.name, "options": options}
+    for scanner in scanners:
+        adapters.extend(scanner([dict(entry, options=dict(options))]) or [])
+    return [adapter for adapter in adapters if _media_kind(adapter) is not None]
+
+
+def _media_adapters(adapters: Any) -> list[tuple[str, Any]]:
+    """``(kind, adapter)`` for each media adapter in *adapters*: one provider, or the list a
+    multi-use ``create_provider`` returns (chat providers in it are skipped)."""
+    found = []
+    for adapter in adapters if isinstance(adapters, (list, tuple)) else [adapters]:
+        kind = _media_kind(adapter)
+        if kind is not None:
+            found.append((kind, adapter))
+    if not found:
+        raise AssertionError(f"no media adapter among {adapters!r}")
+    return found
+
+
+class _NoNetwork:
+    """Blocks every socket connection and name lookup while it is entered, and counts the tries:
+    a refusal happens before anything is sent, so one that reached for the network first is not
+    the refusal this report is about. Process-wide, because a provider may reach the network from
+    a worker thread."""
+
+    def __init__(self) -> None:
+        self.tries = 0
+        self._saved: list[tuple[Any, str, Any]] = []
+
+    def _refuse(self, *_args: Any, **_kwargs: Any) -> Any:
+        self.tries += 1
+        raise OSError("media_refusal_report blocks the network")
+
+    def __enter__(self) -> "_NoNetwork":
+        import socket
+
+        for owner, name in (
+            (socket.socket, "connect"),
+            (socket.socket, "connect_ex"),
+            (socket, "create_connection"),
+            (socket, "getaddrinfo"),
+        ):
+            self._saved.append((owner, name, getattr(owner, name)))
+            setattr(owner, name, self._refuse)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        for owner, name, original in reversed(self._saved):
+            setattr(owner, name, original)
+        self._saved.clear()
+
+
+class _Said:
+    """Every log record written while it is entered, whatever its logger."""
+
+    def __init__(self) -> None:
+        import logging
+
+        self.messages: list[str] = []
+        self._handler = logging.Handler(logging.DEBUG)
+        self._handler.emit = lambda record: self.messages.append(record.getMessage())  # type: ignore[method-assign]
+        self._root = logging.getLogger()
+        self._level = self._root.level
+
+    def __enter__(self) -> "_Said":
+        import logging
+
+        self._root.addHandler(self._handler)
+        self._root.setLevel(logging.DEBUG)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._root.removeHandler(self._handler)
+        self._root.setLevel(self._level)
+
+
+def _silent_audio(folder: Path) -> Path:
+    """A 0.1 s silent WAV: what a speech or diarization call is handed."""
+    import wave
+
+    path = folder / "silence.wav"
+    with wave.open(str(path), "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(16000)
+        out.writeframes(b"\x00\x00" * 1600)
+    return path
+
+
+#: The calls core makes of each kind of media adapter, in the order the report runs them.
+_MEDIA_CALLS: dict[str, tuple[str, ...]] = {
+    "image": ("generate", "edit"),
+    "video": ("generate",),
+    "stt": ("transcribe", "transcribe_detailed"),
+    "tts": ("synthesize",),
+    "embedding": ("embed", "embed_batch"),
+    "diarization": ("diarize",),
+}
+
+
+def _media_call_names(kind: str, *, edit: bool) -> tuple[str, ...]:
+    return tuple(name for name in _MEDIA_CALLS[kind] if edit or name != "edit")
+
+
+def _media_call(kind: str, name: str, adapter: Any, folder: Path) -> Any:
+    """The coroutine for one call core makes of a *kind* adapter, naming no model: the image,
+    video, speech, embedding or diarization binding named none, so ``model=""`` (a voice is
+    text-to-speech's model). Inputs the call reads are written into *folder*."""
+    import base64
+
+    if kind in ("image", "video") and name == "generate":
+        return adapter.generate("a heron at dawn", model="")
+    if name == "edit":
+        source = folder / "source.png"
+        source.write_bytes(base64.b64decode(PNG_DATA_URL.split(",", 1)[1]))
+        return adapter.edit("make it dusk", source_image=str(source), model="")
+    if name in ("transcribe", "transcribe_detailed"):
+        return getattr(adapter, name)(str(_silent_audio(folder)), model="")
+    if name == "synthesize":
+        return adapter.synthesize("hello", voice="")
+    if name == "embed":
+        return adapter.embed("a heron", model="")
+    if name == "embed_batch":
+        return adapter.embed_batch(["a heron", "a kestrel"], model="")
+    return adapter.diarize(str(_silent_audio(folder)), model="")
+
+
+def _returned_nothing(value: Any) -> bool:
+    """A speech, embedding or diarization contract's "nothing": ``None``, an empty result, or a
+    batch whose every vector is empty."""
+    if value is None:
+        return True
+    if isinstance(value, (list, tuple)):
+        return all(isinstance(item, (list, tuple)) and not item for item in value)
+    return value in ("", b"")
+
+
+async def media_refusal_report(adapters: Any, *, edit: bool = True) -> dict[str, str]:
+    """What each media call core makes of *adapters* does when it names no model.
+
+    *adapters* is what the app hands core: one provider, or the list a multi-use
+    ``create_provider`` returns. Build it with its credentials in place (a key, a region), so the
+    one thing a call lacks is its model. Every call names none (``model=""``; for speech, the
+    voice), with the network blocked and every log record kept:
+
+    - an image or video call reads ``"refused: <message>"`` when it raises its contract's error
+      (``ImageGenError``, ``VideoGenError``: the error core turns into the tool's answer);
+    - a speech, embedding or diarization call reads ``"refused: <sentence>"`` when it returns
+      nothing and logged the SDK's sentence, and ``"returned nothing, said nothing"`` when it
+      returned nothing without it;
+    - anything else reads ``"returned <value>"`` or ``"failed: <error>"``;
+    - a call that tried the network first adds ``" (after reaching the network)"``;
+    - text-to-speech also reads ``can_synthesize("")``, which must not claim a call it refuses.
+
+    *edit* ``False`` leaves out an image adapter's ``edit``, for one without an edit endpoint
+    (its contract is to raise that it has none, which says nothing about the model). Compare the
+    result with :func:`media_refusal_expected`.
+    """
+    import tempfile
+
+    from personalclaw.sdk.image import ImageGenError
+    from personalclaw.sdk.video import VideoGenError
+
+    sentence = no_model_refusal()
+    contract_error = {"image": ImageGenError, "video": VideoGenError}
+    report: dict[str, str] = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        for kind, adapter in _media_adapters(adapters):
+            for name in _media_call_names(kind, edit=edit):
+                error = contract_error.get(kind, ())
+                with _NoNetwork() as network, _Said() as said:
+                    try:
+                        value = await _media_call(kind, name, adapter, Path(tmp))
+                    except error as refused:  # type: ignore[misc]
+                        outcome = f"refused: {refused}"
+                    except Exception as failed:  # noqa: BLE001 — recorded, so the report says it
+                        outcome = f"failed: {type(failed).__name__}: {failed}"
+                    else:
+                        if kind in contract_error or not _returned_nothing(value):
+                            outcome = f"returned {value!r:.60}"
+                        elif any(sentence in message for message in said.messages):
+                            outcome = f"refused: {sentence}"
+                        else:
+                            outcome = "returned nothing, said nothing"
+                if network.tries:
+                    outcome += " (after reaching the network)"
+                report[f"{kind} {name}"] = outcome
+            if kind == "tts" and callable(getattr(adapter, "can_synthesize", None)):
+                with _NoNetwork():
+                    report["tts can_synthesize"] = repr(await adapter.can_synthesize(""))
+    return report
+
+
+def media_refusal_expected(adapters: Any, *, edit: bool = True) -> dict[str, str]:
+    """:func:`media_refusal_report` for adapters that refuse every media call naming no model with
+    the SDK's sentence, before anything is sent, and whose text-to-speech claims no such call."""
+    refused = f"refused: {no_model_refusal()}"
+    expected: dict[str, str] = {}
+    for kind, adapter in _media_adapters(adapters):
+        for name in _media_call_names(kind, edit=edit):
+            expected[f"{kind} {name}"] = refused
+        if kind == "tts" and callable(getattr(adapter, "can_synthesize", None)):
+            expected["tts can_synthesize"] = "False"
+    return expected
+
+
 # ── The dialects ──────────────────────────────────────────────────────────────────────────
 
 

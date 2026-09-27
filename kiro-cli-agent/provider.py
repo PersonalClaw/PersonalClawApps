@@ -65,6 +65,12 @@ _ACP_SUBCOMMAND = ["acp"]
 SELF_SANDBOXING = True
 
 
+#: The variables kiro-cli is handed from the gateway's environment to pick its provider or
+#: region: none. It signs in with its own ``kiro-cli login``, which keeps the account it runs as
+#: and where; an agent CLI gets no variable of the gateway's it is not handed.
+PROVIDER_ENV: tuple[str, ...] = ()
+
+
 def resolve_command() -> list[str] | None:
     """Resolve the ``kiro-cli acp`` launch argv (env override → PATH).
 
@@ -126,6 +132,7 @@ def create_provider(config: dict | None = None):
         dialect=DIALECT,
         command=command,
         model=model,
+        env_passthrough=list(PROVIDER_ENV),
         extension=EXTENSION,
         login_command=login_command(command),
         # kiro-cli applies its own OS sandbox; the host's cannot nest around it.

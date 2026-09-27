@@ -34,15 +34,27 @@ What this rail was built from, measured on ``origin/main``:
 ⚠️  AND THE DETECTOR FLOOR RUNS FIRST. A rail that matched nothing would print OK forever, so
     every pattern is proved against a sample it must catch AND one it must spare before a
     clean repository scan is believed — including a re-check of this script's own source.
+
+An OFFICE DOCUMENT is read as well as tracked: its metadata (custom properties, a sensitivity
+label, the creator, last modifier, company and manager, each revision's and comment's author)
+sits in compressed XML parts no text rule sees, so the office-document rule opens every one and
+refuses it when that metadata names anyone. The two content rules read those parts too. Core's
+``publication-hygiene-baseline.json`` holds the same rule as policy.
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import io
+import os
 import re
 import subprocess
 import sys
-from pathlib import Path
+import zipfile
+import zlib
+from pathlib import Path, PurePosixPath
+from xml.etree import ElementTree
 
 ROOT = Path(__file__).resolve().parents[2]
 SELF = Path(__file__).resolve().relative_to(ROOT).as_posix()
@@ -123,32 +135,38 @@ _UNLISTED_OWNER = "zz" + "notaplaceholder" + "zz"
 # internal install path and an internal sign-in tool. Each was rewritten to the principle
 # it stood for.
 #
-# ⚠️  THE DENYLIST IS SALTED SHA-256 DIGESTS, NEVER PLAINTEXT. A plaintext list would publish
-#     the very names it keeps out, the self-defeat the home-path rule avoids by being an
-#     allowlist. The text is folded into candidates (words, two-word phrases, host suffixes,
-#     digit-shaped codes, id shapes), each distinct candidate is digested once, and digests are
-#     compared. A compound kind is only checked in a file that carries one of its HEAD words.
-#     These are the same salt and entries as core's ``publication-hygiene-baseline.json``
-#     (``internal_reference_rule``): add a name there with
-#     ``python3 scripts/check_publication_hygiene.py --digest KIND TEXT`` and copy the printed
-#     lines here. Never write the plaintext into this repo, a commit message, a PR or an issue.
+# ⚠️  THE VOCABULARY IS PRIVATE, AND NO FORM OF IT IS PUBLISHED. A list in this repository
+#     would publish the very names it keeps out, and a list of digests does too: with the salt
+#     beside it, anyone can hash a dictionary of likely names and confirm each entry offline. So
+#     the names live in a plain-text file outside every repository, which
+#     PERSONALCLAW_PRIVATE_DENYLIST names — the same file, format and matching as core's
+#     ``scripts/check_publication_hygiene.py`` (one entry per line: ``word``, ``phrase``,
+#     ``host``, ``code`` or ``id``, then its text). Without the variable (CI, a fork, a
+#     contributor's clone) this one rule is SKIPPED with a one-line notice and every other rule
+#     runs; the maintainer's landing runs it with the list. With it, the rule also refuses an
+#     ENCODED entry: an MD5, SHA-1 or SHA-2 digest of one, in hex or base64, a digest salted
+#     with a salt the list names (``salt`` lines: the salts a list of these digests was ever
+#     published under), or its own base64 or hex — each is as readable as the name to anyone
+#     holding a dictionary. A compound kind is only checked in a file that carries its HEAD
+#     word. Never write a name, or a digest or encoding of one, into this repo, a commit
+#     message, a PR or an issue.
 
-_INTERNAL_SALT = "personalclaw/publication-hygiene/internal-reference/v1"
-_INTERNAL_DENIED: dict[str, frozenset[str]] = {
-    "word": frozenset(),
-    "phrase-head": frozenset(),
-    "phrase": frozenset(),
-    "host-head": frozenset(),
-    "host": frozenset(),
-    "code-head": frozenset(),
-    "code": frozenset(),
-    "id-head": frozenset(),
-    "id": frozenset(),
-}
+_PRIVATE_DENYLIST_ENV = "PERSONALCLAW_PRIVATE_DENYLIST"
+_INTERNAL_SKIPPED = (
+    f"publication-hygiene: internal-reference rule skipped: {_PRIVATE_DENYLIST_ENV} is not set "
+    "(its vocabulary is private; every other rule ran)"
+)
+#: The kinds a list line may name, and the kinds the matcher compares (each compound kind has a
+#: ``-head`` twin — one word every match must contain — derived from the entries).
+_ENTRY_KINDS = ("word", "phrase", "host", "code", "id")
+_INTERNAL_KINDS = (
+    "word", "phrase-head", "phrase", "host-head", "host", "code-head", "code", "id-head", "id",
+)
 _DIGITS = "0123456789"
 #: A word: a maximal run of letters and digits, case-folded, plus the CamelCase parts of a
 #: mixed-case run — so ``snake_case``, ``kebab-case``, ``dotted.names`` and ``FooService``
 #: all fold into the words a reader sees.
+_WORD = re.compile(r"[a-z0-9]+")
 _RUN = re.compile(r"[A-Za-z0-9]+")
 _CAMEL_PART = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
 #: A dotted, host-like run, anchored at a label start. Every suffix of two or more labels is a
@@ -167,26 +185,39 @@ _ID = re.compile(
 )
 #: How far apart two words may sit and still read as one phrase (a wrapped comment included).
 _PHRASE_GAP = 12
+#: The digests tried on every spelling of every entry, in hex and in base64.
+_DIGEST_ALGORITHMS = ("md5", "sha1", "sha224", "sha256", "sha384", "sha512")
+#: A hex run (compared whole, case-folded) and a base64 run (compared whole, padding stripped).
+_HEX_RUN = re.compile(r"[0-9A-Fa-f]{8,}")
+_BASE64_RUN = re.compile(r"[A-Za-z0-9+/_-]{4,}")
 
-#: Each kind's CONTROL (whose digest ``_INTERNAL_DENIED`` carries) planted in ordinary text, and
-#: a near miss that must stay green. Assembled at runtime for the reason ``_UNLISTED_OWNER`` is:
-#: this script is inside its own input set, so a literal control would make it a published
-#: match. Each piece is split so that no fragment is itself a candidate.
+#: A list of INVENTED words, one per kind, read through the same parser as the private list: the
+#: detector floor proves every kind fires on it, planted and encoded, and stays green on a near
+#: miss, whether or not the private list is set. None of these names anything, and none may ever
+#: be replaced by a real name — this file is public. They are the floor's OWN words, distinct
+#: from the ones the tests hand the rail: a seeded test repository carries a copy of this file,
+#: so a word both used would red the copy on every test run.
+_FLOOR_SALT = "zzfloor/publication-hygiene/v0"
+_SYNTHETIC_LIST = (
+    "word    zzgablewarden\n"
+    "phrase  zzfernmoss thrent\n"
+    "host    zzcindervale.invalid\n"
+    "code    zzf-23\n"
+    "id      zzf_Zr7kP2mW9qT4nB\n"
+    f"salt    {_FLOOR_SALT}\n"
+)
 _INTERNAL_CONTROLS = (
-    ("word", "per the " + "ZZ" + "HYGIENECONTROL" + "ZZ" + " guidance", "zz" + "hygienecontrol" + "zzish"),
-    (
-        "phrase",
-        "sign in with " + "zzcontrol" + "head\n#   " + "zzcontrol" + "tail first",
-        "zzcontrol" + "head unrelated",
-    ),
-    ("host", "https://docs." + "zzcontrol" + ".invalid/page", "not" + "zzcontrol" + ".invalid"),
-    ("code", "(" + "ZZQ" + "-42 boundary)", "zzq" + "-1.6.0"),
-    ("id", "cited as " + "zzq" + "_" + "Ab3dE5gH7jK9mN", "zzq" + "_processed1"),
+    ("word", "per the ZZGABLEWARDEN guidance", "zzgablewardenish"),
+    ("phrase", "sign in with zzfernmoss\n#   thrent first", "zzfernmoss unrelated"),
+    ("host", "https://docs.zzcindervale.invalid/page", "notzzcindervale.invalid"),
+    ("code", "(ZZF-23 boundary)", "zzf-1.6.0"),
+    ("id", "cited as zzf_Zr7kP2mW9qT4nB", "zzf_processed1"),
 )
 
 
-def _internal_digest(kind: str, candidate: str) -> str:
-    return hashlib.sha256(f"{_INTERNAL_SALT}\0{kind}\0{candidate}".encode("utf-8")).hexdigest()
+class _PrivateDenylistError(Exception):
+    """The private denylist is named but cannot be used. Never a skip: a typo in a path or a
+    line must not turn "checked" into "silently passed"."""
 
 
 def _words(text: str) -> set[str]:
@@ -197,6 +228,97 @@ def _words(text: str) -> set[str]:
         if tail != tail.lower() and not run.isupper():
             words.update(part.lower() for part in _CAMEL_PART.findall(run))
     return words
+
+
+def _entries(kind: str, text: str) -> list[tuple[str, str]]:
+    """The canonical ``(kind, candidate)`` pairs one list line denies, head included. A refusal
+    never repeats the text: it is a private entry, and the caller names its line instead."""
+    low = text.strip().lower()
+    words = _WORD.findall(low)
+    if kind == "word":
+        if words != [low]:
+            raise ValueError("a word is one run of letters and digits")
+        return [("word", low)]
+    if kind == "phrase":
+        if len(words) != 2:
+            raise ValueError("a phrase is exactly two words")
+        return [("phrase", " ".join(words)), ("phrase-head", words[0])]
+    if kind == "host":
+        labels = low.split(".")
+        if not _HOST_RUN.fullmatch(low) or len(labels) < 2 or not _WORD.findall(labels[-2]):
+            raise ValueError("a host is a dotted host name")
+        return [("host", low), ("host-head", _WORD.findall(labels[-2])[0])]
+    if kind == "code":
+        code = _CODE.fullmatch(low)
+        if not code:
+            raise ValueError("a code is letters, an optional hyphen and 1-3 digits")
+        letters, hyphen, digits = code.groups()
+        return [("code", f"{letters}{hyphen}{'9' * len(digits)}"), ("code-head", letters)]
+    if kind == "id":
+        ident = _ID.fullmatch(text.strip())
+        if not ident:
+            raise ValueError("an id is abc_ and 14 mixed-case or 8 lowercase base62 characters")
+        shape = "m14" if ident.group("m14") else "l8"
+        return [("id", f"{ident.group('prefix')}_{shape}"), ("id-head", ident.group("prefix"))]
+    raise ValueError(f"unknown kind {kind!r} ({', '.join(_ENTRY_KINDS)})")
+
+
+def _salted(salt: str, kind: str, candidate: str) -> str:
+    """The digest a salted denylist made of one candidate: never allowed in the tree."""
+    return hashlib.sha256(f"{salt}\0{kind}\0{candidate}".encode("utf-8")).hexdigest()
+
+
+def _parse_denylist(text: str, source: str) -> dict[str, frozenset[str]]:
+    """One entry per line (KIND, whitespace, TEXT; blank and ``#`` lines ignored), folded as the
+    matcher folds text; a ``salt`` line is taken as written. A malformed line or a list with no
+    entry is refused."""
+    denied: dict[str, set[str]] = {kind: set() for kind in (*_INTERNAL_KINDS, "salt")}
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(None, 1)
+        try:
+            if len(parts) != 2:
+                raise ValueError("a line is KIND, whitespace, then the TEXT to deny")
+            pairs = [tuple(parts)] if parts[0] == "salt" else _entries(*parts)
+        except ValueError as exc:
+            raise _PrivateDenylistError(f"{source}:{number}: {exc}") from None
+        for kind, candidate in pairs:
+            denied[kind].add(candidate)
+    if not any(denied[kind] for kind in _ENTRY_KINDS):
+        raise _PrivateDenylistError(f"{source} holds no entry")
+    return {kind: frozenset(candidates) for kind, candidates in denied.items()}
+
+
+def _private_denylist() -> dict[str, frozenset[str]] | None:
+    """The list the environment names, or ``None`` when it names none (the rule is then skipped)."""
+    value = os.environ.get(_PRIVATE_DENYLIST_ENV, "").strip()
+    if not value:
+        return None
+    path = Path(value).expanduser()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise _PrivateDenylistError(f"{path} cannot be read: {exc}") from None
+    return _parse_denylist(text, str(path))
+
+
+def _spellings(candidate: str) -> set[str]:
+    """The canonical candidate, its upper, capitalised and title-cased twins, a phrase run
+    together or joined by a hyphen or an underscore — each also with ``echo``'s newline."""
+    joined = {candidate}
+    if " " in candidate:
+        joined |= {candidate.replace(" ", sep) for sep in ("", "-", "_")}
+    cased = {c for text in joined for c in (text, text.upper(), text.capitalize(), text.title())}
+    return cased | {text + "\n" for text in cased}
+
+
+def _b64(raw: bytes) -> set[str]:
+    return {
+        base64.b64encode(raw).decode("ascii").rstrip("="),
+        base64.urlsafe_b64encode(raw).decode("ascii").rstrip("="),
+    }
 
 
 def _phrase_pattern(heads: list[str]) -> re.Pattern[str]:
@@ -210,21 +332,29 @@ def _wrapped_phrase(phrase: str) -> re.Pattern[str]:
 
 
 class _InternalMatcher:
-    """Finds denylisted references while knowing the denylist only as digests; each distinct
-    candidate is digested once per run and then checked with set arithmetic."""
+    """Finds a denylist's references in text, as written and encoded, with set arithmetic."""
 
-    def __init__(self) -> None:
-        self._seen: dict[str, set[str]] = {kind: set() for kind in _INTERNAL_DENIED}
-        self._hits: dict[str, set[str]] = {kind: set() for kind in _INTERNAL_DENIED}
+    def __init__(self, denied: dict[str, frozenset[str]]) -> None:
+        self._denied = {kind: frozenset(denied.get(kind, ())) for kind in _INTERNAL_KINDS}
+        self._hex: dict[str, tuple[str, str]] = {}
+        self._b64: dict[str, tuple[str, str]] = {}
+        for kind in _INTERNAL_KINDS:
+            for candidate in self._denied[kind]:
+                for salt in denied.get("salt", ()):
+                    self._hex.setdefault(_salted(salt, kind, candidate), ("salted sha256", kind))
+                for spelling in _spellings(candidate):
+                    raw = spelling.encode("utf-8")
+                    self._hex.setdefault(raw.hex(), ("hex", kind))
+                    for token in _b64(raw):
+                        self._b64.setdefault(token, ("base64", kind))
+                    for algorithm in _DIGEST_ALGORITHMS:
+                        digest = hashlib.new(algorithm, raw).digest()
+                        self._hex.setdefault(digest.hex(), (algorithm, kind))
+                        for token in _b64(digest):
+                            self._b64.setdefault(token, (f"base64 {algorithm}", kind))
 
     def _denied_among(self, kind: str, candidates: set[str]) -> set[str]:
-        seen = self._seen[kind]
-        new = candidates - seen
-        if new:
-            denied = _INTERNAL_DENIED[kind]
-            self._hits[kind].update(c for c in new if _internal_digest(kind, c) in denied)
-            seen |= new
-        return candidates & self._hits[kind]
+        return candidates & self._denied[kind]
 
     def references(self, text: str) -> list[tuple[str, str]]:
         """Every ``(kind, surface)`` denied reference in *text*, sorted, once each."""
@@ -275,6 +405,28 @@ class _InternalMatcher:
                     located.add((low.count("\n", 0, match.start()) + 1, kind, surface))
         return sorted(located)
 
+    def encodings(self, text: str) -> list[tuple[str, str, str]]:
+        """Every ``(encoding, kind, token)`` in *text* that is a denied entry encoded."""
+        found = set()
+        for run in set(_HEX_RUN.findall(text)):
+            if run.lower() in self._hex:
+                found.add((*self._hex[run.lower()], run))
+        for run in set(_BASE64_RUN.findall(text)):
+            if run in self._b64:
+                found.add((*self._b64[run], run))
+        return sorted(found)
+
+    def located_encodings(self, text: str) -> list[tuple[int, str, str, str]]:
+        """``(line, encoding, kind, token)`` for each encoded entry; one pass for a clean text."""
+        if not self.encodings(text):
+            return []
+        lines = enumerate(text.splitlines(), 1)
+        return sorted({(number, *hit) for number, line in lines for hit in self.encodings(line)})
+
+
+def _shown(token: str) -> str:
+    return token if len(token) <= 20 else token[:20] + "…"
+
 
 def _tracked_files() -> list[str]:
     """Every tracked path as a repo-relative POSIX string. ``-z`` because a path may
@@ -296,6 +448,296 @@ def _is_binary(blob: bytes) -> bool:
     """A NUL byte in the first 8 KB — the heuristic ``git diff`` uses to decide a file has
     no textual diff, and the right definition for the size rule's text exemption."""
     return b"\0" in blob[:8192]
+
+
+# ── office documents ────────────────────────────────────────────────────────────────────
+#
+# An office document carries more than its text: the software that saved it records who wrote
+# it, who last changed it, their company and manager, the name, initials and account id of each
+# revision's and comment's author, and whatever properties a document-management tool stamps on
+# it, such as a sensitivity label. It all sits in compressed XML parts, so this rule opens every
+# tracked office document (recognised by its CONTENT, so a renamed one is read too) and refuses
+# one that carries custom properties, a sensitivity label, or a person or organisation in an
+# identity field. A format the rule cannot read is refused rather than trusted.
+
+#: Extensions of the office formats. A tracked file carrying one must be readable as an office
+#: document or it is refused; extensions other files also use (``.dot``, ``.pot``, ``.key``) are
+#: left to the content check.
+_OFFICE_EXTENSIONS = frozenset(
+    # Office Open XML documents, workbooks, presentations and drawings.
+    ".docx .docm .dotx .dotm .xlsx .xlsm .xlsb .xltx .xltm .xlam".split()
+    + ".pptx .pptm .potx .potm .ppsx .ppsm .ppam .sldx .sldm .thmx".split()
+    + ".vsdx .vsdm .vssx .vssm .vstx .vstm".split()
+    # OpenDocument, packaged and flat.
+    + ".odt .ott .ods .ots .odp .otp .odg .otg .odf .odc .odb .fodt .fods .fodp .fodg".split()
+    # The binary formats before those, rich text, and other word processors' packages.
+    + ".doc .xls .xlt .ppt .pps .vsd .rtf .pages .numbers".split()
+)
+#: The values an identity field may hold, because each names no one. An ALLOWLIST for the reason
+#: ``_PLACEHOLDER_HOMES`` is one: a denylist would publish the names it keeps out. The empty
+#: string; ``Author``, which Word's remove-personal-information option writes in place of every
+#: revision author; ``Unknown``, the first entry of every RTF revision table; and the creator
+#: python-docx and openpyxl sign a new file with. python-pptx is deliberately absent: its
+#: template records a real person as the last modifier.
+_PLACEHOLDER_IDENTITY = frozenset({"", "Author", "Unknown", "openpyxl", "python-docx"})
+_ZIP_MAGIC = b"PK\x03\x04"
+#: The compound-document container of the binary office formats, of mail items and of embedded
+#: objects, whose property sets this rule does not parse.
+_COMPOUND_MAGIC = bytes.fromhex("d0cf11e0a1b11ae1")
+_RTF_MAGIC = b"{\\rtf"
+_ODF_MIMETYPE = b"application/vnd.oasis.opendocument."
+_ODF_OFFICE_NS = "urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+_ODF_META_NS = "urn:oasis:names:tc:opendocument:xmlns:meta:1.0"
+_OFFICE_XML_SUFFIXES = (".xml", ".rels", ".vml", ".rdf")
+#: Caps on what one document can make the rule read: bytes per part, parts per package, and
+#: packages nested inside packages. Each one fails CLOSED.
+_OFFICE_PART_CAP = 8_000_000
+_OFFICE_MAX_PARTS = 2_000
+_OFFICE_MAX_DEPTH = 3
+_ZIP_ERRORS = (
+    zipfile.BadZipFile,
+    zipfile.LargeZipFile,
+    zlib.error,
+    OSError,
+    EOFError,
+    RuntimeError,
+    NotImplementedError,
+    ValueError,
+)
+#: Elements whose TEXT names a person or an organisation (a package's creator, last-modified-by,
+#: company and manager, a spreadsheet comment's author, an OpenDocument's creators and
+#: printed-by); attributes that name a person wherever they sit (a revision's or comment's author
+#: and initials, a signed-in author's account id, a shared workbook's user); and elements that
+#: describe a person, whose ``name`` or ``displayName`` is that person's name.
+_IDENTITY_ELEMENTS = frozenset(
+    {
+        "creator",
+        "lastModifiedBy",
+        "Company",
+        "Manager",
+        "author",
+        "initial-creator",
+        "creator-initials",
+        "sender-initials",
+        "printed-by",
+    }
+)
+_IDENTITY_ATTRIBUTES = frozenset({"author", "initials", "userId", "userName"})
+_PERSON_ELEMENTS = frozenset({"cmAuthor", "author", "person", "userInfo"})
+_PERSON_NAME_ATTRIBUTES = frozenset({"name", "displayName"})
+#: Root namespaces of a part holding CUSTOM properties, and the relationship types that attach
+#: custom properties or a sensitivity label to a package.
+_CUSTOM_PROPERTY_NAMESPACES = frozenset(
+    {
+        "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties",
+        "http://purl.oclc.org/ooxml/officeDocument/customProperties",
+        "http://schemas.microsoft.com/office/2006/metadata/properties",
+    }
+)
+_CUSTOM_PROPERTY_RELATIONSHIPS = ("/custom-properties", "/customProperties")
+_LABEL_RELATIONSHIPS = ("/classificationlabels",)
+#: A sensitivity label is written as custom properties whose names start with this marker, or
+#: into a label part of its own.
+_LABEL_MARKER = "msip_label"
+_LABEL_PART = "docmetadata/labelinfo.xml"
+_RTF_IDENTITY = re.compile(r"\{\\(?:\*\\)?(author|operator|company|manager)(?![a-z])\s?([^{}]*)\}")
+_RTF_CUSTOM = re.compile(r"\{\\\*\\userprops(?![a-z])")
+_RTF_REVISION_TABLE = re.compile(r"\{\\\*\\revtbl(?![a-z])((?:\s*\{[^{}]*\})*)")
+_RTF_REVISION_ENTRY = re.compile(r"\{([^{}]*)\}")
+_OFFICE_HOW_TO_FIX = (
+    "An office-document finding is fixed in the document: clear the named field (Word's "
+    "remove-personal-information option or its document inspector does it on save), delete a "
+    "custom-properties or label part together with its content-type override and its package "
+    "relationship, or convert a legacy binary file to its XML format. Do not add a value to "
+    "_PLACEHOLDER_IDENTITY unless it names no person and no organisation."
+)
+
+
+def _local(name: str) -> str:
+    return name.rsplit("}", 1)[-1]
+
+
+def _namespace(name: str) -> str:
+    return name[1:].split("}", 1)[0] if name.startswith("{") else ""
+
+
+def _office_kind(blob: bytes) -> str | None:
+    """``package``, ``flat``, ``rtf`` or ``compound``, judged by CONTENT; ``None`` for anything
+    else, a zip that is not an office package included."""
+    if blob.startswith(_COMPOUND_MAGIC):
+        return "compound"
+    if blob.startswith(_RTF_MAGIC):
+        return "rtf"
+    if blob.startswith(_ZIP_MAGIC):
+        try:
+            with zipfile.ZipFile(io.BytesIO(blob)) as archive:
+                names = set(archive.namelist())
+                if "[Content_Types].xml" in names:
+                    return "package"
+                if "mimetype" in names:
+                    with archive.open("mimetype") as fh:
+                        if fh.read(len(_ODF_MIMETYPE)) == _ODF_MIMETYPE:
+                            return "package"
+        except _ZIP_ERRORS:
+            return None
+        return None
+    head = blob[:4096]
+    if head.lstrip(b"\xef\xbb\xbf \t\r\n").startswith(b"<") and _ODF_OFFICE_NS.encode() in head:
+        try:
+            for _, element in ElementTree.iterparse(io.BytesIO(blob), events=("start",)):
+                return "flat" if _namespace(element.tag) == _ODF_OFFICE_NS else None
+        except ElementTree.ParseError:
+            return None
+    return None
+
+
+def _read_part(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes | None:
+    """A part's bytes, or ``None`` when it cannot be read within the cap. The size is what the
+    read yields, never what the member's header claims."""
+    try:
+        with archive.open(info) as fh:
+            data = fh.read(_OFFICE_PART_CAP + 1)
+    except _ZIP_ERRORS:
+        return None
+    return data if len(data) <= _OFFICE_PART_CAP else None
+
+
+def _xml_problems(part: str, data: bytes) -> list[str]:
+    """One XML part's problems. Fields are judged by NAME, never by searching for a person."""
+    where = f" ({part})" if part else ""
+    found = []
+    if _LABEL_MARKER in data.decode("utf-8", "replace").lower():
+        found.append(f"carries a sensitivity label{where}")
+    try:
+        root = ElementTree.fromstring(data)
+    except ElementTree.ParseError:
+        return [*found, f"has a part that is not well-formed XML{where}"]
+    if _namespace(root.tag) in _CUSTOM_PROPERTY_NAMESPACES:
+        found.append(f"carries custom properties{where}")
+    for element in root.iter():
+        if not isinstance(element.tag, str):
+            continue
+        tag = _local(element.tag)
+        if tag == "user-defined" and _namespace(element.tag) == _ODF_META_NS:
+            found.append(f"carries custom properties{where}")
+        if tag == "Relationship":
+            relationship = element.get("Type", "")
+            if relationship.endswith(_CUSTOM_PROPERTY_RELATIONSHIPS):
+                found.append(f"attaches custom properties{where}")
+            if relationship.endswith(_LABEL_RELATIONSHIPS):
+                found.append(f"attaches a sensitivity label{where}")
+        text = "".join(element.itertext()).strip()
+        if tag in _IDENTITY_ELEMENTS and text not in _PLACEHOLDER_IDENTITY:
+            found.append(f"names someone in <{tag}>{where}")
+        for key, value in element.attrib.items():
+            attribute = _local(key)
+            named = attribute in _IDENTITY_ATTRIBUTES or (
+                tag in _PERSON_ELEMENTS and attribute in _PERSON_NAME_ATTRIBUTES
+            )
+            if named and value.strip() not in _PLACEHOLDER_IDENTITY:
+                found.append(f"names someone in <{tag} {attribute}>{where}")
+    return found
+
+
+def _package_problems(blob: bytes, depth: int) -> list[str]:
+    """The problems in every part of one package, and of every package embedded in it."""
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(blob))
+        infos = [info for info in archive.infolist() if not info.is_dir()]
+    except _ZIP_ERRORS:
+        return ["is not a readable package"]
+    if len(infos) > _OFFICE_MAX_PARTS:
+        return [f"has more parts than this rule reads ({len(infos)} > {_OFFICE_MAX_PARTS})"]
+    found = []
+    for info in infos:
+        part = info.filename
+        data = _read_part(archive, info)
+        if data is None:
+            found.append(f"has a part this rule cannot read ({part})")
+            continue
+        if part.lower() == _LABEL_PART:
+            found.append(f"carries a sensitivity label ({part})")
+        if part.lower().endswith(_OFFICE_XML_SUFFIXES):
+            found += _xml_problems(part, data)
+        elif data.startswith(_COMPOUND_MAGIC):
+            found.append(f"embeds a compound document this rule cannot read ({part})")
+        elif data.startswith(_ZIP_MAGIC) and _office_kind(data) == "package":
+            if depth >= _OFFICE_MAX_DEPTH:
+                found.append(f"nests documents deeper than this rule reads ({part})")
+            else:
+                found += [f"{problem} inside {part}" for problem in _package_problems(data, depth + 1)]
+    return found
+
+
+def _rtf_problems(text: str) -> list[str]:
+    """An RTF document's information group, custom properties and revision table."""
+    found = [
+        f"names someone in \\{field}"
+        for field, value in _RTF_IDENTITY.findall(text)
+        if value.strip() not in _PLACEHOLDER_IDENTITY
+    ]
+    if _RTF_CUSTOM.search(text):
+        found.append("carries custom properties (\\userprops)")
+    for table in _RTF_REVISION_TABLE.findall(text):
+        entries = (entry.strip().rstrip(";").strip() for entry in _RTF_REVISION_ENTRY.findall(table))
+        if any(entry not in _PLACEHOLDER_IDENTITY for entry in entries):
+            found.append("names someone in its revision table")
+    if _LABEL_MARKER in text.lower():
+        found.append("carries a sensitivity label")
+    return found
+
+
+def _office_problems(blob: bytes, *, claimed: bool = False) -> list[str]:
+    """Why *blob* is unfit to publish as an office document, one phrase each, sorted; empty when
+    it is fit, and when it is no office document at all unless *claimed* (its extension names an
+    office format). A phrase names the field or part, never its value: the report is published."""
+    kind = _office_kind(blob)
+    if kind is None:
+        found = ["is not readable as the office document its extension names"] if claimed else []
+    elif kind == "compound":
+        found = ["is a compound document, whose author and custom properties this rule cannot read"]
+    elif kind == "rtf":
+        found = _rtf_problems(blob.decode("latin-1"))
+    elif kind == "flat":
+        found = _xml_problems("", blob)
+    else:
+        found = _package_problems(blob, depth=0)
+    return sorted(set(found))
+
+
+def _office_part_texts(blob: bytes, depth: int = 0) -> list[tuple[str, str]]:
+    """``(part, text)`` for every XML part of an office package and of the packages embedded in
+    it (as ``<part>!<inner part>``); empty for any other blob."""
+    if _office_kind(blob) != "package":
+        return []
+    archive = zipfile.ZipFile(io.BytesIO(blob))
+    texts = []
+    for info in [info for info in archive.infolist() if not info.is_dir()][:_OFFICE_MAX_PARTS]:
+        data = _read_part(archive, info)
+        if data is None:
+            continue
+        if info.filename.lower().endswith(_OFFICE_XML_SUFFIXES):
+            texts.append((info.filename, data.decode("utf-8", "replace")))
+        elif depth < _OFFICE_MAX_DEPTH and data.startswith(_ZIP_MAGIC):
+            texts += [(f"{info.filename}!{inner}", t) for inner, t in _office_part_texts(data, depth + 1)]
+    return texts
+
+
+def _may_be_office(head: bytes) -> bool:
+    if head.startswith((_ZIP_MAGIC, _COMPOUND_MAGIC, _RTF_MAGIC)):
+        return True
+    stripped = head.lstrip(b"\xef\xbb\xbf \t\r\n")
+    return stripped.startswith(b"<") and _ODF_OFFICE_NS.encode() in head
+
+
+def _office_sample(parts: dict[str, str | bytes]) -> bytes:
+    """A small package built at run time for the detector floor: nothing binary is committed."""
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        for name, data in parts.items():
+            archive.writestr(name, data)
+    return out.getvalue()
 
 
 def _detector_floor() -> list[str]:
@@ -332,15 +774,51 @@ def _detector_floor() -> list[str]:
         failures.append("detector floor: the control owner was added to the allowlist")
     if _HOME_PATH.findall("HOME = '/Users/me'") != ["me"] or "me" not in _PLACEHOLDER_HOMES:
         failures.append("detector floor: '/Users/me' is not treated as a placeholder")
-    matcher = _InternalMatcher()
+    matcher = _InternalMatcher(_parse_denylist(_SYNTHETIC_LIST, "the synthetic list"))
     for kind, planted, near_miss in _INTERNAL_CONTROLS:
         if kind not in {found for found, _ in matcher.references(planted)}:
             failures.append(f"detector floor: the {kind} control no longer fires on {planted!r}")
         if matcher.references(near_miss):
             failures.append(f"detector floor: internal-reference falsely catches {near_miss!r}")
-    for kind, entries in _INTERNAL_DENIED.items():
-        if len(entries) < 2:
-            failures.append(f"detector floor: the {kind} denylist holds nothing but its control")
+    word = "zzgablewarden".encode("utf-8")
+    for encoding, token in (
+        ("sha256", hashlib.sha256(word).hexdigest()),
+        ("base64", base64.b64encode(word).decode("ascii")),
+        ("salted sha256", _salted(_FLOOR_SALT, "word", word.decode("utf-8"))),
+    ):
+        fired = {(found, kind) for found, kind, _ in matcher.encodings(f"x = '{token}'")}
+        if (encoding, "word") not in fired:
+            failures.append(f"detector floor: the {encoding} of a denied word no longer fires")
+    if matcher.encodings("x = '" + hashlib.sha256(b"zzsomethingelse").hexdigest() + "'"):
+        failures.append("detector floor: the encoded check falsely catches an unlisted digest")
+
+    dc = 'xmlns:dc="http://purl.org/dc/elements/1.1/"'
+    signed = _office_sample({"docProps/core.xml": f"<p {dc}><dc:creator>python-docx</dc:creator></p>"})
+    if _office_problems(signed):
+        failures.append("detector floor: office-document falsely catches a package naming no one")
+    planted = "zz-planted-person"
+    office_samples = {
+        "a creator": _office_sample(
+            {"docProps/core.xml": f"<p {dc}><dc:creator>{planted}</dc:creator></p>"}
+        ),
+        "a revision author": _office_sample(
+            {"word/document.xml": f'<d xmlns:w="urn:w"><w:ins w:author="{planted}"/></d>'}
+        ),
+        "custom properties": _office_sample(
+            {
+                "docProps/custom.xml": '<Properties xmlns="http://schemas.openxmlformats.org/'
+                'officeDocument/2006/custom-properties"/>'
+            }
+        ),
+        "a sensitivity label": _office_sample({"docProps/custom.xml": "<p name='MSIP_Label_x'/>"}),
+        "a compound document": _COMPOUND_MAGIC + b"\0" * 504,
+        "an unreadable claim": b"not a document",
+    }
+    for label, sample in office_samples.items():
+        if not _office_problems(sample, claimed=label == "an unreadable claim"):
+            failures.append(f"detector floor: office-document no longer catches {label}")
+    if planted in _PLACEHOLDER_IDENTITY:
+        failures.append("detector floor: the planted identity was added to the allowlist")
 
     # This script polices itself — there are no exemptions. A literal `/Users/<name>` here
     # would make this file a published real-home path, so the guard is on the MECHANISM (an
@@ -363,6 +841,14 @@ def main() -> int:
         for line in violations:
             print(f"  {line}")
         return 1
+    try:
+        denied = _private_denylist()
+    except _PrivateDenylistError as exc:
+        print(f"publication-hygiene: FAIL (the private denylist is unusable: {exc})")
+        return 1
+    if denied is None:
+        print(_INTERNAL_SKIPPED)
+    matcher = None if denied is None else _InternalMatcher(denied)
 
     tracked = _tracked_files()
     for rule, pattern in _PATH_RULES:
@@ -371,47 +857,80 @@ def main() -> int:
             if compiled.search(path):
                 violations.append(f"{rule}: {path}")
 
-    matcher = _InternalMatcher()
-    for path in tracked:
-        for kind, surface in matcher.references(path):
-            violations.append(f"internal-reference: {path} (its PATH) names a denied {kind} ({surface!r})")
+    if matcher is not None:
+        for path in tracked:
+            for kind, surface in matcher.references(path):
+                violations.append(
+                    f"internal-reference: {path} (its PATH) names a denied {kind} ({surface!r})"
+                )
+            for encoding, kind, token in matcher.encodings(path):
+                violations.append(
+                    f"internal-reference: {path} (its PATH) carries the {encoding} of a denied {kind} "
+                    f"({_shown(token)!r})"
+                )
 
     for path in tracked:
         full = ROOT / path
         if not full.is_file():
             continue
         blob = full.read_bytes()[:_CONTENT_READ_CAP]
+        claimed = PurePosixPath(path).suffix.lower() in _OFFICE_EXTENSIONS
+        if claimed or _may_be_office(blob[:4096]):
+            for problem in _office_problems(full.read_bytes(), claimed=claimed):
+                violations.append(f"office-document: {path} {problem}")
         if _is_binary(blob):
             size = full.stat().st_size
             if size > _MAX_BINARY_BYTES:
                 violations.append(
                     f"oversized-binary: {path} is {size} bytes (ceiling {_MAX_BINARY_BYTES})"
                 )
-            continue
-        text = blob.decode("utf-8", "replace")
-        for name in set(_HOME_PATH.findall(text)):
-            if name not in _PLACEHOLDER_HOMES:
-                violations.append(f"real-home-path: {path} names home directory {name!r}")
-        for line, kind, surface in matcher.located(text):
-            violations.append(f"internal-reference: {path}:{line} names a denied {kind} ({surface!r})")
+            # An office document's XML parts are text every reader of it gets: hold them to
+            # the content rules below, located as `<path>!<part>`.
+            texts = [(f"{path}!{part}", text) for part, text in _office_part_texts(full.read_bytes())]
+        else:
+            texts = [(path, blob.decode("utf-8", "replace"))]
+        for shown, text in texts:
+            for name in set(_HOME_PATH.findall(text)):
+                if name not in _PLACEHOLDER_HOMES:
+                    violations.append(f"real-home-path: {shown} names home directory {name!r}")
+            if matcher is None:
+                continue
+            for line, kind, surface in matcher.located(text):
+                violations.append(
+                    f"internal-reference: {shown}:{line} names a denied {kind} ({surface!r})"
+                )
+            for line, encoding, kind, token in matcher.located_encodings(text):
+                violations.append(
+                    f"internal-reference: {shown}:{line} carries the {encoding} of a denied {kind} "
+                    f"({_shown(token)!r})"
+                )
 
     if violations:
         print("publication-hygiene: FAIL")
         for line in sorted(violations):
             print(f"  {line}")
+        if any(line.startswith("office-document:") for line in violations):
+            print("\n" + _OFFICE_HOW_TO_FIX)
         if any(line.startswith("internal-reference:") for line in violations):
             print(
                 "\nAn internal reference is fixed by stating the PRINCIPLE instead of naming its "
                 "source (e.g. 'never trust an upload's declared type; cap decoded size'), and by "
-                "renaming a fixture that borrows a non-public name. There is no exemption."
+                "renaming a fixture that borrows a non-public name; an encoded one (a digest, "
+                "base64 or hex of a denied name) is deleted. There is no exemption. A new name "
+                f"goes in the private list {_PRIVATE_DENYLIST_ENV} names, never into this repo."
             )
-        print(
-            "\nDelete the path, or move it somewhere this repo publishes deliberately. Do not "
-            "widen the allowlist to make CI green — every entry is reviewed as policy."
-        )
+        if any(not line.startswith(("office-document:", "internal-reference:")) for line in violations):
+            print(
+                "\nDelete the path, or move it somewhere this repo publishes deliberately. Do not "
+                "widen the allowlist to make CI green — every entry is reviewed as policy."
+            )
         return 1
 
-    print(f"OK: {len(tracked)} tracked paths, none unfit to publish")
+    checked = ""
+    if denied is not None:
+        entries = sum(len(denied[kind]) for kind in _ENTRY_KINDS)
+        checked = f" ({entries} private internal-reference entries checked)"
+    print(f"OK: {len(tracked)} tracked paths, none unfit to publish{checked}")
     return 0
 
 

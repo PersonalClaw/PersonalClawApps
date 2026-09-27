@@ -281,6 +281,7 @@ class TestBuildOutbound:
         assert msg["Auto-Submitted"] == "auto-replied"
 
     def test_message_id_domain_comes_from_the_sender(self):
+        # The recipient's domain differs from the sender's, or this could not tell them apart.
         msg = build_outbound(
             from_addr="agent@example.com", to_addr="b@example.net", subject="s", body="b"
         )

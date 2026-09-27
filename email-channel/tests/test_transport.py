@@ -21,6 +21,7 @@ from personalclaw.sdk.channel import (
     allow_sender,
     create_pairing_code,
     is_allowed_sender,
+    owner_id_credential,
     save_credential,
 )
 
@@ -653,28 +654,70 @@ class TestPairingByReply:
         assert "now do the thing" in captured["text"]
 
 
+OWNER = "me@example.com"
+
+
+class _Asks:
+    request_id = "req-9"
+    title = "run the thing"
+
+
+async def _asked(transport, smtp) -> tuple[asyncio.Future, str]:
+    """An approval asked by mail, and its token, once the prompt has gone out (the send hops
+    to a worker thread, so it is waited for rather than assumed)."""
+    task = asyncio.ensure_future(transport._delivery.request_approval(_Asks(), source="tool"))
+    for _ in range(400):
+        if smtp.sent:
+            break
+        await asyncio.sleep(0.005)
+    assert smtp.sent, "no prompt was mailed"
+    return task, next(iter(transport._delivery._pending))
+
+
 class TestApprovalRepliesConsumeTheMessage:
+    """Only the owner's reply answers an approval, and an answer is never a new turn."""
+
+    @pytest.fixture(autouse=True)
+    def _the_owner(self, monkeypatch):
+        monkeypatch.setenv(owner_id_credential("email"), OWNER)  # read first, gone after the test
+        allow_sender("email", OWNER)
+
     @pytest.mark.asyncio
-    async def test_an_approval_reply_is_not_routed_as_a_turn(self, wired):
+    async def test_the_owners_approval_reply_answers_and_is_not_a_turn(self, wired):
         from email_runtime.delivery import APPROVE_WORD
 
         transport, imap, smtp, _, captured = wired
-        allow_sender("email", BOB)
+        task, token = await _asked(transport, smtp)
+        assert smtp.header("To") == OWNER
 
-        class _Event:
-            request_id = "req-9"
-            title = "run the thing"
-
-        task = asyncio.ensure_future(
-            transport._delivery.request_approval(_Event(), source="tool")
-        )
-        await asyncio.sleep(0)
-        token = next(iter(transport._delivery._pending))
-
-        _mail(1, imap, plain=f"{APPROVE_WORD} {token}")
+        _mail(1, imap, from_addr=OWNER, plain=f"{APPROVE_WORD} {token}")
         await transport._poll_once(transport._settings())
         assert await asyncio.wait_for(task, timeout=1.0) is True
         assert "text" not in captured  # an answer, not a new turn
+
+    @pytest.mark.asyncio
+    async def test_a_correspondents_approval_reply_answers_nothing(self, wired, monkeypatch):
+        """A paired correspondent may converse; an approval is the owner's to answer."""
+        from personalclaw.sdk.channel import sel
+
+        from email_runtime.delivery import APPROVE_WORD
+
+        rows: list[dict] = []
+        monkeypatch.setattr(type(sel()), "log_api_access", lambda _log, **row: rows.append(row))
+        transport, imap, smtp, _, captured = wired
+        allow_sender("email", BOB)
+        task, token = await _asked(transport, smtp)
+
+        _mail(1, imap, from_addr=BOB, plain=f"{APPROVE_WORD} {token}")
+        await transport._poll_once(transport._settings())
+        await asyncio.sleep(0)
+        assert not task.done(), "a correspondent answered the owner's approval"
+        assert "text" not in captured  # an answer attempt, not a new turn
+        refused = [r for r in rows if r.get("operation") == "email.approval_reply"]
+        assert [(r["caller"], r["outcome"], r["error"]) for r in refused] == [
+            (f"email:{BOB}", "denied", "not the owner")
+        ]
+        task.cancel()
 
     @pytest.mark.asyncio
     async def test_an_unknown_senders_approval_reply_is_ignored(self, wired):
@@ -683,16 +726,7 @@ class TestApprovalRepliesConsumeTheMessage:
         from email_runtime.delivery import APPROVE_WORD
 
         transport, imap, smtp, _, _ = wired
-
-        class _Event:
-            request_id = "req-9"
-            title = "run the thing"
-
-        task = asyncio.ensure_future(
-            transport._delivery.request_approval(_Event(), source="tool")
-        )
-        await asyncio.sleep(0)
-        token = next(iter(transport._delivery._pending))
+        task, token = await _asked(transport, smtp)
 
         _mail(1, imap, from_addr="stranger@example.com", plain=f"{APPROVE_WORD} {token}")
         await transport._poll_once(transport._settings())

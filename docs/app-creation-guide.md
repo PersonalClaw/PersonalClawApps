@@ -373,6 +373,14 @@ it runs from:
   `sys.executable -m <module>` with the directory you import it from on the child's
   `PYTHONPATH` (the `piper-tts` app does this), and don't look for its console script
   beside the interpreter — pip puts it in `<home>/app-python/bin`.
+- **A process your provider starts gets every secret the gateway holds unless you pass its
+  environment.** Your provider runs inside the gateway, and the gateway's environment holds
+  every secret saved in PersonalClaw. Give a child that runs a program or package someone else
+  wrote `env=child_process_env()` (`personalclaw.sdk.util`: the child allowlist, your `extra`
+  over it, and `installer="npm"` or `"pip"` for an install), and a declared package run as
+  `python -m` `env=app_packages_env()`. `.github/scripts/check_child_process_env.py` holds every
+  spawn in this repository to one of those, or to a stated reason (your own authenticated tool
+  that signs in from the environment, a doctor step).
 
 `sidecarDependencies` is the engine of a provider declared `execution: "sidecar"`, and a
 manifest that lists it without one is refused. Nothing installs it with the app. The owner
@@ -642,6 +650,23 @@ export function mount(el, ctx) {
   under that: every test starts with `PERSONALCLAW_HOME` pointing at a scratch
   directory of its own, so a test that forgets still does not resolve the real home
   through core. Code that builds `Path.home() / ".personalclaw"` itself is not covered.
+  It also turns the OS keychain off for the run, with
+  `personalclaw.sdk.testing.keychain_off()`: one keychain serves every home on the
+  machine, so a scratch home alone would leave the owner's secrets in reach.
+- **Fake keys look like no key.** A test that hands your provider an API key, a bot token or an
+  access key id uses a neutral fake (`fake-anthropic-test`, `fake-bot-token-saved`), never a
+  provider's format: the repository is public and secret scanners read it. A masking test that
+  needs core's redactor to see a key uses the AWS documentation's example key id.
+  `.github/scripts/check_test_values.py` holds every bundle's tests to that.
+- **A model call names its model.** Core hands every call the model its binding in Settings →
+  Models names, and a call whose binding names none is refused with the SDK's sentence
+  (`personalclaw.sdk.model.require_model`) before anything is sent or loaded: nothing picks a
+  model in its place. A chat-model app proves it with `apps_testkit.model_wire.blank_model_report`.
+  An app that serves an image, video, speech, embedding or diarization call builds its adapters
+  with `media_adapters(<app dir>, create_provider, scanners=(…every function it hands
+  register_scanner…))` and compares `media_refusal_report(adapters)` with
+  `media_refusal_expected(adapters)`. `.github/tests/test_model_apps_prove_the_wire.py` holds every
+  model app to it.
 - **End-to-end**: install your app from a local source (below) and drive it in
   the real UI. Set `PERSONALCLAW_SKIP_APP_BACKENDS=1` in unit tests that don't
   want backend subprocesses.

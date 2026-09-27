@@ -14,11 +14,16 @@ from __future__ import annotations
 
 import json
 import stat
+import sys
 from pathlib import Path
 
 import pytest
 
 import provider
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the repo root: apps_testkit
+
+from apps_testkit.acp_env import PLANTED_SECRETS, handed_env, stub_command  # noqa: E402
 
 PERMISSIVE = {
     "permissions": {"allow": ["Bash(*)"], "defaultMode": "acceptEdits", "deny": ["Bash(rm:*)"]},
@@ -129,3 +134,38 @@ def test_the_app_text_says_what_the_code_does():
     assert setting["default"] is True
     assert "starts empty" in manifest["description"]
     assert "starts" in setting["x-meta"]["help"] and "empty" in setting["x-meta"]["help"]
+
+
+#: What an owner running Claude Code on Amazon Bedrock has in the gateway's environment.
+BEDROCK = {
+    "CLAUDE_CODE_USE_BEDROCK": "1",
+    "AWS_PROFILE": "work",
+    "AWS_REGION": "us-west-2",
+    "ANTHROPIC_MODEL": "a-bedrock-model-id",
+}
+
+
+def test_the_cli_is_handed_the_variables_that_pick_its_provider(operator, monkeypatch, tmp_path):
+    """🔴 Red on main: an ACP CLI gets no variable of the gateway's its app does not declare, and
+    this app declared none, so Claude Code on Bedrock lost its selection and ran on its own
+    default provider. A stub in Claude's place, spawned from the entry the app registers."""
+    from personalclaw.llm.registry import get_default_registry
+
+    for name, value in {**BEDROCK, **PLANTED_SECRETS, "UNRELATED_SETTING": "x"}.items():
+        monkeypatch.setenv(name, value)
+    command, record = stub_command(tmp_path)
+    monkeypatch.setattr(provider, "resolve_command", lambda provision=False: command)
+    monkeypatch.setattr(provider, "_resolve_claude_exec", lambda: "/opt/bin/claude")
+    provider.create_provider({})
+
+    handed = handed_env(get_default_registry().get_entry("acp:claude-code"), record, tmp_path / "w")
+    assert {name: handed.get(name) for name in BEDROCK} == BEDROCK
+    assert sorted(set(PLANTED_SECRETS) & set(handed)) == []
+    assert "UNRELATED_SETTING" not in handed
+    assert handed["CLAUDE_CONFIG_DIR"] == str(_home() / "cc-config"), "still its own config"
+
+
+def test_the_readme_names_every_variable_the_app_passes():
+    readme = (Path(provider.__file__).parent / "README.md").read_text()
+    assert provider.PROVIDER_ENV
+    assert [name for name in provider.PROVIDER_ENV if f"`{name}`" not in readme] == []

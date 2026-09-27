@@ -290,6 +290,20 @@ jobs:
       - name: Every channel send() honors DISABLE_LIVE_WRITES
         run: python .github/scripts/check_live_writes_posture.py
 
+  child-process-env:
+    # Every process an app's code starts says where its environment comes from: an app's
+    # provider runs inside the gateway, whose environment holds every secret saved in
+    # PersonalClaw, so a child that runs someone else's program must get the SDK's child
+    # allowlist. Pure-stdlib AST rail, no core install, the same script run locally.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Every child an app starts says where its environment comes from
+        run: python .github/scripts/check_child_process_env.py
+
   prompt-cache-posture:
     # Cross-app rail: every model-provider app must declare a `prompt_cache`
     # posture explicitly, with the evidence beside it, and an EXPLICIT posture must
@@ -462,6 +476,19 @@ jobs:
           python-version: "3.12"
       - name: Every tracked path is fit to publish
         run: python .github/scripts/check_publication_hygiene.py
+
+  test-values:
+    # No test value has a real token's format or a provider's key prefix: the repository is
+    # public and secret scanners read it. Pure-stdlib rail, no core install, the same script
+    # run locally.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: No test value looks like a key
+        run: python .github/scripts/check_test_values.py
 
   dco:
     # Every commit in a PR must carry a Signed-off-by trailer (DCO),

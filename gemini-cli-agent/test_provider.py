@@ -19,6 +19,10 @@ import pytest
 import provider as gemini_cli
 from personalclaw.llm.registry import get_default_registry, reset_default_registry
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the repo root: apps_testkit
+
+from apps_testkit.acp_env import PLANTED_SECRETS, handed_env, stub_command  # noqa: E402
+
 
 @pytest.fixture(autouse=True)
 def _isolate_registry():
@@ -245,3 +249,33 @@ def test_registered_runtime_id_joins_the_core_runner_catalog(monkeypatch, tmp_pa
     assert row.env_var == "GEMINI_CLI_EXECUTABLE"
     assert row.adapter is None
     assert list(entry.options["command"])[1:] == list(row.acp_args)
+
+
+#: What an owner running Gemini CLI on Vertex AI has in the gateway's environment.
+VERTEX = {
+    "GOOGLE_GENAI_USE_VERTEXAI": "true",
+    "GOOGLE_CLOUD_PROJECT": "their-project",
+    "GOOGLE_CLOUD_LOCATION": "us-central1",
+    "GEMINI_MODEL": "a-gemini-model",
+}
+
+
+def test_the_cli_is_handed_the_variables_that_pick_its_provider(monkeypatch, tmp_path):
+    """🔴 Red on main: an ACP CLI gets no variable of the gateway's its app does not declare, and
+    this app declared none, so Gemini CLI on Vertex AI lost its project, location and model. A stub
+    in Gemini's place, spawned from the entry the app registers. Its API key stays out: that is
+    the owner's to pass through by name."""
+    for name, value in {**VERTEX, **PLANTED_SECRETS}.items():
+        monkeypatch.setenv(name, value)
+    command, record = stub_command(tmp_path)
+    monkeypatch.setattr(gemini_cli, "resolve_command", lambda: command)
+    gemini_cli.create_provider({})
+
+    handed = handed_env(get_default_registry().get_entry("acp:gemini-cli"), record, tmp_path / "w")
+    assert {name: handed.get(name) for name in VERTEX} == VERTEX
+    assert sorted(set(PLANTED_SECRETS) & set(handed)) == []
+
+
+def test_the_readme_names_every_variable_the_app_passes():
+    readme = (Path(gemini_cli.__file__).parent / "README.md").read_text()
+    assert [name for name in gemini_cli.PROVIDER_ENV if f"`{name}`" not in readme] == []

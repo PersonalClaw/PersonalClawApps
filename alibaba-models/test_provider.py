@@ -219,3 +219,24 @@ def test_error_detail_handles_json_and_garbage() -> None:
     assert prov._error_detail(json.dumps({"error": {"message": "bad key"}})) == "bad key"
     assert prov._error_detail("<html>gateway timeout</html>") == "<html>gateway timeout</html>"
     assert len(prov._error_detail("x" * 500)) == 200
+
+
+def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
+    """An image call names its model (the image binding in Settings → Models). One that names
+    none is refused with the SDK's sentence before anything is sent. Its edit is not built
+    (it says so whatever the model)."""
+    from pathlib import Path
+
+    from apps_testkit.model_wire import (
+        media_adapters,
+        media_refusal_expected,
+        media_refusal_report,
+    )
+
+    adapters = media_adapters(
+        Path(__file__).parent,
+        prov.create_provider,
+        scanners=(prov._scan_image,),
+    )
+    report = asyncio.run(media_refusal_report(adapters, edit=False))
+    assert report == media_refusal_expected(adapters, edit=False)

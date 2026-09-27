@@ -20,6 +20,7 @@ from personalclaw.sdk.diarization import (
     SpeakerTurn,
     ensure_ffmpeg_in_path,
 )
+from personalclaw.sdk.model import ProviderResolutionError, require_model
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +116,14 @@ class PyannoteDiarizationProvider(DiarizationProvider, LocalModelProvider):
 
     async def diarize(self, audio_path: str, *, model: str = "", num_speakers: int | None = None,
                       min_speakers: int | None = None, max_speakers: int | None = None):
+        # Like every media call, a diarization names its model (the diarization binding in
+        # Settings → Models), and one that names none is refused before the pipeline is fetched.
+        # It used to fetch and run this app's one pipeline in its place.
+        try:
+            require_model(model)
+        except ProviderResolutionError as exc:
+            logger.warning("diarization-pyannote refused: %s", exc)
+            return None
         ensure_ffmpeg_in_path()
         token = self._hf_token()
         if not token:

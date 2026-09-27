@@ -1192,7 +1192,7 @@ async def test_the_log_records_refs_and_verdicts_but_no_alarm_or_finding_text(
 ) -> None:
     write_runbook(books, "worker-backlog")
     secret_alarm = "customer 4111-1111-1111-1111 saw a 500"
-    secret_finding = "the token in the log was ghp_deadbeefdeadbeefdeadbeef"
+    secret_finding = "the token in the log was fake-github-token-1"
     caplog.set_level("INFO")
     write_alarm(spool, "s.json", summary=secret_alarm)
     incident_id = (await app.invoke("ops_watch", {})).metadata["opened"][0]

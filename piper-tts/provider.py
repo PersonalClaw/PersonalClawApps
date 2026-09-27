@@ -25,8 +25,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from personalclaw.sdk.model import ProviderResolutionError, require_model
 from personalclaw.sdk.tts import LocalTtsProvider, TtsVoice
-from personalclaw.sdk.util import app_packages_env, sandbox_wrap_argv
+from personalclaw.sdk.util import app_packages_env, child_process_env, sandbox_wrap_argv
 
 logger = logging.getLogger(__name__)
 
@@ -67,43 +68,42 @@ def voice_model_path(voice_name: str) -> str:
     return ""
 
 
-def _declared_piper_command() -> tuple[list[str], dict[str, str] | None] | None:
+def _declared_piper_command() -> list[str] | None:
     """Run the ``piper-tts`` package this app declares as ``python -m piper``, or ``None``.
 
     The gateway installs an app's declared packages into ``<home>/app-python`` and loads them
     only into its own process: a plain Python subprocess does not see them, and pip's ``piper``
     console script lands in that directory's ``bin/`` rather than beside the interpreter. So the
-    child is the gateway's own interpreter running the module, in the environment core publishes
-    for exactly that (``app_packages_env``): the app packages on ``PYTHONPATH``, or ``None`` to
-    inherit the gateway's environment when no app package is installed and ``piper`` is the
-    gateway's own. Those directories come before site-packages in the child, which is harmless
-    here: the child runs nothing but piper.
+    child is the gateway's own interpreter running the module, with the app packages on its
+    ``PYTHONPATH`` (core's ``app_packages_env``, which :func:`_synthesize_piper_chunk` passes for
+    it). Those directories come before site-packages in the child, which is harmless here: the
+    child runs nothing but piper.
     """
     spec = importlib.util.find_spec("piper")
     locations = list(spec.submodule_search_locations or []) if spec is not None else []
     if not locations or not (Path(locations[0]) / "__main__.py").is_file():
         return None
-    return [sys.executable, "-m", "piper"], app_packages_env()
+    return [sys.executable, "-m", "piper"]
 
 
-def _piper_command(configured: str = "") -> tuple[list[str], dict[str, str] | None] | None:
-    """``(argv prefix, child env or None to inherit)`` that runs piper, or ``None``.
+def _piper_command(configured: str = "") -> tuple[list[str], bool] | None:
+    """``(argv prefix, whether it runs the declared package)`` that runs piper, or ``None``.
 
     Resolution order: an explicit path → ``piper`` on PATH → the ``piper-tts`` package this app
     declares (see :func:`_declared_piper_command`) → ``~/piper-venv/bin/piper``.
     """
     if configured:
         p = os.path.expanduser(configured)
-        return ([p], None) if os.path.isfile(p) and os.access(p, os.X_OK) else None
+        return ([p], False) if os.path.isfile(p) and os.access(p, os.X_OK) else None
     found = shutil.which("piper")
     if found:
-        return [found], None
+        return [found], False
     declared = _declared_piper_command()
     if declared is not None:
-        return declared
+        return declared, True
     standalone = os.path.expanduser("~/piper-venv/bin/piper")
     if os.path.isfile(standalone) and os.access(standalone, os.X_OK):
-        return [standalone], None
+        return [standalone], False
     return None
 
 
@@ -122,7 +122,7 @@ async def _synthesize_piper_chunk(
     if command is None:
         logger.error("piper not found: no piper on PATH and the piper-tts package is not importable")
         return None
-    prefix, child_env = command
+    prefix, runs_declared_package = command
     model = os.path.expanduser(piper_model) if piper_model else ""
     if not model or not os.path.isfile(model):
         logger.error("piper model not found: %r", piper_model)
@@ -144,7 +144,12 @@ async def _synthesize_piper_chunk(
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=child_env,
+            # Piper is a program someone else wrote, reading a voice someone else trained, and this
+            # provider runs inside the gateway, whose environment holds every secret saved in
+            # PersonalClaw. So it gets the child allowlist. The declared package needs the app
+            # packages on its PYTHONPATH as well; a piper of its own install must not have them put
+            # in front of its own.
+            env=app_packages_env() if runs_declared_package else child_process_env(),
         )
         try:
             _stdout, stderr = await asyncio.wait_for(
@@ -269,8 +274,16 @@ class PiperTtsProvider(LocalTtsProvider):
         **opts: Any,
     ) -> str | None:
         """Synthesize *text* to a WAV via the local piper binary. ``voice`` is the
-        voice name (its ``.onnx`` is located on disk); ``speed`` → ``--length-scale``."""
-        model_path = voice_model_path(voice) if voice else ""
+        voice name (its ``.onnx`` is located on disk); ``speed`` → ``--length-scale``.
+
+        Like every media call, it names its voice (the text-to-speech binding's model), and one
+        that names none is refused, saying so. It used to return nothing and say nothing."""
+        try:
+            voice = require_model(voice)
+        except ProviderResolutionError as exc:
+            logger.warning("piper-tts refused: %s", exc)
+            return None
+        model_path = voice_model_path(voice)
         if not model_path:
             return None
         return await _synthesize_piper_chunk(
@@ -278,9 +291,11 @@ class PiperTtsProvider(LocalTtsProvider):
         )
 
     async def can_synthesize(self, voice: str = "") -> bool:
-        if _piper_command() is None:
+        """Whether a call naming *voice* would speak now: the piper runtime is here and the
+        voice is on disk. A call that names no voice is refused, so it cannot."""
+        if not voice or _piper_command() is None:
             return False
-        return bool(voice_model_path(voice)) if voice else True
+        return bool(voice_model_path(voice))
 
 
 def create_provider(config: dict[str, Any] | None = None) -> PiperTtsProvider:

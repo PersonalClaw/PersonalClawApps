@@ -35,6 +35,17 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 The Codex CLI manages its own configuration and login. Every tool call routes through PersonalClaw's host approval gate.
 
+## Environment
+
+Codex runs with none of the gateway's environment except what it needs to start, the Codex
+binary this app resolves for it (`CODEX_PATH`) and `CODEX_HOME`, the folder whose `config.toml`
+names the provider and model Codex uses. `CODEX_HOME` is passed when it is set in the gateway's
+environment, so a Codex configured there keeps its provider.
+
+No credential is passed: not an API key or a token. Codex keeps its sign-in in that folder. To
+hand it one more variable, add its name under Settings → Security → Child environment
+passthrough.
+
 ## Capability boundary
 
 ACP providers are not at native parity, and the differences are documented rather than implied.

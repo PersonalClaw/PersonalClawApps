@@ -158,11 +158,11 @@ def test_openai_constructor_lazy_imports_sdk(fake_openai: types.ModuleType) -> N
     """Instantiating ``OpenAIProvider`` triggers the lazy SDK import."""
     from personalclaw.sdk.model import OpenAIProvider
 
-    cred = Credential(name="x", kind="api_key", secret="sk-test", source="env")
+    cred = Credential(name="x", kind="api_key", secret="fake-key-test", source="env")
     provider = OpenAIProvider(model="gpt-4o-mini", credential=cred)
 
     assert provider is not None
-    assert _FakeAsyncOpenAI.constructed[-1]["api_key"] == "sk-test"
+    assert _FakeAsyncOpenAI.constructed[-1]["api_key"] == "fake-key-test"
     assert _FakeAsyncOpenAI.constructed[-1]["base_url"] is None
 
 
@@ -228,12 +228,12 @@ def test_openai_factory_resolves_credential_via_store(
     )
     reg.register_entry(entry)
 
-    store = _FakeStore(secret="sk-from-store")
+    store = _FakeStore(secret="fake-key-from-store")
     provider = reg.build("openai-default", credential_store=store)
 
     assert provider is not None
     assert store.resolved == ["openai_api_key"]
-    assert _FakeAsyncOpenAI.constructed[-1]["api_key"] == "sk-from-store"
+    assert _FakeAsyncOpenAI.constructed[-1]["api_key"] == "fake-key-from-store"
 
 
 def test_openai_factory_raises_credential_missing_when_secret_none(
@@ -295,7 +295,7 @@ async def test_openai_stream_translates_text_deltas(
         ),
     ]
 
-    cred = Credential(name="x", kind="api_key", secret="sk-test", source="env")
+    cred = Credential(name="x", kind="api_key", secret="fake-key-test", source="env")
     provider = OpenAIProvider(model="gpt-4o-mini", credential=cred)
     provider._client.chat = _FakeChat(_FakeChatCompletions(chunks=chunks))
 
@@ -317,7 +317,7 @@ async def test_openai_stream_translates_text_deltas(
 async def test_openai_embed_returns_vectors(fake_openai: types.ModuleType) -> None:
     from personalclaw.sdk.model import OpenAIProvider
 
-    cred = Credential(name="x", kind="api_key", secret="sk-test", source="env")
+    cred = Credential(name="x", kind="api_key", secret="fake-key-test", source="env")
     # The embedding model is supplied via extra_options (the app threads the
     # embedding use-case binding through as embedding_model — it is NOT hardcoded
     # in the base provider, whose default is "" so a non-OpenAI compatible endpoint
@@ -343,7 +343,7 @@ async def test_openai_embed_empty_inputs_returns_empty(
 ) -> None:
     from personalclaw.sdk.model import OpenAIProvider
 
-    cred = Credential(name="x", kind="api_key", secret="sk-test", source="env")
+    cred = Credential(name="x", kind="api_key", secret="fake-key-test", source="env")
     provider = OpenAIProvider(model="gpt-4o-mini", credential=cred)
 
     assert await provider.embed([]) == []
@@ -356,7 +356,7 @@ async def test_openai_embed_empty_inputs_returns_empty(
 async def test_openai_shutdown_closes_client(fake_openai: types.ModuleType) -> None:
     from personalclaw.sdk.model import OpenAIProvider
 
-    cred = Credential(name="x", kind="api_key", secret="sk-test", source="env")
+    cred = Credential(name="x", kind="api_key", secret="fake-key-test", source="env")
     provider = OpenAIProvider(model="gpt-4o-mini", credential=cred)
 
     await provider.shutdown()
@@ -392,7 +392,7 @@ async def test_a_per_call_temperature_and_output_budget_reach_the_request(
     """best-of-N builds each candidate with a ``temperature`` build kwarg, and core derives a
     per-model ``max_tokens``. The factory dropped both, so core reported every candidate as
     "not sent at its requested temperature"."""
-    provider = _registry_with({"api_key": "sk-test"}).build(
+    provider = _registry_with({"api_key": "fake-key-test"}).build(
         "openai-x", temperature=0.7, max_tokens=900
     )
     assert provider.sampling_temperature == 0.7
@@ -408,11 +408,11 @@ async def test_a_per_call_temperature_and_output_budget_reach_the_request(
 
 
 def test_a_configured_max_tokens_wins_over_the_per_call_budget(fake_openai: types.ModuleType) -> None:
-    provider = _registry_with({"api_key": "sk-test", "max_tokens": 256}).build("openai-x", max_tokens=900)
+    provider = _registry_with({"api_key": "fake-key-test", "max_tokens": 256}).build("openai-x", max_tokens=900)
     assert provider._max_tokens == 256
 
 
 def test_no_per_call_settings_leave_the_endpoint_defaults(fake_openai: types.ModuleType) -> None:
-    provider = _registry_with({"api_key": "sk-test"}).build("openai-x")
+    provider = _registry_with({"api_key": "fake-key-test"}).build("openai-x")
     assert provider.sampling_temperature is None
     assert provider._max_tokens is None

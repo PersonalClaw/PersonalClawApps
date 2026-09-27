@@ -27,6 +27,7 @@ import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from personalclaw.sdk.channel import AcpError, AcpProcessDied, AcpTimeoutError
 from personalclaw.sdk.channel import STOP_REASON_CANCELLED, STOP_REASON_END_TURN
@@ -55,12 +56,14 @@ from personalclaw.sdk.channel import (
     ModelProvider,
 )
 from personalclaw.sdk.channel import parse_title, session_restrictions, trust_mode
+from personalclaw.sdk.channel import approval_brief_for
 from personalclaw.sdk.channel import is_sensitive_path, redact_credentials, redact_exfiltration_urls
 from personalclaw.sdk.channel import sel
 from personalclaw.sdk.channel import SessionManager
 from slack_runtime.blocks import deprecation_warning_block
 from slack_runtime.client import SlackClientOps
 from slack_runtime.format import (
+    SLACK_BLOCK_SECTION_LIMIT,
     SLACK_MSG_LIMIT,
     TRUNCATION_NOTICE,
     split_message,
@@ -108,12 +111,12 @@ _EDIT_INTERVAL = 1.0
 # Timeout for user to click approve/reject before auto-rejecting
 _APPROVAL_TIMEOUT = 120.0
 
-# Slack Block Kit section text limit (3000 chars max); leave room for
-# markdown fences (``` ... ```) that wrap the tool input.
-_SLACK_SECTION_TEXT_LIMIT = 2900
+# Block Kit's cap on the blocks in one message: an approval prompt whose arguments need more
+# code sections than that runs over several messages (`_approval_messages`).
+_MAX_BLOCKS = 50
 
-# Truncation marker appended when tool_input exceeds the limit
-_TRUNCATION_MARKER = "\n… [truncated]"
+# Three or more backticks: a run that would end the code block the arguments are shown in.
+_FENCE_RUN = re.compile(r"`{3,}")
 
 # Slack UX strings
 _THINKING = "_Thinking…_"
@@ -124,6 +127,64 @@ _STATUS_WORKING = "is working on your request"
 # Pending approvals: keyed by f"{channel}:{approval_msg_ts}"
 # Module-level dict — safe because gateway runs in a single asyncio event loop.
 _pending_approvals: "dict[str, _PendingApproval]" = {}
+
+# How each prompt ended, by the same key, so a press that arrives after it is answered with that.
+# Bounded: it only has to outlive a stale client showing buttons a moment longer.
+_ended_prompts: "OrderedDict[str, str]" = OrderedDict()
+_ENDED_PROMPTS_KEPT = 256
+
+# The line a prompt shows once its approval has ended, for each way core or a press ends one
+# (``ChannelDelivery.request_approval``). Expired and cancelled are not a Deny: nobody decided.
+_OUTCOME_LINES = {
+    "approved": "✅ Approved",
+    "rejected": "🚫 Rejected",
+    "expired": "⌛ Nobody answered in time, so it did not run",
+    "cancelled": "⏹️ Cancelled: the work that asked for it stopped first, so it did not run",
+}
+
+# What a press on a prompt whose approval has ended is told, for each ending.
+_LATE_ANSWERS = {
+    "approved": "Already approved. This press changes nothing.",
+    "rejected": "Already rejected. This press changes nothing.",
+    "expired": "Nobody answered in time, so it did not run. This press changes nothing.",
+    "cancelled": (
+        "Cancelled: the work that asked for it stopped first, so it did not run. "
+        "This press changes nothing."
+    ),
+}
+# ...and when this process never saw it end (the prompt is older than the gateway's last start).
+_NO_LONGER_WAITING = "This approval is no longer waiting. This press changes nothing."
+
+# Background closes of prompts whose wait was cancelled, kept so they are not collected mid-send.
+_closing: "set[asyncio.Task[None]]" = set()
+
+
+def outcome_line(outcome: str) -> str:
+    """The line a prompt shows once its approval ended *outcome*."""
+    return _OUTCOME_LINES.get(outcome) or f"Ended: {outcome}"
+
+
+def late_answer(outcome: str) -> str:
+    """What a press after the approval ended is told: how it ended, when this process saw it."""
+    return _LATE_ANSWERS.get(outcome) or _NO_LONGER_WAITING
+
+
+def _record_ending(key: str, outcome: str) -> None:
+    _ended_prompts.pop(key, None)
+    _ended_prompts[key] = outcome
+    while len(_ended_prompts) > _ENDED_PROMPTS_KEPT:
+        _ended_prompts.popitem(last=False)
+
+
+def ended_prompt(key: str) -> str:
+    """How the prompt at *key* (``channel:ts``) ended, or ``""`` if this process never saw it."""
+    return _ended_prompts.get(key, "")
+
+
+def _closed_blocks(blocks: list[dict], line: str) -> list[dict]:
+    """*blocks* with the buttons taken off and *line* under what was asked."""
+    kept = [b for b in blocks if b.get("type") != "actions"]
+    return [*kept, {"type": "context", "elements": [{"type": "mrkdwn", "text": line}]}]
 
 # ── Phase-aware reaction constants ──────────────────────────────────────
 
@@ -742,6 +803,9 @@ class _PendingApproval:
 _OUTCOME_APPROVED = "approved"
 _OUTCOME_REJECTED = "rejected"
 
+# What :func:`handle_interaction` returns for the owner's press on a prompt that has ended.
+LATE_PRESS = "late_press"
+
 # Block Kit action IDs
 _ACTION_APPROVE = "approve_tool"
 _ACTION_TRUST = "trust_tool"
@@ -1206,7 +1270,7 @@ async def _handle_slash_command(
         await _add_phase_reaction(slack, channel, msg_ts, "done")
         return ""
 
-    # ── !dashboard [duration] ──
+    # ── !dashboard [duration] — the owner's sign-in link, DM'd; anyone else is told why not ──
     if cmd == "!dashboard":
         from personalclaw.sdk.channel import parse_duration
         from slack_runtime.allowlist import send_dashboard_link
@@ -1879,7 +1943,8 @@ async def handle_message(
     # DM:       "!agent foo"                    → "!agent foo"       (no-op)
     # @mention: "<@UBOT|personalclaw> !agent foo"   → "!agent foo"      (strip prefix)
     if _cmd_text.startswith("!"):
-        # !dashboard and !stop are available to any allowed user
+        # !stop and !title are any allowed user's. !dashboard reaches them too, and sends its
+        # link to the owner alone (send_dashboard_link): anyone else is told why not.
         _cmd_word = _cmd_text.split()[0]
         if _cmd_word in ("!dashboard", "!stop", "!title"):
             if is_owner(user_id) or is_allowed_user(user_id):
@@ -2837,49 +2902,95 @@ async def _request_approval(
     session_key: str = "",
     is_dm: bool = True,
 ) -> str:
-    """Post approval buttons, wait for click, return 'approved' or 'rejected'."""
-    blocks = _build_approval_blocks(event, is_dm=is_dm)
-    approval_ts = await slack.post_blocks(channel, blocks, "Manual approval required", thread_ts)
+    """Post approval buttons, wait for click, return 'approved' or 'rejected'.
+
+    The prompt goes once it is answered. If it cannot be deleted it is closed instead, saying
+    how it ended, so no button is left that answers nothing: a timeout reads as nobody
+    answering, not as a Deny."""
+    approval_ts = await _post_approval(slack, channel, thread_ts, event, is_dm=is_dm)
 
     key = f"{channel}:{approval_ts}"
     pending = _PendingApproval(provider, event.request_id, session_key)
     _pending_approvals[key] = pending
 
     try:
-        outcome = await asyncio.wait_for(pending.future, timeout=_APPROVAL_TIMEOUT)
+        outcome = ended = await asyncio.wait_for(pending.future, timeout=_APPROVAL_TIMEOUT)
     except asyncio.TimeoutError:
-        outcome = _OUTCOME_REJECTED
+        outcome, ended = _OUTCOME_REJECTED, "expired"
         await provider.reject_tool(event.request_id)
+    except asyncio.CancelledError:
+        _close_prompt_later(slack, channel, approval_ts, event, is_dm=is_dm, outcome="cancelled")
+        raise
     finally:
         _pending_approvals.pop(key, None)
 
+    _record_ending(key, ended)
     try:
         await slack.delete_message(channel, approval_ts)
     except Exception:
-        status = "✅ Approved" if outcome == _OUTCOME_APPROVED else "🚫 Rejected"
-        title_safe, _ = redact_exfiltration_urls(event.title)
-        title_safe, _ = redact_credentials(title_safe)
-        await _safe_update(slack, channel, approval_ts, f"🔐 *{title_safe}* — {status}")
+        await close_prompt(slack, channel, approval_ts, event, is_dm=is_dm, outcome=ended)
 
     return outcome
+
+
+async def close_prompt(
+    slack: SlackClientOps,
+    channel: str,
+    ts: str,
+    event: LLMEvent,
+    *,
+    outcome: str,
+    is_dm: bool = True,
+    source: str = "",
+) -> None:
+    """Show how the approval prompted at *ts* ended, on the prompt's last message, and take its
+    buttons off.
+
+    The message keeps what it asked, so the conversation shows what was decided. Its blocks are
+    replaced, not only its text: an update that sets the text alone keeps the blocks, and so the
+    buttons, and a notification or a screen reader then says one thing while the message shows
+    another. A press on it after this is answered with *outcome* (:func:`late_answer`)."""
+    _record_ending(f"{channel}:{ts}", outcome)
+    line = outcome_line(outcome)
+    blocks = _closed_blocks(_approval_messages(event, is_dm=is_dm, source=source)[-1], line)
+    tool = str((approval_brief_for(event) or {}).get("tool") or "") or "a tool"
+    try:
+        await slack.update_message(channel, ts, text=f"🔐 {tool}: {line}", blocks=blocks)
+    except Exception:
+        logger.warning("Could not show how the approval at %s ended", ts, exc_info=True)
+
+
+def _close_prompt_later(
+    slack: SlackClientOps, channel: str, ts: str, event: LLMEvent, **kw: Any
+) -> None:
+    """:func:`close_prompt` for a wait that is being cancelled: it runs on its own, so the
+    cancellation is not held up by a call to Slack."""
+    try:
+        task = asyncio.get_running_loop().create_task(close_prompt(slack, channel, ts, event, **kw))
+    except RuntimeError:
+        return
+    _closing.add(task)
+    task.add_done_callback(_closing.discard)
 
 
 async def handle_interaction(channel: str, msg_ts: str, action_id: str, user_id: str = "", thread_ts: str = "", slack: SlackClientOps | None = None) -> str | None:
     """Handle a Block Kit button click for tool approval.
 
-    Supports four actions:
+    Supports three actions:
     - approve_tool: approve this one tool call
     - trust_tool: auto-approve all tools for this session (thread)
     - reject_tool: reject this tool call
 
-    Security: rejects non-owner clicks. Trust requires DM channel
-    (verified via conversations.info by the gateway caller).
+    Only the owner answers: Approve, Trust and Reject alike, and a late Trust too. An allowlisted
+    user may talk to the agent, but a press decides what runs with the owner's authority, and a
+    prompt in a linked channel thread is in front of everyone in it. Anyone else's press answers
+    nothing, is logged to the SEL, and is told so. Trust also requires a DM (verified via
+    conversations.info by the gateway caller).
     """
 
-    # Deny-by-default: reject unless positively confirmed as allowed
-    if not user_id or not is_allowed_user(user_id):
+    if not user_id or not is_owner(user_id):
         logger.warning(
-            "Rejecting interactive action from unauthorized user %s (action=%s)", user_id, action_id
+            "Refusing an approval press from %s, not the owner (action=%s)", user_id, action_id
         )
         sel().log_api_access(
             caller=user_id or "unknown",
@@ -2887,8 +2998,15 @@ async def handle_interaction(channel: str, msg_ts: str, action_id: str, user_id:
             outcome="denied",
             source="slack",
             resources=action_id,
-            error="unauthorized user",
+            error="not the owner",
         )
+        if slack is not None and user_id:
+            try:
+                await slack.post_ephemeral(
+                    channel, user_id, "Only the owner can answer this.", thread_ts=thread_ts or None
+                )
+            except Exception:
+                logger.debug("Failed to tell a non-owner their press answered nothing", exc_info=True)
         return None
 
     key = f"{channel}:{msg_ts}"
@@ -2899,16 +3017,6 @@ async def handle_interaction(channel: str, msg_ts: str, action_id: str, user_id:
         # Replicate session_key derivation from handle_message: thread_ts,
         # then check for linked dashboard session override.
         if action_id == _ACTION_TRUST and thread_ts:
-            if not is_allowed_user(user_id):
-                logger.warning("Rejecting late trust click from non-allowed user %s", user_id)
-                sel().log_api_access(
-                    caller=user_id,
-                    operation="slack.interactive.trust_late",
-                    outcome="denied",
-                    source="slack",
-                    error="unauthorized user",
-                )
-                return None
             # Verify clicking user owns this thread (prevents privilege escalation)
             if not slack:
                 logger.warning("Rejecting late trust click: cannot verify thread ownership (no slack client)")
@@ -2970,7 +3078,9 @@ async def handle_interaction(channel: str, msg_ts: str, action_id: str, user_id:
             )
             return _ACTION_TRUST
         else:
-            logger.warning("No pending approval for %s", key)
+            # A press after the approval ended: the owner is told how it ended, which is what the
+            # prompt says once it is closed, rather than hearing nothing and pressing again.
+            logger.info("No pending approval for %s", key)
             sel().log_api_access(
                 caller=user_id or "unknown",
                 operation="slack.interactive.approval",
@@ -2979,26 +3089,22 @@ async def handle_interaction(channel: str, msg_ts: str, action_id: str, user_id:
                 resources=key,
                 error="no_pending_approval",
             )
-        return None
+            if slack is not None:
+                try:
+                    await slack.post_ephemeral(
+                        channel,
+                        user_id,
+                        late_answer(ended_prompt(key)),
+                        thread_ts=thread_ts or None,
+                    )
+                except Exception:
+                    logger.debug("Failed to tell the owner their press came late", exc_info=True)
+            return LATE_PRESS
 
     if action_id in (_ACTION_APPROVE, _ACTION_TRUST):
         # Set trust state BEFORE approving (so subsequent tools auto-approve)
         if action_id == _ACTION_TRUST:
-            if not is_allowed_user(user_id):
-                logger.error("Rejecting trust escalation from non-allowed user %s", user_id)
-                sel().log_api_access(
-                    caller=user_id,
-                    operation="slack.interactive.trust_denied",
-                    outcome="denied",
-                    source="slack",
-                    resources=pending.session_key or "",
-                    error="non-allowed user",
-                )
-                if not pending.future.done():
-                    pending.future.set_result(_OUTCOME_REJECTED)
-                del _pending_approvals[key]
-                return _ACTION_REJECT
-            elif pending.session_key:
+            if pending.session_key:
                 _trusted_sessions.add(pending.session_key)
                 logger.info("Trust mode ON for session %s", pending.session_key)
             else:
@@ -3031,80 +3137,29 @@ async def handle_interaction(channel: str, msg_ts: str, action_id: str, user_id:
     return action_id
 
 
-#: The key the CORE stamps its approval brief onto ``event.tool_meta`` under — the value
-#: of ``personalclaw.approval_brief.APPROVAL_BRIEF_META_KEY``. Read as a literal because
-#: the brief is ADDITIVE meta the SDK does not export: a core that composes none simply
-#: leaves the key absent, and this channel then prompts exactly as it did before.
-_APPROVAL_BRIEF_META_KEY = "approval_brief"
+def _approval_messages(
+    event: LLMEvent, is_dm: bool = True, source: str = "", *, offer_trust: bool = True
+) -> list[list[dict]]:
+    """The approval prompt, as the Block Kit messages it takes: what will run, then the decision.
 
-#: The one facet that is NOT a consequence: ``readOnly`` claims what a call does not do,
-#: so it must never be framed as something the call "can" do. Named as the EXCEPTION
-#: rather than listing the consequences, so a facet core adds later is framed as a
-#: consequence automatically instead of silently reading as a reassurance.
-_READ_CLAIM_FACET = "readOnly"
+    Everything shown comes from core's brief (``approval_brief_for``): the tool, its arguments,
+    the purpose the runner gave and the summary line (what the call can touch, and its risk),
+    each already masked. That is what the dashboard's approval card shows. The arguments are
+    shown whole, in code sections split to fit a section; they used to be cut at a section's
+    limit, so a command was approved whose end nobody saw. When they need more blocks than one
+    message holds, the prompt runs over several messages and the buttons ride the last, where
+    the reader ends up. Almost always it is one.
 
-
-def _approval_brief_line(event: LLMEvent) -> str:
-    """One line saying what this call can TOUCH, or ``""`` to show no such line.
-
-    Slack is the surface with no room, so the core-composed brief collapses to a single
-    line next to the effective risk; the dashboard stays the rich surface (per-facet
-    cards carrying each facet's ``detail`` sentence). Nothing is re-derived here — every
-    word comes from ``event.tool_meta``, so a hint added to the core gate reaches Slack
-    without a change in this repo, and this renderer cannot drift into a second
-    vocabulary.
-
-    Two rules, both from the ``ChannelDelivery.request_approval`` contract:
-
-    * an ABSENT blast radius renders NO line. "Nothing was established" reads to a
-      person as "nothing happens", which is the opposite of what an unrecognized tool
-      means. Silence is the honest render, and the caller must not fill it.
-    * only ESTABLISHED facets are ever named. ``blastRadiusLine`` already contains
-      exactly the ``True`` ones, so a ``False`` can never be painted as an all-clear
-      ("no network") — absence of evidence never becomes evidence of absence.
-
-    The returned text is plain (no mrkdwn, no emoji) so the approval block and the
-    notification fallback can render the same string without diverging.
+    In DMs: Approve / Trust / Reject. In group channels: Approve / Reject only (Trust excluded
+    to limit blast radius — it escalates permissions for the session). YOLO is owner-only via
+    ``!yolo on`` — no button. A prompt core asks (*offer_trust* off) has no Trust either: the
+    trust it grants is this app's own, for the Slack threads it runs itself, and an approval core
+    asks belongs to a chat that trust never reaches, so the button would approve once and say
+    it trusted.
     """
-    meta = getattr(event, "tool_meta", None)
-    if not isinstance(meta, dict):
-        return ""
-    brief = meta.get(_APPROVAL_BRIEF_META_KEY)
-    if not isinstance(brief, dict):
-        return ""
-    facets = str(brief.get("blastRadiusLine") or "")
-    if not facets:
-        return ""
-    radius = brief.get("blastRadius")
-    consequence = isinstance(radius, dict) and any(
-        v for k, v in radius.items() if k != _READ_CLAIM_FACET
-    )
-    line = f"Can: {facets}" if consequence else f"{facets[:1].upper()}{facets[1:]}"
-    risk = str(brief.get("risk") or "")
-    if risk:
-        line += f" · Risk: {risk}"
-    return line
-
-
-def _build_approval_blocks(event: LLMEvent, is_dm: bool = True, source: str = "") -> list[dict]:
-    """Build Block Kit blocks for tool approval prompt.
-
-    Args:
-        event: The permission-request event from the LLM provider.
-        is_dm: True when posting to a DM (adds Trust button).
-        source: Optional label for background agents (e.g. "subagent",
-            "cron").  Prefixed to the header so users can tell main-agent
-            approvals apart from background ones.
-
-    Shows the full command text (from tool_input) in a code block so users
-    can see exactly what will run before approving.  Falls back to the
-    truncated title when tool_input is unavailable.
-
-    In DMs: Approve / Trust / Reject
-    In group channels: Approve / Reject only (Trust excluded
-    to limit blast radius — it escalates permissions for the session).
-    YOLO is owner-only via ``!yolo on`` command — no button.
-    """
+    brief = approval_brief_for(event) or {}
+    tool = str(brief.get("tool") or "") or "a tool"
+    tag = f"[{source}] " if source else ""
     buttons: list[dict] = [
         {
             "type": "button",
@@ -3114,7 +3169,7 @@ def _build_approval_blocks(event: LLMEvent, is_dm: bool = True, source: str = ""
             "value": event.request_id,
         },
     ]
-    if is_dm:
+    if is_dm and offer_trust:
         buttons.append(
             {
                 "type": "button",
@@ -3133,56 +3188,54 @@ def _build_approval_blocks(event: LLMEvent, is_dm: bool = True, source: str = ""
         },
     )
 
-    blocks: list[dict] = []
+    blocks: list[dict] = [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"🔐 *{tag}Tool approval requested:* `{tool}`"},
+        },
+    ]
+    arguments = str(brief.get("input") or "")
+    if arguments:
+        unfenced = _FENCE_RUN.sub(lambda m: "\u200b".join(m.group(0)), arguments)
+        for part in split_message(f"```\n{unfenced}\n```", SLACK_BLOCK_SECTION_LIMIT):
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": part}})
+    # Why, and what it can touch, go ABOVE the buttons: they are the reasons to press one, so a
+    # reader must meet them before the decision, not after it.
+    tail: list[dict] = [
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": str(brief[k])}]}
+        for k in ("purpose", "summary")
+        if brief.get(k)
+    ]
+    tail.append({"type": "actions", "elements": buttons})
+    messages: list[list[dict]] = []
+    while len(blocks) + len(tail) > _MAX_BLOCKS:
+        messages.append(blocks[:_MAX_BLOCKS])
+        blocks = blocks[_MAX_BLOCKS:]
+    messages.append(blocks + tail)
+    return messages
 
-    tag = f"[{source}] " if source else ""
-    title_safe, _ = redact_exfiltration_urls(event.title)
-    title_safe, _ = redact_credentials(title_safe)
-    footer = f":lock: {tag}*{title_safe}*"
-    if event.tool_purpose:
-        purpose, _ = redact_exfiltration_urls(event.tool_purpose)
-        purpose, _ = redact_credentials(purpose)
-        footer += f" — {purpose}"
 
-    # When full tool_input is available, show a simple header and the
-    # complete command in a code block below.
-    # When tool_input is missing, fall back to the truncated title.
-    if event.tool_input:
-        blocks.append(
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": f"🔐 *{tag}Tool approval requested:*"},
-            },
-        )
-        # Security: scan for exfiltration URLs and credentials before posting
-        sanitized, _ = redact_exfiltration_urls(event.tool_input)
-        sanitized, _ = redact_credentials(sanitized)
-        # Truncate with marker if exceeds Slack limit
-        if len(sanitized) > _SLACK_SECTION_TEXT_LIMIT:
-            detail = (
-                sanitized[: _SLACK_SECTION_TEXT_LIMIT - len(_TRUNCATION_MARKER)]
-                + _TRUNCATION_MARKER
-            )
-        else:
-            detail = sanitized
-        blocks.append(
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": f"```{detail}```"},
-            },
-        )
+def _approval_fallback(event: LLMEvent, source: str = "") -> str:
+    """The prompt's notification text: the first thing the owner reads, and often the only thing
+    (a lock screen shows no blocks). The same words the prompt's summary line says."""
+    brief = approval_brief_for(event) or {}
+    tool = str(brief.get("tool") or "") or "a tool"
+    text = f"🔐 [{source}] Approval needed: {tool}" if source else f"🔐 Approval needed: {tool}"
+    summary = str(brief.get("summary") or "")
+    return f"{text} — {summary}" if summary else text
 
-    # The blast radius goes ABOVE the buttons: it is the reason to press one, so a
-    # reader must meet it before the decision, not after it.
-    brief_line = _approval_brief_line(event)
-    if brief_line:
-        blocks.append(
-            {"type": "context", "elements": [{"type": "mrkdwn", "text": brief_line}]},
-        )
 
-    blocks.append({"type": "actions", "elements": buttons})
-    blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": footer}]})
-    return blocks
+async def _post_approval(
+    slack: SlackClientOps, channel: str, thread_ts: str | None, event: LLMEvent, *,
+    is_dm: bool = True, source: str = "", offer_trust: bool = True,
+) -> str:
+    """Post the approval prompt (:func:`_approval_messages`) and return the ts of its last
+    message, the one with the buttons."""
+    fallback = _approval_fallback(event, source)
+    ts = ""
+    for blocks in _approval_messages(event, is_dm=is_dm, source=source, offer_trust=offer_trust):
+        ts = await slack.post_blocks(channel, blocks, fallback, thread_ts)
+    return ts
 
 
 def _remove_all_jobs(store: TriggerStore) -> str:

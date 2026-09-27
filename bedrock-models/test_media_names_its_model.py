@@ -172,3 +172,25 @@ def test_the_catalog_lists_transcribe_for_speech_to_text(monkeypatch):
 def test_an_account_the_listings_did_not_reach_lists_nothing(monkeypatch):
     """No Transcribe row on its own: an empty catalog is how an unreachable account reads."""
     assert _listed(monkeypatch, []) == []
+
+
+def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
+    """Every media adapter an instance registers refuses a call that names no model, with the
+    SDK's sentence, before a client is built or anything is sent: the embedding, image, video
+    and speech-to-text scanners' adapters, built for the instance the form saves. Nova Canvas
+    has no edit, so edit is left out."""
+    from pathlib import Path
+
+    from apps_testkit.model_wire import (
+        media_adapters,
+        media_refusal_expected,
+        media_refusal_report,
+    )
+
+    adapters = media_adapters(
+        Path(__file__).parent,
+        prov.create_provider,
+        scanners=(prov._scan_embedding, prov._scan_image, prov._scan_video, prov._scan_stt),
+    )
+    report = asyncio.run(media_refusal_report(adapters, edit=False))
+    assert report == media_refusal_expected(adapters, edit=False)

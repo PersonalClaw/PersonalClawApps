@@ -95,10 +95,10 @@ class FakeAPI(DiscordAPI):
         return self.users.get(str(user_id), {"id": str(user_id), "username": "someone"})
 
     async def create_interaction_response(self, interaction_id, interaction_token, *,
-                                          callback_type=6):
+                                          callback_type=6, data=None):
         self._boom("create_interaction_response")
         self.acks.append({"id": interaction_id, "token": interaction_token,
-                          "type": callback_type})
+                          "type": callback_type, "data": data})
 
     async def add_reaction(self, channel_id, message_id, emoji):
         self._boom("add_reaction")
@@ -501,9 +501,23 @@ class TestNoPlaceholderIsLeftBehind:
 
 
 class _Event:
-    def __init__(self, request_id="req1", title="delete files"):
+    def __init__(self, request_id="req1", title="delete files", tool_input="", brief=None):
         self.request_id = request_id
         self.title = title
+        self.tool_input = tool_input
+        self.tool_purpose = ""
+        self.tool_meta = {} if brief is None else {"approval_brief": brief}
+
+
+#: What core stamps on an approval it asks a channel: the call, masked, as the dashboard's card
+#: shows it (``personalclaw.sdk.channel.approval_brief_for``).
+_BRIEF = {
+    "tool": "execute_bash",
+    "input": '{"command": "deploy --token [REDACTED: credential] --env staging"}',
+    "purpose": "ship the staging build",
+    "risk": "destructive",
+    "summary": "Can: runs a command · Risk: Destructive",
+}
 
 
 class TestApprovalRoundTrip:
@@ -542,18 +556,51 @@ class TestApprovalRoundTrip:
         assert final["components"] == []
 
     @pytest.mark.asyncio
+    async def test_the_prompt_shows_what_will_run_as_the_dashboard_card_does(self):
+        """The prompt was "Approve: execute_bash?" and nothing else, so a command was approved
+        without being seen. It shows the tool, its arguments, the purpose and what the call can
+        touch, from core's brief, as they are: core masked them."""
+        d = _delivery(owner="42")
+        task = asyncio.ensure_future(
+            d.request_approval(_Event("reqB", "execute_bash", brief=_BRIEF), source="subagent")
+        )
+        for _ in range(4):
+            await asyncio.sleep(0)
+        (prompt,) = d._api.sent
+        text = (
+            "🔐 [subagent] Approve `execute_bash`?\n"
+            "```\n"
+            '{"command": "deploy --token [REDACTED: credential] --env staging"}\n'
+            "```\n"
+            "ship the staging build\n"
+            "Can: runs a command · Risk: Destructive"
+        )
+        assert prompt["content"] == text
+        await d.resolve_interaction({
+            "id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
+            "data": {"custom_id": "approve:reqB"}, "user": {"id": "42"},
+        })
+        assert await asyncio.wait_for(task, timeout=1.0) is True
+        # Answered, the prompt keeps what was approved, with the outcome under it.
+        assert d._api.edits[-1]["content"] == f"{text}\n✅ Approved"
+
+    @pytest.mark.asyncio
     async def test_a_long_prompt_is_split_like_a_reply_with_the_buttons_last(self):
         """It was cut at 2,000 characters, so the owner approved a command whose end they
-        never saw. Every part arrives, and the buttons ride the last."""
+        never saw. Every line of the arguments arrives, and the buttons ride the last part."""
         d = _delivery(owner="42")
-        command = "bash: " + " && ".join(f"echo step-{i}" for i in range(400))
-        task = asyncio.ensure_future(d.request_approval(_Event("reqL", command), source="tool"))
+        command = "\n".join(f"echo step-{i}" for i in range(400))
+        task = asyncio.ensure_future(
+            d.request_approval(_Event("reqL", "execute_bash", tool_input=command), source="tool")
+        )
         for _ in range(4):
             await asyncio.sleep(0)
         sent = d._api.sent
         assert len(sent) >= 2 and all(len(m["content"]) <= DISCORD_MAX_TEXT for m in sent)
         assert [m["components"] is not None for m in sent] == [False] * (len(sent) - 1) + [True]
-        assert "step-399?" in sent[-1]["content"] and "step-0 " in sent[0]["content"]
+        shown = "\n".join(m["content"] for m in sent)
+        for i in range(400):
+            assert f"echo step-{i}\n" in shown, f"step {i} was not shown"
 
         await d.resolve_interaction({
             "id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
@@ -579,12 +626,18 @@ class TestApprovalRoundTrip:
         assert d._api.edits[-1]["components"] == []
 
     @pytest.mark.asyncio
-    async def test_timeout_defaults_to_rejected(self, monkeypatch):
-        """Fail closed: an unanswered approval is a rejection, never an approval."""
-        monkeypatch.setattr("discord_runtime.delivery._APPROVAL_TIMEOUT", 0.01)
+    async def test_an_approval_nobody_answered_does_not_run_and_says_so(self):
+        """Fail closed, and say what happened: core ends an approval nobody answered in its
+        window as expired, which runs nothing and is not a Deny anyone gave."""
         d = _delivery(owner="42")
-        assert await d.request_approval(_Event("reqZ"), source="tool") is False
-        assert "Rejected" in d._api.edits[-1]["content"]
+        got = await d.request_approval(
+            _Event("reqZ"), source="tool",
+            on_prompted=lambda pending: pending.future.set_result("expired"),
+        )
+        assert got is False
+        assert "Nobody answered in time, so it did not run" in d._api.edits[-1]["content"]
+        assert "Rejected" not in d._api.edits[-1]["content"]
+        assert d._api.edits[-1]["components"] == []
 
     @pytest.mark.asyncio
     async def test_prompts_the_linked_channel_when_there_is_one(self):
@@ -792,7 +845,9 @@ _HANDED = {
     ),
     "start_stream": lambda h: h.start_stream("500", initial_text=f"thinking {SECRET}"),
     "request_approval": lambda h: h.request_approval(
-        _Event("reqK", f"deploy {SECRET}"), source="tool"
+        _Event("reqK", f"deploy {SECRET}"), source="tool",
+        # Core ends every approval it asks, and the wait keeps no timer of its own.
+        on_prompted=lambda pending: pending.future.set_result("expired"),
     ),
 }
 
@@ -802,7 +857,6 @@ def through_core(monkeypatch):
     """This delivery as core holds it: registered with core, and read back the way core reads it."""
     from personalclaw import channel_delivery
 
-    monkeypatch.setattr("discord_runtime.delivery._APPROVAL_TIMEOUT", 0.01)
     d = _delivery(owner="42")
     channel_delivery.register(d, provider="discord")
     yield d, channel_delivery.delivery_for("discord")

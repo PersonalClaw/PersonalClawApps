@@ -393,11 +393,11 @@ class TestSessionRouting:
         t, state, captured = transport_with_capture
         allow_sender("discord", "42")
         await t._on_message_create(
-            _msg(text="key sk-ABC123DEF456GHI789JKL012MNO345", channel_id="dm-42", author_id="42")
+            _msg(text="key AKIAIOSFODNN7EXAMPLE", channel_id="dm-42", author_id="42")
         )
         await asyncio.sleep(0)
         appended = state.session.appended[-1][1]
-        assert "sk-ABC123DEF456GHI789JKL012MNO345" not in appended
+        assert "AKIAIOSFODNN7EXAMPLE" not in appended
 
     @pytest.mark.asyncio
     async def test_one_session_per_channel(self, transport_with_capture):

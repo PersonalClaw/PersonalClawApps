@@ -67,6 +67,10 @@ DISCORD_MAX_TEXT = 2000
 # message, which is what an approval button needs — we edit the prompt ourselves
 # once the decision resolves.
 INTERACTION_CALLBACK_DEFERRED_UPDATE = 6
+# 4 = CHANNEL_MESSAGE_WITH_SOURCE: answer a press with a message. With the EPHEMERAL flag only the
+# person who pressed sees it — how a press that decides nothing is told why.
+INTERACTION_CALLBACK_MESSAGE = 4
+MESSAGE_FLAG_EPHEMERAL = 64
 
 # Message component types / button styles (Discord "Message Components").
 COMPONENT_ACTION_ROW = 1
@@ -151,12 +155,14 @@ class DiscordAPI(ABC):
     async def create_interaction_response(
         self, interaction_id: str, interaction_token: str, *,
         callback_type: int = INTERACTION_CALLBACK_DEFERRED_UPDATE,
+        data: dict[str, Any] | None = None,
     ) -> None:
         """``POST /interactions/{id}/{token}/callback`` — answer an interaction.
 
         Discord shows the pressing user a red "interaction failed" banner unless the
         bot responds within THREE seconds, so every component press must land here
-        even when the decision itself takes longer."""
+        even when the decision itself takes longer. *data* is the response's message, for a
+        callback type that carries one."""
 
     @abstractmethod
     async def add_reaction(self, channel_id: str, message_id: str, emoji: str) -> None:
@@ -470,10 +476,13 @@ class HTTPDiscordAPI(DiscordAPI):
     async def create_interaction_response(
         self, interaction_id: str, interaction_token: str, *,
         callback_type: int = INTERACTION_CALLBACK_DEFERRED_UPDATE,
+        data: dict[str, Any] | None = None,
     ) -> None:
+        body: dict[str, Any] = {"type": callback_type}
+        if data is not None:
+            body["data"] = data
         await self._call(
-            "POST", f"/interactions/{interaction_id}/{interaction_token}/callback",
-            json={"type": callback_type},
+            "POST", f"/interactions/{interaction_id}/{interaction_token}/callback", json=body,
         )
 
     async def add_reaction(self, channel_id: str, message_id: str, emoji: str) -> None:

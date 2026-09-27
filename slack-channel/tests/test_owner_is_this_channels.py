@@ -47,7 +47,7 @@ _SHARED = "PERSONALCLAW_OWNER_ID"
 _TELEGRAM_OWNER = "424242"
 #: Fake tokens, made at run time as this app's other tests make them.
 BOT = f"xoxb-{secrets.token_hex(12)}"
-APP_TOKEN = f"xapp-1-{secrets.token_hex(12)}"
+APP_TOKEN = f"fake-app-token-1{secrets.token_hex(12)}"
 
 
 @pytest.fixture(autouse=True)
@@ -166,7 +166,7 @@ async def _start(registered: list) -> None:
         # What the gateway hands a transport: ``owner_id`` is the SHARED key's value.
         owner_id=credentials.get_credential(_SHARED),
         register_channel_delivery=lambda delivery, provider="": registered.append(
-            (provider, delivery._owner_id)
+            (provider, delivery._owner())
         ),
         dashboard_state=None,
         channel_history=None,

@@ -31,7 +31,8 @@ Each synthesis is a sandboxed child process. The app runs, in order: a `piper` o
 `PATH`, else the `piper-tts` package it declares — as `python -m piper`, with the
 directory the gateway imports it from (`<home>/app-python`) on the child's `PYTHONPATH`,
 because a plain Python child does not see app packages — else
-`~/piper-venv/bin/piper`.
+`~/piper-venv/bin/piper`. Piper gets the child allowlist (`PATH`, the home, locale, proxy and
+certificate settings), never the gateway's environment and the secrets in it.
 
 ## License
 

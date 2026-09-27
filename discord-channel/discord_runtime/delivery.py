@@ -22,7 +22,8 @@ Two Discord-specific shapes drive this module:
   the decision resolves, the prompt is edited to show the outcome AND its
   ``components`` are cleared — a still-clickable approval button on a
   hours-old decided request is a real footgun, not a cosmetic one. A prompt too
-  long for one message is split like a reply, the buttons on its last part.
+  long for one message is split like a reply, the buttons on its last part. It shows
+  what will run, as the dashboard's approval card does (:func:`_approval_text`).
 
 Discord renders standard markdown, so unlike Telegram's MarkdownV2 there is no
 escaping layer: the model's markdown goes out as-is. Length is the only rendering
@@ -38,9 +39,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from collections import OrderedDict
 from typing import Any, Callable
 
-from personalclaw.sdk.channel import is_tracked_channel, sel
+from personalclaw.sdk.channel import approval_brief_for, is_tracked_channel, sel
 
 from discord_runtime.api import (
     BUTTON_STYLE_DANGER,
@@ -48,6 +50,8 @@ from discord_runtime.api import (
     COMPONENT_ACTION_ROW,
     COMPONENT_BUTTON,
     DISCORD_MAX_TEXT,
+    INTERACTION_CALLBACK_MESSAGE,
+    MESSAGE_FLAG_EPHEMERAL,
     DiscordAPI,
 )
 
@@ -57,9 +61,50 @@ logger = logging.getLogger(__name__)
 # Discord's per-channel message bucket is roughly 5 requests / 5 seconds, and edits
 # spend from the same budget as the sends around them, so 1.1s leaves headroom.
 _EDIT_MIN_INTERVAL = 1.1
-# Approval prompts wait this long for the owner's button press before defaulting to
-# rejected (mirrors Slack + Telegram's 2h ceiling).
-_APPROVAL_TIMEOUT = 7200
+# How many ended approvals are remembered, so a press on one is answered with how it ended.
+_ENDED_KEPT = 256
+
+# The line a prompt shows once its approval has ended, for each way core or a press ends one
+# (``ChannelDelivery.request_approval``). Expired and cancelled are not a Deny: nobody decided.
+_OUTCOME_LINES = {
+    "approved": "✅ Approved",
+    "rejected": "🚫 Rejected",
+    "expired": "⌛ Nobody answered in time, so it did not run",
+    "cancelled": "⏹️ Cancelled: the work that asked for it stopped first, so it did not run",
+}
+
+# What a press on a prompt whose approval has ended is told, for each ending.
+_LATE_ANSWERS = {
+    "approved": "Already approved. This press changes nothing.",
+    "rejected": "Already rejected. This press changes nothing.",
+    "expired": "Nobody answered in time, so it did not run. This press changes nothing.",
+    "cancelled": (
+        "Cancelled: the work that asked for it stopped first, so it did not run. "
+        "This press changes nothing."
+    ),
+}
+# ...and when this process never saw it end (the prompt is older than the gateway's last start).
+_NO_LONGER_WAITING = "This approval is no longer waiting. This press changes nothing."
+_NOT_THE_OWNER = "Only the owner can answer this."
+
+# A progress line for each status core gives a call (``ChannelDelivery.append_stream_task``): its
+# mark, and the words for an ending other than done. A call that did not run never reads done.
+_TASK_LINES = {
+    "in_progress": ("⏳", ""),
+    "complete": ("✅", ""),
+    "failed": ("❌", "failed"),
+    "rejected": ("🚫", "rejected"),
+    "expired": ("⌛", "no answer in time, not run"),
+    "cancelled": ("⏹️", "cancelled, not run"),
+}
+
+
+def _task_line(title: str, status: str) -> str:
+    """One call's progress line: its mark, its title, and how it ended when not done. A status
+    this app does not know is shown by its name, and not as done."""
+    mark, words = _TASK_LINES.get(status, ("•", status))
+    line = f"{mark} {title}".strip()
+    return f"{line} ({words})" if words else line
 # custom_id prefixes. Discord caps custom_id at 100 chars; a request id is short.
 _APPROVE = "approve"
 _DENY = "deny"
@@ -221,6 +266,10 @@ class DiscordDelivery:
         # keyed by "req:<request_id>" (from the button custom_id) and by
         # "<channel>:<message>" (the prompt the buttons live on).
         self._pending: dict[str, _PendingApproval] = {}
+        # How each ended approval ended, by its request id, for a press that comes after.
+        self._ended: OrderedDict[str, str] = OrderedDict()
+        # Background closes of prompts whose wait was cancelled, kept until they are sent.
+        self._closing: set[asyncio.Task[None]] = set()
         # user id → opened DM channel id. create_dm is idempotent server-side but
         # costs a request on a bucket shared with sends, so cache the resolution.
         self._dm_channels: dict[str, str] = {}
@@ -458,8 +507,7 @@ class DiscordDelivery:
         st = self._streams.get(f"{channel}:{stream_ts}")
         if st is None:
             return
-        mark = "✅" if status in ("complete", "completed", "done") else "⏳"
-        st.tasks[task_id] = f"{mark} {title}".strip()
+        st.tasks[task_id] = _task_line(title, status)
         await self._maybe_edit(st, force=False)
 
     async def stop_stream(self, channel: str, stream_ts: str) -> None:
@@ -507,12 +555,14 @@ class DiscordDelivery:
         self, event: Any, *, source: str, parent_session_key: str = "",
         sessions: Any = None, on_prompted: Any = None,
     ) -> bool | None:
-        """Post an Approve/Deny button row and wait for the owner's press.
+        """Post an Approve/Deny button row and wait for the approval to end.
 
         Returns approved/rejected, or None when we can't prompt (no owner/channel) so
         the gateway falls back to the dashboard. ``on_prompted(pending)`` lets core
-        race a dashboard prompt against this one — a dashboard click resolves the
-        same future."""
+        race a dashboard prompt against this one: core resolves the same future with how
+        the approval ended wherever it ended, so the wait keeps no timer of its own. Once
+        it ends, the prompt says how and loses its buttons (:meth:`_close`), and so it does
+        when this wait is cancelled."""
         channel_id = ""
         if parent_session_key and sessions is not None:
             try:
@@ -528,10 +578,10 @@ class DiscordDelivery:
             return None
 
         request_id = str(getattr(event, "request_id", ""))
-        title = str(getattr(event, "title", ""))
-        # Split like a reply, the buttons on the last part: the prompt was cut at 2,000
-        # characters, so the owner approved a command whose end they never saw.
-        parts = split_message(f"🔐 [{source}] Approve: {title}?")
+        # What will run, as the dashboard's card shows it. Split like a reply, the buttons on
+        # the last part: the prompt was cut at 2,000 characters, so the owner approved a
+        # command whose end they never saw.
+        parts = split_message(_approval_text(approval_brief_for(event) or {}, source))
         msg: dict[str, Any] = {}
         for index, part in enumerate(parts, 1):
             last = index == len(parts)
@@ -550,38 +600,69 @@ class DiscordDelivery:
                 logger.debug("discord: on_prompted hook failed", exc_info=True)
 
         try:
-            outcome = await asyncio.wait_for(pending.future, timeout=_APPROVAL_TIMEOUT)
-        except asyncio.TimeoutError:
-            outcome = "rejected"
+            outcome = await pending.future
+        except asyncio.CancelledError:
+            self._close_later(channel_id, message_id, parts, request_id, "cancelled")
+            raise
         finally:
             self._pending.pop(f"{channel_id}:{message_id}", None)
             self._pending.pop(f"req:{request_id}", None)
 
-        approved = outcome == "approved"
-        status = "✅ Approved" if approved else "🚫 Rejected"
+        await self._close(channel_id, message_id, parts, request_id, outcome)
+        return outcome == "approved"
+
+    async def _close(
+        self, channel_id: str, message_id: str, parts: list[str], request_id: str, outcome: str
+    ) -> None:
+        """Show how the approval ended under what the prompt asked, and strip its buttons
+        (``components=[]``): an ended approval must not leave a clickable Approve behind. A
+        press after this is answered with *outcome*."""
+        self._ended.pop(request_id, None)
+        self._ended[request_id] = outcome
+        while len(self._ended) > _ENDED_KEPT:
+            self._ended.popitem(last=False)
+        line = _OUTCOME_LINES.get(outcome) or f"Ended: {outcome}"
         try:
-            # components=[] strips the buttons: a decided request must not leave a
-            # clickable Approve behind.
             await self._api.edit_message(
-                channel_id, message_id, _answered(title, parts, status), components=[]
+                channel_id, message_id, _answered(parts, line), components=[]
             )
         except Exception:
             logger.debug("discord: approval finalize edit failed", exc_info=True)
-        return approved
+
+    def _close_later(
+        self, channel_id: str, message_id: str, parts: list[str], request_id: str, outcome: str
+    ) -> None:
+        """:meth:`_close` for a wait that is being cancelled, on its own so the cancellation is
+        not held up by a call to Discord."""
+        try:
+            task = asyncio.get_running_loop().create_task(
+                self._close(channel_id, message_id, parts, request_id, outcome)
+            )
+        except RuntimeError:
+            return
+        self._closing.add(task)
+        task.add_done_callback(self._closing.discard)
 
     async def resolve_interaction(self, interaction: dict[str, Any]) -> None:
         """Resolve a pending approval from an ``INTERACTION_CREATE`` button press.
 
         Acknowledging is NOT optional and NOT conditional on the press being ours:
         Discord shows the pressing user "This interaction failed" if nothing answers
-        within three seconds, so the ack happens even for an unknown/stale custom_id."""
+        within three seconds, so the ack happens even for an unknown/stale custom_id.
+
+        A press that decides nothing is answered with why, in a message only the presser sees:
+        someone who is not the owner, and a press after the approval ended, which is told how it
+        ended. Acknowledged silently, either read as an answer that worked."""
         if int(interaction.get("type", 0) or 0) != INTERACTION_TYPE_COMPONENT:
             return
         custom_id = str((interaction.get("data") or {}).get("custom_id", ""))
         action, _, request_id = custom_id.partition(":")
+        told = ""
         if action in (_APPROVE, _DENY) and request_id:
             pending = self._pending.get(f"req:{request_id}")
-            if pending is not None and not pending.future.done():
+            if pending is None or pending.future.done():
+                told = _LATE_ANSWERS.get(self._ended.get(request_id, "")) or _NO_LONGER_WAITING
+            else:
                 # Only the owner's press answers it. A prompt for a chat linked to a tracked
                 # channel is posted there, where everyone in it sees the buttons, and a member
                 # must not approve what the owner's agent runs. In a server the presser is
@@ -592,6 +673,7 @@ class DiscordDelivery:
                 if owner and presser == owner:
                     pending.future.set_result("approved" if action == _APPROVE else "rejected")
                 else:
+                    told = _NOT_THE_OWNER
                     logger.warning("discord: refused an approval press from %s, not the owner", presser)
                     sel().log_api_access(
                         caller=f"discord:{presser or 'unknown'}",
@@ -605,7 +687,15 @@ class DiscordDelivery:
         itoken = str(interaction.get("token", ""))
         if iid and itoken:
             try:
-                await self._api.create_interaction_response(iid, itoken)
+                if told:
+                    await self._api.create_interaction_response(
+                        iid,
+                        itoken,
+                        callback_type=INTERACTION_CALLBACK_MESSAGE,
+                        data={"content": told, "flags": MESSAGE_FLAG_EPHEMERAL},
+                    )
+                else:
+                    await self._api.create_interaction_response(iid, itoken)
             except Exception:
                 logger.debug("discord: interaction ack failed", exc_info=True)
 
@@ -646,9 +736,33 @@ def _monotonic() -> float:
     return time.monotonic()
 
 
-def _answered(title: str, parts: list[str], status: str) -> str:
-    """What the prompt's last message says once it is answered, in one message: the prompt with
-    its outcome, or, for a prompt split over several, its last part with it, or the outcome
-    alone when that would not fit (the parts above keep the rest)."""
-    text = f"🔐 {title} — {status}" if len(parts) <= 1 else f"{parts[-1]} — {status}"
-    return text if len(text) <= DISCORD_MAX_TEXT else f"🔐 {status}"
+def _approval_text(brief: dict, source: str) -> str:
+    """The approval prompt, from core's brief (``approval_brief_for``): the tool, its arguments
+    in a code block, the purpose the runner gave and the summary line (what the call can touch,
+    and its risk). That is what the dashboard's approval card shows; the prompt used to show the
+    tool's name alone, so a command was approved unseen. Every string is already masked."""
+    tool = str(brief.get("tool") or "") or "a tool"
+    lines = [f"🔐 [{source}] Approve `{tool}`?"]
+    arguments = str(brief.get("input") or "")
+    if arguments:
+        lines += ["```", _unfenced(arguments), "```"]
+    lines += [str(brief[k]) for k in ("purpose", "summary") if brief.get(k)]
+    return "\n".join(lines)
+
+
+#: Three or more backticks: a run that would end a code block.
+_FENCE_RUN = re.compile(r"`{3,}")
+
+
+def _unfenced(text: str) -> str:
+    """*text* with every run of three or more backticks broken by zero-width spaces, so what is
+    shown cannot close the code block it is shown in."""
+    return _FENCE_RUN.sub(lambda m: "\u200b".join(m.group(0)), text)
+
+
+def _answered(parts: list[str], status: str) -> str:
+    """What the prompt's last message says once it is answered: its own text with the outcome
+    under it, so the channel keeps what was approved; or the outcome alone when that would not
+    fit one message (the parts above keep the rest)."""
+    text = f"{parts[-1]}\n{status}" if parts else status
+    return text if len(text) <= DISCORD_MAX_TEXT else status

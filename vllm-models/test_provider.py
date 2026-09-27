@@ -241,14 +241,14 @@ def test_vllm_constructor_uses_credential_secret_when_provided(
 ) -> None:
     from provider import VLLMProvider
 
-    cred = Credential(name="x", kind="api_key", secret="sk-real", source="env")
+    cred = Credential(name="x", kind="api_key", secret="fake-key-real", source="env")
     VLLMProvider(
         model="meta-llama/Llama-3-8B",
         base_url="http://localhost:8000/v1",
         credential=cred,
     )
 
-    assert _FakeAsyncOpenAI.constructed[-1]["api_key"] == "sk-real"
+    assert _FakeAsyncOpenAI.constructed[-1]["api_key"] == "fake-key-real"
 
 
 # ── Factory ────────────────────────────────────────────────────────────
@@ -366,12 +366,12 @@ def test_vllm_factory_resolves_credential_when_declared(
     )
     reg.register_entry(entry)
 
-    store = _FakeStore(secret="sk-from-store")
+    store = _FakeStore(secret="fake-key-from-store")
     provider = reg.build("vllm-auth", credential_store=store)
 
     assert provider is not None
     assert store.resolved == ["vllm_api_key"]
-    assert _FakeAsyncOpenAI.constructed[-1]["api_key"] == "sk-from-store"
+    assert _FakeAsyncOpenAI.constructed[-1]["api_key"] == "fake-key-from-store"
 
 
 def test_vllm_factory_raises_credential_missing_when_secret_none(

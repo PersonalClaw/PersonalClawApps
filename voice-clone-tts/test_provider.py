@@ -131,3 +131,20 @@ class TestEnginePath:
     @pytest.mark.asyncio
     async def test_engine_detected_reports_available(self):
         assert await create_provider().is_available() is True
+
+
+def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
+    """A synthesis names its voice (the text-to-speech binding's model). One that names none is
+    refused with the SDK's sentence before the engine loads, and can_synthesize says it cannot
+    speak for it."""
+    import asyncio
+
+    from apps_testkit.model_wire import (
+        media_adapters,
+        media_refusal_expected,
+        media_refusal_report,
+    )
+
+    adapters = media_adapters(Path(__file__).parent, prov.create_provider)
+    report = asyncio.run(media_refusal_report(adapters))
+    assert report == media_refusal_expected(adapters)

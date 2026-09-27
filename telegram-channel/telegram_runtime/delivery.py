@@ -18,7 +18,9 @@ refuses as "message is not modified" is the text already being there, not a fail
 
 Every text that can outgrow one message goes out through :func:`send_parts`, which
 splits it into parts Telegram accepts and never lets one go missing quietly. An
-approval prompt does too, its buttons on the last part.
+approval prompt does too, its buttons on the last part. The prompt shows what will run,
+as the dashboard's approval card does (:func:`_approval_text`): the tool, its arguments, the
+purpose and what the call can touch, from core's brief.
 
 Core masks every text it hands this handle, keys and exfiltration URLs included, before
 any method here is called, so nothing here masks it again.
@@ -28,9 +30,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from collections import OrderedDict
 from typing import Any, Callable
 
-from personalclaw.sdk.channel import is_tracked_channel, sel
+from personalclaw.sdk.channel import approval_brief_for, is_tracked_channel, sel
 
 from telegram_runtime.api import TelegramAPI, TelegramAPIError
 from telegram_runtime.format import TELEGRAM_MAX_TEXT, render_parts, to_markdown_v2, utf16_len
@@ -40,6 +44,9 @@ logger = logging.getLogger(__name__)
 #: Telegram's code for a request it will not take as sent: for a MarkdownV2 text, the
 #: formatting it cannot parse.
 _BAD_REQUEST = 400
+
+#: Three or more backticks: a run that would end a code block.
+_FENCE_RUN = re.compile(r"`{3,}")
 
 
 async def send_parts(
@@ -102,9 +109,49 @@ async def send_parts(
 # Minimum wall-clock seconds between two edits of the same streamed message. The
 # plan sets the floor at 1.1s; Telegram tolerates roughly one edit/second.
 _EDIT_MIN_INTERVAL = 1.1
-# Approval prompts wait this long for the owner's button press before defaulting
-# to rejected (mirrors Slack's 2h ceiling).
-_APPROVAL_TIMEOUT = 7200
+# How many ended approvals are remembered, so a press on one is answered with how it ended.
+_ENDED_KEPT = 256
+
+# The line a prompt shows once its approval has ended, for each way core or a press ends one
+# (``ChannelDelivery.request_approval``). Expired and cancelled are not a Deny: nobody decided.
+_OUTCOME_LINES = {
+    "approved": "✅ Approved",
+    "rejected": "🚫 Rejected",
+    "expired": "⌛ Nobody answered in time, so it did not run",
+    "cancelled": "⏹️ Cancelled: the work that asked for it stopped first, so it did not run",
+}
+
+# What a press on a prompt whose approval has ended is told, for each ending.
+_LATE_ANSWERS = {
+    "approved": "Already approved. This press changes nothing.",
+    "rejected": "Already rejected. This press changes nothing.",
+    "expired": "Nobody answered in time, so it did not run. This press changes nothing.",
+    "cancelled": (
+        "Cancelled: the work that asked for it stopped first, so it did not run. "
+        "This press changes nothing."
+    ),
+}
+# ...and when this process never saw it end (the prompt is older than the gateway's last start).
+_NO_LONGER_WAITING = "This approval is no longer waiting. This press changes nothing."
+
+# A progress line for each status core gives a call (``ChannelDelivery.append_stream_task``): its
+# mark, and the words for an ending other than done. A call that did not run never reads done.
+_TASK_LINES = {
+    "in_progress": ("⏳", ""),
+    "complete": ("✅", ""),
+    "failed": ("❌", "failed"),
+    "rejected": ("🚫", "rejected"),
+    "expired": ("⌛", "no answer in time, not run"),
+    "cancelled": ("⏹️", "cancelled, not run"),
+}
+
+
+def _task_line(title: str, status: str) -> str:
+    """One call's progress line: its mark, its title, and how it ended when not done. A status
+    this app does not know is shown by its name, and not as done."""
+    mark, words = _TASK_LINES.get(status, ("•", status))
+    line = f"{mark} {title}".strip()
+    return f"{line} ({words})" if words else line
 # callback_data is capped at 64 bytes by Telegram; our tokens are short ids.
 _APPROVE = "approve"
 _DENY = "deny"
@@ -167,6 +214,10 @@ class TelegramDelivery:
         self._streams: dict[str, _StreamState] = {}
         # keyed by "chat_id:message_id" of the prompt message the buttons live on.
         self._pending: dict[str, _PendingApproval] = {}
+        # How each ended approval ended, by its request id, for a press that comes after.
+        self._ended: OrderedDict[str, str] = OrderedDict()
+        # Background closes of prompts whose wait was cancelled, kept until they are sent.
+        self._closing: set[asyncio.Task[None]] = set()
         # monotonic clock is injectable so the throttle test needn't sleep.
         self._now = _monotonic
 
@@ -300,8 +351,7 @@ class TelegramDelivery:
         st = self._streams.get(key)
         if st is None:
             return
-        icon = "✅" if status in ("complete", "completed", "done") else "⏳"
-        st.tasks[task_id] = f"{icon} {title}".strip()
+        st.tasks[task_id] = _task_line(title, status)
         await self._maybe_edit(st, force=False)
 
     async def stop_stream(self, channel: str, stream_ts: str) -> None:
@@ -356,12 +406,14 @@ class TelegramDelivery:
         self, event: Any, *, source: str, parent_session_key: str = "",
         sessions: Any = None, on_prompted: Any = None,
     ) -> bool | None:
-        """Post an Approve/Deny inline keyboard and wait for the owner's press.
+        """Post an Approve/Deny inline keyboard and wait for the approval to end.
 
         Returns approved/rejected, or None when we can't prompt (no owner/chat) so
         the gateway falls back to the dashboard. ``on_prompted(pending)`` lets core
-        race a dashboard prompt against this one — a dashboard click resolves the
-        same future."""
+        race a dashboard prompt against this one: core resolves the same future with how
+        the approval ended wherever it ended, so the wait keeps no timer of its own. Once
+        it ends, the prompt says how and loses its buttons (:meth:`_close`), and so it does
+        when this wait is cancelled."""
         # Resolve the chat to prompt in: the session's linked chat if there is one,
         # else the owner's DM (their user id == their DM chat id).
         chat_id = ""
@@ -376,16 +428,16 @@ class TelegramDelivery:
             return None
 
         request_id = str(getattr(event, "request_id", ""))
-        title = str(getattr(event, "title", ""))
         markup = {
             "inline_keyboard": [[
                 {"text": "✅ Approve", "callback_data": f"{_APPROVE}:{request_id}"},
                 {"text": "🚫 Deny", "callback_data": f"{_DENY}:{request_id}"},
             ]]
         }
-        # Split like a reply, the buttons on the last part: one message of it all was refused
-        # as too long, and the owner was never asked.
-        prompt = f"🔐 [{source}] Approve: {title}?"
+        # What will run, as the dashboard's card shows it. Split like a reply, the buttons on
+        # the last part: one message of it all was refused as too long, and the owner was
+        # never asked.
+        prompt = _approval_text(approval_brief_for(event) or {}, source)
         parts = render_parts(prompt)
         mid = int(await send_parts(self._api, chat_id, prompt, reply_markup=markup) or 0)
         key = f"{chat_id}:{mid}"
@@ -400,22 +452,47 @@ class TelegramDelivery:
                 logger.debug("telegram: on_prompted hook failed", exc_info=True)
 
         try:
-            outcome = await asyncio.wait_for(pending.future, timeout=_APPROVAL_TIMEOUT)
-        except asyncio.TimeoutError:
-            outcome = "rejected"
+            outcome = await pending.future
+        except asyncio.CancelledError:
+            self._close_later(chat_id, mid, parts, request_id, "cancelled")
+            raise
         finally:
             self._pending.pop(key, None)
             self._pending.pop(f"req:{request_id}", None)
 
-        status = "✅ Approved" if outcome == "approved" else "🚫 Rejected"
+        await self._close(chat_id, mid, parts, request_id, outcome)
+        return outcome == "approved"
+
+    async def _close(
+        self, chat_id: str, mid: int, parts: list, request_id: str, outcome: str
+    ) -> None:
+        """Show how the approval ended under what the prompt asked, and take its buttons off (an
+        edit that sends no keyboard removes it). A press after this is answered with *outcome*."""
+        self._ended.pop(request_id, None)
+        self._ended[request_id] = outcome
+        while len(self._ended) > _ENDED_KEPT:
+            self._ended.popitem(last=False)
+        line = _OUTCOME_LINES.get(outcome) or f"Ended: {outcome}"
         try:
             await self._api.edit_message_text(
-                chat_id, mid, to_markdown_v2(_answered(title, parts, status)),
-                parse_mode="MarkdownV2",
+                chat_id, mid, to_markdown_v2(_answered(parts, line)), parse_mode="MarkdownV2",
             )
         except Exception:
             logger.warning("telegram: approval finalize edit failed", exc_info=True)
-        return outcome == "approved"
+
+    def _close_later(
+        self, chat_id: str, mid: int, parts: list, request_id: str, outcome: str
+    ) -> None:
+        """:meth:`_close` for a wait that is being cancelled, on its own so the cancellation is
+        not held up by a call to Telegram."""
+        try:
+            task = asyncio.get_running_loop().create_task(
+                self._close(chat_id, mid, parts, request_id, outcome)
+            )
+        except RuntimeError:
+            return
+        self._closing.add(task)
+        task.add_done_callback(self._closing.discard)
 
     async def resolve_callback(self, cq: dict[str, Any]) -> None:
         """Resolve a pending approval from a ``callback_query`` (button press).
@@ -429,7 +506,11 @@ class TelegramDelivery:
         answer = "Recorded"
         if action in (_APPROVE, _DENY) and request_id:
             pending = self._pending.get(f"req:{request_id}")
-            if pending is not None and not pending.future.done():
+            if pending is None or pending.future.done():
+                # A press after the approval ended: told how it ended, not "Recorded".
+                ended = self._ended.get(request_id, "")
+                answer = _LATE_ANSWERS.get(ended) or _NO_LONGER_WAITING
+            else:
                 presser = str((cq.get("from") or {}).get("id", "") or "")
                 owner = str(self._owner() or "")
                 if owner and presser == owner:
@@ -453,12 +534,32 @@ class TelegramDelivery:
                 logger.debug("telegram: answerCallbackQuery failed", exc_info=True)
 
 
-def _answered(title: str, parts: list, status: str) -> str:
-    """What the prompt's last message says once it is answered, in one message: the prompt with
-    its outcome, or, for a prompt split over several, its last part's text with it, or the
-    outcome alone when that would not fit (the parts above keep the rest)."""
-    text = f"🔐 {title} — {status}" if len(parts) <= 1 else f"{parts[-1].plain} — {status}"
-    return text if len(render_parts(text)) == 1 else f"🔐 {status}"
+def _approval_text(brief: dict, source: str) -> str:
+    """The approval prompt, from core's brief (``approval_brief_for``): the tool, its arguments
+    in a code block, the purpose the runner gave and the summary line (what the call can touch,
+    and its risk). That is what the dashboard's approval card shows; the prompt used to show the
+    tool's name alone, so a command was approved unseen. Every string is already masked."""
+    tool = str(brief.get("tool") or "") or "a tool"
+    lines = [f"🔐 [{source}] Approve `{tool}`?"]
+    arguments = str(brief.get("input") or "")
+    if arguments:
+        lines += ["```", _unfenced(arguments), "```"]
+    lines += [str(brief[k]) for k in ("purpose", "summary") if brief.get(k)]
+    return "\n".join(lines)
+
+
+def _unfenced(text: str) -> str:
+    """*text* with every run of three or more backticks broken by zero-width spaces, so what is
+    shown cannot close the code block it is shown in."""
+    return _FENCE_RUN.sub(lambda m: "\u200b".join(m.group(0)), text)
+
+
+def _answered(parts: list, status: str) -> str:
+    """What the prompt's last message says once it is answered: its own text with the outcome
+    under it, so the chat keeps what was approved; or the outcome alone when that would not fit
+    one message (the parts above keep the rest)."""
+    text = f"{parts[-1].plain}\n{status}" if parts else status
+    return text if len(render_parts(text)) == 1 else status
 
 
 def _monotonic() -> float:

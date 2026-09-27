@@ -1117,7 +1117,7 @@ async def test_a_bad_revision_is_refused_at_the_tool_layer(tmp_path: Path, repo:
 async def test_no_section_content_is_logged(
     provider: SpecBuilderProvider, caplog: pytest.LogCaptureFixture
 ) -> None:
-    secret = "sk-live-do-not-log-this-anywhere"
+    secret = "fake-key-live-do-not-log-this-anywhere"
     await provider.invoke("spec_open", {"title": "One", "spec_id": "one"})
     with caplog.at_level("DEBUG", logger="spec-builder"):
         await provider.invoke(
@@ -1137,14 +1137,14 @@ async def test_no_section_content_is_logged(
 async def test_no_seeded_body_is_logged(
     tmp_path: Path, repo: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    _commit(repo, "creds.md", "token = sk-live-seeded-secret\n", "creds")
+    _commit(repo, "creds.md", "token = fake-key-live-seeded-secret\n", "creds")
     prov = create_provider({"source_repo": str(repo)})
     prov._store_impl = SpecStore(tmp_path / "specs", source_repo=str(repo))
     await prov.invoke("spec_open", {"title": "One", "spec_id": "one"})
     with caplog.at_level("DEBUG", logger="spec-builder"):
         await prov.invoke("spec_seed", {"spec": "one", "path": "creds.md"})
     logged = "\n".join(record.getMessage() for record in caplog.records)
-    assert "sk-live-seeded-secret" not in logged
+    assert "fake-key-live-seeded-secret" not in logged
     assert "creds.md" in logged
 
 

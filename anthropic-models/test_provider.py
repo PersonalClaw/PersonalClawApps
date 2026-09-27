@@ -117,11 +117,11 @@ def test_anthropic_constructor_lazy_imports_sdk(fake_anthropic: types.ModuleType
     """Instantiating ``AnthropicProvider`` triggers the lazy SDK import."""
     from personalclaw.sdk.model import AnthropicProvider
 
-    cred = Credential(name="x", kind="api_key", secret="sk-ant-test", source="env")
+    cred = Credential(name="x", kind="api_key", secret="fake-anthropic-test", source="env")
     provider = AnthropicProvider(model="claude-3-5-sonnet-20241022", credential=cred)
 
     assert provider is not None
-    assert _FakeAsyncAnthropic.constructed[-1]["api_key"] == "sk-ant-test"
+    assert _FakeAsyncAnthropic.constructed[-1]["api_key"] == "fake-anthropic-test"
     # No base_url supplied → SDK uses its default endpoint.
     assert _FakeAsyncAnthropic.constructed[-1]["base_url"] is None
 
@@ -132,7 +132,7 @@ def test_anthropic_forwards_base_url_for_compatible_endpoints(
     """A custom ``base_url`` (anthropic-compatible proxy/gateway) reaches the SDK."""
     from personalclaw.sdk.model import AnthropicProvider
 
-    cred = Credential(name="x", kind="api_key", secret="sk-ant-test", source="env")
+    cred = Credential(name="x", kind="api_key", secret="fake-anthropic-test", source="env")
     provider = AnthropicProvider(
         model="claude-3-5-sonnet-20241022",
         credential=cred,
@@ -164,7 +164,7 @@ def test_anthropic_factory_reads_base_url_from_options(
     )
     reg.register_entry(entry)
 
-    store = _FakeStore(secret="sk-ant-from-store")
+    store = _FakeStore(secret="fake-anthropic-from-store")
     provider = reg.build("anthropic-compat", credential_store=store)
 
     assert provider is not None
@@ -236,12 +236,12 @@ def test_anthropic_factory_resolves_credential_via_store(
     )
     reg.register_entry(entry)
 
-    store = _FakeStore(secret="sk-ant-from-store")
+    store = _FakeStore(secret="fake-anthropic-from-store")
     provider = reg.build("anthropic-default", credential_store=store)
 
     assert provider is not None
     assert store.resolved == ["anthropic_api_key"]
-    assert _FakeAsyncAnthropic.constructed[-1]["api_key"] == "sk-ant-from-store"
+    assert _FakeAsyncAnthropic.constructed[-1]["api_key"] == "fake-anthropic-from-store"
 
 
 def test_anthropic_factory_raises_credential_missing_when_secret_none(
@@ -306,10 +306,10 @@ def test_create_provider_honors_explicit_model(
     """A pinned ``model`` (or ``default_model``) in the config still wins."""
     from provider import create_provider
 
-    pinned = create_provider({"api_key": "sk-ant-test", "model": "claude-sonnet-5"})
+    pinned = create_provider({"api_key": "fake-anthropic-test", "model": "claude-sonnet-5"})
     assert pinned._model == "claude-sonnet-5"
 
-    fallback = create_provider({"api_key": "sk-ant-test", "default_model": "claude-haiku-4-5"})
+    fallback = create_provider({"api_key": "fake-anthropic-test", "default_model": "claude-haiku-4-5"})
     assert fallback._model == "claude-haiku-4-5"
 
 
@@ -376,7 +376,7 @@ async def test_anthropic_stream_translates_text_deltas(
         _message_stop(),
     ]
 
-    cred = Credential(name="x", kind="api_key", secret="sk-ant-test", source="env")
+    cred = Credential(name="x", kind="api_key", secret="fake-anthropic-test", source="env")
     provider = AnthropicProvider(model="claude-3-5-sonnet-20241022", credential=cred)
     provider._client.messages = _FakeMessages(stream_events=events)
 
@@ -407,7 +407,7 @@ async def test_anthropic_stream_translates_tool_use(
         _message_stop(),
     ]
 
-    cred = Credential(name="x", kind="api_key", secret="sk-ant-test", source="env")
+    cred = Credential(name="x", kind="api_key", secret="fake-anthropic-test", source="env")
     provider = AnthropicProvider(model="claude-3-5-sonnet-20241022", credential=cred)
     provider._client.messages = _FakeMessages(stream_events=events)
 
@@ -432,7 +432,7 @@ async def test_anthropic_stream_translates_tool_use(
 async def test_anthropic_shutdown_closes_client(fake_anthropic: types.ModuleType) -> None:
     from personalclaw.sdk.model import AnthropicProvider
 
-    cred = Credential(name="x", kind="api_key", secret="sk-ant-test", source="env")
+    cred = Credential(name="x", kind="api_key", secret="fake-anthropic-test", source="env")
     provider = AnthropicProvider(model="claude-3-5-sonnet-20241022", credential=cred)
 
     await provider.shutdown()
@@ -468,7 +468,7 @@ async def test_a_per_call_temperature_and_output_budget_reach_the_request(
     """best-of-N builds each candidate with a ``temperature`` build kwarg, and core derives a
     per-model ``max_tokens``. The factory dropped both, so core reported every candidate as
     "not sent at its requested temperature" — N paid calls sampling one answer."""
-    provider = _registry_with({"api_key": "sk-ant-test"}).build(
+    provider = _registry_with({"api_key": "fake-anthropic-test"}).build(
         "anthropic-x", temperature=0.9, max_tokens=1234
     )
     assert provider.sampling_temperature == 0.9  # what core's model-call record reads back
@@ -488,13 +488,13 @@ async def test_a_per_call_temperature_and_output_budget_reach_the_request(
 def test_a_configured_max_tokens_wins_over_the_per_call_budget(
     fake_anthropic: types.ModuleType,
 ) -> None:
-    provider = _registry_with({"api_key": "sk-ant-test", "max_tokens": 512}).build(
+    provider = _registry_with({"api_key": "fake-anthropic-test", "max_tokens": 512}).build(
         "anthropic-x", max_tokens=1234
     )
     assert provider._max_tokens == 512
 
 
 def test_no_per_call_temperature_sends_none(fake_anthropic: types.ModuleType) -> None:
-    provider = _registry_with({"api_key": "sk-ant-test"}).build("anthropic-x")
+    provider = _registry_with({"api_key": "fake-anthropic-test"}).build("anthropic-x")
     assert provider.sampling_temperature is None
     assert provider._max_tokens == 4096  # the adapter's long-standing default

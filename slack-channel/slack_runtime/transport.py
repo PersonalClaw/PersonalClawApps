@@ -44,6 +44,7 @@ from personalclaw.sdk.channel import (
 from slack_runtime.client import RealSlackClient
 from slack_runtime.delivery import SlackDelivery
 from slack_runtime.events import SeenCache, init_socket_mode
+from slack_runtime.handler import get_owner_id
 from slack_runtime.interactions import init as init_interactions
 from slack_runtime.runtime import SlackRuntime
 from slack_runtime.settings import LiveConfig, adopt_owner_id, load_tokens
@@ -193,9 +194,10 @@ class SlackTransport(ChannelTransportProvider):
         # Register outbound delivery on the gateway + the dashboard. Core delivers
         # through this ONE provider-agnostic ChannelDelivery handle (text, attachments,
         # streaming, identity lookups, approvals) — it never sees the Slack client. Filed under
-        # "slack", the name core reads this channel's owner by (``owner_id_for("slack")``, the
-        # owner the runtime holds).
-        delivery = SlackDelivery(runtime.slack, runtime._owner_id)
+        # "slack", the name core reads this channel's owner by (``owner_id_for("slack")``). The
+        # delivery reads the owner each time it asks (``get_owner_id``), so one claimed by the
+        # first person to message a fresh install is the one it prompts, before any restart.
+        delivery = SlackDelivery(runtime.slack, get_owner_id)
         if hasattr(services, "register_channel_delivery"):
             services.register_channel_delivery(delivery, provider="slack")
         if getattr(services, "dashboard_state", None) is not None:

@@ -62,13 +62,13 @@ def _patch_fetch(monkeypatch, response):
 
 def test_catalog_registered():
     assert get_default_registry().catalog_of("anthropic") is not None
-    cat = prov.create_catalog({"api_key": "sk-ant"})
+    cat = prov.create_catalog({"api_key": "fake-key-ant"})
     assert isinstance(cat, ModelCatalog)
     assert not isinstance(cat, ModelManager)  # hosted API, no local management
 
 
 def test_lists_current_claude_models():
-    cat = prov.create_catalog({"api_key": "sk-ant"})
+    cat = prov.create_catalog({"api_key": "fake-key-ant"})
     models = _run(cat.list_models())
     ids = {m.id for m in models}
     # Current family surfaces (the picker must offer today's models) — the list is
@@ -104,7 +104,7 @@ def test_connection_rejects_a_key_the_vendor_rejects(monkeypatch):
     This is the regression. ``test_connection`` used to return ``ok=True`` from key
     PRESENCE alone, which core renders as ``status: "connected"`` and the UI paints as
     "Connected — N model(s) available". Measured on a fresh container install with
-    `api_key="sk-ant-deliberately-invalid-000"`: Settings → Providers said
+    `api_key="fake-anthropic-deliberately-invalid-000"`: Settings → Providers said
     "Connected — 10 model(s) available", first-run setup marked the provider "Ready"
     and advanced — while the same gateway logged
     `anthropic.AuthenticationError: Error code: 401 … 'API key is invalid.'`.
@@ -113,19 +113,19 @@ def test_connection_rejects_a_key_the_vendor_rejects(monkeypatch):
         monkeypatch,
         _FakeFetchResponse(401, {"error": {"type": "authentication_error", "message": "API key is invalid."}}),
     )
-    result = _run(prov.create_catalog({"api_key": "sk-ant-bad"}).test_connection())
+    result = _run(prov.create_catalog({"api_key": "fake-anthropic-bad"}).test_connection())
     assert result.ok is False, "a key the vendor rejects was reported as connected"
     assert "key" in result.detail.lower()
     assert "Settings" in result.detail  # names where to fix it
     assert calls, "test_connection made no request at all — it cannot have measured anything"
     assert calls[0][0].endswith("/v1/models")
-    assert calls[0][1].get("x-api-key") == "sk-ant-bad", "the probe was not authenticated"
+    assert calls[0][1].get("x-api-key") == "fake-anthropic-bad", "the probe was not authenticated"
     assert calls[0][1].get("anthropic-version")
 
 
 def test_connection_ok_only_after_a_real_authenticated_200(monkeypatch):
     calls = _patch_fetch(monkeypatch, _FakeFetchResponse(200, {"data": [{"id": "claude-x"}]}))
-    result = _run(prov.create_catalog({"api_key": "sk-ant-good"}).test_connection())
+    result = _run(prov.create_catalog({"api_key": "fake-anthropic-good"}).test_connection())
     assert result.ok is True
     # The count reported is the CURATED picker list, not the endpoint's own count.
     assert result.model_count == len(prov._ANTHROPIC_MODELS)

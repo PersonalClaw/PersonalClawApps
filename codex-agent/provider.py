@@ -54,6 +54,15 @@ _ACP_NPM_PKG = "@agentclientprotocol/codex-acp"
 _CODEX_PATH_ENV = "CODEX_PATH"
 _CODEX_BIN_NAMES = ["codex"]
 
+# ── what picks the provider ─────────────────────────────────────────────────
+#: The variables the Codex CLI reads to pick its provider and model: ``CODEX_HOME``, the folder
+#: whose ``config.toml`` names them. An agent CLI gets no variable of the gateway's it is not
+#: handed, so it is declared by name and core passes it when the gateway's environment sets it.
+#: It is a folder, not a credential: Codex keeps its sign-in there, and core refuses a
+#: credential-shaped name anyway.
+PROVIDER_ENV: tuple[str, ...] = ("CODEX_HOME",)
+
+
 # ── model selection ─────────────────────────────────────────────────────────
 # No hardcoded model list or default id (de-hardcode directive). The codex-acp
 # adapter advertises the LIVE model set via the ``session/new`` handshake, so the
@@ -162,6 +171,7 @@ def create_provider(config: dict | None = None):
         command=command,
         model=model,
         env=env,
+        env_passthrough=list(PROVIDER_ENV),
         extension=EXTENSION,
         login_command=login_command(),
         # codex-acp is a thin protocol shim — the actual model turn is delegated

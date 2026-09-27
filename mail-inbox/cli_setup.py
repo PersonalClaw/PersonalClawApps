@@ -134,7 +134,7 @@ def _setup_outbound(ctx: SetupContext) -> None:
     )
     port_raw = ctx.input(f"  SMTP port [{cur.get('smtp_port', 587)}]: ").strip()
     security = (
-        ctx.input(f"  TLS mode (starttls/ssl/plain) [{cur.get('smtp_security', 'starttls')}]: ")
+        ctx.input(f"  TLS mode (starttls/ssl) [{cur.get('smtp_security', 'starttls')}]: ")
         .strip()
         .lower()
         or str(cur.get("smtp_security", "starttls"))

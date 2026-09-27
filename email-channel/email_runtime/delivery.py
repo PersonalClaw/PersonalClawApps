@@ -36,11 +36,19 @@ import asyncio
 import json
 import logging
 import secrets
+from collections import OrderedDict
 from email.message import EmailMessage
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import quote
 
-from personalclaw.sdk.channel import atomic_write, is_tracked_channel
+from personalclaw.sdk.channel import (
+    AppConfig,
+    approval_brief_for,
+    atomic_write,
+    is_tracked_channel,
+    owner_id_for,
+    sel,
+)
 from personalclaw.sdk.util import app_data_dir
 
 from email_runtime.mime import build_outbound, build_references, reply_subject
@@ -49,18 +57,53 @@ from email_runtime.smtp_client import SmtpError, SmtpSender
 logger = logging.getLogger(__name__)
 
 _APP = "email-channel"
+#: The channel's provider key: core keeps this channel's owner under it (``owner_id_for``).
+_PROVIDER = "email"
 _THREADS_FILE = "threads.json"
 #: Bound the persisted thread map so a long-lived mailbox can't grow it without limit.
 #: Oldest entries age out; a thread that falls out simply starts a fresh chain.
 MAX_THREADS = 500
-#: Approval prompts wait this long for the owner's reply mail before defaulting to
-#: rejected (mirrors Slack/Telegram/Discord's 2h ceiling). Email is slower than a button
-#: press, but an approval that outlives the operation it guards is worse than a denial.
-_APPROVAL_TIMEOUT = 7200
 #: Reply-token vocabulary. The owner replies with either word plus the token.
 APPROVE_WORD = "APPROVE"
 DENY_WORD = "DENY"
 _TOKEN_BYTES = 4  # 8 hex chars — short enough to retype, wide enough not to collide
+#: How many ended approvals are remembered, so a reply to one is answered with how it ended.
+_ENDED_KEPT = 256
+
+#: What a reply to an approval that has ended is told, for each ending
+#: (``ChannelDelivery.request_approval``). Expired and cancelled are not a Deny: nobody decided.
+_LATE_ANSWERS = {
+    "approved": "This approval was already approved. Your reply changes nothing.",
+    "rejected": "This approval was already rejected. Your reply changes nothing.",
+    "expired": (
+        "Nobody answered this approval in time, so it did not run. Your reply changes nothing."
+    ),
+    "cancelled": (
+        "This approval was cancelled: the work that asked for it stopped first, so it did not "
+        "run. Your reply changes nothing."
+    ),
+}
+
+
+def _how_long(minutes: int) -> str:
+    """*minutes* in the unit a person says it in: 2 hours, 90 minutes, 7 days."""
+    if minutes >= 1440 and minutes % 1440 == 0:
+        n, unit = minutes // 1440, "day"
+    elif minutes >= 60 and minutes % 60 == 0:
+        n, unit = minutes // 60, "hour"
+    else:
+        n, unit = minutes, "minute"
+    return f"{n} {unit}{'' if n == 1 else 's'}"
+
+
+def _approval_window() -> str:
+    """How long PersonalClaw waits for an answer at most (Settings → Approval wait), in words. It
+    is what the approval mail says, since this channel keeps no clock of its own. An approval that
+    subagent or workflow work asks for can end sooner, with that work's own time limit."""
+    try:
+        return _how_long(int(AppConfig.load().agent.approval_timeout_minutes))
+    except Exception:  # noqa: BLE001 - an unreadable config leaves the sentence without a length
+        return ""
 
 
 class ThreadState:
@@ -178,6 +221,16 @@ class _PendingApproval:
         self.channel = channel
 
 
+class _EndedApproval(NamedTuple):
+    """How an approval asked by mail ended, and the thread it was asked in."""
+
+    outcome: str
+    request_id: str
+    channel: str
+    #: the thread's root id: a reply to the prompt, and the answer to it, belong to it
+    thread: str
+
+
 class EmailDelivery:
     """Renders + delivers gateway results over SMTP. Implements ChannelDelivery."""
 
@@ -192,6 +245,11 @@ class EmailDelivery:
         # keyed by the uppercase reply token; the transport matches an inbound body
         # against these to resolve an approval.
         self._pending: dict[str, _PendingApproval] = {}
+        # How each ended approval ended, by its token, with where it was asked, so a reply to it
+        # is answered with that instead of becoming a message to the agent.
+        self._ended: OrderedDict[str, _EndedApproval] = OrderedDict()
+        # Background sends of those answers, kept until they are sent.
+        self._answering: set[asyncio.Task[Any]] = set()
         #: Why the most recent send failed, or "" when it went out (or none was tried). The
         #: channel's health reads it: SMTP holds no connection, so the last send IS its state.
         self.send_failure = ""
@@ -446,41 +504,63 @@ class EmailDelivery:
 
     # ── approval via reply token (C3: SHOULD) ──
 
+    def _owner_address(self) -> str:
+        """The owner's own address, or ``""`` when this channel knows none.
+
+        Core's owner id for this channel, read each time so an owner set after start is the one
+        asked, when it is an address. Never the mailbox's own address: mail from it is our own
+        coming back and is dropped unread, so a prompt there asks nobody."""
+        addr = str(owner_id_for(_PROVIDER) or "").strip().lower()
+        if "@" not in addr or addr == (self._from or "").strip().lower():
+            return ""
+        return addr
+
     async def request_approval(
         self, event: Any, *, source: str, parent_session_key: str = "",
         sessions: Any = None, on_prompted: Any = None,
     ) -> bool | None:
         """Mail the owner an approve/deny prompt and wait for their reply.
 
-        Returns approved/rejected, or ``None`` when we can't prompt (no address) so the
-        gateway falls back to the dashboard. The prompt carries a random token; the
-        transport resolves this future when an inbound message from an ALLOWED sender
-        contains ``APPROVE <token>`` or ``DENY <token>`` (:meth:`resolve_reply_token`).
-        ``on_prompted(pending)`` lets core race a dashboard prompt against this one."""
-        channel = ""
-        thread_ts = ""
+        Only the owner is asked, and only the owner answers (:meth:`resolve_reply_token`): the
+        token IS the answer, so the prompt goes to the owner's own address and nowhere else. A
+        chat linked to a thread with the owner is asked in that thread. One with anyone else,
+        a paired correspondent included, is asked in a new mail to the owner. Returns
+        approved/rejected, or ``None`` when there is no owner address to ask (the gateway then
+        falls back to the dashboard). ``on_prompted(pending)`` lets core race a dashboard
+        prompt against this one: core resolves the same future with how the approval ended
+        wherever it ended, so the wait keeps no timer of its own, and the mail says how long
+        PersonalClaw waits. A reply after it ended is answered with how it ended."""
+        owner = self._owner_address()
+        if not owner:
+            return None
+        channel, thread_ts = owner, ""
         if parent_session_key and sessions is not None:
             try:
-                thread_ts, channel = sessions.get_channel_link(parent_session_key)
+                linked_thread, linked = sessions.get_channel_link(parent_session_key)
             except Exception:
-                thread_ts, channel = "", ""
-        channel = channel or self._owner_id
-        if not channel or "@" not in channel:
-            return None
+                linked_thread, linked = "", ""
+            if str(linked or "").strip().lower() == owner:
+                channel, thread_ts = str(linked), str(linked_thread or "")
 
         request_id = str(getattr(event, "request_id", ""))
-        title = str(getattr(event, "title", ""))
+        brief = approval_brief_for(event) or {}
+        title = str(brief.get("tool") or "") or "a tool"
         token = secrets.token_hex(_TOKEN_BYTES).upper()
         pending = _PendingApproval(request_id, token, channel)
         self._pending[token] = pending
 
+        window = _approval_window()
         body = (
-            f"PersonalClaw needs your approval for a {source} action:\n\n"
-            f"    {title}\n\n"
-            f"Reply to this message with exactly one of:\n"
+            _approval_text(brief, source)
+            + "\n\nReply to this message with exactly one of:\n"
             f"    {APPROVE_WORD} {token}\n"
             f"    {DENY_WORD} {token}\n\n"
-            f"No reply within {_APPROVAL_TIMEOUT // 3600}h counts as a denial."
+            + (
+                f"PersonalClaw waits up to {window} for your answer. If nobody answers by "
+                "then, it does not run."
+                if window
+                else "If nobody answers before PersonalClaw stops waiting, it does not run."
+            )
         )
         sent = await self._deliver(
             channel, thread_ts or "", f"[PersonalClaw] Approval needed: {title}"[:200], body
@@ -495,22 +575,61 @@ class EmailDelivery:
             except Exception:
                 logger.debug("email: on_prompted hook failed", exc_info=True)
 
+        outcome = "cancelled"
         try:
-            outcome = await asyncio.wait_for(pending.future, timeout=_APPROVAL_TIMEOUT)
-        except asyncio.TimeoutError:
-            outcome = "rejected"
+            outcome = await pending.future
         finally:
             self._pending.pop(token, None)
+            self._ended[token] = _EndedApproval(outcome, request_id, channel, thread_ts or sent)
+            while len(self._ended) > _ENDED_KEPT:
+                self._ended.popitem(last=False)
         return outcome == "approved"
 
-    def resolve_reply_token(self, text: str) -> bool:
-        """Resolve a pending approval from a reply body. Returns whether one matched.
+    def _answer_late(self, ended: _EndedApproval) -> None:
+        """Mail the owner how the approval they replied to ended, in its thread. Sent on its own,
+        so the inbound poll is not held up by the send."""
+        text = _LATE_ANSWERS.get(ended.outcome) or (
+            "This approval is no longer waiting. Your reply changes nothing."
+        )
+        try:
+            task = asyncio.get_running_loop().create_task(
+                self._deliver(ended.channel, ended.thread, "", text)
+            )
+        except RuntimeError:
+            return
+        self._answering.add(task)
+        task.add_done_callback(self._answering.discard)
 
-        The token must appear alongside the verb, so an unrelated mail that happens to
-        contain the word "approve" cannot decide anything. Called by the transport ONLY
-        for a sender the trust seam already allowed — an approval is the highest-value
-        thing a channel can carry, so it never rides an unauthenticated message."""
+    @staticmethod
+    def _refuse(who: str, request_id: str) -> None:
+        """A reply to the owner's approval from someone else: it decides nothing, and the SEL
+        keeps the attempt."""
+        logger.warning("email: refused an approval reply from %s, not the owner", who)
+        sel().log_api_access(
+            caller=f"email:{who or 'unknown'}",
+            operation="email.approval_reply",
+            outcome="denied",
+            source="email",
+            resources=request_id,
+            error="not the owner",
+        )
+
+    def resolve_reply_token(self, text: str, sender: str) -> bool:
+        """Answer a pending approval from a reply body. Returns whether the body was an answer.
+
+        A reply to an approval that has already ended is an answer too, one that decides nothing:
+        the owner is mailed how it ended, and it does not reach the agent as a new message.
+
+        Only the owner answers. A reply from any other address, an allowed correspondent's
+        included, decides nothing: it is logged to the SEL and still returns True, because an
+        answer is not a new turn. The token must appear alongside the verb, so an unrelated
+        mail that happens to contain the word "approve" cannot decide anything. Called by the
+        transport ONLY for a sender the trust seam already allowed — an approval is the
+        highest-value thing a channel can carry, so it never rides an unauthenticated
+        message."""
         upper = (text or "").upper()
+        who = str(sender or "").strip().lower()
+        is_owner = bool(who) and who == self._owner_address()
         for token, pending in list(self._pending.items()):
             if token not in upper:
                 continue
@@ -518,12 +637,51 @@ class EmailDelivery:
             denied = f"{DENY_WORD} {token}" in upper or f"{DENY_WORD}{token}" in upper
             if not approved and not denied:
                 continue
+            if not is_owner:
+                self._refuse(who, pending.request_id)
+                return True
             if not pending.future.done():
                 # An explicit DENY wins over a body that somehow contains both — a
                 # request to stop must never be read as consent.
                 pending.future.set_result("rejected" if denied else "approved")
             return True
+        for token, ended in list(self._ended.items()):
+            if not _answers(upper, token):
+                continue
+            # A reply to an approval that has ended decides nothing, and it is not a new message
+            # to the agent either: the owner is told how it ended.
+            if not is_owner:
+                self._refuse(who, ended.request_id)
+                return True
+            self._answer_late(ended)
+            return True
         return False
+
+
+def _answers(upper: str, token: str) -> bool:
+    """Whether the uppercased body *upper* answers the approval *token* (either word with it)."""
+    return any(
+        f"{word} {token}" in upper or f"{word}{token}" in upper
+        for word in (APPROVE_WORD, DENY_WORD)
+    )
+
+
+def _approval_text(brief: dict, source: str) -> str:
+    """What the approval mail says will run, from core's brief (``approval_brief_for``): the
+    tool, its arguments, the purpose the runner gave and the summary line (what the call can
+    touch, and its risk), which is what the dashboard's approval card shows. It used to name the
+    tool alone. Every string is already masked; the arguments are indented, as a mail client
+    shows code."""
+    tool = str(brief.get("tool") or "") or "a tool"
+    parts = [f"PersonalClaw needs your approval for a {source} action: {tool}"]
+    arguments = str(brief.get("input") or "")
+    if arguments:
+        indented = "\n".join(f"    {line}" for line in arguments.split("\n"))
+        parts.append(f"What will run:\n\n{indented}")
+    extra = [str(brief[k]) for k in ("purpose", "summary") if brief.get(k)]
+    if extra:
+        parts.append("\n".join(extra))
+    return "\n\n".join(parts)
 
 
 def _read_bytes(path: str) -> bytes:

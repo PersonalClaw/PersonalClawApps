@@ -47,8 +47,8 @@ def test_connected_derives_from_shared_creds(monkeypatch):
     used — this test's actual subject — is unchanged; ``tests/
     test_dashboard_settings_are_read.py`` covers the inbound-state dimension.
     """
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-shared")
-    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-shared")
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "fake-bot-token-shared")
+    monkeypatch.setenv("SLACK_APP_TOKEN", "fake-app-token-shared")
     t = SlackTransport({})  # empty instance config — tokens only in the environment
     assert t.connected is True
     assert asyncio.run(t.health())["state"] != "offline"
@@ -64,9 +64,9 @@ def test_offline_when_no_tokens_anywhere(monkeypatch):
 
 def test_instance_config_overrides_shared(monkeypatch):
     """A user-supplied per-instance token wins over the shared store."""
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-shared")
-    t = SlackTransport({"bot_token": "xoxb-instance"})
-    assert t._tokens()[0] == "xoxb-instance"
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "fake-bot-token-shared")
+    t = SlackTransport({"bot_token": "fake-bot-token-instance"})
+    assert t._tokens()[0] == "fake-bot-token-instance"
 
 
 def test_slack_info_exposes_caps():

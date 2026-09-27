@@ -69,6 +69,29 @@ _CLAUDE_BIN_NAMES = ["claude"]
 # default — deferring to the tool rather than pinning a name that ages out.
 
 
+# ── what picks the provider ─────────────────────────────────────────────────
+#: The variables Claude Code reads to run on Amazon Bedrock or Google Vertex AI, in which region
+#: and with which models. An agent CLI gets no variable of the gateway's it is not handed, so
+#: these are declared by name and core passes each one set in the gateway's environment. None of
+#: them is a credential: Claude Code takes its keys from its own sign-in, or from the AWS or
+#: Google credential files its profile names, and core refuses a credential-shaped name anyway.
+PROVIDER_ENV: tuple[str, ...] = (
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "AWS_PROFILE",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_SMALL_FAST_MODEL",
+    "ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "CLOUD_ML_REGION",
+    "ANTHROPIC_VERTEX_PROJECT_ID",
+)
+
+
 # ── config isolation (E12 §6 — Claude-only security hardening) ──────────────
 #
 # The spawned Claude gets a config root of its own that starts EMPTY. It used to be seeded from
@@ -229,6 +252,7 @@ def create_provider(config: dict | None = None):
         command=command,
         model=model,
         env=env,
+        env_passthrough=list(PROVIDER_ENV),
         extension=EXTENSION,
         login_command=login_command(isolated=isolated),
         # claude-agent-acp delegates the model turn to the separate Claude Code

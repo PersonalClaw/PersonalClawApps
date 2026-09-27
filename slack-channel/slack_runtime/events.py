@@ -225,10 +225,11 @@ def _build_help_text(cmd_name: str = "personalclaw") -> str:
 async def _handle_dashboard(
     orch: "GatewayServices", caller_id: str, args: str, respond: Callable
 ) -> None:
-    """Generate presigned dashboard link and DM to caller.
+    """Generate presigned dashboard link and DM it to the caller, when the caller is the owner.
 
-    A lifetime longer than the gateway allows is answered with the gateway's own sentence
-    (``send_dashboard_link`` relays ``generate_token``'s refusal), never quietly shortened.
+    Anyone else, and a lifetime longer than the gateway allows, is answered with core's own
+    sentence (``send_dashboard_link`` relays ``owner_sign_in_token``'s refusal), and nothing is
+    minted or sent; a lifetime is never quietly shortened.
     """
     from personalclaw.sdk.channel import LINK_WINDOW_SECS
     from slack_runtime.blocks import dashboard_link_block
@@ -1177,7 +1178,9 @@ async def _handle_slash(orch: "GatewayServices", payload: dict) -> None:
         resources=cmd_text,
     )
 
-    if not (orch.slack and orch._owner_id):
+    # The owner as it is now: a fresh install's owner is claimed by the first person to message
+    # the bot, after this runtime read it at its start.
+    if not (orch.slack and get_owner_id()):
         asyncio.create_task(_respond("⚠️ Owner not configured."))
         return
 
@@ -1207,7 +1210,7 @@ async def _handle_slash(orch: "GatewayServices", payload: dict) -> None:
         channel_id = channel_match.group(1)
         channel_name = channel_match.group(2) or "Secret"
         asyncio.create_task(
-            prompt_track_channel(orch.slack, orch._owner_id, channel_id, channel_name)
+            prompt_track_channel(orch.slack, get_owner_id(), channel_id, channel_name)
         )
         asyncio.create_task(_respond(f"📨 Track request sent for #{channel_name or channel_id}."))
         return

@@ -9,6 +9,7 @@ capability, exactly like faster-whisper is one STT provider (mirrors its app sha
 from __future__ import annotations
 
 import asyncio
+import logging
 import tarfile
 import urllib.request
 from pathlib import Path
@@ -21,7 +22,10 @@ from personalclaw.sdk.diarization import (
     SpeakerTurn,
     ensure_ffmpeg_in_path,
 )
+from personalclaw.sdk.model import ProviderResolutionError, require_model
 from personalclaw.sdk.util import config_dir
+
+logger = logging.getLogger(__name__)
 
 # The catalog model id (the binding ref is ``diarization-onnx:<this>``). The real weights are
 # a pyannote-converted ONNX segmentation model + a 3D-Speaker embedding model — the documented
@@ -140,6 +144,14 @@ class OnnxDiarizationProvider(DiarizationProvider, LocalModelProvider):
 
     async def diarize(self, audio_path: str, *, model: str = "", num_speakers: int | None = None,
                       min_speakers: int | None = None, max_speakers: int | None = None):
+        # Like every media call, a diarization names its model (the diarization binding in
+        # Settings → Models), and one that names none is refused before the model loads. It
+        # used to run with this app's one model in its place.
+        try:
+            require_model(model)
+        except ProviderResolutionError as exc:
+            logger.warning("diarization-onnx refused: %s", exc)
+            return None
         ensure_ffmpeg_in_path()
         maxs = max_speakers or num_speakers or (self._config.get("max_speakers") or None)
 

@@ -18,7 +18,9 @@ vendor-specific-in-bundles-only rule):
   (claude-code's ``claude-agent-acp``). There is no adapter package to resolve or
   pin, and the binary *is* the engine, so no ``requires_executable`` is declared;
 * auth is Gemini CLI's own — Google OAuth on first interactive run, or a
-  ``GEMINI_API_KEY`` in the environment. PersonalClaw stores no key.
+  ``GEMINI_API_KEY`` in the gateway's environment that the owner passes through to it
+  by name (``sandbox.env_passthrough``: an agent CLI gets no other variable of the
+  gateway's). PersonalClaw stores no key.
 
 The binary is absent on a machine that has never installed Gemini CLI, so the
 provider registers nothing and probes as unavailable there rather than erroring.
@@ -49,6 +51,21 @@ _BIN_ENV = "GEMINI_CLI_EXECUTABLE"
 _BIN_NAMES = ["gemini"]
 # Gemini CLI enters ACP stdio-protocol mode via a FLAG, not a subcommand.
 _ACP_FLAG = ["--experimental-acp"]
+
+
+#: The variables Gemini CLI reads to pick its provider, project, region and model: Vertex AI or
+#: Code Assist instead of the Gemini API, the Google Cloud project and location, and the model.
+#: An agent CLI gets no variable of the gateway's it is not handed, so these are declared by name
+#: and core passes each one set in the gateway's environment. None is a credential: Gemini CLI
+#: takes its keys from its own sign-in or Google's credential files, and a ``GEMINI_API_KEY`` is
+#: the owner's to pass through by name (``sandbox.env_passthrough``).
+PROVIDER_ENV: tuple[str, ...] = (
+    "GOOGLE_GENAI_USE_VERTEXAI",
+    "GOOGLE_GENAI_USE_GCA",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
+    "GEMINI_MODEL",
+)
 
 
 def resolve_command() -> list[str] | None:
@@ -97,8 +114,9 @@ def login_command(command: list[str] | None = None) -> list[str]:
     picker (Google OAuth / Gemini API key / Vertex AI) and ``/auth`` re-runs it — so
     the suggestion is simply the resolved binary with the ACP flag stripped, which
     lands the user in that picker. There is no ``gemini login`` subcommand to
-    pre-type. The terminal is freeform, so a user preferring a key can instead
-    export ``GEMINI_API_KEY`` there; PersonalClaw stores no key either way.
+    pre-type. A user preferring a key sets ``GEMINI_API_KEY`` in the gateway's
+    environment and passes it through by name (``sandbox.env_passthrough``); exporting
+    it in this terminal reaches only the terminal. PersonalClaw stores no key either way.
     """
     argv = command if command is not None else resolve_command()
     binary = argv[0] if argv else "gemini"
@@ -126,6 +144,7 @@ def create_provider(config: dict | None = None):
         dialect=DIALECT,
         command=command,
         model=model,
+        env_passthrough=list(PROVIDER_ENV),
         extension=EXTENSION,
         login_command=login_command(command),
     )

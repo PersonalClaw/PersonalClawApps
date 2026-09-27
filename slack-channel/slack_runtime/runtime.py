@@ -45,7 +45,9 @@ class SlackRuntime:
 
         creds = cfg.load_credentials()
         # Slack's OWN owner: a member id stored for this channel. The one shared key every
-        # channel used to write could hold another platform's user id.
+        # channel used to write could hold another platform's user id. This is the owner at
+        # start, which seeds the handler's (`set_owner_id`); a first-contact claim changes that one
+        # alone, so after start the owner is `handler.get_owner_id()`, never this copy.
         self._owner_id: str = owner_id_for("slack")
 
         # Slack behavioral config comes from the app's OWN store (SlackSettings) —

@@ -17,7 +17,7 @@ from slack_sdk.errors import SlackApiError
 
 from slack_runtime.transport import SlackTransport
 
-TOKENS = ("xoxb-saved-bot-token", "xapp-1-saved-app-token")
+TOKENS = ("fake-bot-token-saved-bot-token", "fake-app-token-1")
 
 
 class _Socket:
@@ -79,7 +79,7 @@ async def test_a_connected_socket_reads_ready():
 @pytest.mark.asyncio
 async def test_newer_tokens_over_a_dropped_socket_do_not_claim_it_is_connected():
     transport = _started(_Socket(connected=False))
-    transport._inbound_tokens = ("xoxb-older-bot-token", TOKENS[1])
+    transport._inbound_tokens = ("fake-bot-token-older-bot-token", TOKENS[1])
 
     health = await transport.health()
 

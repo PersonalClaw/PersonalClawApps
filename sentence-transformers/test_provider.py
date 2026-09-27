@@ -137,3 +137,19 @@ def test_an_embedding_that_names_no_model_is_refused_and_loads_nothing(monkeypat
     assert _run(provider.embed_batch(["a heron", "a kestrel"])) == [[], []]
     assert loaded == []
 
+
+
+def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
+    """An embedding names its model (the Embedding binding). Both calls that name none are
+    refused with the SDK's sentence before a model loads."""
+    from pathlib import Path
+
+    from apps_testkit.model_wire import (
+        media_adapters,
+        media_refusal_expected,
+        media_refusal_report,
+    )
+
+    adapters = media_adapters(Path(__file__).parent, prov.create_provider)
+    report = asyncio.run(media_refusal_report(adapters))
+    assert report == media_refusal_expected(adapters)
