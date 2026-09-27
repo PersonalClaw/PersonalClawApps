@@ -3298,13 +3298,14 @@ def _handle_cron_command(
                 last = " ✓"
             elif view.get("last_status") in ("error", "failure", "timeout"):
                 last = " ❌"
-            safe_msg, _ = redact_credentials(
-                redact_exfiltration_urls(str(view.get("message") or ""))[0]
-            )
+            # The row arrives masked: core masks every field of it that holds text someone wrote
+            # (`schedule_view.MASKED_FIELDS`), so the prompt reads here as it does on the
+            # Automations page, and is cut short only after it was masked.
+            message = str(view.get("message") or "")
             next_part = _relative_next_run(view.get("next_run_ts"), now)
             lines.append(
                 f"{status} `{trigger.id}` | `{describe_cadence(trigger)}` "
-                f"| {safe_msg[:50]}{last}{next_part}"
+                f"| {message[:50]}{last}{next_part}"
             )
         return "\n".join(lines)
 
