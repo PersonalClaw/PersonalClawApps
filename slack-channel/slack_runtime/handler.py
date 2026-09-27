@@ -1224,7 +1224,12 @@ async def _handle_slash_command(
                 return ""
             ttl = parsed
 
-        url = await send_dashboard_link(slack, user_id, ttl)
+        try:
+            url = await send_dashboard_link(slack, user_id, ttl)
+        except ValueError as exc:
+            # Longer than the gateway lets a sign-in last: its own sentence says so, and why.
+            await slack.post_message(channel, f"❌ {exc}", reply_ts)
+            return ""
         if url:
             await slack.post_message(channel, "🔗 Dashboard link sent via DM.", reply_ts)
         else:
