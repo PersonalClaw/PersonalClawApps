@@ -16,7 +16,7 @@ import json
 
 import pytest
 
-from personalclaw.sdk.channel import ProviderSettings
+from personalclaw.sdk.channel import ProviderSettings, owner_id_credential
 
 from email_runtime.delivery import (
     APPROVE_WORD,
@@ -30,6 +30,8 @@ from _fakes import FakeSmtpServer, build_message
 
 AGENT = "agent@example.com"
 BOB = "bob@example.com"
+#: The owner's own address: this channel's owner id, the one address an approval goes to.
+OWNER = "me@example.com"
 
 #: A key for the masking assertions, ASSEMBLED AT RUNTIME. Written as a literal it trips
 #: secret scanners (measured — one flagged this file), which costs a real review cycle over a
@@ -40,11 +42,18 @@ TAIL = "A" * 20 + "B" * 20 + "C" * 15
 SECRET = "sk-" + "ant-api03-" + TAIL
 
 
+def _owner_is(monkeypatch, address: str) -> None:
+    """This channel's owner id, under the key core reads every channel's by (``owner_id_for``).
+    Set in the environment, which core reads first, so it ends with the test."""
+    monkeypatch.setenv(owner_id_credential("email"), address)
+
+
 @pytest.fixture
-def wired(tmp_path):
-    """A delivery over a fake SMTP sink, with thread state in a tmp file."""
+def wired(tmp_path, monkeypatch):
+    """A delivery over a fake SMTP sink, with thread state in a tmp file and an owner."""
     smtp = FakeSmtpServer()
     store = ThreadStore(path_provider=lambda: tmp_path / "threads.json")
+    _owner_is(monkeypatch, OWNER)
     delivery = EmailDelivery(smtp, AGENT, owner_id=AGENT, threads=store)
     return delivery, smtp, store
 
@@ -444,7 +453,7 @@ class TestApprovalReplyToken:
         assert APPROVE_WORD in body and DENY_WORD in body
         token = next(iter(delivery._pending))
         assert token in body
-        assert delivery.resolve_reply_token(f"{APPROVE_WORD} {token}") is True
+        assert delivery.resolve_reply_token(f"{APPROVE_WORD} {token}", OWNER) is True
         assert await asyncio.wait_for(task, timeout=1.0) is True
 
     @pytest.mark.asyncio
@@ -453,7 +462,7 @@ class TestApprovalReplyToken:
         task = asyncio.ensure_future(delivery.request_approval(self._Event(), source="tool"))
         await asyncio.sleep(0)
         token = next(iter(delivery._pending))
-        assert delivery.resolve_reply_token(f"please {DENY_WORD} {token} thanks") is True
+        assert delivery.resolve_reply_token(f"please {DENY_WORD} {token} thanks", OWNER) is True
         assert await asyncio.wait_for(task, timeout=1.0) is False
 
     @pytest.mark.asyncio
@@ -463,10 +472,10 @@ class TestApprovalReplyToken:
         delivery, smtp, _ = wired
         task = asyncio.ensure_future(delivery.request_approval(self._Event(), source="tool"))
         await asyncio.sleep(0)
-        assert delivery.resolve_reply_token("sure, approve it") is False
+        assert delivery.resolve_reply_token("sure, approve it", OWNER) is False
         assert not task.done()
         token = next(iter(delivery._pending))
-        delivery.resolve_reply_token(f"{APPROVE_WORD} {token}")
+        delivery.resolve_reply_token(f"{APPROVE_WORD} {token}", OWNER)
         await asyncio.wait_for(task, timeout=1.0)
 
     @pytest.mark.asyncio
@@ -475,9 +484,9 @@ class TestApprovalReplyToken:
         task = asyncio.ensure_future(delivery.request_approval(self._Event(), source="tool"))
         await asyncio.sleep(0)
         token = next(iter(delivery._pending))
-        assert delivery.resolve_reply_token(f"about request {token}") is False
+        assert delivery.resolve_reply_token(f"about request {token}", OWNER) is False
         assert not task.done()
-        delivery.resolve_reply_token(f"{DENY_WORD} {token}")
+        delivery.resolve_reply_token(f"{DENY_WORD} {token}", OWNER)
         await asyncio.wait_for(task, timeout=1.0)
 
     @pytest.mark.asyncio
@@ -487,7 +496,7 @@ class TestApprovalReplyToken:
         task = asyncio.ensure_future(delivery.request_approval(self._Event(), source="tool"))
         await asyncio.sleep(0)
         token = next(iter(delivery._pending))
-        delivery.resolve_reply_token(f"{APPROVE_WORD} {token}\n> {DENY_WORD} {token}")
+        delivery.resolve_reply_token(f"{APPROVE_WORD} {token}\n> {DENY_WORD} {token}", OWNER)
         assert await asyncio.wait_for(task, timeout=1.0) is False
 
     @pytest.mark.asyncio
@@ -496,16 +505,28 @@ class TestApprovalReplyToken:
         task = asyncio.ensure_future(delivery.request_approval(self._Event(), source="tool"))
         await asyncio.sleep(0)
         token = next(iter(delivery._pending))
-        assert delivery.resolve_reply_token(f"{APPROVE_WORD.lower()} {token.lower()}") is True
+        assert delivery.resolve_reply_token(f"{APPROVE_WORD.lower()} {token.lower()}", OWNER) is True
         assert await asyncio.wait_for(task, timeout=1.0) is True
 
     @pytest.mark.asyncio
-    async def test_returns_none_without_an_address_to_prompt(self):
-        delivery = EmailDelivery(FakeSmtpServer(), AGENT, owner_id="")
-        assert await delivery.request_approval(self._Event(), source="tool") is None
+    @pytest.mark.parametrize("owner", ["", "U0123456789", AGENT])
+    async def test_asks_nothing_by_mail_without_the_owners_address(self, owner, monkeypatch):
+        """No owner id, one that is not an address (another platform's user id under the shared
+        key), or the mailbox's own address (its mail is dropped unread): nobody here could
+        answer, so the approval is left to the dashboard instead of waiting two hours."""
+        smtp = FakeSmtpServer()
+        if owner:
+            _owner_is(monkeypatch, owner)
+        delivery = EmailDelivery(smtp, AGENT, owner_id=AGENT)
+        verdict = await asyncio.wait_for(
+            delivery.request_approval(self._Event(), source="tool"), timeout=1.0
+        )
+        assert verdict is None
+        assert smtp.sent == []
 
     @pytest.mark.asyncio
-    async def test_a_failed_prompt_send_returns_none_and_leaves_no_pending(self):
+    async def test_a_failed_prompt_send_returns_none_and_leaves_no_pending(self, monkeypatch):
+        _owner_is(monkeypatch, OWNER)
         delivery = EmailDelivery(FakeSmtpServer(fail=True), AGENT, owner_id=AGENT)
         assert await delivery.request_approval(self._Event(), source="tool") is None
         assert delivery._pending == {}
@@ -526,35 +547,81 @@ class TestApprovalReplyToken:
             assert asyncio.get_running_loop().time() < deadline, "on_prompted never fired"
             await asyncio.sleep(0.001)
         assert seen[0].request_id == "req-1"
-        delivery.resolve_reply_token(f"{DENY_WORD} {seen[0].token}")
+        delivery.resolve_reply_token(f"{DENY_WORD} {seen[0].token}", OWNER)
         await asyncio.wait_for(task, timeout=1.0)
 
     @pytest.mark.asyncio
     async def test_no_pending_approvals_means_no_match(self, wired):
         delivery, _, _ = wired
-        assert delivery.resolve_reply_token("APPROVE DEADBEEF") is False
+        assert delivery.resolve_reply_token("APPROVE DEADBEEF", OWNER) is False
 
-    @pytest.mark.asyncio
-    async def test_prompt_threads_onto_the_session_channel(self, wired):
-        delivery, smtp, _ = wired
+    @staticmethod
+    async def _asked_in(delivery, smtp, correspondent: str):
+        """An approval for a chat linked to a thread with *correspondent*, once it is mailed."""
 
         class Sessions:
             def get_channel_link(self, key):
-                return "<m1@x>", "carol@example.com"
+                return "<m1@x>", correspondent
 
-        delivery.note_inbound(_inbound(message_id="<m1@x>", from_addr="carol@example.com"))
+        delivery.note_inbound(_inbound(message_id="<m1@x>", from_addr=correspondent))
         task = asyncio.ensure_future(
             delivery.request_approval(
-                self._Event(), source="tool", parent_session_key="dashboard:chat-1",
-                sessions=Sessions(),
+                TestApprovalReplyToken._Event(), source="tool",
+                parent_session_key="dashboard:chat-1", sessions=Sessions(),
             )
         )
-        await asyncio.sleep(0)
-        assert smtp.header("To") == "carol@example.com"
+        for _ in range(400):
+            if smtp.sent:
+                break
+            await asyncio.sleep(0.005)
+        assert smtp.sent, "no prompt was mailed"
+        return task
+
+    @pytest.mark.asyncio
+    async def test_a_chat_with_the_owner_is_asked_in_its_thread(self, wired):
+        delivery, smtp, _ = wired
+        task = await self._asked_in(delivery, smtp, OWNER)
+        assert smtp.header("To") == OWNER
         assert smtp.header("In-Reply-To") == "<m1@x>"
         token = next(iter(delivery._pending))
-        delivery.resolve_reply_token(f"{DENY_WORD} {token}")
+        delivery.resolve_reply_token(f"{DENY_WORD} {token}", OWNER)
         await asyncio.wait_for(task, timeout=1.0)
+
+    @pytest.mark.asyncio
+    async def test_a_chat_with_a_correspondent_asks_the_owner_not_the_correspondent(self, wired):
+        """The token IS the answer, so mailing it into a correspondent's thread handed them the
+        owner's decision. The owner is asked in a mail of its own; the correspondent gets none."""
+        delivery, smtp, _ = wired
+        task = await self._asked_in(delivery, smtp, "carol@example.com")
+        assert [str(m["To"]) for m in smtp.sent] == [OWNER]
+        assert smtp.header("In-Reply-To") == ""
+        token = next(iter(delivery._pending))
+        delivery.resolve_reply_token(f"{DENY_WORD} {token}", OWNER)
+        await asyncio.wait_for(task, timeout=1.0)
+
+    @pytest.mark.asyncio
+    async def test_a_reply_from_anyone_but_the_owner_answers_nothing(self, wired, monkeypatch):
+        from personalclaw.sdk.channel import sel
+
+        rows: list[dict] = []
+        monkeypatch.setattr(type(sel()), "log_api_access", lambda _log, **row: rows.append(row))
+        delivery, _, _ = wired
+        task = asyncio.ensure_future(delivery.request_approval(self._Event(), source="tool"))
+        for _ in range(400):
+            if delivery._pending:
+                break
+            await asyncio.sleep(0.005)
+        token = next(iter(delivery._pending))
+        assert delivery.resolve_reply_token(f"{APPROVE_WORD} {token}", BOB) is True, (
+            "an answer attempt is consumed, not turned into a conversation turn"
+        )
+        await asyncio.sleep(0)
+        assert not task.done(), "a correspondent answered the owner's approval"
+        assert [r["error"] for r in rows if r.get("operation") == "email.approval_reply"] == [
+            "not the owner"
+        ]
+        assert delivery.resolve_reply_token(f"{APPROVE_WORD} {token}", OWNER.upper()) is True
+        assert await asyncio.wait_for(task, timeout=1.0) is True
 
 
 class TestAttachments:

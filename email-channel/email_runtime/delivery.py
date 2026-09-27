@@ -40,7 +40,7 @@ from email.message import EmailMessage
 from typing import Any
 from urllib.parse import quote
 
-from personalclaw.sdk.channel import atomic_write, is_tracked_channel
+from personalclaw.sdk.channel import atomic_write, is_tracked_channel, owner_id_for, sel
 from personalclaw.sdk.util import app_data_dir
 
 from email_runtime.mime import build_outbound, build_references, reply_subject
@@ -49,6 +49,8 @@ from email_runtime.smtp_client import SmtpError, SmtpSender
 logger = logging.getLogger(__name__)
 
 _APP = "email-channel"
+#: The channel's provider key: core keeps this channel's owner under it (``owner_id_for``).
+_PROVIDER = "email"
 _THREADS_FILE = "threads.json"
 #: Bound the persisted thread map so a long-lived mailbox can't grow it without limit.
 #: Oldest entries age out; a thread that falls out simply starts a fresh chain.
@@ -446,27 +448,41 @@ class EmailDelivery:
 
     # ── approval via reply token (C3: SHOULD) ──
 
+    def _owner_address(self) -> str:
+        """The owner's own address, or ``""`` when this channel knows none.
+
+        Core's owner id for this channel, read each time so an owner set after start is the one
+        asked, when it is an address. Never the mailbox's own address: mail from it is our own
+        coming back and is dropped unread, so a prompt there asks nobody."""
+        addr = str(owner_id_for(_PROVIDER) or "").strip().lower()
+        if "@" not in addr or addr == (self._from or "").strip().lower():
+            return ""
+        return addr
+
     async def request_approval(
         self, event: Any, *, source: str, parent_session_key: str = "",
         sessions: Any = None, on_prompted: Any = None,
     ) -> bool | None:
         """Mail the owner an approve/deny prompt and wait for their reply.
 
-        Returns approved/rejected, or ``None`` when we can't prompt (no address) so the
-        gateway falls back to the dashboard. The prompt carries a random token; the
-        transport resolves this future when an inbound message from an ALLOWED sender
-        contains ``APPROVE <token>`` or ``DENY <token>`` (:meth:`resolve_reply_token`).
-        ``on_prompted(pending)`` lets core race a dashboard prompt against this one."""
-        channel = ""
-        thread_ts = ""
+        Only the owner is asked, and only the owner answers (:meth:`resolve_reply_token`): the
+        token IS the answer, so the prompt goes to the owner's own address and nowhere else. A
+        chat linked to a thread with the owner is asked in that thread. One with anyone else,
+        a paired correspondent included, is asked in a new mail to the owner. Returns
+        approved/rejected, or ``None`` when there is no owner address to ask (the gateway then
+        falls back to the dashboard). ``on_prompted(pending)`` lets core race a dashboard
+        prompt against this one."""
+        owner = self._owner_address()
+        if not owner:
+            return None
+        channel, thread_ts = owner, ""
         if parent_session_key and sessions is not None:
             try:
-                thread_ts, channel = sessions.get_channel_link(parent_session_key)
+                linked_thread, linked = sessions.get_channel_link(parent_session_key)
             except Exception:
-                thread_ts, channel = "", ""
-        channel = channel or self._owner_id
-        if not channel or "@" not in channel:
-            return None
+                linked_thread, linked = "", ""
+            if str(linked or "").strip().lower() == owner:
+                channel, thread_ts = str(linked), str(linked_thread or "")
 
         request_id = str(getattr(event, "request_id", ""))
         title = str(getattr(event, "title", ""))
@@ -503,13 +519,16 @@ class EmailDelivery:
             self._pending.pop(token, None)
         return outcome == "approved"
 
-    def resolve_reply_token(self, text: str) -> bool:
-        """Resolve a pending approval from a reply body. Returns whether one matched.
+    def resolve_reply_token(self, text: str, sender: str) -> bool:
+        """Answer a pending approval from a reply body. Returns whether the body was an answer.
 
-        The token must appear alongside the verb, so an unrelated mail that happens to
-        contain the word "approve" cannot decide anything. Called by the transport ONLY
-        for a sender the trust seam already allowed — an approval is the highest-value
-        thing a channel can carry, so it never rides an unauthenticated message."""
+        Only the owner answers. A reply from any other address, an allowed correspondent's
+        included, decides nothing: it is logged to the SEL and still returns True, because an
+        answer is not a new turn. The token must appear alongside the verb, so an unrelated
+        mail that happens to contain the word "approve" cannot decide anything. Called by the
+        transport ONLY for a sender the trust seam already allowed — an approval is the
+        highest-value thing a channel can carry, so it never rides an unauthenticated
+        message."""
         upper = (text or "").upper()
         for token, pending in list(self._pending.items()):
             if token not in upper:
@@ -518,6 +537,18 @@ class EmailDelivery:
             denied = f"{DENY_WORD} {token}" in upper or f"{DENY_WORD}{token}" in upper
             if not approved and not denied:
                 continue
+            who = str(sender or "").strip().lower()
+            if not who or who != self._owner_address():
+                logger.warning("email: refused an approval reply from %s, not the owner", who)
+                sel().log_api_access(
+                    caller=f"email:{who or 'unknown'}",
+                    operation="email.approval_reply",
+                    outcome="denied",
+                    source="email",
+                    resources=pending.request_id,
+                    error="not the owner",
+                )
+                return True
             if not pending.future.done():
                 # An explicit DENY wins over a body that somehow contains both — a
                 # request to stop must never be read as consent.

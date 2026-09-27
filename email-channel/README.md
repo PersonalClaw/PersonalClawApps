@@ -211,10 +211,20 @@ channel cannot stream". Both halves are asserted together in
 `tests/test_transport.py::TestCapabilities`.
 
 Approvals arrive as a **reply token**: the prompt mail carries `APPROVE <token>` /
-`DENY <token>`, and only a reply from an already-allowed sender can resolve one. Both the
-verb and the token must be present, and an explicit `DENY` wins over a body containing
-both. A chat that started in this mailbox is asked here first; *Settings → Notifications →
-Send approvals to* decides for the rest.
+`DENY <token>`. **Only the owner is asked, and only the owner answers.** The owner is the
+address this channel keeps as its owner id, `PERSONALCLAW_OWNER_ID_EMAIL` (set it in the
+environment or the credential store, like every channel's owner id). The prompt goes to that
+address alone, and only a reply from it can resolve one. That address must be paired like any
+other sender, and it cannot be the mailbox's own address.
+
+A chat in a thread with the owner is asked in that thread. A chat with anyone else, a paired
+correspondent included, is asked in a new mail to the owner. A correspondent's reply carrying a
+token decides nothing and is logged to the security event log. With no owner address, no
+approval is asked by mail, and it waits in PersonalClaw instead.
+
+Both the verb and the token must be present, and an explicit `DENY` wins over a body containing
+both. A chat that started in this mailbox is asked here first. For every other chat, *Settings
+→ Notifications → Send approvals to* decides.
 
 Notifications can reach the mailbox too. A notification rule with the **Channel DM** target
 sends its note to the owner on the first connected channel that reaches them, in name order,

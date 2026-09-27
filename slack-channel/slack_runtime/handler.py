@@ -2867,19 +2867,21 @@ async def _request_approval(
 async def handle_interaction(channel: str, msg_ts: str, action_id: str, user_id: str = "", thread_ts: str = "", slack: SlackClientOps | None = None) -> str | None:
     """Handle a Block Kit button click for tool approval.
 
-    Supports four actions:
+    Supports three actions:
     - approve_tool: approve this one tool call
     - trust_tool: auto-approve all tools for this session (thread)
     - reject_tool: reject this tool call
 
-    Security: rejects non-owner clicks. Trust requires DM channel
-    (verified via conversations.info by the gateway caller).
+    Only the owner answers: Approve, Trust and Reject alike, and a late Trust too. An allowlisted
+    user may talk to the agent, but a press decides what runs with the owner's authority, and a
+    prompt in a linked channel thread is in front of everyone in it. Anyone else's press answers
+    nothing, is logged to the SEL, and is told so. Trust also requires a DM (verified via
+    conversations.info by the gateway caller).
     """
 
-    # Deny-by-default: reject unless positively confirmed as allowed
-    if not user_id or not is_allowed_user(user_id):
+    if not user_id or not is_owner(user_id):
         logger.warning(
-            "Rejecting interactive action from unauthorized user %s (action=%s)", user_id, action_id
+            "Refusing an approval press from %s, not the owner (action=%s)", user_id, action_id
         )
         sel().log_api_access(
             caller=user_id or "unknown",
@@ -2887,8 +2889,15 @@ async def handle_interaction(channel: str, msg_ts: str, action_id: str, user_id:
             outcome="denied",
             source="slack",
             resources=action_id,
-            error="unauthorized user",
+            error="not the owner",
         )
+        if slack is not None and user_id:
+            try:
+                await slack.post_ephemeral(
+                    channel, user_id, "Only the owner can answer this.", thread_ts=thread_ts or None
+                )
+            except Exception:
+                logger.debug("Failed to tell a non-owner their press answered nothing", exc_info=True)
         return None
 
     key = f"{channel}:{msg_ts}"
@@ -2899,16 +2908,6 @@ async def handle_interaction(channel: str, msg_ts: str, action_id: str, user_id:
         # Replicate session_key derivation from handle_message: thread_ts,
         # then check for linked dashboard session override.
         if action_id == _ACTION_TRUST and thread_ts:
-            if not is_allowed_user(user_id):
-                logger.warning("Rejecting late trust click from non-allowed user %s", user_id)
-                sel().log_api_access(
-                    caller=user_id,
-                    operation="slack.interactive.trust_late",
-                    outcome="denied",
-                    source="slack",
-                    error="unauthorized user",
-                )
-                return None
             # Verify clicking user owns this thread (prevents privilege escalation)
             if not slack:
                 logger.warning("Rejecting late trust click: cannot verify thread ownership (no slack client)")
@@ -2984,21 +2983,7 @@ async def handle_interaction(channel: str, msg_ts: str, action_id: str, user_id:
     if action_id in (_ACTION_APPROVE, _ACTION_TRUST):
         # Set trust state BEFORE approving (so subsequent tools auto-approve)
         if action_id == _ACTION_TRUST:
-            if not is_allowed_user(user_id):
-                logger.error("Rejecting trust escalation from non-allowed user %s", user_id)
-                sel().log_api_access(
-                    caller=user_id,
-                    operation="slack.interactive.trust_denied",
-                    outcome="denied",
-                    source="slack",
-                    resources=pending.session_key or "",
-                    error="non-allowed user",
-                )
-                if not pending.future.done():
-                    pending.future.set_result(_OUTCOME_REJECTED)
-                del _pending_approvals[key]
-                return _ACTION_REJECT
-            elif pending.session_key:
+            if pending.session_key:
                 _trusted_sessions.add(pending.session_key)
                 logger.info("Trust mode ON for session %s", pending.session_key)
             else:
