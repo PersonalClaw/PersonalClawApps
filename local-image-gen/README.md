@@ -20,7 +20,9 @@ renders locally and saves the result as a normal image artifact.
 
 It ships as a self-contained directory:
 
-- `app.json` — the manifest (`type: model`, `capabilities: ["image_gen"]`).
+- `app.json` — the manifest (`type: model`, `capabilities: ["image_gen"]`). Its `requires`
+  names ComfyUI, what the app uses it for and how to have it, which install consent and the
+  Store card show before anything installs.
 - `provider.py` — the `ImageGenProvider` implementation, exposed via `create_provider`.
 - `test_provider.py` — the app's own rails.
 

@@ -1,4 +1,4 @@
-"""The engine is looked for where the sidecar runs it, and the app says how to put it there.
+"""The engine is looked for where the sidecar runs it, and Install engine puts it there.
 
 Measured before this was written:
 
@@ -10,8 +10,9 @@ Measured before this was written:
   could not import it.
 * The unavailable card on Settings → Providers read "install it and download a model card's
   weights", naming a CosyVoice candidate the spike had already dropped, and gave no command.
-  PersonalClaw has no UI that installs the engine, so that sentence is the only way in, and
-  core shows at most 500 characters of it.
+* Core's Install engine installs an app's ``sidecarDependencies`` into that environment, and
+  this app declared none, so its card offered nothing to install and sent the owner to a
+  shell for two commands.
 * The weights download runs in the gateway and imports ``huggingface_hub``, which core ships
   only in its ``tts`` extra. The app declared nothing, so the Download button failed on a
   plain install.
@@ -20,7 +21,6 @@ Measured before this was written:
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
@@ -88,35 +88,39 @@ def test_without_its_own_environment_the_gateway_interpreter_is_asked():
     assert provider._detect_engine() == "omnivoice"
 
 
-def test_the_card_gives_the_command_with_this_machines_paths():
-    """🔴 Red on main: no command, and a CosyVoice candidate that no longer exists."""
+def test_install_engine_installs_the_engine_the_worker_imports():
+    """🔴 Red on main: no ``sidecarDependencies``, so the card's Install engine had nothing to
+    install and the only way in was a shell."""
+    from packaging.requirements import Requirement
+
+    from personalclaw.apps.manifest import AppManifest
+
+    manifest = json.loads((_BUNDLE / "app.json").read_text(encoding="utf-8"))
+    parsed = AppManifest.from_dict(manifest)
+    assert parsed.validate() == [], "core refuses an engine it cannot install"
+    [spec] = parsed.dependencies.sidecarDependencies
+    engine = Requirement(spec)
+    assert engine.name == provider._CANDIDATE_ENGINE_MODULES[0] == "omnivoice"
+    # `worker.py` was validated against 0.2.1; the next minor is an API to check again first.
+    assert engine.specifier.contains("0.2.1") and not engine.specifier.contains("0.3.0")
+
+
+def test_the_card_sends_you_to_install_engine():
+    """🔴 Red on main: two shell commands, and "PersonalClaw does not install it"."""
     ok, reason = provider.availability()
     assert ok is False
-    app_dir = _venv().parent
-    command = f"`cd {app_dir} && {sys.executable} -m venv venv && venv/bin/pip install omnivoice`"
-    assert command in reason
-    assert "PersonalClaw does not install it" in reason
-    assert "Check again" in reason and reason.endswith("Settings → Models.")
-    assert "CosyVoice" not in reason
-    assert len(reason) <= provider._REASON_BUDGET, "core keeps 500 characters of a reason"
-
-
-def test_paths_too_long_for_the_card_point_at_the_readme(monkeypatch):
-    """Core cuts a reason at 500 characters, and a command cut short is worse than none. The
-    first version of this sentence named the environment's path three times and lost its end
-    ("download OmniVoice in Setting") on the card itself."""
-    monkeypatch.setattr(provider.sys, "executable", "/" + "x" * 400 + "/python3")
-    ok, reason = provider.availability()
-    assert ok is False and len(reason) <= provider._REASON_BUDGET
-    assert "README" in reason and "pip install" not in reason
+    assert "Install engine" in reason and "Settings → Providers" in reason
     assert reason.endswith("Settings → Models.")
+    assert "pip install" not in reason and "does not install" not in reason
+    assert "CosyVoice" not in reason
 
 
-def test_the_listing_says_the_engine_is_not_installed_for_you():
-    """🔴 Red on main: the description read as if cloning worked once the app was in."""
+def test_the_listing_says_the_engine_is_a_step_of_its_own():
+    """🔴 Red on main: it said PersonalClaw does not install the engine. It still says cloning
+    needs one, so the listing doesn't read as if cloning worked once the app was in."""
     description = json.loads((_BUNDLE / "app.json").read_text(encoding="utf-8"))["description"]
-    assert "PersonalClaw does not install" in description
-    assert "Settings → Providers" in description
+    assert "does not install" not in description
+    assert "Install engine" in description and "Settings → Providers" in description
 
 
 def test_the_weights_download_brings_its_library():

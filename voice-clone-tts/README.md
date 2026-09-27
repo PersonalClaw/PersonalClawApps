@@ -1,8 +1,8 @@
 # Voice Clone TTS
 
 Cloning-capable text-to-speech beside Piper: **zero-shot voice cloning** from a short
-reference clip, run as an isolated **sidecar**. It needs the OmniVoice engine, which
-PersonalClaw does not install for you: see [Installing the engine](#installing-the-engine).
+reference clip, run as an isolated **sidecar**. It needs the OmniVoice engine, which you install
+from the app's card: see [Installing the engine](#installing-the-engine).
 
 **Voice Clone TTS** is a **model provider (TTS) + local-model manager**. Unlike Piper
 (a fixed voice bank), it conditions synthesis on a reference clip — the
@@ -27,26 +27,21 @@ so core can evolve without breaking it.
 
 ## Installing the engine
 
-Cloning needs the **OmniVoice** engine, a torch stack of several GB. **PersonalClaw does not
-install it for you**: the Store installs this app without it, and the app stays unavailable
-until the engine is in place. It goes in this app's own Python environment, which is where
-the sidecar runs it, so none of it loads into the gateway:
+Cloning needs the **OmniVoice** engine, a torch stack of several GB. The Store installs this app
+without it, and the app stays unavailable until the engine is in place. The manifest declares it
+in `sidecarDependencies` (`omnivoice>=0.2.1,<0.3`, the line `worker.py` was validated against).
 
-```sh
-cd ~/.personalclaw/apps/voice-clone-tts
-# The Python PersonalClaw runs on: OmniVoice needs 3.10 or newer.
-python3 -m venv venv
-venv/bin/pip install omnivoice
-```
+Press **Install engine** on the app's card in **Settings → Providers**, or on its Configure page.
+PersonalClaw makes the app's own Python environment (`apps/voice-clone-tts/venv` under your
+PersonalClaw home) and pip-installs the engine into it. That is where the sidecar runs it, so
+none of it loads into the gateway. The card shows pip's output while it runs, and you can leave
+the page. Then download **OmniVoice** in **Settings → Models** (about 3.3 GB of weights).
 
-Use your `PERSONALCLAW_HOME` in place of `~/.personalclaw` if you set one. The app's card in
-**Settings → Providers** shows the same command with the exact paths for your machine. Then
-press **Check again** on that card, and download **OmniVoice** in **Settings → Models**
-(about 3.3 GB of weights).
-
-Updating the app replaces its folder, and today that removes this environment with it. The
-app then reads as unavailable again and its card shows the command again; the weights stay,
-because they live in `models/tts-clone/` under your PersonalClaw home.
+Updating the app keeps this environment, so the engine stays installed. If an update changes the
+engine the manifest declares, the card offers **Install engine** again, and pip brings the same
+environment up to it. **Remove engine** on the card deletes the environment, and removing the app
+deletes it too. The weights stay either way, because they live in `models/tts-clone/` under your
+PersonalClaw home.
 
 With no engine installed the app degrades quietly: `is_available()` is `False` and
 `synthesize()` returns `None` (it never raises), so the manifest and contract tests run

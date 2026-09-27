@@ -166,12 +166,21 @@ An app that plugs a capability into core declares a `provider` (or several via
   "multiInstance": true,                     // user may add several instances (e.g. two endpoints)
   "capabilities": ["search"],                // what this provider can do
   "entity": "",                              // optional sub-grouping within a type
+  "execution": "in-process",                 // or "sidecar": its own process and Python environment
   "settingsSchema": { ... }                  // JSON Schema (Draft-07 + x-meta) for the Configure form
 }
 ```
 
 The factory receives the app's current config dict and returns a provider
 instance implementing the relevant SDK contract.
+
+`execution: "sidecar"` is for an engine heavy or crash-prone enough to keep out of
+the gateway (torch, a native library). Your provider still loads in-process, and it
+drives the engine through `personalclaw.sdk.sidecar.SidecarRunner`: a worker module
+you ship runs in a child process under the app's own Python environment,
+`apps/<app>/venv`, so a crash in it leaves the gateway up with a typed reason. The
+engine packages go in `dependencies.sidecarDependencies` (see
+[Dependencies](#dependencies)). `voice-clone-tts` is the worked example.
 
 `settingsSchema` properties support `x-meta` per field:
 `label`, `help`, `sensitive: true` (secret handling), `tags: ["advanced"]`
@@ -338,7 +347,8 @@ the install back.
 
 ```json
 "dependencies": {
-  "pythonDependencies": ["faster-whisper>=1.0"]  // pip specs, installed into <home>/app-python
+  "pythonDependencies": ["faster-whisper>=1.0"],   // pip specs, installed into <home>/app-python
+  "sidecarDependencies": ["omnivoice>=0.2.1,<0.3"] // pip specs for a sidecar's engine, installed into apps/<app>/venv
 }
 ```
 
@@ -364,8 +374,39 @@ it runs from:
   `PYTHONPATH` (the `piper-tts` app does this), and don't look for its console script
   beside the interpreter — pip puts it in `<home>/app-python/bin`.
 
+`sidecarDependencies` is the engine of a provider declared `execution: "sidecar"`, and a
+manifest that lists it without one is refused. Nothing installs it with the app. The owner
+presses **Install engine** on the app's card in Settings → Providers, or on its Configure
+page, and PersonalClaw makes `apps/<app>/venv` and pip-installs the list there, showing pip's
+output as it runs. Only your worker, in that child process, imports these packages; the
+gateway never does. Each entry is a PEP 508 requirement (an option such as `--index-url` is
+an install error), and install consent names them under what the app runs. An update keeps
+the environment, so the engine survives it. If the new version declares a different list,
+the card offers Install engine again and pip brings the same environment up to it. Say in
+your provider's availability reason that Install engine is the way in, as `voice-clone-tts`
+does, rather than giving shell commands.
+
 There is also a `marketplace` block (mcp/skills/agents ids with
 `managedBy: "gateway" | "app"`) for marketplace-managed dependencies.
+
+### Prerequisites (`requires`)
+
+```json
+"requires": [{
+  "name": "ComfyUI",                                   // what it is (at most 80 characters)
+  "why": "Every image is made by a ComfyUI server ...", // what the app uses it for (300)
+  "how": "Install ComfyUI and start it on this machine ..." // what the owner does to have it (600)
+}]
+```
+
+What the app needs on this machine that PersonalClaw does not install: a local server it
+sends its work to, a program a tool runs. Install consent leads with these, under "What it
+needs that PersonalClaw doesn't install", the Store card says "Needs ComfyUI", and an update
+that adds one asks for consent again. All three strings are plain text shown as you wrote
+them, so write `how` as steps the owner can follow, with the address or command they need.
+At most 10 entries, each named once. Something PersonalClaw can install is not a
+prerequisite: a Python package goes in `dependencies`. `local-image-gen` is the worked
+example.
 
 ### Platform
 
