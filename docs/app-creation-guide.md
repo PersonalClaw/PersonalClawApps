@@ -531,6 +531,64 @@ Read your saved `configSchema` values via your own detail endpoint
 (`GET /api/apps/<name>` — declare it in `permissions.api`), like demo-dashboard
 does for its `label` and `refresh_interval_s`.
 
+### Saving your settings from your page
+
+`PUT /api/apps/<name>/config` replaces the whole settings file, so the gateway
+saves it only over the copy your page read. `GET /api/apps/<name>/config` answers
+with that copy and its `revision`. Keep the two together, and pass the revision
+back as `{ basedOn }` on the save. The SDK sends it as `If-Match`, the one header
+an app sets. `post`, `put` and `patch` all take it, and declaring
+`/api/apps/<name>` in `permissions.api` covers both routes.
+
+```js
+import { createAppApi, isStaleWrite, notify } from '@personalclaw/app-sdk'
+
+export function mount(el, ctx) {
+  const api = createAppApi(ctx)
+  const route = `/api/apps/${ctx.name}/config`
+  let read // { config, revision, … }
+
+  async function load() {
+    read = await api.get(route)
+    render(read.config)
+  }
+
+  // `edit` is only what the user changed, e.g. { collection: 'journal' }.
+  async function save(edit) {
+    const put = () => api.put(route, { ...read.config, ...edit }, { basedOn: read.revision })
+    try {
+      read = await put().catch(async (e) => {
+        if (!isStaleWrite(e)) throw e
+        // 409 stale_write: the settings changed after this page read them (another
+        // tab, Settings → Providers, your own backend), and nothing was saved.
+        // Apply the same edit to the stored copy and save over its revision.
+        read = await api.get(route)
+        return put()
+      })
+      render(read.config) // what the save stored, with its new revision
+    } catch (e) {
+      notify(e.message, 'error') // 428, or any other refusal, in the gateway's words
+    }
+  }
+
+  // ... render into el, call save() from its controls ...
+  load()
+}
+```
+
+- `isStaleWrite(e)` is true only for `409 stale_write`, the one refusal a page
+  recovers from by itself. If the other change could touch the field the user
+  edited, show them both values instead of re-applying theirs.
+- A save without `basedOn` is refused with `428 revision_required`
+  (`e.status === 428`, `e.code === 'revision_required'`). It fails the same way
+  every time, so it is a bug in the page, not something to retry.
+- Every refusal rejects with the gateway's `status`, `code` and sentence
+  (`e.message`), so `notify(e.message, 'error')` shows the user the gateway's
+  own words.
+- A sensitive field comes back masked, and sending the mask back keeps the
+  stored secret. `{ ...read.config, ...edit }` therefore never erases a secret
+  the user did not touch.
+
 ## Testing
 
 - **Provider apps** ship a `test_provider.py` next to the provider (every
