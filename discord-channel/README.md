@@ -8,11 +8,13 @@ converse in servers, and receive results with approval buttons.
 the messaging channels alongside the dashboard, Slack and Telegram.
 
 > **Read this first: enable the MESSAGE CONTENT intent.** It is a *privileged*
-> intent, off by default, and without it Discord delivers every message with an
-> **empty `content`**. The bot connects, shows as online, receives events — and
-> ignores everything you say. This is the single most common reason a Discord bot
-> looks broken. Developer Portal → your application → **Bot** → **Privileged Gateway
-> Intents** → enable **Message Content Intent**.
+> intent, off by default. This app asks for it when it connects, and Discord refuses
+> the gateway session of a bot that asks for a privileged intent it has not been given
+> (close code 4014, disallowed intents): the bot never comes online and hears nothing.
+> This is the single most common reason a new Discord bot looks broken, and the Discord
+> row on Settings → Providers says so. Developer Portal → your application → **Bot** →
+> **Privileged Gateway Intents** → enable **Message Content Intent**, then turn the
+> channel off and on.
 
 ## What this is
 
@@ -131,7 +133,7 @@ and **any other present value — including a typo — turns it on**.
 2. **General Information** → copy the **Application ID**.
 3. **Bot** → **Reset Token** → copy the token (shown once).
 4. **Bot** → **Privileged Gateway Intents** → enable **MESSAGE CONTENT INTENT**.
-   (See the warning at the top — skip this and the bot receives empty messages.)
+   (See the warning at the top — skip this and Discord refuses the bot's gateway session.)
 5. Run `personalclaw setup` and paste the token, application id and your own Discord
    user id (enable Settings → Advanced → **Developer Mode**, then right-click your
    name → **Copy User ID**). The setup step then prints the **OAuth2 invite URL**
@@ -145,6 +147,12 @@ and **any other present value — including a typo — turns it on**.
    **Pair as owner** shows an 8-digit code. Send it to the bot in a direct message within ten
    minutes, and the bot answers that you are its owner — no user id to look up, and no restart.
 6. Track the channels you want the bot active in from the Channels page.
+
+The Discord row on Settings → Providers reads the gateway session, not just the token. When
+Discord refuses the session it stops for good and the row says why, with what to do: a
+rejected token (401, or close code 4004) is fixed by saving a working token in Configure, a
+missing privileged intent (4014) in the Developer Portal. A connection that drops and is being
+resumed reads as reconnecting until the session is back.
 
 The invite requests exactly the permissions the code exercises: View Channels, Send
 Messages, Send Messages in Threads, Add Reactions, Attach Files, Read Message

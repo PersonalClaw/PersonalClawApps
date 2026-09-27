@@ -73,6 +73,23 @@ logger = logging.getLogger(__name__)
 # channel posts) is noise for a DM/group bot and just inflates the poll payload.
 ALLOWED_UPDATES = ["message", "callback_query"]
 _OFFSET_FILE = "poll_offset.json"
+#: The longest the receiver waits between two failed long-polls.
+_MAX_BACKOFF = 30.0
+
+
+def _why_the_poll_failed(exc: BaseException) -> str:
+    """A failed long-poll in words safe to show: Telegram's own answer, never the request.
+
+    An answer from Telegram carries its code and description. A failure with no code never got
+    one — the client could not reach Telegram, or got back something that is not the Bot API —
+    and its text is the HTTP client's, which can carry the request URL, and the URL carries the
+    token. So that case, and anything else, is named rather than quoted."""
+    if isinstance(exc, TelegramAPIError):
+        if not exc.error_code:
+            return "Telegram could not be reached, or did not answer like the Bot API"
+        code = str(exc.error_code)
+        return exc.description if code in exc.description else f"{exc.description} (code {code})"
+    return f"an unexpected {type(exc).__name__}"
 
 #: What ``sendMessage`` takes as ``chat_id``: an integer id (negative for groups and channels), or a
 #: public channel's ``@username`` (5 to 32 letters, digits or underscores, starting with a letter).
@@ -93,6 +110,11 @@ class TelegramTransport(ChannelTransportProvider):
         self._poll_task: asyncio.Task | None = None
         self._stopping = False
         self._offset = 0
+        #: Why the long-poll receiver gave up for good (``""`` while it runs). The loop used to end
+        #: on a 401 with only a log line, and ``health`` kept answering "ready".
+        self._inbound_stopped = ""
+        #: Why the last long-poll failed while the receiver retries it (``""`` once one succeeds).
+        self._poll_failure = ""
 
     @property
     def name(self) -> str:
@@ -212,7 +234,11 @@ class TelegramTransport(ChannelTransportProvider):
             await self._api.close()
 
     async def _poll_loop(self) -> None:
-        """Long-poll getUpdates, dispatching each update. Degrades, never crashes."""
+        """Long-poll getUpdates, dispatching each update. Degrades, never crashes.
+
+        Every way it stops receiving is recorded for :meth:`health`: a token Telegram rejects ends
+        the loop (``_inbound_stopped``), and a poll that fails and is retried leaves its reason
+        (``_poll_failure``) until the next one succeeds."""
         backoff = 1.0
         while not self._stopping:
             try:
@@ -221,6 +247,7 @@ class TelegramTransport(ChannelTransportProvider):
                     allowed_updates=ALLOWED_UPDATES,
                 )
                 backoff = 1.0
+                self._poll_failure = ""
                 for update in updates:
                     # Advance past this update_id BEFORE dispatch so a handler that
                     # raises can't wedge the loop on the same update forever.
@@ -237,15 +264,22 @@ class TelegramTransport(ChannelTransportProvider):
                 raise
             except TelegramAPIError as exc:
                 if exc.error_code == 401:
-                    logger.error("telegram: invalid bot token (401) — inbound offline")
+                    logger.error("telegram: invalid bot token (401) — the long-poll receiver stopped")
+                    self._inbound_stopped = (
+                        "Telegram rejected the bot token (401 Unauthorized), so the long-poll "
+                        "receiver stopped. Save a working token from @BotFather in Configure to "
+                        "start it again; sending with this token fails too."
+                    )
                     return
+                self._poll_failure = _why_the_poll_failed(exc)
                 logger.warning("telegram: getUpdates error: %s — backing off %ss", exc, backoff)
                 await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
-            except Exception:
+                backoff = min(backoff * 2, _MAX_BACKOFF)
+            except Exception as exc:
+                self._poll_failure = _why_the_poll_failed(exc)
                 logger.warning("telegram: poll loop error — backing off %ss", backoff, exc_info=True)
                 await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 30.0)
+                backoff = min(backoff * 2, _MAX_BACKOFF)
 
     async def _dispatch(self, update: dict[str, Any]) -> None:
         if "callback_query" in update:
@@ -387,6 +421,18 @@ class TelegramTransport(ChannelTransportProvider):
                     "on, starts it on this one."
                 )
             return {"state": "error", "detail": detail}
+        # The receiver runs on the saved token. Whether it is RECEIVING is the poll loop's to say.
+        if self._inbound_stopped:
+            return {"state": "error", "detail": f"Inbound STOPPED — {self._inbound_stopped}"}
+        if self._poll_failure:
+            return {
+                "state": "error",
+                "detail": (
+                    f"Inbound NOT RECEIVING — the last long-poll failed: {self._poll_failure}. "
+                    f"The receiver keeps retrying, waiting up to {_MAX_BACKOFF:g} seconds between "
+                    "tries."
+                ),
+            }
         return {"state": "ready", "detail": "Bot token configured"}
 
     async def test(self) -> dict[str, Any]:

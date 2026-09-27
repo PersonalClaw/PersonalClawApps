@@ -109,7 +109,10 @@ back.
   the owner, allowlisted, or in an open channel.
 - **Socket Mode errors**: the `xapp-…` token must have the
   `connections:write` scope — regenerate it via the Socket Mode toggle dance in
-  step 1.3.
+  step 1.3. The Slack row on Settings → Providers says when Socket Mode is not
+  connected, and what Slack answered the last reconnect: `invalid_auth` or
+  `token_revoked` means the App Token was revoked or regenerated — save the new one
+  on the Configure form.
 - **Wrong workspace / Enterprise Grid**: if you set `allowed_enterprise_ids`,
   the connection refuses workspaces outside that list.
 - **Token rotation**: save the new token on the Configure form, and the receiver

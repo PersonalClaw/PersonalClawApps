@@ -61,7 +61,7 @@ from personalclaw.sdk.channel import (
 # only keeps this app's dir on sys.path while it execs this module, so a
 # ``from discord_runtime.X import`` inside a method would run LATER, off the path,
 # and fail. Binding them here, during exec, captures them for the process life.
-from discord_runtime.api import DISCORD_MAX_TEXT, DiscordAPI, HTTPDiscordAPI
+from discord_runtime.api import DISCORD_MAX_TEXT, DiscordAPI, DiscordAPIError, HTTPDiscordAPI
 from discord_runtime.delivery import DiscordDelivery, split_message
 from discord_runtime.gateway import DEFAULT_GATEWAY_URL, DiscordGateway
 from discord_runtime.inbound_tap import publish as publish_inbound
@@ -81,6 +81,44 @@ _SNOWFLAKE_RE = re.compile(r"\d{17,20}")
 
 logger = logging.getLogger(__name__)
 
+#: Discord refused the token at ``GET /gateway/bot``, before any session was opened.
+_TOKEN_REFUSED_AT_DISCOVERY = (
+    "Discord rejected the bot token (401 Unauthorized), so no gateway session was opened. Save a "
+    "working token in Configure to start one; sending with this token fails too."
+)
+#: What each close code Discord says not to retry after means for the owner — the same set as
+#: ``gateway.FATAL_CLOSE_CODES``, which a test holds equal to this map's keys.
+_REFUSALS = {
+    4004: (
+        "Discord rejected the bot token (close code 4004, authentication failed), so the gateway "
+        "session stopped. Save a working token in Configure to start it again; sending with this "
+        "token fails too."
+    ),
+    4014: (
+        "Discord refused the privileged intent this bot asks for (close code 4014, disallowed "
+        "intents), so the gateway session stopped. Turn on Message Content Intent under Bot → "
+        "Privileged Gateway Intents in the Discord Developer Portal, then turn the channel off "
+        "and on, or use Configure → Save, to connect again."
+    ),
+    4013: (
+        "Discord rejected the gateway intents this app sends (close code 4013, invalid intents), "
+        "so the gateway session stopped. That is a defect in the Discord Channel app, not in your "
+        "settings: update the app."
+    ),
+    4012: (
+        "Discord no longer accepts the gateway API version this app uses (close code 4012), so the "
+        "gateway session stopped. Update the Discord Channel app."
+    ),
+    4011: (
+        "Discord requires this bot to shard (close code 4011, sharding required): it is in too "
+        "many servers for one gateway session, and this app opens one. The gateway session "
+        "stopped."
+    ),
+    4010: (
+        "Discord rejected the shard this app sent (close code 4010, invalid shard), so the gateway "
+        "session stopped. That is a defect in the Discord Channel app: update the app."
+    ),
+}
 
 
 class DiscordTransport(ChannelTransportProvider):
@@ -98,6 +136,9 @@ class DiscordTransport(ChannelTransportProvider):
         self._gateway_task: asyncio.Task | None = None
         # The bot's own user id, captured from READY — half of the self-message filter.
         self._own_user_id = ""
+        #: Why the receiver did not open a gateway session at all (``""`` when it did): Discord
+        #: refused the token at ``GET /gateway/bot``.
+        self._inbound_stopped = ""
 
     @property
     def name(self) -> str:
@@ -167,6 +208,12 @@ class DiscordTransport(ChannelTransportProvider):
         self._services = services
         reload_settings()
         self._api = HTTPDiscordAPI(token)
+        gateway_url = await self._discover_gateway_url()
+        if self._inbound_stopped:
+            # Discord refused the token: no session to open, and nothing it could deliver.
+            await self._api.close()
+            self._api = None
+            return
 
         # Register outbound delivery on the gateway + dashboard. Core delivers every
         # channel result through this ONE provider-agnostic ChannelDelivery handle —
@@ -181,7 +228,7 @@ class DiscordTransport(ChannelTransportProvider):
 
         self._gateway = DiscordGateway(
             token,
-            gateway_url=await self._discover_gateway_url(),
+            gateway_url=gateway_url,
             on_message=self._on_message_create,
             on_interaction=self._on_interaction_create,
             on_ready=self._on_ready,
@@ -193,12 +240,21 @@ class DiscordTransport(ChannelTransportProvider):
         """The bot's own gateway URL from ``GET /gateway/bot``.
 
         Discord asks clients to fetch this rather than hardcode the host (it can move
-        and it carries the session-start budget). A failure here is not fatal — the
+        and it carries the session-start budget). Most failures here are not fatal — the
         documented default host still works — so degrade to it and let the gateway
-        loop's own backoff report the real problem."""
+        loop's own backoff report the real problem. A 401 is the exception: Discord has
+        refused the token, and opening a session with it only has Discord refuse it again
+        (close code 4004), so the refusal is kept for :meth:`health` instead."""
         try:
             info = await self._api.get_gateway_bot()  # type: ignore[union-attr]
             return str(info.get("url", "")) or DEFAULT_GATEWAY_URL
+        except DiscordAPIError as exc:
+            if exc.status == 401:
+                logger.error("discord: GET /gateway/bot refused the bot token (401) — not connecting")
+                self._inbound_stopped = _TOKEN_REFUSED_AT_DISCOVERY
+                return ""
+            logger.warning("discord: GET /gateway/bot failed (%s) — using the default gateway URL", exc)
+            return DEFAULT_GATEWAY_URL
         except Exception:
             logger.warning("discord: GET /gateway/bot failed — using the default gateway URL")
             return DEFAULT_GATEWAY_URL
@@ -371,6 +427,21 @@ class DiscordTransport(ChannelTransportProvider):
                     "off and on, starts it on this one."
                 )
             return {"state": "error", "detail": detail}
+        # The receiver started on the saved token. Whether it is RECEIVING is its session's to say.
+        if self._inbound_stopped:
+            return {"state": "error", "detail": f"Inbound STOPPED — {self._inbound_stopped}"}
+        gateway = self._gateway
+        if gateway is not None and gateway.fatal_close_code is not None:
+            refusal = _REFUSALS[gateway.fatal_close_code]
+            return {"state": "error", "detail": f"Inbound STOPPED — {refusal}"}
+        if gateway is not None and gateway.last_drop:
+            return {
+                "state": "error",
+                "detail": (
+                    f"Inbound NOT RECEIVING — {gateway.last_drop}, and the gateway session is "
+                    "reconnecting."
+                ),
+            }
         return {"state": "ready", "detail": "Bot token configured"}
 
     async def test(self) -> dict[str, Any]:

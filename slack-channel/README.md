@@ -74,7 +74,10 @@ replaces one.
 **Inbound follows the tokens.** The gateway starts the Socket-Mode receiver when it turns
 the channel on, and a Configure → Save moves it onto the saved tokens at once; the channel
 row reads "starting" until Socket Mode is connected. Whenever outbound works and inbound does
-not, the row says so, and what starts it, rather than showing a flat green.
+not, the row says so, and what starts it, rather than showing a flat green. That includes a
+connection Slack dropped later: the Slack SDK reconnects on its own every 10 seconds, and while
+it cannot, the row says what Slack answered (`invalid_auth` means the App Token was revoked or
+regenerated; save the new one in Configure).
 
 An allowlisted (non-owner) user is authorized for conversation *and* for the commands in
 the "any allowed user" tier — `!stop`, `!title`, `!compact`, `sessions`, and `!dashboard`,

@@ -126,6 +126,12 @@ core seam: an unknown DM sender gets a canned pairing-needed reply (run
 `personalclaw pair telegram` for a code); a tracked group's non-owner content is
 fenced before it enters a session.
 
+The Telegram row on Settings → Providers reads the long-poll, not just the token. If Telegram
+rejects the token (401, for example after `/revoke` in @BotFather) the receiver stops and the
+row says so; save the new token in Configure to start it again. A long-poll that fails and is
+retried (another poller holding the token, Telegram unreachable) reads as not receiving, with
+Telegram's answer, until a poll gets through.
+
 ## License
 
 MIT — see `LICENSE`.
