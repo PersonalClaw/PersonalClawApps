@@ -4,6 +4,10 @@ Groq LPU inference (OpenAI-compatible), very low latency. Bring your own Groq AP
 
 **Groq** is a **model provider** — it registers Groq-hosted models (OpenAI-compatible) under Settings → Models.
 
+Images: a model that reads images is sent an attached image as the image itself. That is Llama 4
+Scout and Maverick (`VISION_MODELS` in `provider.py`, since their ids don't say so) and any model
+whose id carries `vision`. Every other Groq model gets the image's text instead.
+
 ## What this is
 
 A standalone PersonalClaw app bundle (part of the core/app workspace split). It ships
@@ -12,8 +16,8 @@ as a self-contained directory:
 - `app.json` — the manifest (identity, provider/backend/UI declarations, permissions).
 - `provider.py` — the implementation, exposed via `create_provider`.
 - `test_catalog.py`, `test_provider.py` — the app's own tests.
-- `test_wire.py` — proves a call's per-call temperature and output budget reach the request, against
-  a recording endpoint.
+- `test_wire.py` — proves a call's per-call temperature and output budget reach the request, and
+  that a model that takes images is sent the image, against a recording endpoint.
 
 It imports only the PersonalClaw **SDK** (never core internals), so core can evolve
 without breaking it:

@@ -9,6 +9,11 @@ calls a bound model.
 
 It rides core's branded-app factory (``register_branded_app``), which reads both. So this drives
 the app's real ``openai`` client against a fake endpoint that records the request.
+
+An image goes to a model as an image only when the platform's record says the model takes one: the
+provider type's ``supports_vision`` and ``image_modality`` on the model's catalog row. The last
+test asks that record the way a chat turn does, for a model whose id says so, one this app declares
+and one that takes none, and checks that the image part reaches the request.
 """
 
 from __future__ import annotations
@@ -22,9 +27,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the repo root
 
 from apps_testkit.model_wire import (  # noqa: E402
     MODEL,
+    PNG_DATA_URL,
     REPLY,
     RecordingModelServer,
     form_options,
+    image_call,
+    images_sent,
     one_call,
     sampling_sent,
 )
@@ -62,3 +70,51 @@ async def test_what_core_asks_of_a_call_is_what_the_request_carries(server, aske
     assert built.sampling_temperature == sent[0]
     assert await one_call(built) == REPLY
     assert [sampling_sent(call) for call in server.calls()] == [sent]
+
+
+#: A Groq model that takes images and whose id does not say so (``provider.VISION_MODELS``).
+DECLARED_VISION = "meta-llama/llama-4-scout-17b-16e-instruct"
+#: One whose id does: core's classifier tags it from the ``vision`` marker.
+NAMED_VISION = "llama-3.2-90b-vision-preview"
+TEXT_ONLY = "llama-3.1-8b-instant"
+
+
+@pytest.fixture
+def listed(monkeypatch):
+    """A form-saved instance registered the way core registers one, against a server that lists
+    the three models, with 127.0.0.1 allow-listed so catalog discovery may reach it."""
+    from personalclaw.config.loader import AppConfig
+    from personalclaw.llm.registry import get_default_registry
+    from personalclaw.providers import image_input
+
+    cfg = AppConfig()
+    cfg.security.egress.allow_hosts = ["127.0.0.1"]
+    monkeypatch.setattr(AppConfig, "load", staticmethod(lambda *a, **k: cfg))
+    with RecordingModelServer(models=(DECLARED_VISION, NAMED_VISION, TEXT_ONLY)) as recording:
+        entry = _entry(recording.url)
+        registry = get_default_registry()
+        registry.register_entry(entry)
+        image_input.clear_cache()
+        try:
+            yield recording, entry
+        finally:
+            registry.unregister_entry(entry.name)
+            image_input.clear_cache()
+
+
+@pytest.mark.asyncio
+async def test_a_model_that_takes_images_is_sent_the_image(listed):
+    from personalclaw.providers.image_input import image_input
+
+    recording, entry = listed
+    for model in (DECLARED_VISION, NAMED_VISION):
+        answer = await image_input(f"{entry.name}:{model}")
+        assert answer.accepted, (model, answer.reason)
+    refused = await image_input(f"{entry.name}:{TEXT_ONLY}")
+    assert (refused.accepted, refused.reason) == (False, f"{TEXT_ONLY} can't take images.")
+
+    built = provider._factory(entry=entry, model=DECLARED_VISION)
+    assert await image_call(built) == REPLY
+    calls = recording.calls()
+    assert [images_sent(call) for call in calls] == [[PNG_DATA_URL]]
+    assert calls[0]["body"]["model"] == DECLARED_VISION
