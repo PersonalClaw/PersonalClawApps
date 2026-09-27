@@ -21,6 +21,7 @@
     "routes": [
       {
         "op": "list_artifacts",
+        "readOnly": true,
         "method": "GET",
         "path": "/artifacts",
         "summary": "List growth artifacts, optionally filtered by dimension, area, or period.",
@@ -62,6 +63,7 @@
       },
       {
         "op": "list_areas",
+        "readOnly": true,
         "method": "GET",
         "path": "/areas",
         "summary": "List tracked growth areas."
@@ -93,6 +95,7 @@
       },
       {
         "op": "list_dismissed",
+        "readOnly": true,
         "method": "GET",
         "path": "/dismissed",
         "summary": "List evidence sources the user has dismissed from auto-capture."
@@ -106,12 +109,14 @@
       },
       {
         "op": "readiness",
+        "readOnly": true,
         "method": "GET",
         "path": "/readiness",
         "summary": "Report readiness scores against the rubric across dimensions."
       },
       {
         "op": "get_rubric",
+        "readOnly": true,
         "method": "GET",
         "path": "/rubric",
         "summary": "Get the current scoring rubric."
@@ -130,6 +135,7 @@
       },
       {
         "op": "list_digests",
+        "readOnly": true,
         "method": "GET",
         "path": "/digests",
         "summary": "List generated accomplishment digests."
