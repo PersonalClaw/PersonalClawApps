@@ -30,7 +30,9 @@ mail is irreversible and leaves your machine, so it is off by default. See
   the one **CA Certificate File** names. Nothing turns the check off. With **Use SSL** off,
   the IMAP connection is upgraded with STARTTLS before the login, checked the same way,
   and a server that does not offer STARTTLS is refused without the password being sent.
-  There is no setting that sends it in the clear.
+  SMTP is the same: `starttls` upgrades before the login and the mail, and `ssl` is TLS
+  from the start. There is no setting that sends either in the clear (SMTP's `plain` mode
+  is gone; a setting that still names it reads as `starttls`).
 - **Fail-closed sender allowlist.** Only senders matching your allow-glob patterns are
   ever surfaced. An **empty allowlist surfaces nothing at all** — never "everything".
   This is the security posture, not a bug: an unknown sender can never trigger anything.
@@ -196,10 +198,11 @@ mail on the same address, and every mail arrives on the same address, so a reply
 to whoever wrote last. Answering the wrong person is worse than not answering.
 
 TLS is verified, not attempted: the server's certificate and host name are checked before
-the login, and in `starttls` mode a failed upgrade **aborts** the send rather than
-continuing in the clear, so an app password is never put on a plaintext socket or handed
-to a server nothing vouches for. SMTP error text is scrubbed of the password before it
-reaches a log.
+the login, and in `starttls` mode a server that does not offer STARTTLS, or an upgrade that
+fails, **aborts** the send before the login rather than continuing in the clear, so an app
+password is never put on a plaintext socket or handed to a server nothing vouches for. The
+reply says why: *the SMTP server … doesn't offer STARTTLS, so nothing was sent to it*. SMTP
+error text is scrubbed of the password before it reaches a log.
 
 ## Security
 

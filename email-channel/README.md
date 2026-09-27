@@ -35,8 +35,8 @@ A standalone PersonalClaw app bundle. It ships as a self-contained directory:
   - `imap_client.py` — the blocking IMAP mechanics behind a narrow protocol: UID-only
     commands, read-only `SELECT`, `BODY.PEEK[]`, `UIDVALIDITY`, the folder's newest UID,
     and the `_MAXLINE` ceiling raised at import.
-  - `smtp_client.py` — the blocking SMTP mechanics: STARTTLS/SSL/plain, with **no
-    plaintext fallback** (a failed upgrade aborts the send).
+  - `smtp_client.py` — the blocking SMTP mechanics: STARTTLS or SSL, **never plaintext** (a
+    server that cannot upgrade, or a failed upgrade, aborts before the login and the mail).
   - `tls.py` — the one TLS context every IMAP and SMTP connection uses, and the sentence
     a connection that fails reports.
   - `mime.py` — inbound parse (RFC-2047 header decoding, `text/plain` preference, HTML
@@ -122,7 +122,7 @@ other app. (Or [install it from a shell](../docs/third-party-install.md#installi
 | `imap_host` / `imap_port` / `imap_user` / `imap_use_ssl` | IMAP | Inbound. 993 + SSL by default. With IMAP SSL off (usually 143), the connection is upgraded with STARTTLS before the login. |
 | `imap_password` | IMAP App Password | Write-only. An app password, never your account password. |
 | `folder` | Folder | Polled **read-only** — your mail is never marked read. |
-| `smtp_host` / `smtp_port` / `smtp_user` / `smtp_security` | SMTP | Outbound. 587 + STARTTLS by default. |
+| `smtp_host` / `smtp_port` / `smtp_user` / `smtp_security` | SMTP | Outbound. 587 + STARTTLS by default, or `ssl` (usually 465). There is no mode without TLS: `plain` is gone, and a setting that still names it reads as `starttls`. |
 | `smtp_password` | SMTP App Password | Write-only. Blank reuses the IMAP one (one app password usually covers both). |
 | `tls_ca_file` | CA Certificate File | Optional. The PEM certificate of the authority your mail server's certificate comes from, when it is not a public one (a company relay, a home server). Trusted in addition to this machine's authorities. |
 | `address` | Mailbox Address | Sends as, receives at, and anchors the self-message filter. Defaults to the IMAP login. |
@@ -142,7 +142,10 @@ removes them. Passwords an earlier release's setup saved under `EMAIL_IMAP_PASS`
   check off: a server nothing vouches for is refused, and the channel's status says
   which server, why, and that the password was not sent. With **IMAP SSL** off, the IMAP
   connection is upgraded with STARTTLS before the login, and a server that does not offer
-  STARTTLS is refused the same way: the password is never sent in the clear.
+  STARTTLS is refused the same way: the password is never sent in the clear. SMTP is the
+  same: `starttls` upgrades before the login and the mail, and a relay that does not offer
+  STARTTLS is refused with *the SMTP server … doesn't offer STARTTLS, so nothing was sent to
+  it*.
 - **A first connection starts after the newest message.** The mail already in the folder
   when you set the channel up is never answered; mail that arrives after it is. The same
   happens when the server renumbers the folder (`UIDVALIDITY` changes).
@@ -186,6 +189,11 @@ Who may talk is owned by the **core sender-trust seam** (`channel_trust`, provid
 3. They **reply with the code anywhere in the body** — quoting and signatures are fine.
 4. From then on they converse; each thread gets its own session.
 
+**The owner** is the address approvals and anything else for you are sent to. Pair it from
+Configure → **Pair as owner**: mail the code the page shows to the mailbox from that address,
+anywhere in the message. It then counts as a paired sender too. Five wrong codes cancel it, and
+the mailbox's own address can never be the owner (its mail is dropped unread).
+
 Trust is keyed on the address parsed out of `From`, never on the display name. A message
 whose display name reads `allowed@example.com` but whose actual address is
 `evil@attacker.test` is denied.
@@ -210,12 +218,13 @@ returns `""` with no-op append/stop. Core's mirror path already treats `""` as "
 channel cannot stream". Both halves are asserted together in
 `tests/test_transport.py::TestCapabilities`.
 
-Approvals arrive as a **reply token**: the prompt mail carries `APPROVE <token>` /
+Approvals arrive as a **reply token**. The prompt mail says what will run, as PersonalClaw's
+own approval card does: the tool, its arguments, why the agent is calling it, and what the call
+can touch with its risk (masked by PersonalClaw). It carries `APPROVE <token>` /
 `DENY <token>`. **Only the owner is asked, and only the owner answers.** The owner is the
-address this channel keeps as its owner id, `PERSONALCLAW_OWNER_ID_EMAIL` (set it in the
-environment or the credential store, like every channel's owner id). The prompt goes to that
-address alone, and only a reply from it can resolve one. That address must be paired like any
-other sender, and it cannot be the mailbox's own address.
+address paired from Configure → **Pair as owner** (above), which core keeps as this channel's
+owner id. The prompt goes to that address alone, and only a reply from it can resolve one. It
+cannot be the mailbox's own address.
 
 A chat in a thread with the owner is asked in that thread. A chat with anyone else, a paired
 correspondent included, is asked in a new mail to the owner. A correspondent's reply carrying a

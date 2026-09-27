@@ -86,8 +86,8 @@ def _coerce_port(value: object, default: int = _DEFAULT_PORT) -> int:
 
 
 def _coerce_security(value: object) -> str:
-    """An unknown TLS mode falls back to STARTTLS, never to ``plain``: a typo must not
-    silently put an app password on the wire in the clear."""
+    """A mode this app does not have reads as STARTTLS: a typo, or ``plain``, which sent the app
+    password and the mail in the clear and is gone. A session is TLS before anything is sent."""
     mode = str(value or "").strip().lower()
     return mode if mode in VALID_SMTP_SECURITY else SMTP_STARTTLS
 

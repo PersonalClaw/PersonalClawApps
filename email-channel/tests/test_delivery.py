@@ -440,9 +440,45 @@ class TestSendFailure:
 
 class TestApprovalReplyToken:
     class _Event:
-        def __init__(self, request_id="req-1", title="Run rm -rf /tmp/x"):
+        def __init__(self, request_id="req-1", title="Run rm -rf /tmp/x", brief=None):
             self.request_id = request_id
             self.title = title
+            self.tool_input = ""
+            self.tool_purpose = ""
+            self.tool_meta = {} if brief is None else {"approval_brief": brief}
+
+    @pytest.mark.asyncio
+    async def test_the_mail_says_what_will_run_as_the_dashboard_card_does(self, wired):
+        """It named the tool alone. It says the tool, its arguments, the purpose and what the
+        call can touch, from core's brief, as they are: core masked them."""
+        delivery, smtp, _ = wired
+        brief = {
+            "tool": "execute_bash",
+            "input": '{"command": "rm -rf build",\n "cwd": "/srv/app"}',
+            "purpose": "clear the old build",
+            "risk": "destructive",
+            "summary": "Can: runs a command · Risk: Destructive",
+        }
+        task = asyncio.ensure_future(
+            delivery.request_approval(self._Event(brief=brief), source="subagent")
+        )
+        await asyncio.sleep(0)
+        token = next(iter(delivery._pending))
+        assert smtp.header("Subject") == "[PersonalClaw] Approval needed: execute_bash"
+        assert smtp.body_text().strip() == (
+            "PersonalClaw needs your approval for a subagent action: execute_bash\n\n"
+            "What will run:\n\n"
+            '    {"command": "rm -rf build",\n'
+            '     "cwd": "/srv/app"}\n\n'
+            "clear the old build\n"
+            "Can: runs a command · Risk: Destructive\n\n"
+            "Reply to this message with exactly one of:\n"
+            f"    {APPROVE_WORD} {token}\n"
+            f"    {DENY_WORD} {token}\n\n"
+            "No reply within 2h counts as a denial."
+        )
+        delivery.resolve_reply_token(f"{DENY_WORD} {token}", OWNER)
+        await asyncio.wait_for(task, timeout=1.0)
 
     @pytest.mark.asyncio
     async def test_prompt_carries_both_verbs_and_a_token(self, wired):

@@ -36,6 +36,7 @@ from email_runtime.settings import (
     SMTP_STARTTLS,
     _VALID_ACTIVATIONS,
     _VALID_SMTP_SECURITY,
+    _validate_smtp_security,
 )
 
 _APP = "email-channel"
@@ -109,7 +110,9 @@ def _setup_connection(ctx: SetupContext, preset: tuple | None) -> None:
     d_imap_port = preset[1] if preset else cur.get("imap_port", DEFAULT_IMAP_PORT)
     d_smtp_host = preset[2] if preset else str(cur.get("smtp_host", ""))
     d_smtp_port = preset[3] if preset else cur.get("smtp_port", DEFAULT_SMTP_PORT)
-    d_security = preset[4] if preset else str(cur.get("smtp_security", SMTP_STARTTLS))
+    d_security = preset[4] if preset else _validate_smtp_security(
+        str(cur.get("smtp_security", SMTP_STARTTLS))
+    )
 
     ctx.print("── Mailbox ──\n")
     address = (

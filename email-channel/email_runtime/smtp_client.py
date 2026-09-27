@@ -81,10 +81,10 @@ def _connect(
 ) -> smtplib.SMTP:
     """Open a session, verify the server, and log in. BLOCKING.
 
-    ``security`` is ``"ssl"`` (implicit TLS, 465), ``"starttls"`` (587) or ``"plain"``.
-    STARTTLS is required rather than attempted: a server that does not offer it, or an
-    upgrade that fails, aborts before the login, so an app password never crosses in the
-    clear. Raises :class:`SmtpError` naming the failed stage."""
+    ``security`` is ``"ssl"`` (implicit TLS, 465); anything else is STARTTLS (587), which is
+    required rather than attempted: a server that does not offer it, or an upgrade that fails,
+    aborts before the login and the mail, so neither an app password nor a message crosses in
+    the clear. There is no mode without TLS. Raises :class:`SmtpError` naming the failed stage."""
 
     def describe(exc: BaseException) -> str:
         return describe_failure(exc, protocol="SMTP", host=host, port=port)
@@ -99,21 +99,25 @@ def _connect(
         )
     except (smtplib.SMTPException, OSError) as exc:
         raise SmtpError(describe(exc), kind=_stage_kind(exc)) from exc
+    no_starttls = SmtpError(
+        f"the SMTP server {host}:{port} doesn't offer STARTTLS, so nothing was sent to it: the "
+        "connection must be upgraded to TLS before the login and the mail. Set SMTP Security to "
+        "ssl (usually port 465), or use a server that offers STARTTLS",
+        kind="tls",
+    )
     try:
         if security != "ssl":
             client.ehlo()
-            if security == "starttls":
-                client.starttls(context=client_context(ca_file))
-                # RFC 3207: the session resets on upgrade — re-EHLO so the AUTH
-                # capabilities read are the post-TLS ones.
-                client.ehlo()
+            if not client.has_extn("starttls"):
+                _quit_quietly(client)
+                raise no_starttls
+            client.starttls(context=client_context(ca_file))
+            # RFC 3207: the session resets on upgrade — re-EHLO so the AUTH
+            # capabilities read are the post-TLS ones.
+            client.ehlo()
     except smtplib.SMTPNotSupportedError as exc:
         _quit_quietly(client)
-        raise SmtpError(
-            f"the SMTP server {host}:{port} does not offer STARTTLS, so nothing was sent "
-            "(choose ssl for port 465)",
-            kind="tls",
-        ) from exc
+        raise no_starttls from exc
     except (smtplib.SMTPException, OSError) as exc:
         _quit_quietly(client)
         raise SmtpError(describe(exc), kind=_stage_kind(exc)) from exc
@@ -141,11 +145,11 @@ class SmtplibSender:
 
     :meth:`send` is BLOCKING and must be called from a thread executor.
 
-    ``security`` selects the transport: ``"ssl"`` (implicit TLS, port 465), ``"starttls"``
-    (upgrade an established plaintext session, port 587), or ``"plain"``. STARTTLS is
-    verified rather than attempted: if the upgrade fails the send is ABORTED, never
-    retried in the clear — silently downgrading would put an app password on the wire in
-    plaintext, which is the whole failure this check exists to prevent."""
+    ``security`` selects the transport: ``"ssl"`` (implicit TLS, port 465) or ``"starttls"``
+    (upgrade the session before anything is sent, port 587). STARTTLS is verified rather than
+    attempted: a server without it, or an upgrade that fails, ABORTS the send, never retried in
+    the clear — downgrading would put an app password on the wire in plaintext, which is the
+    whole failure this check exists to prevent."""
 
     def __init__(
         self, host: str, port: int, username: str, password: str, *, security: str = "starttls",

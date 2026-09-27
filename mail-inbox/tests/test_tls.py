@@ -182,6 +182,9 @@ class TestTheContextEveryPathUses:
             def ehlo(self):
                 return (250, b"ok")
 
+            def has_extn(self, name):
+                return name.lower() == "starttls"
+
             def starttls(self, context=None):
                 contexts.append(context)
                 return (220, b"go")
@@ -338,3 +341,41 @@ class TestWithSslOffTheConnectionIsUpgradedFirst:
         from mail_inbox_runtime.imap_client import IMAP_TIMEOUT_SECS
 
         assert seen == [IMAP_TIMEOUT_SECS, IMAP_TIMEOUT_SECS]
+
+
+class TestSmtpIsNeverSentInTheClear:
+    """Ledger 282's SMTP half. A ``plain`` mode sent the password and the mail on a plaintext
+    socket to whatever answered. There is no mode without TLS now: ``starttls`` upgrades before
+    the login and the mail, and a server that cannot upgrade is refused before anything is sent
+    to it, whatever the mode was saved as."""
+
+    @pytest.fixture
+    def no_upgrade(self, ca):
+        server = StarttlsSmtpServer(ca, offer_starttls=False)
+        yield server
+        server.close()
+
+    @pytest.mark.parametrize("security", ["starttls", "plain"])
+    def test_a_server_that_cannot_upgrade_gets_neither_the_password_nor_the_mail(
+        self, no_upgrade, ca, security
+    ):
+        sender = SmtplibSender(
+            "127.0.0.1", no_upgrade.port, "u", "pw", security=security, ca_file=str(ca.ca)
+        )
+        with pytest.raises(SmtpError) as refused:
+            sender.send(_message())
+        assert str(refused.value) == (
+            f"the SMTP server 127.0.0.1:{no_upgrade.port} doesn't offer STARTTLS, so nothing was "
+            "sent to it: the connection must be upgraded to TLS before the login and the mail. "
+            "Set SMTP TLS Mode to ssl (usually port 465), or use a server that offers STARTTLS"
+        )
+        assert no_upgrade.clear_logins == [] and no_upgrade.logins == []
+        assert no_upgrade.clear_commands == ["EHLO", "QUIT"], "it was sent more than a greeting"
+
+    def test_the_login_goes_over_tls(self, submission, ca):
+        ok, detail = smtp_probe(
+            "127.0.0.1", submission.port, "u", "pw", security="starttls", ca_file=str(ca.ca)
+        )
+        assert ok is True, detail
+        assert submission.clear_logins == [] and submission.logins == ["u"]
+        assert submission.clear_commands == ["EHLO", "STARTTLS"]

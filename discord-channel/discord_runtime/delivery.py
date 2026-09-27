@@ -22,7 +22,8 @@ Two Discord-specific shapes drive this module:
   the decision resolves, the prompt is edited to show the outcome AND its
   ``components`` are cleared — a still-clickable approval button on a
   hours-old decided request is a real footgun, not a cosmetic one. A prompt too
-  long for one message is split like a reply, the buttons on its last part.
+  long for one message is split like a reply, the buttons on its last part. It shows
+  what will run, as the dashboard's approval card does (:func:`_approval_text`).
 
 Discord renders standard markdown, so unlike Telegram's MarkdownV2 there is no
 escaping layer: the model's markdown goes out as-is. Length is the only rendering
@@ -40,7 +41,7 @@ import logging
 import re
 from typing import Any, Callable
 
-from personalclaw.sdk.channel import is_tracked_channel, sel
+from personalclaw.sdk.channel import approval_brief_for, is_tracked_channel, sel
 
 from discord_runtime.api import (
     BUTTON_STYLE_DANGER,
@@ -528,10 +529,10 @@ class DiscordDelivery:
             return None
 
         request_id = str(getattr(event, "request_id", ""))
-        title = str(getattr(event, "title", ""))
-        # Split like a reply, the buttons on the last part: the prompt was cut at 2,000
-        # characters, so the owner approved a command whose end they never saw.
-        parts = split_message(f"🔐 [{source}] Approve: {title}?")
+        # What will run, as the dashboard's card shows it. Split like a reply, the buttons on
+        # the last part: the prompt was cut at 2,000 characters, so the owner approved a
+        # command whose end they never saw.
+        parts = split_message(_approval_text(approval_brief_for(event) or {}, source))
         msg: dict[str, Any] = {}
         for index, part in enumerate(parts, 1):
             last = index == len(parts)
@@ -563,7 +564,7 @@ class DiscordDelivery:
             # components=[] strips the buttons: a decided request must not leave a
             # clickable Approve behind.
             await self._api.edit_message(
-                channel_id, message_id, _answered(title, parts, status), components=[]
+                channel_id, message_id, _answered(parts, status), components=[]
             )
         except Exception:
             logger.debug("discord: approval finalize edit failed", exc_info=True)
@@ -646,9 +647,33 @@ def _monotonic() -> float:
     return time.monotonic()
 
 
-def _answered(title: str, parts: list[str], status: str) -> str:
-    """What the prompt's last message says once it is answered, in one message: the prompt with
-    its outcome, or, for a prompt split over several, its last part with it, or the outcome
-    alone when that would not fit (the parts above keep the rest)."""
-    text = f"🔐 {title} — {status}" if len(parts) <= 1 else f"{parts[-1]} — {status}"
-    return text if len(text) <= DISCORD_MAX_TEXT else f"🔐 {status}"
+def _approval_text(brief: dict, source: str) -> str:
+    """The approval prompt, from core's brief (``approval_brief_for``): the tool, its arguments
+    in a code block, the purpose the runner gave and the summary line (what the call can touch,
+    and its risk). That is what the dashboard's approval card shows; the prompt used to show the
+    tool's name alone, so a command was approved unseen. Every string is already masked."""
+    tool = str(brief.get("tool") or "") or "a tool"
+    lines = [f"🔐 [{source}] Approve `{tool}`?"]
+    arguments = str(brief.get("input") or "")
+    if arguments:
+        lines += ["```", _unfenced(arguments), "```"]
+    lines += [str(brief[k]) for k in ("purpose", "summary") if brief.get(k)]
+    return "\n".join(lines)
+
+
+#: Three or more backticks: a run that would end a code block.
+_FENCE_RUN = re.compile(r"`{3,}")
+
+
+def _unfenced(text: str) -> str:
+    """*text* with every run of three or more backticks broken by zero-width spaces, so what is
+    shown cannot close the code block it is shown in."""
+    return _FENCE_RUN.sub(lambda m: "\u200b".join(m.group(0)), text)
+
+
+def _answered(parts: list[str], status: str) -> str:
+    """What the prompt's last message says once it is answered: its own text with the outcome
+    under it, so the channel keeps what was approved; or the outcome alone when that would not
+    fit one message (the parts above keep the rest)."""
+    text = f"{parts[-1]}\n{status}" if parts else status
+    return text if len(text) <= DISCORD_MAX_TEXT else status

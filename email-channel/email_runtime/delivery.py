@@ -40,7 +40,13 @@ from email.message import EmailMessage
 from typing import Any
 from urllib.parse import quote
 
-from personalclaw.sdk.channel import atomic_write, is_tracked_channel, owner_id_for, sel
+from personalclaw.sdk.channel import (
+    approval_brief_for,
+    atomic_write,
+    is_tracked_channel,
+    owner_id_for,
+    sel,
+)
 from personalclaw.sdk.util import app_data_dir
 
 from email_runtime.mime import build_outbound, build_references, reply_subject
@@ -485,15 +491,15 @@ class EmailDelivery:
                 channel, thread_ts = str(linked), str(linked_thread or "")
 
         request_id = str(getattr(event, "request_id", ""))
-        title = str(getattr(event, "title", ""))
+        brief = approval_brief_for(event) or {}
+        title = str(brief.get("tool") or "") or "a tool"
         token = secrets.token_hex(_TOKEN_BYTES).upper()
         pending = _PendingApproval(request_id, token, channel)
         self._pending[token] = pending
 
         body = (
-            f"PersonalClaw needs your approval for a {source} action:\n\n"
-            f"    {title}\n\n"
-            f"Reply to this message with exactly one of:\n"
+            _approval_text(brief, source)
+            + "\n\nReply to this message with exactly one of:\n"
             f"    {APPROVE_WORD} {token}\n"
             f"    {DENY_WORD} {token}\n\n"
             f"No reply within {_APPROVAL_TIMEOUT // 3600}h counts as a denial."
@@ -555,6 +561,24 @@ class EmailDelivery:
                 pending.future.set_result("rejected" if denied else "approved")
             return True
         return False
+
+
+def _approval_text(brief: dict, source: str) -> str:
+    """What the approval mail says will run, from core's brief (``approval_brief_for``): the
+    tool, its arguments, the purpose the runner gave and the summary line (what the call can
+    touch, and its risk), which is what the dashboard's approval card shows. It used to name the
+    tool alone. Every string is already masked; the arguments are indented, as a mail client
+    shows code."""
+    tool = str(brief.get("tool") or "") or "a tool"
+    parts = [f"PersonalClaw needs your approval for a {source} action: {tool}"]
+    arguments = str(brief.get("input") or "")
+    if arguments:
+        indented = "\n".join(f"    {line}" for line in arguments.split("\n"))
+        parts.append(f"What will run:\n\n{indented}")
+    extra = [str(brief[k]) for k in ("purpose", "summary") if brief.get(k)]
+    if extra:
+        parts.append("\n".join(extra))
+    return "\n\n".join(parts)
 
 
 def _read_bytes(path: str) -> bytes:

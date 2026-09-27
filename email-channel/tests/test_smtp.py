@@ -46,6 +46,10 @@ class FakeSmtp:
         self.calls.append("ehlo")
         return (250, b"ok")
 
+    def has_extn(self, name):
+        """What the server's EHLO offered: STARTTLS unless the ``no_starttls`` fault is set."""
+        return name.lower() == "starttls" and "no_starttls" not in FakeSmtp.faults
+
     def starttls(self, *a, **k):
         self.calls.append("starttls")
         if self.starttls_fails:
@@ -101,13 +105,15 @@ class TestTransportSelection:
         assert "starttls" not in client.calls
         assert client.calls == ["login", "send_message", "quit"]
 
-    def test_plain_neither_upgrades_nor_uses_ssl(self):
-        SmtplibSender("localhost", 25, "", "", security="plain").send(_msg())
+    def test_there_is_no_mode_without_tls(self):
+        """Ledger 282's SMTP half: ``plain`` sent the password and the mail in the clear. A
+        sender handed that mode upgrades like any other."""
+        SmtplibSender("localhost", 25, "u", "p", security="plain").send(_msg())
         client = FakeSmtp.instances[-1]
-        assert client.calls == ["ehlo", "send_message", "quit"]
+        assert client.calls == ["ehlo", "starttls", "ehlo", "login", "send_message", "quit"]
 
     def test_no_login_without_credentials(self):
-        SmtplibSender("localhost", 25, "", "", security="plain").send(_msg())
+        SmtplibSender("localhost", 25, "", "", security="starttls").send(_msg())
         assert FakeSmtp.instances[-1].logins == []
 
     def test_timeout_is_always_passed(self):
@@ -132,6 +138,22 @@ class TestNoPlaintextFallback:
         assert "login" not in client.calls  # never authenticated in the clear
         assert client.sent == []  # and never sent
         assert "quit" in client.calls  # still torn down
+
+    def test_a_server_that_offers_no_starttls_is_refused_with_a_sentence(self):
+        """Refused before anything is sent to it, whatever the mode was saved as."""
+        FakeSmtp.faults.add("no_starttls")
+        for security in ("starttls", "plain"):
+            with pytest.raises(SmtpError) as err:
+                SmtplibSender("relay.test", 25, "u", "p", security=security).send(_msg())
+            assert str(err.value) == (
+                "the SMTP server relay.test:25 doesn't offer STARTTLS, so nothing was sent to it: "
+                "the connection must be upgraded to TLS before the login and the mail. Set SMTP "
+                "Security to ssl (usually port 465), or use a server that offers STARTTLS"
+            )
+            assert err.value.kind == "tls"
+            client = FakeSmtp.instances[-1]
+            assert client.calls == ["ehlo", "quit"], "something was sent before the refusal"
+            assert client.logins == [] and client.sent == []
 
 
 class TestErrorContainment:
@@ -165,10 +187,16 @@ class TestErrorContainment:
 
 class TestProbeLogin:
     def test_ok_for_each_security_mode(self):
-        for security in ("starttls", "ssl", "plain"):
+        for security in ("starttls", "ssl"):
             ok, detail = probe_login("mail.test", 587, "u", "p", security=security)
             assert ok is True, detail
             assert security in detail
+
+    def test_the_probe_is_refused_by_a_server_without_starttls(self):
+        FakeSmtp.faults.add("no_starttls")
+        ok, detail = probe_login("relay.test", 25, "u", "p")
+        assert ok is False and "doesn't offer STARTTLS, so nothing was sent to it" in detail
+        assert FakeSmtp.instances[-1].logins == []
 
     def test_probe_sends_no_mail(self):
         probe_login("mail.test", 587, "u", "p")
