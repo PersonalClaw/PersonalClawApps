@@ -1210,6 +1210,7 @@ class TestAgentCommand:
 
     @pytest.fixture(autouse=True)
     def setup_agents_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PERSONALCLAW_HOME", str(tmp_path / ".personalclaw"))
         agents_dir = tmp_path / ".personalclaw" / "agents"
         agents_dir.mkdir(parents=True)
         # Agent with package prefix: filename != internal name
@@ -1218,7 +1219,6 @@ class TestAgentCommand:
         )
         # Agent where filename == internal name
         (agents_dir / "fyi-blog-writer.json").write_text('{"name": "fyi-blog-writer"}')
-        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
         # Stub out _set_default_agent to avoid real config writes
         monkeypatch.setattr("slack_runtime.handler._set_default_agent", lambda name: None)
         set_owner_id("U_OWNER")
@@ -1359,11 +1359,11 @@ class TestPerThreadAgent:
 
     @pytest.fixture(autouse=True)
     def setup_agents_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PERSONALCLAW_HOME", str(tmp_path / ".personalclaw"))
         agents_dir = tmp_path / ".personalclaw" / "agents"
         agents_dir.mkdir(parents=True)
         (agents_dir / "AcmeAICapabilities-acme-dev.json").write_text('{"name": "acme-dev"}')
         (agents_dir / "sisyphus.json").write_text('{"name": "sisyphus"}')
-        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
         monkeypatch.setattr("slack_runtime.handler._set_default_agent", lambda name: None)
         set_owner_id("U_OWNER")
         set_allowed_users({"U_OWNER"})

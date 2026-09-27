@@ -18,7 +18,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from slack_runtime.settings import ACTIVATION_REVIEW
-from personalclaw.sdk.channel import redact_credentials, redact_exfiltration_urls
+from personalclaw.sdk.channel import config_dir, redact_credentials, redact_exfiltration_urls
 from personalclaw.sdk.channel import sel
 from slack_runtime.allowlist import (
     ACTION_ALLOWLIST_APPROVE,
@@ -1885,9 +1885,7 @@ async def _handle_resume_choice(
 
         # Post last 5 messages as context
         try:
-            from pathlib import Path
-
-            sess_dir = Path.home() / ".personalclaw" / "sessions"
+            sess_dir = config_dir() / "sessions"
             stem = session_key.split(":", 1)[-1] if ":" in session_key else session_key
             jsonl = sess_dir / f"{stem}.jsonl"
             if not jsonl.exists() and not stem.startswith("dashboard_"):

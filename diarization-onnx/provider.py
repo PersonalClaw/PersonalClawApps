@@ -9,7 +9,6 @@ capability, exactly like faster-whisper is one STT provider (mirrors its app sha
 from __future__ import annotations
 
 import asyncio
-import os
 import tarfile
 import urllib.request
 from pathlib import Path
@@ -22,6 +21,7 @@ from personalclaw.sdk.diarization import (
     SpeakerTurn,
     ensure_ffmpeg_in_path,
 )
+from personalclaw.sdk.util import config_dir
 
 # The catalog model id (the binding ref is ``diarization-onnx:<this>``). The real weights are
 # a pyannote-converted ONNX segmentation model + a 3D-Speaker embedding model — the documented
@@ -39,38 +39,19 @@ _EMB_REL = Path("embed.onnx")
 
 
 def _models_dir() -> Path:
-    """Where downloaded weights are WRITTEN — rooted at ``PERSONALCLAW_HOME`` so an
-    isolated home is actually isolated. Same one-line idiom as the sibling model bundles
-    (sentence-transformers, piper-tts, voice-clone-tts); this used to root at
-    ``XDG_CACHE_HOME``/``~/.cache``, which no PersonalClaw home can reach."""
-    home = os.environ.get("PERSONALCLAW_HOME", str(Path.home() / ".personalclaw"))
-    return Path(home) / "models" / "diarization-onnx"
+    """Where the pair is downloaded to and read from: the PersonalClaw home
+    (``config_dir()``), so an isolated home is actually isolated.
 
-
-def _legacy_dir() -> Path:
-    """Where the pair landed BEFORE it was rooted under ``PERSONALCLAW_HOME``: the
-    machine-wide XDG cache. Read-through only (see :func:`_weights_root`) — an existing
-    install keeps working with zero downloads, and nothing is ever copied out of here. A
-    migration copy at startup is its own outage, and looks like a hang rather than an
-    error."""
-    return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "personalclaw" / "diarization-onnx"
+    Earlier releases wrote it to ``$XDG_CACHE_HOME/personalclaw/diarization-onnx`` and read
+    through that folder. It is outside the home, so it is neither read nor deleted any more:
+    an install that has the pair only there downloads it once (47 MB) into the home."""
+    return config_dir() / "models" / "diarization-onnx"
 
 
 def _has_weights(root: Path) -> bool:
     """True only when BOTH halves of the pair sit under *root* — a half-populated root is
-    what an interrupted download leaves behind, and accepting it is how a legacy fallback
-    quietly resolves to nothing."""
+    what an interrupted download leaves behind, and accepting it would resolve to nothing."""
     return (root / _SEG_REL).is_file() and (root / _EMB_REL).is_file()
-
-
-def _weights_root() -> Path:
-    """The root the pipeline READS the pair from: the new ``PERSONALCLAW_HOME`` one, unless
-    the pair lives only in the legacy cache — then read straight through it so an upgrade
-    fetches nothing."""
-    new = _models_dir()
-    if _has_weights(new):
-        return new
-    return _legacy_dir() if _has_weights(_legacy_dir()) else new
 
 
 def create_provider(config: dict[str, Any] | None = None) -> "OnnxDiarizationProvider":
@@ -90,10 +71,8 @@ def availability() -> tuple[bool, str]:
 
 
 def _downloaded() -> bool:
-    """Whether a usable pair exists in EITHER root. Accepting the legacy cache is what
-    keeps an upgrade free: without it an already-downloaded pair reads as missing and the
-    Settings UI invites the user to re-fetch it."""
-    return _has_weights(_models_dir()) or _has_weights(_legacy_dir())
+    """Whether a usable pair is in the home."""
+    return _has_weights(_models_dir())
 
 
 class OnnxDiarizationProvider(DiarizationProvider, LocalModelProvider):
@@ -110,10 +89,7 @@ class OnnxDiarizationProvider(DiarizationProvider, LocalModelProvider):
 
     def cache_dir(self) -> str:
         """Where downloaded weights land — the core download UI reads this for byte
-        progress. ALWAYS the new root, never the legacy one, because every download writes
-        here (see :meth:`download_model`) even when the legacy cache already holds a copy.
-        Returning the legacy dir whenever it happened to hold weights would aim the
-        progress bar at a tree that never grows."""
+        progress, and core's delete sweeps it."""
         return str(_models_dir())
 
     async def is_available(self) -> bool:
@@ -132,8 +108,6 @@ class OnnxDiarizationProvider(DiarizationProvider, LocalModelProvider):
 
         def _run() -> bool:
             try:
-                # A deliberate download always fills the NEW root — never the legacy one —
-                # so cache_dir()'s byte progress tracks the tree that is actually growing.
                 root = _models_dir()
                 seg, emb = root / _SEG_REL, root / _EMB_REL
                 root.mkdir(parents=True, exist_ok=True)
@@ -149,8 +123,6 @@ class OnnxDiarizationProvider(DiarizationProvider, LocalModelProvider):
                     tarball.unlink(missing_ok=True)
                 if not emb.is_file():
                     urllib.request.urlretrieve(_EMB_URL, emb)
-                # Deliberately _has_weights(root), not _downloaded(): a legacy copy must
-                # not let a failed write here report success.
                 return _has_weights(root)
             except Exception:
                 return False
@@ -158,16 +130,13 @@ class OnnxDiarizationProvider(DiarizationProvider, LocalModelProvider):
         return await asyncio.get_running_loop().run_in_executor(None, _run)
 
     async def delete_model(self, model_name: str) -> bool:
+        """Remove the pair from the home. Nothing outside the home is deleted."""
         import shutil
-        # BOTH roots, for the same reason sentence-transformers removes both of its
-        # layouts: _downloaded() reads through to the legacy cache, so leaving that copy
-        # behind would keep the model reporting as "downloaded" right after a delete.
-        removed = False
-        for root in (_models_dir(), _legacy_dir()):
-            if root.is_dir():
-                shutil.rmtree(root, ignore_errors=True)
-                removed = True
-        return removed
+        root = _models_dir()
+        if not root.is_dir():
+            return False
+        shutil.rmtree(root, ignore_errors=True)
+        return True
 
     async def diarize(self, audio_path: str, *, model: str = "", num_speakers: int | None = None,
                       min_speakers: int | None = None, max_speakers: int | None = None):
@@ -180,9 +149,7 @@ class OnnxDiarizationProvider(DiarizationProvider, LocalModelProvider):
                 import soundfile as sf
                 if not _downloaded():
                     return None
-                # Read-through: resolves to the legacy root when the pair lives ONLY there,
-                # so an upgraded install uses what it already has instead of re-fetching.
-                root = _weights_root()
+                root = _models_dir()
                 seg_path, emb_path = root / _SEG_REL, root / _EMB_REL
                 clustering = (sherpa_onnx.FastClusteringConfig(num_clusters=int(maxs))
                               if maxs else sherpa_onnx.FastClusteringConfig(num_clusters=-1, threshold=0.5))
