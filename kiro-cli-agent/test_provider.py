@@ -17,6 +17,10 @@ import pytest
 import provider as kiro_cli
 from personalclaw.llm.registry import get_default_registry, reset_default_registry
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the repo root: apps_testkit
+
+from apps_testkit.acp_env import PLANTED_SECRETS, handed_env, stub_command  # noqa: E402
+
 
 @pytest.fixture(autouse=True)
 def _isolate_registry():
@@ -178,3 +182,20 @@ async def test_discover_agents_kiro_personas(monkeypatch, tmp_path):
     assert agents[0].runtime == "acp:kiro-cli"
     assert agents[0].models == ["auto", "glm-5"]
     assert all(a.reasoning_effort == "" for a in agents)
+
+
+def test_the_cli_is_handed_no_provider_variable_and_no_credential(monkeypatch, tmp_path):
+    """kiro-cli picks its account and region from its own sign-in, so this app declares nothing:
+    an AWS profile or region in the gateway's environment is not handed over, and neither is a
+    credential. A stub in kiro-cli's place (never the real one), spawned from the entry the app
+    registers."""
+    for name, value in {"AWS_PROFILE": "work", "AWS_REGION": "us-west-2", **PLANTED_SECRETS}.items():
+        monkeypatch.setenv(name, value)
+    command, record = stub_command(tmp_path)
+    monkeypatch.setattr(kiro_cli, "resolve_command", lambda: command)
+    kiro_cli.create_provider({})
+
+    entry = get_default_registry().get_entry("acp:kiro-cli")
+    assert kiro_cli.PROVIDER_ENV == () and "env_passthrough" not in entry.options
+    handed = handed_env(entry, record, tmp_path / "w")
+    assert sorted({"AWS_PROFILE", "AWS_REGION", *PLANTED_SECRETS} & set(handed)) == []

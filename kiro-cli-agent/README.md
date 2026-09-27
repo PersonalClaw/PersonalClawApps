@@ -31,6 +31,13 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | `model` | Default Model | Optional model the agent defaults to. Empty uses the kiro CLI's own default. |
 | `acp_bin` | CLI Path | Optional absolute path to the kiro-cli binary. Empty auto-resolves via PATH. Equivalent to the KIRO_CLI_BIN env var. |
 
+## Environment
+
+kiro-cli runs with none of the gateway's environment except what it needs to start. This app
+passes no variable to pick a provider or a region: kiro-cli signs in with its own `kiro-cli login`,
+which keeps the account it runs as and where. No credential is passed either. To hand it a
+variable, add its name under Settings → Security → Child environment passthrough.
+
 ## Capability boundary
 
 kiro-cli speaks the baseline ACP shape, which means several host features are supplied by

@@ -36,6 +36,24 @@ Sign-in terminal pre-types the resolved `gemini` binary for exactly that first r
 There is no `npx` fallback: a per-spawn download would not share your OAuth state, so
 an unresolved binary is reported as unavailable instead.
 
+## Environment
+
+Gemini CLI runs with none of the gateway's environment except what it needs to start and the
+variables it reads to pick its provider, project, region and model. Each of these is passed when
+it is set in the gateway's environment, so Gemini CLI on Vertex AI or Code Assist keeps the
+provider you chose:
+
+| Variable | What Gemini CLI reads it for |
+|---|---|
+| `GOOGLE_GENAI_USE_VERTEXAI` | Run on Vertex AI instead of the Gemini API |
+| `GOOGLE_GENAI_USE_GCA` | Run on Gemini Code Assist |
+| `GOOGLE_CLOUD_PROJECT` | The Google Cloud project |
+| `GOOGLE_CLOUD_LOCATION` | The Vertex AI location |
+| `GEMINI_MODEL` | The model |
+
+No credential is passed: a `GEMINI_API_KEY` or `GOOGLE_API_KEY` reaches it only once you add its
+name under Settings → Security → Child environment passthrough, as described above.
+
 ## Settings
 
 | Key | Label | Notes |

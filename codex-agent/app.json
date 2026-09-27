@@ -1,6 +1,6 @@
 {
   "name": "codex-agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "OpenAI Codex",
   "description": "Run the OpenAI Codex CLI as an agent (acp:codex) via the Zed ACP adapter. Codex manages its own configuration and authentication; every tool call routes through PersonalClaw's host approval gate.",
   "icon": "SquareTerminal",

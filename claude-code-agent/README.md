@@ -39,6 +39,29 @@ Claude Code signs itself in; PersonalClaw stores no API key. With isolated setti
 
 Why: Claude's own permission engine auto-approves whatever your `permissions.allow` rules and `defaultMode` say. An empty config has none of them, so every tool call comes back to PersonalClaw's approval gate.
 
+## Environment
+
+Claude Code runs with none of the gateway's environment except what it needs to start, what this
+app sets for it (`CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_EXECUTABLE`) and the variables it reads to pick
+its provider, region and models. Each of these is passed when it is set in the gateway's
+environment, so Claude Code on Amazon Bedrock or Google Vertex AI keeps the provider you chose:
+
+| Variable | What Claude Code reads it for |
+|---|---|
+| `CLAUDE_CODE_USE_BEDROCK` | Run on Amazon Bedrock |
+| `CLAUDE_CODE_USE_VERTEX` | Run on Google Vertex AI |
+| `AWS_PROFILE` | The AWS profile whose credentials Bedrock uses |
+| `AWS_REGION`, `AWS_DEFAULT_REGION` | The Bedrock region |
+| `ANTHROPIC_MODEL` | The model |
+| `ANTHROPIC_SMALL_FAST_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION` | The fast model, and its Bedrock region |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` | The model each alias names |
+| `CLOUD_ML_REGION`, `ANTHROPIC_VERTEX_PROJECT_ID` | The Vertex AI region and project |
+
+No credential is passed: not an API key, an access key or a session token, even under one of these
+names. Claude Code takes its keys from its own sign-in, or from the AWS or Google credential files
+its profile names. To hand it one more variable, add its name under Settings → Security → Child
+environment passthrough.
+
 ## Capability boundary
 
 Running an agent over ACP is **not** the same as PersonalClaw's native runtime: some host

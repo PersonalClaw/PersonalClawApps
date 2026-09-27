@@ -53,6 +53,21 @@ _BIN_NAMES = ["gemini"]
 _ACP_FLAG = ["--experimental-acp"]
 
 
+#: The variables Gemini CLI reads to pick its provider, project, region and model: Vertex AI or
+#: Code Assist instead of the Gemini API, the Google Cloud project and location, and the model.
+#: An agent CLI gets no variable of the gateway's it is not handed, so these are declared by name
+#: and core passes each one set in the gateway's environment. None is a credential: Gemini CLI
+#: takes its keys from its own sign-in or Google's credential files, and a ``GEMINI_API_KEY`` is
+#: the owner's to pass through by name (``sandbox.env_passthrough``).
+PROVIDER_ENV: tuple[str, ...] = (
+    "GOOGLE_GENAI_USE_VERTEXAI",
+    "GOOGLE_GENAI_USE_GCA",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
+    "GEMINI_MODEL",
+)
+
+
 def resolve_command() -> list[str] | None:
     """Resolve the ``gemini --experimental-acp`` launch argv (env override → PATH).
 
@@ -129,6 +144,7 @@ def create_provider(config: dict | None = None):
         dialect=DIALECT,
         command=command,
         model=model,
+        env_passthrough=list(PROVIDER_ENV),
         extension=EXTENSION,
         login_command=login_command(command),
     )
