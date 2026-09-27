@@ -225,8 +225,12 @@ def _build_help_text(cmd_name: str = "personalclaw") -> str:
 async def _handle_dashboard(
     orch: "GatewayServices", caller_id: str, args: str, respond: Callable
 ) -> None:
-    """Generate presigned dashboard link and DM to caller."""
-    from personalclaw.sdk.channel import LINK_WINDOW_SECS, MAX_SESSION_TTL_SECS
+    """Generate presigned dashboard link and DM to caller.
+
+    A lifetime longer than the gateway allows is answered with the gateway's own sentence
+    (``send_dashboard_link`` relays ``generate_token``'s refusal), never quietly shortened.
+    """
+    from personalclaw.sdk.channel import LINK_WINDOW_SECS
     from slack_runtime.blocks import dashboard_link_block
 
     ttl = 3600
@@ -237,11 +241,14 @@ async def _handle_dashboard(
             return
         ttl = parsed
 
-    session_ttl = min(ttl, MAX_SESSION_TTL_SECS)
     assert orch.slack is not None
-    url = await send_dashboard_link(orch.slack, caller_id, session_ttl)
+    try:
+        url = await send_dashboard_link(orch.slack, caller_id, ttl)
+    except ValueError as exc:
+        await respond(f"❌ {exc}")
+        return
     if url:
-        blks = dashboard_link_block(url, LINK_WINDOW_SECS // 60, session_ttl // 60)
+        blks = dashboard_link_block(url, ttl, LINK_WINDOW_SECS)
         await respond("🔗 Dashboard link sent to your DMs.", blocks=blks)
     else:
         await respond("❌ Failed to send dashboard link.")
