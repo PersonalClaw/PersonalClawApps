@@ -108,7 +108,7 @@ def test_discovery_paginates_profiles(monkeypatch):
     monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(Session=lambda **k: session))
 
     models = _run(_list(region="us-east-1"))
-    assert {m["id"] for m in models} == {"us.a", "us.b"}
+    assert {m["id"] for m in models if "chat" in m["capabilities"]} == {"us.a", "us.b"}
 
 
 def test_discovery_empty_when_boto3_missing(monkeypatch):

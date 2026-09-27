@@ -586,10 +586,15 @@ def test_image_generate_raises_without_key(monkeypatch):
     assert calls == []
 
 
-def test_image_generate_raises_when_discovery_empty(monkeypatch):
-    _fake_fetch(monkeypatch, [_FakeResponse(200, {"data": []})])
-    with pytest.raises(ImageGenError, match="No OpenRouter image-generation model"):
+def test_a_media_call_that_names_no_model_is_refused_before_anything_is_fetched(monkeypatch):
+    """Like chat, an image or video call names its model (the binding in Settings → Models).
+    One that names none used to take the first model discovery listed."""
+    calls = _fake_fetch(monkeypatch, [_FakeResponse(200, _image_models_payload())])
+    with pytest.raises(ImageGenError, match="No model is chosen for this call"):
         _run(_image_provider().generate("x"))
+    with pytest.raises(VideoGenError, match="No model is chosen for this call"):
+        _run(_video_provider().generate("x"))
+    assert calls == []
 
 
 @pytest.mark.parametrize(("status", "needle"), [

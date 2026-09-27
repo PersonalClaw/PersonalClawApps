@@ -15,6 +15,12 @@ Alibaba Cloud Model Studio (DashScope) provider for PersonalClaw.
 
 Set your API key via the `ALIBABA_API_KEY` environment variable or in the app settings.
 
+| Key | Label | Notes |
+|---|---|---|
+| `api_key` | API Key | Your Alibaba Model Studio API key. Falls back to ALIBABA_API_KEY env var. |
+| `default_model` | Default Model | A Model Studio model id, such as qwen-plus. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
+| `endpoint` | Endpoint | Regional API endpoint (below). |
+
 ### Regional Endpoints
 
 Select your endpoint in the app settings dropdown:

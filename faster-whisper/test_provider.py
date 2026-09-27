@@ -325,12 +325,34 @@ def test_bias_prompt_capped_and_single_lever(monkeypatch):
     monkeypatch.setattr(faster_whisper, "WhisperModel", _StubModel, raising=False)
 
     huge_bias = [f"Term Number {i} With Some Length" for i in range(80)]  # ~2000 chars raw
-    r = _run(prov.create_provider({}).transcribe_detailed("/tmp/x.wav", bias_terms=huge_bias))
+    r = _run(
+        prov.create_provider({}).transcribe_detailed(
+            "/tmp/x.wav", model="turbo", bias_terms=huge_bias
+        )
+    )
     assert r is not None and r.text  # did NOT silently fail
     # exactly one bias lever, and it's short (well under the 224-token window)
     levers = [k for k in ("hotwords", "initial_prompt") if k in captured]
     assert len(levers) == 1, f"expected ONE bias lever, got {levers}"
     assert len(captured[levers[0]]) <= 200
+
+
+def test_a_call_that_names_no_model_is_refused_and_loads_nothing(monkeypatch):
+    """Like chat, a transcription names its model (the speech-to-text binding). With none it
+    is refused before anything is loaded: this used to load ``turbo`` in its place."""
+    loaded = []
+
+    class _StubModel:
+        def __init__(self, target, *a, **k):
+            loaded.append(target)
+
+    import faster_whisper
+    monkeypatch.setattr(faster_whisper, "WhisperModel", _StubModel, raising=False)
+
+    provider = prov.create_provider({})
+    assert _run(provider.transcribe_detailed("/tmp/x.wav")) is None
+    assert _run(provider.transcribe("/tmp/x.wav")) is None
+    assert loaded == []
 
 
 def test_availability_reason_without_faster_whisper(monkeypatch):

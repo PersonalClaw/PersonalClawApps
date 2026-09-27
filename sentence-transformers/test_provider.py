@@ -123,3 +123,17 @@ def test_delete_removes_both_layouts(tmp_path, monkeypatch):
     assert prov.is_model_downloaded("all-MiniLM-L6-v2") is True
     assert _run(prov.create_provider({}).delete_model("all-MiniLM-L6-v2")) is True
     assert prov.is_model_downloaded("all-MiniLM-L6-v2") is False
+
+
+def test_an_embedding_that_names_no_model_is_refused_and_loads_nothing(monkeypatch):
+    """Like chat, an embedding call names its model (the Embedding binding). Both calls used to
+    load all-MiniLM-L6-v2 when handed none."""
+    loaded = []
+    monkeypatch.setattr(prov, "load_model", lambda name: loaded.append(name))
+    monkeypatch.setattr(prov, "make_native_embed_fn", lambda name: loaded.append(name))
+
+    provider = prov.create_provider()
+    assert _run(provider.embed("a heron")) is None
+    assert _run(provider.embed_batch(["a heron", "a kestrel"])) == [[], []]
+    assert loaded == []
+

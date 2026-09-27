@@ -34,6 +34,7 @@ from personalclaw.sdk.video import (
     VideoGenProvider,
     VideoResult,
 )
+from personalclaw.sdk.model import ProviderResolutionError, require_model
 
 logger = logging.getLogger(__name__)
 
@@ -110,17 +111,16 @@ _KNOWN_VIDEO_MODELS = [
 ]
 
 
-def _default_image_model(*, edit: bool) -> str:
-    """Unpinned default image model id derived from catalog."""
-    for m in _KNOWN_IMAGE_MODELS:
-        if bool(m.supports_edit) == edit:
-            return m.name
-    return _KNOWN_IMAGE_MODELS[0].name if _KNOWN_IMAGE_MODELS else ""
+def _named(model: str, error: type[Exception]) -> str:
+    """The model a call names, or ``error`` with the SDK's refusal when it names none.
 
-
-def _default_video_model() -> str:
-    """Unpinned default video model id derived from catalog."""
-    return _KNOWN_VIDEO_MODELS[0].name if _KNOWN_VIDEO_MODELS else ""
+    Like chat, a call names its model (the image or video binding in Settings → Models), and
+    nothing picks one in its place. This used to take the first model of the catalog above.
+    """
+    try:
+        return require_model(model)
+    except ProviderResolutionError as exc:
+        raise error(str(exc)) from exc
 
 
 # Bound the internal poll loop.
@@ -297,7 +297,7 @@ class FalImageProvider(ImageGenProvider):
     async def generate(
         self, prompt: str, *, model: str = "", size: str = "", n: int = 1, **opts: Any,
     ) -> list[ImageResult]:
-        model_id = model or _default_image_model(edit=False)
+        model_id = _named(model, ImageGenError)
         payload: dict[str, Any] = {"prompt": prompt}
         image_size = _normalize_image_size(size)
         if image_size is not None:
@@ -314,7 +314,7 @@ class FalImageProvider(ImageGenProvider):
         import base64
         import mimetypes
 
-        model_id = model or _default_image_model(edit=True)
+        model_id = _named(model, ImageGenError)
         try:
             with open(source_image, "rb") as fh:
                 raw = fh.read()
@@ -403,7 +403,7 @@ class FalVideoProvider(VideoGenProvider):
         aspect_ratio: str = "",
         **opts: Any,
     ) -> list[VideoResult]:
-        model_id = model or _default_video_model()
+        model_id = _named(model, VideoGenError)
         payload: dict[str, Any] = {"prompt": prompt}
         if duration_seconds and duration_seconds > 0:
             dur = self._format_duration(model_id, duration_seconds)

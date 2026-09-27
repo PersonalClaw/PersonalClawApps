@@ -124,7 +124,21 @@ def test_generate_without_key_raises_before_network(no_env_key: None) -> None:
     from personalclaw.sdk.image import ImageGenError
 
     with pytest.raises(ImageGenError, match="API key"):
-        _run(prov.AlibabaImageProvider().generate("a fox"))
+        _run(prov.AlibabaImageProvider().generate("a fox", model="qwen-image-2.0"))
+
+
+def test_generate_that_names_no_model_is_refused_before_network(monkeypatch) -> None:
+    """Like chat, an image call names its model (the binding in Settings → Models). One that
+    names none used to take qwen-image-2.0 in its place."""
+    import aiohttp
+    from personalclaw.sdk.image import ImageGenError
+
+    def _no_network(*_a, **_k):
+        raise AssertionError("no request may be sent")
+
+    monkeypatch.setattr(aiohttp, "ClientSession", _no_network)
+    with pytest.raises(ImageGenError, match="No model is chosen for this call"):
+        _run(prov.AlibabaImageProvider(api_key="ak").generate("a fox"))
 
 
 def test_edit_is_explicitly_unsupported() -> None:
@@ -180,7 +194,7 @@ def test_generate_parses_url_and_b64_results(monkeypatch: pytest.MonkeyPatch) ->
         {"data": [{"url": "https://img/1.png"}, {"b64_json": "aGk="}, "junk-row"]},
     )
     p = prov.AlibabaImageProvider(api_key="ak", endpoint="https://cn.example/v1")
-    results = _run(p.generate("a fox", size="1024x1024", n=2))
+    results = _run(p.generate("a fox", model="qwen-image-2.0", size="1024x1024", n=2))
     assert [r.url for r in results] == ["https://img/1.png", ""]
     assert results[1].b64 == "aGk="
     req = calls[0]
@@ -194,11 +208,11 @@ def test_generate_raises_on_empty_and_on_http_error(monkeypatch: pytest.MonkeyPa
 
     _fake_aiohttp(monkeypatch, 200, {"data": []})
     with pytest.raises(ImageGenError, match="no images"):
-        _run(prov.AlibabaImageProvider(api_key="ak").generate("a fox"))
+        _run(prov.AlibabaImageProvider(api_key="ak").generate("a fox", model="qwen-image-2.0"))
 
     _fake_aiohttp(monkeypatch, 429, {"error": {"message": "rate limited"}})
     with pytest.raises(ImageGenError, match="429.*rate limited"):
-        _run(prov.AlibabaImageProvider(api_key="ak").generate("a fox"))
+        _run(prov.AlibabaImageProvider(api_key="ak").generate("a fox", model="qwen-image-2.0"))
 
 
 def test_error_detail_handles_json_and_garbage() -> None:

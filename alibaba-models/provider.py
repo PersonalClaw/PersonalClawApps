@@ -34,14 +34,13 @@ from personalclaw.sdk.model import (
     BrandedProviderSpec,
     Capability,
     ConnectionResult,
-    MediaCatalog,
-    MediaModel,
     ModelCatalog,
     ModelInfo,
     PromptCache,
+    ProviderResolutionError,
     get_default_registry,
     register_branded_app,
-    register_media_catalog,
+    require_model,
 )
 
 logger = logging.getLogger(__name__)
@@ -133,18 +132,6 @@ def create_catalog(options: dict[str, Any] | None = None, *, model: str = "") ->
 # last-wins by contract, so this swaps in the one that states which models read images.
 get_default_registry().register_catalog(SPEC.type, create_catalog)
 
-# Register embedding catalog so the embedding adapter resolves `alibaba:model` refs.
-register_media_catalog(
-    "embedding", "alibaba",
-    MediaCatalog(
-        models=(
-            MediaModel(name="text-embedding-v3", description="DashScope Text Embedding v3"),
-            MediaModel(name="text-embedding-v2", description="DashScope Text Embedding v2"),
-        ),
-        default_model="text-embedding-v3",
-    ),
-)
-
 # ── Image generation models (static catalog) ────────────────────────────────
 
 _IMAGE_MODELS = [
@@ -229,11 +216,15 @@ class AlibabaImageProvider(ImageGenProvider):
     ) -> list[ImageResult]:
         import aiohttp
 
+        # Like chat, a call names its model (the image binding in Settings → Models), and it is
+        # refused when it names none. This used to take qwen-image-2.0 in its place.
+        try:
+            model_id = require_model(model)
+        except ProviderResolutionError as exc:
+            raise ImageGenError(str(exc)) from exc
         key = self._key()
         if not key:
             raise ImageGenError("No Alibaba API key configured (set ALIBABA_API_KEY).")
-
-        model_id = model if model else "qwen-image-2.0"
 
         # Use the OpenAI-compat images endpoint at the configured base URL.
         base = self._endpoint.rstrip("/")

@@ -1,6 +1,6 @@
 {
   "name": "openai-models",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "OpenAI",
   "description": "OpenAI chat + embedding models (Chat Completions API). Bring your own OpenAI API key.",
   "icon": "Brain",

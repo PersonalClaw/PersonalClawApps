@@ -98,14 +98,19 @@ class TestDegradation:
     @pytest.mark.asyncio
     async def test_synthesize_without_engine_returns_none(self):
         with patch("provider._detect_engine", return_value=""):
-            assert await create_provider().synthesize("hello") is None
+            assert await create_provider().synthesize("hello", voice="omnivoice-zeroshot") is None
 
     @pytest.mark.asyncio
     async def test_clone_request_missing_ref_clip_returns_none(self, tmp_path):
         # Engine present (mocked) but the reference clip is missing → fail fast, no raise.
         with patch("provider._detect_engine", return_value="omnivoice"):
             missing = str(tmp_path / "nope.wav")
-            assert await create_provider().synthesize("hi", ref_audio=missing) is None
+            assert (
+                await create_provider().synthesize(
+                    "hi", voice="omnivoice-zeroshot", ref_audio=missing
+                )
+                is None
+            )
 
     @pytest.mark.asyncio
     async def test_delete_voice_absent_returns_false(self):

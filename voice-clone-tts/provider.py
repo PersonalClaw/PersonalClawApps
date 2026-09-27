@@ -41,6 +41,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from personalclaw.sdk.model import ProviderResolutionError, require_model
 from personalclaw.sdk.tts import LocalTtsProvider, TtsVoice
 
 logger = logging.getLogger(__name__)
@@ -299,6 +300,14 @@ class VoiceCloneTtsProvider(LocalTtsProvider):
         gateway stays up, the typed reason (``sidecar_crashed:signal_9``) is recorded on
         :attr:`last_crash_reason` and logged, and the call degrades to ``None``.
         """
+        # Like chat, a call names its voice (the text-to-speech binding's model), and one that
+        # names none is refused before the engine loads: it used to load the weights folder's
+        # root in its place.
+        try:
+            voice = require_model(voice)
+        except ProviderResolutionError as exc:
+            logger.warning("voice-clone-tts refused: %s", exc)
+            return None
         engine = _detect_engine()
         if not engine:
             logger.info(
@@ -325,7 +334,7 @@ class VoiceCloneTtsProvider(LocalTtsProvider):
         try:
             await runner.acall(
                 "load",
-                {"device": self._device, "weights_dir": str(_weights_dir() / (voice or ""))},
+                {"device": self._device, "weights_dir": str(_weights_dir() / voice)},
             )
             result = await runner.acall(
                 "call",

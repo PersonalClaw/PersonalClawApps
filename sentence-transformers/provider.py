@@ -25,6 +25,7 @@ from typing import Any, Callable
 
 from personalclaw.sdk.embedding import EmbeddingModel, EmbeddingProvider
 from personalclaw.sdk.local_model import LocalModelProvider
+from personalclaw.sdk.model import ProviderResolutionError, require_model
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +68,6 @@ def _repo_of(model_name: str) -> str:
     if info and info.get("repo"):
         return info["repo"]
     return model_name if "/" in model_name else f"sentence-transformers/{model_name}"
-
-_DEFAULT_NATIVE_MODEL = "all-MiniLM-L6-v2"
 
 _loaded_model = None
 _loaded_model_name: str | None = None
@@ -230,14 +229,30 @@ class NativeEmbeddingProvider(EmbeddingProvider, LocalModelProvider):
                 _loaded_model_name = None
         return removed
 
+    # Like chat, an embedding call names its model (the Embedding binding in Settings → Models),
+    # and one that names none is refused before anything is loaded: both used to load
+    # all-MiniLM-L6-v2 in its place.
+
     async def embed(self, text: str, model: str = "") -> list[float] | None:
+        try:
+            named = require_model(model)
+        except ProviderResolutionError as exc:
+            logger.warning("sentence-transformers refused: %s", exc)
+            return None
+
         def _run():
-            return make_native_embed_fn(model or _DEFAULT_NATIVE_MODEL)(text)
+            return make_native_embed_fn(named)(text)
         return await asyncio.to_thread(_run)
 
     async def embed_batch(self, texts: list[str], model: str = "") -> list[list[float]]:
+        try:
+            named = require_model(model)
+        except ProviderResolutionError as exc:
+            logger.warning("sentence-transformers refused: %s", exc)
+            return [[] for _ in texts]
+
         def _run():
-            m = load_model(model or _DEFAULT_NATIVE_MODEL)
+            m = load_model(named)
             # Explicit single-process encode: no progress bar, modest batch — never let
             # sentence-transformers spawn loky workers (they segfault the gateway on
             # teardown, see module header). normalize_embeddings matches embed().
