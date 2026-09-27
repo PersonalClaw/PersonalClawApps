@@ -56,6 +56,13 @@ with its reason, rather than by loosening the pattern until it stops matching. E
 exemption must still resolve to a live field (see the floor below), so one that outlives
 its subject reds instead of silently widening the rule.
 
+A few names end in a credential noun and never hold one, whatever app declares them:
+``idempotency_key`` is the workflows API's idempotency token. Those are exempted by name
+in ``NOT_A_CREDENTIAL``. The field that name lives on can ship in core (the bundled
+``run-workflow-action``), which this stdlib job cannot read, so the floor for those entries
+is core's ``test_app_manifest_secret_fields.py``: it compares this rail's verdicts with
+core's over both repos' manifests, and fails an entry no shipped field carries.
+
 **Vacuity floor.** A rail that matches nothing reads as clean — and this rail's own
 first draft proved it: an early scan of this corpus looked for ``settings``/
 ``configSchema`` and reported "0 credential fields, 0 unmarked", which reads exactly
@@ -100,6 +107,12 @@ CRED_CLASS = re.compile(
 PATH_VALUED_EXEMPT = {
     # Handed to `ssh` by path; the app never reads the key bytes. Its own help says so.
     ("rsync-sync", "ssh_key"),
+}
+
+# Names that end in a credential noun and never hold a credential, in any app. Exempted
+# by NAME, each with its reason, so the pattern above keeps its reach. Keep it tiny.
+NOT_A_CREDENTIAL = {
+    "idempotency_key",  # the workflows API's idempotency token, not a credential
 }
 
 MIN_SCHEMAS = 40
@@ -162,7 +175,7 @@ def main() -> int:
                 cred_shaped_seen += 1
                 if (app, name) in PATH_VALUED_EXEMPT:
                     exempt_seen.add((app, name))
-                elif not is_sensitive:
+                elif not is_sensitive and name not in NOT_A_CREDENTIAL:
                     failures.append(
                         f"{app}: credential-shaped field '{name}' must carry "
                         f"x-meta.sensitive: true — that flag is the ONLY input to core's "
