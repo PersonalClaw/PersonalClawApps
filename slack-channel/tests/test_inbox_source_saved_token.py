@@ -8,8 +8,9 @@ install configured after enable) until the gateway restarted. #124 moved the cha
 the live store. This moves the inbox half onto the same ``LiveConfig`` and ``load_tokens``, so the
 two providers cannot disagree about which token is in effect.
 
-Saves go through core's own route handler. Nothing opens a socket: ``RealSlackClient`` is replaced
-where the inbox source builds it.
+Saves go through core's own routes, served on a loopback test server and made the way the page
+makes them: read the settings, then save over the revision that read reported. Nothing reaches
+Slack: ``RealSlackClient`` is replaced where the inbox source builds it.
 """
 
 from __future__ import annotations
@@ -19,9 +20,11 @@ import shutil
 from pathlib import Path
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 
 import slack_runtime.inbox_source as inbox_mod
-from personalclaw.dashboard.handlers.apps import api_app_config_put
+from personalclaw.dashboard.handlers.apps import register_app_routes
 from personalclaw.providers.settings import ProviderSettings
 from slack_runtime.inbox_source import create_provider
 
@@ -75,16 +78,19 @@ def fake_client(monkeypatch):
 
 
 async def _configure_save(values: dict) -> None:
-    """The Apps page's Configure → Save: core's PUT /api/apps/{name}/config handler."""
-
-    class _Request(dict):
-        match_info = {"name": _APP}
-
-        async def json(self):
-            return values
-
-    resp = await api_app_config_put(_Request())
-    assert resp.status == 200, resp.text
+    """The Apps page's Configure → Save, over core's own routes: read the settings, then save
+    ``values`` over the revision that read reported. The save replaces the whole file, so it
+    names the copy it replaces (``If-Match``), as the page does."""
+    app = web.Application()
+    register_app_routes(app)
+    async with TestClient(TestServer(app)) as client:
+        read = await client.get(f"/api/apps/{_APP}/config")
+        assert read.status == 200, await read.text()
+        revision = (await read.json())["revision"]
+        resp = await client.put(
+            f"/api/apps/{_APP}/config", json=values, headers={"If-Match": f'"{revision}"'}
+        )
+        assert resp.status == 200, await resp.text()
 
 
 def _registry_built():

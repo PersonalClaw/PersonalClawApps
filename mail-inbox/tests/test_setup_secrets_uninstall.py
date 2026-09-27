@@ -22,10 +22,12 @@ import secrets
 from pathlib import Path
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
 
 from personalclaw.apps import app_manager
 from personalclaw.config import credentials
-from personalclaw.dashboard.handlers.apps import api_app_config_put
+from personalclaw.dashboard.handlers.apps import register_app_routes
 from personalclaw.providers.settings import ProviderSettings
 from personalclaw.sdk.cli import SetupContext
 
@@ -75,16 +77,23 @@ def _run_setup(answers: list[str]) -> None:
 
 
 def _configure_save(values: dict) -> None:
-    """The Apps page's Configure → Save: core's PUT /api/apps/{name}/config handler."""
+    """The Apps page's Configure → Save, over core's own routes: read the settings, then save
+    ``values`` over the revision that read reported. The save replaces the whole file, so it
+    names the copy it replaces (``If-Match``), as the page does."""
 
-    class _Request(dict):
-        match_info = {"name": _APP}
+    async def save() -> None:
+        app = web.Application()
+        register_app_routes(app)
+        async with TestClient(TestServer(app)) as client:
+            read = await client.get(f"/api/apps/{_APP}/config")
+            assert read.status == 200, await read.text()
+            revision = (await read.json())["revision"]
+            resp = await client.put(
+                f"/api/apps/{_APP}/config", json=values, headers={"If-Match": f'"{revision}"'}
+            )
+            assert resp.status == 200, await resp.text()
 
-        async def json(self):
-            return values
-
-    resp = asyncio.run(api_app_config_put(_Request()))
-    assert resp.status == 200, resp.text
+    asyncio.run(save())
 
 
 def _hits(home: Path, needle: str) -> list[str]:

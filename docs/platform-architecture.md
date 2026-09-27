@@ -230,6 +230,10 @@ Two flavors, both persisted in `~/.personalclaw/apps/{name}/data/config.json`
   `ProviderSettings`.
 - **Backend/UI apps** declare `setup.configSchema`; `GET/PUT
   /api/apps/{name}/config` validates against it (required keys, declared types,
-  enum membership; unknown keys rejected).
+  enum membership; unknown keys rejected). The PUT replaces the whole file, so it
+  names the copy it replaces: send the `revision` the GET returned in `If-Match`.
+  A PUT that names none is refused with `428 revision_required`, and one built
+  from a copy older than the stored file with `409 stale_write`. Neither writes
+  anything: read again, re-apply the edit, and save.
 
 Fields tagged `"sensitive": true` in `x-meta` are treated as secrets by the UI.

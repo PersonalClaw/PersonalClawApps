@@ -26,7 +26,8 @@ def store(tmp_path):
 
 
 def _seed(store, *, enabled: bool = True, message: str = "do something important",
-          next_fire_at: str = "", trigger_id: str = "clock:test-job") -> Trigger:
+          next_fire_at: str = "", trigger_id: str = "clock:test-job",
+          granted: bool = True) -> Trigger:
     trigger = Trigger(
         id=trigger_id,
         name="test-job",
@@ -35,6 +36,10 @@ def _seed(store, *, enabled: bool = True, message: str = "do something important
         spec={"kind": "cron", "expr": "0 13 * * *"},
         workflow={"inline": {"provider": "invoke-agent", "config": {"task_template": message}}},
         next_fire_at=next_fire_at,
+        # The grant, as the store records it for an automation the owner allowed: core's
+        # `automation_create` freezes it and the Triggers page's Allow writes it. Resuming an
+        # ungranted one is refused (core `triggers.grants`), so a seed without it is no real row.
+        capabilities={"providers": ["invoke-agent"]} if granted else {},
     )
     store.upsert(trigger)
     return trigger
@@ -136,6 +141,19 @@ class TestHandleCronMutations:
             _handle_cron_command("cron resume clock:test-job", store, "C", "t") or ""
         )
         assert store.get("clock:test-job").trigger.enabled is True
+
+    def test_resuming_an_automation_nobody_allowed_says_so_and_leaves_it_off(self, store) -> None:
+        """Switching an automation on allows what it runs, and only the owner gives that, on the
+        Triggers page after its consent dialog. A `cron resume` from Slack cannot, so it relays
+        core's refusal rather than a "Resumed" that left the row off or a bare "not found"."""
+        _seed(store, enabled=False, granted=False)
+
+        result = _handle_cron_command("cron resume clock:test-job", store, "C", "t") or ""
+
+        assert "“test-job” is not allowed to use the “Invoke Agent” action, so it was not " \
+            "switched on." in result, result
+        assert "Triggers page" in result, result
+        assert store.get("clock:test-job").trigger.enabled is False
 
     def test_remove(self, store) -> None:
         _seed(store)
