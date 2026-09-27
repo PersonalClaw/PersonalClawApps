@@ -99,7 +99,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 | Key | Label | Notes |
 |---|---|---|
-| `default_model` | Default Model | A Claude model id. Empty = the newest model from the app's built-in list. |
+| `default_model` | Default Model | A Claude model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 | `endpoint` | Base URL | Optional Anthropic-compatible base URL. Empty uses the official Anthropic host. |
 
 There is deliberately **no `api_key` setting**. A key set by hand on the instance would

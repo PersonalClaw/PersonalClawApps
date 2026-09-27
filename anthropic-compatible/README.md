@@ -42,7 +42,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 |---|---|---|
 | `endpoint` | Base URL | The Anthropic-compatible base URL, e.g. https://my-gateway. |
 | `api_key` | API Key | API key for the endpoint. Leave empty to fall back to the ANTHROPIC_API_KEY environment variable. |
-| `default_model` | Default Model | The Anthropic model id served by your endpoint. |
+| `default_model` | Default Model | The Anthropic model id served by your endpoint. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 
 ## License
 

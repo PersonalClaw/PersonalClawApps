@@ -288,19 +288,16 @@ def test_anthropic_factory_raises_when_credential_declared_but_no_store(
 # ── create_provider (app-factory path) — no hardcoded default model ─────
 
 
-def test_create_provider_unpinned_uses_catalog_default_not_literal(
+def test_create_provider_unpinned_names_no_model(
     fake_anthropic: types.ModuleType,
 ) -> None:
-    """An unpinned instance config must resolve its model from the curated catalog
-    (via ``_pick_default_model``), never from a stale hardcoded literal — the
-    de-hardcode directive. The removed literal was ``claude-sonnet-4-20250514``."""
-    from provider import _pick_default_model, create_provider
+    """An instance config with no Default Model names no model: the app never picks one from
+    its curated catalog in its place (it used to take the newest Opus, ``claude-opus-4-8``).
+    The call is then refused before anything is sent — proven on the wire in test_wire.py."""
+    from provider import create_provider
 
-    provider = create_provider({"api_key": "sk-ant-test"})
-
-    assert provider._model == _pick_default_model()
-    assert provider._model == "claude-opus-4-8"
-    assert provider._model != "claude-sonnet-4-20250514"  # the removed hardcode
+    # Not shaped like the vendor's key prefix: a realistic literal trips secret scanners.
+    assert create_provider({"api_key": "TESTONLY-anthropic-key"})._model == ""
 
 
 def test_create_provider_honors_explicit_model(

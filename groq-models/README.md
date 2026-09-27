@@ -36,7 +36,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | Key | Label | Notes |
 |---|---|---|
 | `api_key` | Groq API Key | Your Groq API key. Leave empty to fall back to the GROQ_API_KEY environment variable. |
-| `default_model` | Default Model | A Groq model id. Empty = resolved from live /v1/models discovery. |
+| `default_model` | Default Model | A Groq model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 | `endpoint` | Base URL | Optional override of the Groq base URL. Empty uses https://api.groq.com/openai/v1. |
 
 ## License

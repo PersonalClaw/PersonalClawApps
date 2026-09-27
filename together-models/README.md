@@ -32,7 +32,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | Key | Label | Notes |
 |---|---|---|
 | `api_key` | Together AI API Key | Your Together AI API key. Leave empty to fall back to the TOGETHER_API_KEY environment variable. |
-| `default_model` | Default Model | A Together AI model id. Empty = resolved from live /v1/models discovery. |
+| `default_model` | Default Model | A Together AI model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 | `endpoint` | Base URL | Optional override of the Together AI base URL. Empty uses https://api.together.xyz/v1. |
 
 ## License

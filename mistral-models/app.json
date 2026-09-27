@@ -1,6 +1,6 @@
 {
   "name": "mistral-models",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Mistral AI",
   "description": "Mistral AI models via its OpenAI-compatible endpoint. Bring your own Mistral API key.",
   "icon": "Wind",
@@ -42,7 +42,7 @@
           "default": "",
           "x-meta": {
             "label": "Default Model",
-            "help": "A Mistral model id. Empty = resolved from live /v1/models discovery."
+            "help": "A Mistral model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models."
           }
         },
         "endpoint": {

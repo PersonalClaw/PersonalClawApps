@@ -1,6 +1,6 @@
 {
   "name": "together-models",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Together AI",
   "description": "Together AI serverless inference (OpenAI-compatible). Bring your own Together API key.",
   "icon": "Boxes",
@@ -42,7 +42,7 @@
           "default": "",
           "x-meta": {
             "label": "Default Model",
-            "help": "A Together AI model id. Empty = resolved from live /v1/models discovery."
+            "help": "A Together AI model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models."
           }
         },
         "endpoint": {

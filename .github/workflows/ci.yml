@@ -110,9 +110,11 @@ jobs:
         # Each bundle's own suite puts the app directory on sys.path first, so a step that cannot
         # load from the installed copy still passes there. This loads each one as core does.
         run: python -m pytest .github/tests/test_cli_steps_load.py -q
-      - name: Every chat-model app proves its requests carry the per-call temperature and max_tokens
-        # Each bundle's test_wire.py drives its real SDK client against apps_testkit/model_wire.py;
-        # this refuses a chat-model app that ships without one.
+      - name: Every chat-model app proves what its requests carry, and that it picks no model
+        # Each bundle's test_wire.py drives its real SDK client against apps_testkit/model_wire.py:
+        # the per-call temperature and max_tokens reach the request, a call no model is chosen for
+        # is refused, and the Default Model is the one named. This refuses a chat-model app that
+        # ships without those tests, or whose Default Model help promises anything else.
         run: python -m pytest .github/tests/test_model_apps_prove_the_wire.py -q
       - name: Every app's SDK imports are published and every SDK call binds
         # The static rails in apps_testkit/sdk_contract.py, over every bundle. Only

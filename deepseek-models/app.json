@@ -1,6 +1,6 @@
 {
   "name": "deepseek-models",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "DeepSeek",
   "description": "DeepSeek chat + reasoner models (OpenAI-compatible). Bring your own DeepSeek API key.",
   "icon": "Waves",
@@ -41,7 +41,7 @@
           "default": "",
           "x-meta": {
             "label": "Default Model",
-            "help": "A DeepSeek model id. Empty = resolved from live /v1/models discovery."
+            "help": "A DeepSeek model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models."
           }
         },
         "endpoint": {

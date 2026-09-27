@@ -1,6 +1,6 @@
 {
   "name": "bedrock-models",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "Amazon Bedrock",
   "description": "Amazon Bedrock models, authenticated with your own AWS credential chain. No key is stored by PersonalClaw. Chat (Converse API), embedding (Titan/Cohere), image generation (Nova Canvas), video generation (Nova Reel), and speech-to-text. One instance per AWS profile/region.",
   "icon": "Cloud",
@@ -62,7 +62,7 @@
           "default": "",
           "x-meta": {
             "label": "Default Chat Model",
-            "help": "Bedrock chat model id (full versioned id). Empty = resolved from live Bedrock discovery (Claude preferred)."
+            "help": "A Bedrock chat model id (full versioned id). The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models."
           }
         },
         "system_prompt": {

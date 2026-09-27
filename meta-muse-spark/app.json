@@ -1,7 +1,7 @@
 {
   "name": "meta-muse-spark",
   "displayName": "Meta Muse Spark",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Meta Muse Spark chat models via the Meta AI API (OpenAI-compatible). Bring your own Meta AI API key.",
   "author": "PersonalClaw",
   "icon": "Brain",
@@ -42,7 +42,7 @@
           "default": "",
           "x-meta": {
             "label": "Default Model",
-            "help": "A Meta AI model id. Empty uses muse-spark-1.1."
+            "help": "A Meta AI model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models."
           }
         },
         "endpoint": {

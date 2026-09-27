@@ -117,7 +117,7 @@ SPEC = BrandedProviderSpec(
     protocol="openai",
     default_base_url=_BASE,
     api_key_env=_API_KEY_ENV,
-    default_model="",  # resolved from live /v1/models discovery at start()
+    default_model="",  # no curated pick: a call names its binding or the instance's Default Model
     # openai-wire: leave max_tokens unset (only the anthropic wire requires a value).
     max_tokens=None,
     capabilities=frozenset({

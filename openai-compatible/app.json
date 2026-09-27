@@ -1,6 +1,6 @@
 {
   "name": "openai-compatible",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "OpenAI-Compatible",
   "description": "Any OpenAI-compatible Chat Completions endpoint. Self-hosted, a proxy, or an unlisted cloud. Supply the base URL + API key.",
   "icon": "Brain",
@@ -53,7 +53,7 @@
           "default": "",
           "x-meta": {
             "label": "Default Model",
-            "help": "The model id served by your endpoint."
+            "help": "The model id served by your endpoint. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models."
           }
         }
       },

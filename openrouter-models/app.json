@@ -1,6 +1,6 @@
 {
   "name": "openrouter-models",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "OpenRouter",
   "description": "OpenRouter — one key for hundreds of models across providers. Chat (with image input), embedding, image generation, and video generation from a single instance. Bring your own OpenRouter API key.",
   "icon": "Route",
@@ -52,7 +52,7 @@
           "default": "",
           "x-meta": {
             "label": "Default Model",
-            "help": "An OpenRouter model id (e.g. anthropic/claude-sonnet-4.5). Empty = resolved from live /v1/models discovery."
+            "help": "An OpenRouter model id (e.g. anthropic/claude-sonnet-4.5). The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models."
           }
         },
         "endpoint": {

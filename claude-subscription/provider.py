@@ -38,6 +38,7 @@ from personalclaw.sdk.model import (
     ModelProvider,
     PromptCache,
     ProviderEntry,
+    own_model,
     register_branded_app,
 )
 from personalclaw.sdk.provider_helpers import (
@@ -86,14 +87,16 @@ _CURATED_MODELS: tuple[dict[str, Any], ...] = (
     {"id": "claude-haiku-4-5", "capabilities": ["chat", "image_modality"]},
 )
 
-# Family preference for the unpinned default. The default id is DERIVED from the curated
-# list (same discipline as anthropic-models' ``_pick_default_model``) so refreshing the
-# list moves the default with it and no id is separately hardcoded.
+# Family preference for the spec's curated first choice (``SPEC.default_model``). The id is
+# DERIVED from the curated list, so refreshing the list moves it and no id is separately
+# hardcoded. It is what the spec offers core (Test connection on a wire with no models route,
+# and the family map); it is never the model a call is sent with when nobody chose one — an
+# instance with no Default Model refuses an unbound call (core's ``require_model``).
 _DEFAULT_MODEL_PREFERENCE = ("opus", "sonnet", "haiku", "fable")
 
 
 def _pick_default_model() -> str:
-    """The unpinned default model id, resolved from the curated list by family."""
+    """The spec's curated first choice, resolved from the curated list by family."""
     ids = [str(m["id"]) for m in _CURATED_MODELS]
     for family in _DEFAULT_MODEL_PREFERENCE:
         for model_id in ids:
@@ -162,7 +165,9 @@ def create_provider(config: dict[str, Any] | None = None) -> ModelProvider:
         entry=ProviderEntry(
             name=SPEC.type,
             type=SPEC.type,
-            model=str(cfg.get("model") or cfg.get("default_model") or SPEC.default_model),
+            # The instance's own model (the SDK's ``own_model``: its model, else its Default
+            # Model), never the spec's curated pick: with neither, each call is refused.
+            model=own_model(cfg.get("model"), cfg),
             options=options,
             declared_capabilities=SPEC.capabilities,
         )

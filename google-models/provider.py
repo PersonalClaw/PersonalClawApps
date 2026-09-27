@@ -75,7 +75,7 @@ SPEC = BrandedProviderSpec(
     protocol="openai",
     default_base_url=_OPENAI_COMPAT_BASE,
     api_key_env="GEMINI_API_KEY",
-    default_model="",  # resolved from live /v1/models discovery
+    default_model="",  # no curated pick: a call names its binding or the instance's Default Model
     capabilities=frozenset({
         Capability.CHAT, Capability.CODE_TOOLS, Capability.STREAMING,
         Capability.VISION, Capability.EMBEDDING,

@@ -37,7 +37,7 @@ like any other app. (Or [install it from a shell](../docs/third-party-install.md
 | Key | Label | Notes |
 |---|---|---|
 | `api_key` | OpenRouter API Key | Your OpenRouter API key (openrouter.ai/keys). Leave empty to fall back to the `OPENROUTER_API_KEY` environment variable. |
-| `default_model` | Default Model | An OpenRouter model id (e.g. `anthropic/claude-sonnet-4.5`). Empty = resolved from live `/v1/models` discovery. |
+| `default_model` | Default Model | An OpenRouter model id (e.g. `anthropic/claude-sonnet-4.5`). The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 | `endpoint` | Base URL | Optional override of the OpenRouter base URL. Empty uses `https://openrouter.ai/api/v1`. |
 
 ## Capabilities

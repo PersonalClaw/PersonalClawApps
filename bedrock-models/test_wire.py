@@ -23,9 +23,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the repo root: apps_testkit
 
 from apps_testkit.model_wire import (  # noqa: E402
+    LISTED,
     MODEL,
     REPLY,
     RecordingModelServer,
+    blank_model_expected,
+    blank_model_report,
     form_options,
     model_sent,
     one_call,
@@ -36,18 +39,24 @@ from personalclaw.sdk.model import ProviderEntry  # noqa: E402
 import provider  # noqa: E402 — app-local
 
 
+def _boto3_reaches_only(monkeypatch, recording: RecordingModelServer) -> None:
+    """boto3 reaches the recording endpoint and nothing else: both service endpoints (runtime and
+    the control plane that lists models) are overridden, the credentials are dummies, and no AWS
+    profile or config file on this machine is read."""
+    monkeypatch.setenv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME", recording.url)
+    monkeypatch.setenv("AWS_ENDPOINT_URL_BEDROCK", recording.url)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "wire-test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "wire-test")
+    for name in ("AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_DEFAULT_PROFILE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_CONFIG_FILE", os.devnull)
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", os.devnull)
+
+
 @pytest.fixture
 def server(monkeypatch):
-    """boto3 reaches the recording endpoint and nothing else: the service endpoint is overridden,
-    the credentials are dummies, and no AWS profile or config file on this machine is read."""
     with RecordingModelServer() as recording:
-        monkeypatch.setenv("AWS_ENDPOINT_URL_BEDROCK_RUNTIME", recording.url)
-        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "wire-test")
-        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "wire-test")
-        for name in ("AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_DEFAULT_PROFILE"):
-            monkeypatch.delenv(name, raising=False)
-        monkeypatch.setenv("AWS_CONFIG_FILE", os.devnull)
-        monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", os.devnull)
+        _boto3_reaches_only(monkeypatch, recording)
         yield recording
 
 
@@ -75,3 +84,29 @@ async def test_what_core_asks_of_a_call_is_what_the_request_carries(server, aske
     assert await one_call(built) == REPLY
     assert [sampling_sent(call) for call in server.calls()] == [sent]
     assert [model_sent(call) for call in server.calls()] == [MODEL]
+
+
+# ── A call no model is chosen for ─────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def listing(monkeypatch):
+    """A Bedrock whose control plane lists only a model nobody chose (``LISTED``): a provider that
+    picked a model from discovery would name it on the wire."""
+    with RecordingModelServer(models=(LISTED,)) as recording:
+        _boto3_reaches_only(monkeypatch, recording)
+        yield recording
+
+
+@pytest.mark.asyncio
+async def test_no_model_chosen_is_refused_and_the_default_model_is_named(listing):
+    """Saved with its Default Model empty and called with nothing bound, an instance is sent no
+    call, and no model is picked in its place. With a Default Model, both calls name it."""
+    report = await blank_model_report(
+        app_dir=APP_DIR,
+        entry_type="bedrock",
+        factory=provider._factory,
+        create_provider=provider.create_provider,
+        server=listing,
+    )
+    assert report == blank_model_expected(APP_DIR)

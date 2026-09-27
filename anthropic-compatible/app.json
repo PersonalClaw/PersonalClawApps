@@ -1,6 +1,6 @@
 {
   "name": "anthropic-compatible",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Anthropic-Compatible",
   "description": "Any Anthropic-compatible (Messages API) endpoint. Supply the base URL + API key.",
   "icon": "Sparkles",
@@ -52,7 +52,7 @@
           "default": "",
           "x-meta": {
             "label": "Default Model",
-            "help": "The Anthropic model id served by your endpoint."
+            "help": "The Anthropic model id served by your endpoint. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models."
           }
         }
       },

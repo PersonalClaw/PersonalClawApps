@@ -31,7 +31,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | Key | Label | Notes |
 |---|---|---|
 | `region` | AWS Region | Bedrock region (e.g. us-west-2). Credentials come from your AWS environment / profile — no key is stored here. |
-| `default_model` | Default Model | Bedrock model id (full versioned id). Empty = resolved from live Bedrock discovery (Claude preferred). |
+| `default_model` | Default Chat Model | A Bedrock chat model id (full versioned id). The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 | `profile` | AWS Profile | Optional named profile from ~/.aws. Empty uses the default credential chain (env / SSO / instance role). |
 | `system_prompt` | System Prompt | Optional system prompt prepended to every turn. |
 

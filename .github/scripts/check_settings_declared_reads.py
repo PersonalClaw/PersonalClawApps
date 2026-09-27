@@ -60,7 +60,9 @@ Three more distinctions that each cost a false positive to learn:
 * **Class A — the tolerant-reader ALIAS.** ``config.get("model") or
   config.get("default_model")`` reads an undeclared name whose fallback IS declared. The
   registry path can legitimately supply the alias, so the schema is right not to offer it as
-  a user setting, and the read is right to accept it. Eight of these exist. They are
+  a user setting, and the read is right to accept it. The SDK's ``own_model(config.get(
+  "model"), config)`` is the same chain with the fallback read inside core, and every model
+  app now spells it that way. Eight of these exist. They are
   allowlisted BY NAME WITH A REASON rather than pattern-excluded, and a stale entry reds —
   the discipline the sibling rail's ``PATH_VALUED_EXEMPT`` already established.
 * **An unresolved entrypoint must RED, not skip.** Six model apps build their factory
@@ -184,6 +186,13 @@ def _tainted_names(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
     return tainted
 
 
+def _callee_name(func: ast.AST) -> str:
+    """The called name: ``own_model`` for both ``own_model(...)`` and ``sdk.own_model(...)``."""
+    if isinstance(func, ast.Name):
+        return func.id
+    return func.attr if isinstance(func, ast.Attribute) else ""
+
+
 def _reads(
     fn: ast.FunctionDef | ast.AsyncFunctionDef,
     *,
@@ -241,6 +250,19 @@ def _reads(
             found = [key_of(v) for v in node.values]
             if sum(1 for f in found if f) > 1:
                 alias_lines.update(f[1] for f in found if f)
+        # The SDK's own alias chain: `own_model(config.get("model"), config)` is
+        # `config.get("model") or config.get("default_model")` with the fallback read inside
+        # core, which reads the Default Model off the mapping it is handed. So a read in its
+        # first argument, beside the mapping itself as the second, is the same chain.
+        if (
+            isinstance(node, ast.Call)
+            and _callee_name(node.func) == "own_model"
+            and len(node.args) == 2
+            and _is_tainted_receiver(node.args[1])
+        ):
+            first = key_of(node.args[0])
+            if first:
+                alias_lines.add(first[1])
 
     out: list[tuple[str, int, bool]] = []
     for node in ast.walk(fn):

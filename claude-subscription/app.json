@@ -1,6 +1,6 @@
 {
   "name": "claude-subscription",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "Claude (Subscription)",
   "description": "Claude models over your existing Claude Code sign-in — no API key. Reads the CLI's own credential store read-only.",
   "icon": "Sparkles",
@@ -38,7 +38,7 @@
           "default": "",
           "x-meta": {
             "label": "Default Model",
-            "help": "Claude model id. Empty = the newest model from the app's built-in list your subscription can call."
+            "help": "A Claude model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models."
           }
         },
         "endpoint": {
