@@ -18,7 +18,9 @@ vendor-specific-in-bundles-only rule):
   (claude-code's ``claude-agent-acp``). There is no adapter package to resolve or
   pin, and the binary *is* the engine, so no ``requires_executable`` is declared;
 * auth is Gemini CLI's own — Google OAuth on first interactive run, or a
-  ``GEMINI_API_KEY`` in the environment. PersonalClaw stores no key.
+  ``GEMINI_API_KEY`` in the gateway's environment that the owner passes through to it
+  by name (``sandbox.env_passthrough``: an agent CLI gets no other variable of the
+  gateway's). PersonalClaw stores no key.
 
 The binary is absent on a machine that has never installed Gemini CLI, so the
 provider registers nothing and probes as unavailable there rather than erroring.
@@ -97,8 +99,9 @@ def login_command(command: list[str] | None = None) -> list[str]:
     picker (Google OAuth / Gemini API key / Vertex AI) and ``/auth`` re-runs it — so
     the suggestion is simply the resolved binary with the ACP flag stripped, which
     lands the user in that picker. There is no ``gemini login`` subcommand to
-    pre-type. The terminal is freeform, so a user preferring a key can instead
-    export ``GEMINI_API_KEY`` there; PersonalClaw stores no key either way.
+    pre-type. A user preferring a key sets ``GEMINI_API_KEY`` in the gateway's
+    environment and passes it through by name (``sandbox.env_passthrough``); exporting
+    it in this terminal reaches only the terminal. PersonalClaw stores no key either way.
     """
     argv = command if command is not None else resolve_command()
     binary = argv[0] if argv else "gemini"

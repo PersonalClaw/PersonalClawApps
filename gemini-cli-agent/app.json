@@ -2,7 +2,7 @@
   "name": "gemini-cli-agent",
   "version": "0.1.0",
   "displayName": "Gemini CLI",
-  "description": "Run Google's Gemini CLI as an agent (acp:gemini-cli) over ACP. Gemini enters ACP mode via its own `--experimental-acp` flag — no adapter package — and self-authenticates with your `gemini` login (Google OAuth) or a GEMINI_API_KEY in the environment; PersonalClaw stores no key. The provider activates only when the `gemini` binary is present, and is unavailable otherwise.",
+  "description": "Run Google's Gemini CLI as an agent (acp:gemini-cli) over ACP. Gemini enters ACP mode via its own `--experimental-acp` flag — no adapter package — and self-authenticates with your `gemini` login (Google OAuth) or a GEMINI_API_KEY you pass through to it by name (Settings → Security → Child environment passthrough); PersonalClaw stores no key. The provider activates only when the `gemini` binary is present, and is unavailable otherwise.",
   "icon": "SquareTerminal",
   "author": "PersonalClaw",
   "license": "MIT",
