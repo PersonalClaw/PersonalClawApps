@@ -213,7 +213,7 @@ class TestApproval:
         assert cbs == {"approve:reqX", "deny:reqX"}
 
         # A button press (callback_query) resolves the same pending future.
-        await d.resolve_callback({"id": "cbq1", "data": "approve:reqX"})
+        await d.resolve_callback({"id": "cbq1", "data": "approve:reqX", "from": {"id": 42}})
         approved = await asyncio.wait_for(task, timeout=1.0)
         assert approved is True
         # button spinner acknowledged
@@ -226,7 +226,7 @@ class TestApproval:
         d = _delivery(owner="42")
         task = asyncio.ensure_future(d.request_approval(_Event("reqY"), source="tool"))
         await asyncio.sleep(0)
-        await d.resolve_callback({"id": "c2", "data": "deny:reqY"})
+        await d.resolve_callback({"id": "c2", "data": "deny:reqY", "from": {"id": 42}})
         assert await asyncio.wait_for(task, timeout=1.0) is False
 
     @pytest.mark.asyncio
@@ -234,6 +234,42 @@ class TestApproval:
         d = _delivery(owner="")  # no owner, no linked session → cannot prompt
         result = await d.request_approval(_Event(), source="tool")
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_only_the_owner_answers_a_prompt(self):
+        """A prompt for a chat linked to a tracked group is posted in the group, where every
+        member sees the buttons. A member's press must not approve what the owner's agent runs."""
+        d = _delivery(owner="42")
+        task = asyncio.ensure_future(d.request_approval(_Event("reqG", "rm -rf"), source="tool"))
+        await asyncio.sleep(0)
+
+        await d.resolve_callback({"id": "m1", "data": "approve:reqG", "from": {"id": 5151}})
+        await d.resolve_callback({"id": "m2", "data": "approve:reqG"})  # no presser at all
+        await asyncio.sleep(0)
+        assert not task.done(), "a member's press answered the owner's approval"
+        assert [a["text"] for a in d._api.answers[-2:]] == ["Only the owner can answer this."] * 2
+
+        # Floor: the owner's press, on the same prompt, does answer it.
+        await d.resolve_callback({"id": "o1", "data": "approve:reqG", "from": {"id": 42}})
+        assert await asyncio.wait_for(task, timeout=1.0) is True
+        assert d._api.answers[-1] == {"id": "o1", "text": "Recorded"}
+
+    @pytest.mark.asyncio
+    async def test_a_refused_press_is_a_security_event(self, monkeypatch):
+        import telegram_runtime.delivery as mod
+
+        events = []
+        monkeypatch.setattr(mod, "sel", lambda: type("S", (), {"log_api_access": lambda self, **kw: events.append(kw)})())
+        d = _delivery(owner="42")
+        task = asyncio.ensure_future(d.request_approval(_Event("reqS"), source="tool"))
+        await asyncio.sleep(0)
+        await d.resolve_callback({"id": "m1", "data": "deny:reqS", "from": {"id": 5151}})
+        assert [(e["caller"], e["outcome"], e["resources"]) for e in events] == [
+            ("telegram:5151", "denied", "reqS")
+        ]
+        await d.resolve_callback({"id": "o1", "data": "deny:reqS", "from": {"id": 42}})
+        assert await asyncio.wait_for(task, timeout=1.0) is False
+        assert len(events) == 1, "the owner's press is not an event"
 
     @pytest.mark.asyncio
     async def test_callback_for_unknown_request_just_acks(self):

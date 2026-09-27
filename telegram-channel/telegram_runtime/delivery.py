@@ -23,6 +23,7 @@ from personalclaw.sdk.channel import (
     is_tracked_channel,
     redact_credentials,
     redact_exfiltration_urls,
+    sel,
 )
 
 from telegram_runtime.api import TelegramAPI
@@ -332,18 +333,37 @@ class TelegramDelivery:
         return outcome == "approved"
 
     async def resolve_callback(self, cq: dict[str, Any]) -> None:
-        """Resolve a pending approval from a ``callback_query`` (button press)."""
+        """Resolve a pending approval from a ``callback_query`` (button press).
+
+        Only the owner's press answers it. A prompt for a chat linked to a tracked group is posted
+        in that group, where every member sees the buttons, and a member must not approve what
+        the owner's agent runs. Anyone else's press is refused and logged."""
         data = cq.get("data", "") or ""
         cq_id = cq.get("id", "")
         action, _, request_id = data.partition(":")
+        answer = "Recorded"
         if action in (_APPROVE, _DENY) and request_id:
             pending = self._pending.get(f"req:{request_id}")
             if pending is not None and not pending.future.done():
-                pending.future.set_result("approved" if action == _APPROVE else "rejected")
+                presser = str((cq.get("from") or {}).get("id", "") or "")
+                owner = str(self._owner() or "")
+                if owner and presser == owner:
+                    pending.future.set_result("approved" if action == _APPROVE else "rejected")
+                else:
+                    answer = "Only the owner can answer this."
+                    logger.warning("telegram: refused an approval press from %s, not the owner", presser)
+                    sel().log_api_access(
+                        caller=f"telegram:{presser or 'unknown'}",
+                        operation="telegram.approval_press",
+                        outcome="denied",
+                        source="telegram",
+                        resources=request_id,
+                        error="not the owner",
+                    )
         # Acknowledge so Telegram stops the button's spinner.
         if cq_id:
             try:
-                await self._api.answer_callback_query(cq_id, text="Recorded")
+                await self._api.answer_callback_query(cq_id, text=answer)
             except Exception:
                 logger.debug("telegram: answerCallbackQuery failed", exc_info=True)
 

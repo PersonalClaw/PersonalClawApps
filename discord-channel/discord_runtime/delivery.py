@@ -35,6 +35,7 @@ from personalclaw.sdk.channel import (
     is_tracked_channel,
     redact_credentials,
     redact_exfiltration_urls,
+    sel,
 )
 
 from discord_runtime.api import (
@@ -469,7 +470,25 @@ class DiscordDelivery:
         if action in (_APPROVE, _DENY) and request_id:
             pending = self._pending.get(f"req:{request_id}")
             if pending is not None and not pending.future.done():
-                pending.future.set_result("approved" if action == _APPROVE else "rejected")
+                # Only the owner's press answers it. A prompt for a chat linked to a tracked
+                # channel is posted there, where everyone in it sees the buttons, and a member
+                # must not approve what the owner's agent runs. In a server the presser is
+                # `member.user`, in a DM `user`.
+                member_user = (interaction.get("member") or {}).get("user") or {}
+                presser = str((member_user or interaction.get("user") or {}).get("id", "") or "")
+                owner = str(self._owner() or "")
+                if owner and presser == owner:
+                    pending.future.set_result("approved" if action == _APPROVE else "rejected")
+                else:
+                    logger.warning("discord: refused an approval press from %s, not the owner", presser)
+                    sel().log_api_access(
+                        caller=f"discord:{presser or 'unknown'}",
+                        operation="discord.approval_press",
+                        outcome="denied",
+                        source="discord",
+                        resources=request_id,
+                        error="not the owner",
+                    )
         iid = str(interaction.get("id", ""))
         itoken = str(interaction.get("token", ""))
         if iid and itoken:

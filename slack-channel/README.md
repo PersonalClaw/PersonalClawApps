@@ -45,6 +45,14 @@ Three things this deliberately does *not* do:
 - **Prose never lands in `meta`.** `meta` is matched, not narrated, and core does not fence
   it — so a sender's Slack profile name is not there.
 
+## Results from your schedules
+
+A schedule can send its results here too. In the schedule's Advanced → Notify channel, pick
+Slack, then **You, in a direct message** or **A chat or channel** with the channel's id, like
+`C0123456789` (at the bottom of the channel's About tab). Your DMs need Slack to know who you
+are, its owner. Slack checks the id when you save and says what's wrong if it can't send
+there.
+
 ## Install
 
 From the App Store, add the `apps/` directory as a **local source**, then install

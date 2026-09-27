@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import sys as _sys
 from pathlib import Path as _Path
 from typing import Any
@@ -73,6 +74,10 @@ logger = logging.getLogger(__name__)
 ALLOWED_UPDATES = ["message", "callback_query"]
 _OFFSET_FILE = "poll_offset.json"
 
+#: What ``sendMessage`` takes as ``chat_id``: an integer id (negative for groups and channels), or a
+#: public channel's ``@username`` (5 to 32 letters, digits or underscores, starting with a letter).
+_TARGET_RE = re.compile(r"-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{4,31}")
+
 
 class TelegramTransport(ChannelTransportProvider):
     def __init__(self, config: dict[str, Any] | None = None) -> None:
@@ -96,6 +101,20 @@ class TelegramTransport(ChannelTransportProvider):
     @property
     def display_name(self) -> str:
         return "Telegram"
+
+    def validate_target(self, target: str) -> str:
+        """Whether a schedule can send its results to ``target`` on Telegram.
+
+        ``sendMessage`` takes a chat id, a number that is negative for a group, supergroup or
+        channel (``-1001234567890``), or a public channel's ``@username``. Anything else would be
+        refused by Telegram at send time, so it is refused here, in words, instead.
+        """
+        if _TARGET_RE.fullmatch(str(target or "").strip()):
+            return ""
+        return (
+            "A Telegram chat id is a number, like 4242, or -1001234567890 for a group, or a "
+            "public channel's @username."
+        )
 
     def capabilities(self) -> ChannelCapabilities:
         # Honest: streaming is edit-based (not native chunk append), rich text is
@@ -258,6 +277,9 @@ class TelegramTransport(ChannelTransportProvider):
                 "chat_type": chat.get("type", ""),
                 "sender_name": sender_name,
                 "username": frm.get("username", ""),
+                # A group's title: core lists an untracked group that messaged the bot by it, on
+                # the Sender trust page, so the owner can tell which group to track.
+                "channel_name": chat.get("title", "") or "",
             },
         )
 

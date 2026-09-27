@@ -21,6 +21,8 @@ ships as a self-contained directory:
   - `transport.py` — the `getUpdates` long-poll inbound loop + outbound `send`.
   - `delivery.py` — the `ChannelDelivery` the gateway delivers results through
     (MarkdownV2 rendering, throttled edit-streaming, inline-keyboard approvals).
+    Only the owner's press answers an approval: in a tracked group every member sees
+    the buttons, and anyone else's press is refused and logged.
   - `format.py` — the MarkdownV2 escaper (the classic Telegram footgun, contained).
   - `settings.py` — the app's own DM-activation config + credential key.
 - `cli_setup.py` / `cli_doctor.py` — the app's `personalclaw setup` / `doctor` hooks.
@@ -63,6 +65,14 @@ Three things this deliberately does *not* do:
   list above by a structural fact, so a sender cannot pick which of your automations runs.
 - **Prose never lands in `meta`.** `meta` is matched, not narrated, and core does not fence
   it — so a sender's chosen display name is not there.
+
+## Results from your schedules
+
+A schedule can send its results here too. In the schedule's Advanced → Notify channel, pick
+Telegram, then **You, in a direct message** or **A chat or channel** with its id: a number like
+`4242`, `-1001234567890` for a group, or a public channel's `@username`. Your DMs need Telegram
+to know who you are, its owner. Telegram checks the id when you save and says what's wrong if
+it can't send there.
 
 ## Install
 

@@ -152,7 +152,7 @@ async def test_an_owner_paired_while_the_receiver_runs_gets_the_next_approval_pr
         assert {b["callback_data"] for b in prompt["reply_markup"]["inline_keyboard"][0]} == {
             "approve:after", "deny:after",
         }
-        await transport._delivery.resolve_callback({"id": "cb", "data": "approve:after"})
+        await transport._delivery.resolve_callback({"id": "cb", "data": "approve:after", "from": {"id": OWNER}})
         assert await asyncio.wait_for(task, timeout=1.0) is True
     finally:
         await transport.stop_inbound()
