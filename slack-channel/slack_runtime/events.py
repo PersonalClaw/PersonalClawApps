@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Coroutine
 
 import aiohttp
+from slack_sdk.errors import SlackApiError
 from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
 from slack_sdk.socket_mode.websockets import SocketModeClient as WSSocketModeClient
@@ -72,6 +73,40 @@ if TYPE_CHECKING:
     from personalclaw.sdk.channel import GatewayServices
 
 logger = logging.getLogger(__name__)
+
+
+class SocketModeReceiver(WSSocketModeClient):
+    """The Slack SDK's Socket Mode client, keeping why it last failed to connect.
+
+    The SDK reconnects on its own (``monitor_current_session``, every ``ping_interval``) and only
+    LOGS a failure, so the transport could see that Socket Mode was not connected but not why.
+    ``connect_error`` is Slack's own error code when ``apps.connections.open`` refused
+    (``invalid_auth`` for a revoked App Token), else the failure's type. Never its text: that
+    can carry the socket URL and its one-time ticket. ``""`` once a connection is made.
+    """
+
+    connect_error = ""
+
+    async def issue_new_wss_url(self) -> str:
+        try:
+            return await super().issue_new_wss_url()
+        except SlackApiError as exc:
+            try:
+                self.connect_error = str(exc.response["error"] or "") or type(exc).__name__
+            except (KeyError, TypeError):
+                self.connect_error = type(exc).__name__
+            raise
+
+    async def connect(self) -> None:
+        try:
+            await super().connect()
+        except SlackApiError:
+            raise  # `issue_new_wss_url` kept Slack's answer
+        except Exception as exc:
+            self.connect_error = type(exc).__name__
+            raise
+        self.connect_error = ""
+
 
 _skills_loader: SkillsLoader | None = None
 
@@ -676,7 +711,7 @@ def init_socket_mode(orch: "GatewayServices", seen: SeenCache) -> None:
         return
 
     web_client = AsyncWebClient(token=orch._bot_token)
-    orch._socket_client = WSSocketModeClient(
+    orch._socket_client = SocketModeReceiver(
         app_token=orch._app_token,
         web_client=web_client,
     )

@@ -305,10 +305,15 @@ class SlackTransport(ChannelTransportProvider):
         tokens = self._tokens()
         if not tokens[0]:
             return {"state": "offline", "detail": "No bot token configured"}
+        # Whether Socket Mode is connected NOW (``None``: this instance holds no socket client).
+        # Connecting once is not staying connected: the SDK reconnects on its own and only logs
+        # a reconnect that fails, so the flag set at the first connect cannot answer this.
+        socket = self._runtime._socket_client if self._runtime is not None else None
+        connected = None if socket is None else await socket.is_connected()
         if self._inbound_tokens is not None and self._inbound_tokens != tokens:
             # Tokens saved in the running gateway replace this instance and its receiver; ones
             # changed outside it are what this reports.
-            if self._inbound_started:
+            if self._inbound_started and connected is not False:
                 detail = (
                     "Outbound uses the saved tokens; Socket Mode is still connected with the "
                     "ones it started with. Configure → Save, or turning the channel off and on, "
@@ -322,6 +327,8 @@ class SlackTransport(ChannelTransportProvider):
                 )
             return {"state": "error", "detail": detail}
         if self._inbound_started:
+            if connected is False:
+                return {"state": "error", "detail": _socket_down(socket)}
             return {"state": "ready", "detail": "Tokens configured, Socket-Mode connected"}
         if self._inbound_offline_reason:
             return {
@@ -353,6 +360,44 @@ class SlackTransport(ChannelTransportProvider):
         if h["state"] != "ready":
             return {"ok": False, "detail": f"Authenticated to {team}, but {h['detail']}"}
         return {"ok": True, "detail": f"Authenticated to {team}"}
+
+
+#: What ``apps.connections.open`` answers when Slack will not take the App Token.
+_APP_TOKEN_REFUSALS = frozenset(
+    {
+        "invalid_auth",
+        "not_authed",
+        "token_revoked",
+        "token_expired",
+        "account_inactive",
+        "not_allowed_token_type",
+    }
+)
+
+
+def _socket_down(socket: Any) -> str:
+    """Why inbound is down while Socket Mode is not connected, from what the socket client kept.
+
+    ``socket`` is the runtime's :class:`~slack_runtime.events.SocketModeReceiver`: its
+    ``connect_error`` is Slack's answer to the last reconnect (or the failure's type), and its
+    ``ping_interval`` is how often the SDK tries again."""
+    error = socket.connect_error
+    every = f"every {socket.ping_interval:g} seconds"
+    if error in _APP_TOKEN_REFUSALS:
+        return (
+            f"Inbound OFFLINE — Socket Mode is not connected, and Slack refuses the App Token "
+            f"({error}) each time it reconnects. Save a working App Token in Configure; that "
+            "connects it again."
+        )
+    if error:
+        return (
+            f"Inbound OFFLINE — Socket Mode is not connected, and reconnecting fails ({error}). "
+            f"The Slack SDK keeps trying {every}."
+        )
+    return (
+        "Inbound OFFLINE — Socket Mode is not connected. The Slack SDK reconnects on its own, "
+        f"trying {every}."
+    )
 
 
 def create_provider(config: dict[str, Any] | None = None) -> "SlackTransport":

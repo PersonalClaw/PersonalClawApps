@@ -149,7 +149,7 @@ def slack_offline(monkeypatch):
     monkeypatch.setattr(transport_mod, "RealSlackClient", lambda token: SimpleNamespace())
     monkeypatch.setattr(events_mod, "validate_enterprise", lambda *a, **k: True)
     monkeypatch.setattr(events_mod, "AsyncWebClient", lambda **kw: SimpleNamespace())
-    monkeypatch.setattr(events_mod, "WSSocketModeClient", _FakeSocketClient)
+    monkeypatch.setattr(events_mod, "SocketModeReceiver", _FakeSocketClient)
     for name in ("_gateway_services", "_orch_cfg"):
         monkeypatch.setattr(H, name, getattr(H, name))
     for name in ("global_enabled", "auto_speak", "auto_reply_to_voice"):
