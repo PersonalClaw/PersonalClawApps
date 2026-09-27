@@ -42,8 +42,8 @@ Core declares the seam and this app fills it:
 
 ## Security posture
 
-Per ARCC `cnt_eMkU5kkpTaEk65` ("Secure File Uploads"), an image is admitted on what its
-**bytes** say, never on its name:
+An upload's name and declared type are claims, never evidence, so an image is admitted on
+what its **bytes** say, never on its name:
 
 - **True-type detection.** A file called `page.png` whose bytes are a PDF, an HTML document
   or plain text is refused before any decoder touches it. So is a real PNG named `.jpg` —

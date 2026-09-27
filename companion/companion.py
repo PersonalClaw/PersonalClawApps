@@ -80,7 +80,7 @@ _ID_BYTES = 4
 
 #: A control character, including newline and tab. Stripped from every stored string: a
 #: newline inside a title would forge a second line in every log and notification the item is
-#: read through (ARCC SAX-06), and a NUL would truncate a path at the syscall boundary.
+#: read through (log injection), and a NUL would truncate a path at the syscall boundary.
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 #: One path segment of a watch pattern: at most ONE leading dot, then an alphanumeric. That

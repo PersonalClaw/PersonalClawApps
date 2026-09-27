@@ -174,8 +174,8 @@ a test asserts that sentence is still there.
 ## Security posture
 
 An alarm is the canonical untrusted input for this app: machine-generated text quoting log
-lines, hostnames and URLs from wherever the failure happened. Applying the ARCC
-input-validation guidance (SAX-04 boundary validation, SAX-06 log injection) to each
+lines, hostnames and URLs from wherever the failure happened. Applying two input-validation
+rules (validate at the boundary, and never let untrusted text forge a log record) to each
 untrusted edge:
 
 - **Nothing from an alarm ever becomes a path or an argv element.** The incident id is

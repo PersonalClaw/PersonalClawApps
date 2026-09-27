@@ -117,7 +117,7 @@ class RapidOcrProvider(OcrProvider):
         """OCR each image in order and return the concatenated text.
 
         Every input passes core's :func:`assert_image` gate FIRST — the bytes decide what a
-        file is, never its extension (ARCC ``cnt_eMkU5kkpTaEk65``). A rejected input raises
+        file is, never its extension. A rejected input raises
         :class:`OcrRejected` before any decoder is handed the bytes, which is the whole
         point of doing it here rather than letting the engine discover it.
         """

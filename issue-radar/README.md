@@ -146,8 +146,8 @@ they are the part a human wrote.
 ## Security posture
 
 Every issue this app reads is attacker-authored text written by a stranger on the internet,
-so it is treated as such at all three edges. Applying the ARCC input-validation guidance
-(SAX-04 boundary validation, SAX-06 log injection):
+so it is treated as such at all three edges. Applying two input-validation rules (validate
+at the boundary, and never let untrusted text forge a log record):
 
 - **The repository reference** becomes both a CLI argument and a filename, so it is
   validated against one strict regex before either — and GitLab needs its `gitlab:` prefix

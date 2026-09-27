@@ -1,9 +1,7 @@
-"""kiro-cli bundle tests — kept OUT of the public repo (gitignored alongside the
-``acp_bundles/kiro_cli.py`` module + ``providers/bundled/kiro-cli-agent/`` bundle).
+"""kiro-cli bundle tests.
 
-kiro-cli is an Amazon-internal CLI vended only as a removable bundle; its source
-and these tests are excluded from the published OSS tree. The public bundle
-tests live in ``test_acp_bundles.py`` and never import kiro.
+kiro-cli ships only as this removable bundle, so its tests live beside it. Core never
+imports the bundle; core's own ``test_acp_bundles.py`` covers the shared ACP machinery.
 """
 
 from __future__ import annotations
