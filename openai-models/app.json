@@ -1,6 +1,6 @@
 {
   "name": "openai-models",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "OpenAI",
   "description": "OpenAI chat + embedding models (Chat Completions API). Bring your own OpenAI API key.",
   "icon": "Brain",
@@ -45,7 +45,7 @@
           "default": "",
           "x-meta": {
             "label": "Default Model",
-            "help": "OpenAI model id. Empty = resolved from live /v1/models discovery."
+            "help": "An OpenAI model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models."
           }
         },
         "endpoint": {

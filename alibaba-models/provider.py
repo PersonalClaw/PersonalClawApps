@@ -73,7 +73,7 @@ SPEC = BrandedProviderSpec(
     protocol="openai",
     default_base_url=_DEFAULT_ENDPOINT,
     api_key_env="ALIBABA_API_KEY",
-    default_model="",  # resolved from live model discovery
+    default_model="",  # no curated pick: a call names its binding or the instance's Default Model
     capabilities=frozenset({
         Capability.CHAT, Capability.CODE_TOOLS, Capability.STREAMING,
         Capability.VISION, Capability.EMBEDDING,

@@ -149,44 +149,33 @@ async def test_default_chain_when_no_profile(monkeypatch: pytest.MonkeyPatch) ->
 def test_no_hardcoded_default_model_constant() -> None:
     """De-hardcode directive (2026-07-06): there is NO hardcoded default model id.
     The old ``DEFAULT_BEDROCK_MODEL`` constant (and the #32 fix's hardcoded value) are
-    gone — the unpinned default is resolved from live discovery at start()."""
+    gone, and nothing picks a model in their place: a call names its binding or the
+    instance's Default Model, or it is refused."""
     import provider as prov
     assert not hasattr(prov, "DEFAULT_BEDROCK_MODEL"), "no hardcoded default id may exist"
     assert not hasattr(prov, "_BEDROCK_FALLBACK_MODELS"), "no hardcoded fallback catalog may exist"
 
 
 @pytest.mark.asyncio
-async def test_default_resolves_from_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An unpinned provider resolves its model from the DISCOVERED list (preference
-    order: sonnet → haiku → any claude → nova → first), never a baked id."""
+async def test_an_unpinned_provider_picks_no_model_and_sends_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``start()`` never picks a model: an unpinned provider stays unpinned, and both of its
+    calls are refused before anything is sent or kept. It used to take a Claude from live
+    discovery at ``start()``, so an unbound call answered on a model nobody chose."""
     import provider as prov
+    from personalclaw.sdk.model import ProviderResolutionError
 
-    async def fake_resolve(region, profile):
-        return "us.anthropic.claude-sonnet-4-6"  # stands in for discovery
-    monkeypatch.setattr(prov, "_resolve_default_model_id", fake_resolve)
-    _install_fake_boto3(monkeypatch, [])
-    p = prov.BedrockProvider(model="")  # unpinned
-    assert p._model_id == ""            # nothing baked at construction
+    client = _install_fake_boto3(monkeypatch, [_text_event("never sent")])
+    p = prov.BedrockProvider(model="")
     await p.start()
-    assert p._model_id == "us.anthropic.claude-sonnet-4-6"  # resolved from discovery
-
-
-def test_pick_default_prefers_claude_sonnet() -> None:
-    """_DEFAULT_MODEL_PREFERENCE picks a sonnet-tier Claude first, by substring —
-    no exact id hardcoded."""
-    import asyncio
-
-    import provider as prov
-
-    rows = [
-        {"id": "amazon.nova-lite-v1:0"},
-        {"id": "global.anthropic.claude-opus-4-8"},
-        {"id": "global.anthropic.claude-sonnet-4-6"},
-    ]
-    import unittest.mock as m
-    with m.patch.object(prov, "_list_bedrock_models_sync", return_value=rows):
-        picked = asyncio.run(prov._resolve_default_model_id("us-west-2", ""))
-    assert picked == "global.anthropic.claude-sonnet-4-6"  # sonnet beats opus/nova per preference
+    assert p._model_id == ""
+    for call in (lambda: p.stream("hi"), lambda: p.complete([{"role": "user", "content": "hi"}])):
+        with pytest.raises(ProviderResolutionError, match="No model is chosen for this call"):
+            async for _event in call():
+                pass
+    assert client.last_request is None, "no request went out"
+    assert p._history == []
 
 
 @pytest.mark.asyncio

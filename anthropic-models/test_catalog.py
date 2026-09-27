@@ -90,14 +90,6 @@ def test_lists_current_claude_models():
         assert "chat" in m.capabilities
 
 
-def test_default_model_derived_from_catalog_by_family_preference():
-    # The unpinned default is DERIVED from the curated list (no separately-hardcoded
-    # id) — Opus leads per the docs' "start with Claude Opus 4.8" guidance.
-    assert prov._pick_default_model() == "claude-opus-4-8"
-    # Whatever it resolves to must be a real catalog entry, never a stale literal.
-    assert prov._pick_default_model() in {m["id"] for m in prov._ANTHROPIC_MODELS}
-
-
 def test_connection_needs_a_key():
     no_key = prov.create_catalog({})
     no_key._api_key = ""  # ensure env isn't satisfying it

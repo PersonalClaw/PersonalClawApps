@@ -28,6 +28,7 @@ from personalclaw.sdk.model import (
     ProviderResolutionError,
     get_default_registry,
     output_cap,
+    own_model,
     per_call_temperature,
 )
 
@@ -101,7 +102,7 @@ def _factory(
     _base = options.pop("base_url", None)
     _endpoint = options.pop("endpoint", None)
     base_url = str(_base or _endpoint or META_BASE_URL)
-    _default_model = options.pop("default_model", None)
+    options.pop("default_model", None)  # read as the entry's own model, below
     # The operator's configured cap, else the budget core derived for this call (the
     # ``max_tokens`` build kwarg), else none: the endpoint's own default.
     max_tokens = output_cap(options.pop("max_tokens", None), kwargs.get("max_tokens"))
@@ -113,8 +114,10 @@ def _factory(
     if temperature is not None:
         options["temperature"] = temperature
 
-    _model_override = kwargs.get("model")
-    model = str(_model_override or entry.model or _default_model or "muse-spark-1.1")
+    # The model this call is built for (core passes the bound one), else the entry's own (the
+    # SDK's ``ProviderEntry.own_model``: its model, else its Default Model). With neither, the
+    # client refuses each call: this app never names a model nobody chose.
+    model = str(kwargs.get("model") or "") or entry.own_model
 
     return OpenAIProvider(
         model=model,
@@ -130,7 +133,7 @@ def create_provider(config: dict[str, Any]) -> "OpenAIProvider":
     api_key = config.get("api_key", "") or os.environ.get("META_MODEL_API_KEY", "")
     cred = Credential(name="meta", kind="api_key", secret=api_key, source="file")
     return OpenAIProvider(
-        model=config.get("model") or config.get("default_model") or "muse-spark-1.1",
+        model=own_model(config.get("model"), config),  # its Default Model, else none: refused
         credential=cred,
         base_url=config.get("endpoint") or META_BASE_URL,
         max_tokens=None,

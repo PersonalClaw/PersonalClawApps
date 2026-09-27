@@ -32,7 +32,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | Key | Label | Notes |
 |---|---|---|
 | `api_key` | OpenAI API Key | Your OpenAI API key (platform.openai.com). Leave empty to fall back to the OPENAI_API_KEY environment variable. |
-| `default_model` | Default Model | OpenAI model id. Empty = resolved from live /v1/models discovery. |
+| `default_model` | Default Model | An OpenAI model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 | `endpoint` | Base URL | Optional custom OpenAI-compatible base URL. Empty uses the OpenAI default. |
 
 ## License

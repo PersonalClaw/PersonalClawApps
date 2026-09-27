@@ -75,7 +75,7 @@ def test_capability_matches_what_the_provider_implements() -> None:
 
 def test_create_provider_defaults(fake_openai: types.ModuleType, no_env_key: None) -> None:
     p = prov.create_provider({"api_key": "mk-x"})
-    assert p._model == "muse-spark-1.1"
+    assert p._model == ""  # no Default Model: none is picked, and each call is refused
     last = _FakeAsyncOpenAI.constructed[-1]
     assert last["api_key"] == "mk-x"
     assert last["base_url"] == prov.META_BASE_URL

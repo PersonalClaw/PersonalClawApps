@@ -47,7 +47,7 @@ like any other app. (Or [install it from a shell](../docs/third-party-install.md
 | Key | Label | Notes |
 |---|---|---|
 | `api_key` | Meta AI API Key | Your Meta AI API key. Leave empty to fall back to the META_MODEL_API_KEY environment variable. |
-| `default_model` | Default Model | A Meta AI model id. Empty uses muse-spark-1.1. |
+| `default_model` | Default Model | A Meta AI model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 | `endpoint` | Base URL | Optional override of the Meta AI base URL. Empty uses https://api.meta.ai/v1. |
 
 ## License

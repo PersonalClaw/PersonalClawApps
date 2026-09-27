@@ -45,23 +45,19 @@ from personalclaw.sdk.model import (
     ProviderResolutionError,
     get_default_registry,
     output_cap,
+    own_model,
     per_call_temperature,
+    require_model,
 )
 
 logger = logging.getLogger(__name__)
 
-# NO hardcoded model id (user directive 2026-07-06): Bedrock supports dynamic
-# discovery (control plane list_foundation_models + list_inference_profiles), so the
-# unpinned default is RESOLVED FROM LIVE DISCOVERY at start() — never a baked id
-# (the old bug #32 was a hardcoded default that this account rejected). See
-# _pick_default_model_id. When a model IS pinned (the common case — the chat binding
-# supplies e.g. Bedrock:global.anthropic.claude-opus-4-8), no default is needed.
+# NO model id is chosen here, hardcoded or discovered. A call names its model: the chat binding
+# in Settings → Models (e.g. ``Bedrock:global.anthropic.claude-opus-4-8``), else the instance's
+# own Default Model (the SDK's ``own_model``). One that names neither is refused before it is
+# sent (``require_model``). This used to pick a Claude from live discovery at ``start()``, so an
+# unbound call on an instance saved without a Default Model answered on a model nobody chose.
 DEFAULT_REGION = "us-west-2"
-
-# Preference order for auto-picking an unpinned default from the discovered list:
-# a mid-tier Claude (sonnet) first, then any Claude, then any Nova, then anything.
-# Substring match against discovered ids — no exact id is hardcoded.
-_DEFAULT_MODEL_PREFERENCE = ("claude-sonnet", "claude-haiku", "claude", "nova")
 
 # Max conversation history entries before trimming oldest (mirrors openai.py).
 _MAX_HISTORY = 50
@@ -640,7 +636,7 @@ class BedrockProvider(ModelProvider):
         temperature: float | None = None,
     ) -> None:
         # NO credential parameter — boto3's chain authenticates (G-AUTH).
-        # Empty ⇒ resolve from live discovery at start() (no hardcoded default id).
+        # Empty ⇒ every call that names no model of its own is refused (``require_model``).
         self._model_id = model or ""
         self._region = region or DEFAULT_REGION
         self._profile = profile_name or None
@@ -721,13 +717,9 @@ class BedrockProvider(ModelProvider):
             )
 
         self._client = await asyncio.to_thread(_build_client)
-        # No model pinned → resolve the default from LIVE discovery (no hardcoded id).
-        # _resolve_default_model_id already runs its boto calls via to_thread.
-        if not self._model_id:
-            self._model_id = await _resolve_default_model_id(self._region, self._profile)
         logger.info(
             "Bedrock provider ready: model=%s region=%s profile=%s",
-            self._model_id or "<unresolved>",
+            self._model_id or "<none chosen>",
             self._region,
             self._profile or "<default-chain>",
         )
@@ -749,6 +741,8 @@ class BedrockProvider(ModelProvider):
         record are pushed onto an :class:`asyncio.Queue` this generator
         drains, so the event loop is never blocked by boto I/O.
         """
+        # Refused before anything is built or kept: a call that names no model is never sent.
+        model_id = require_model(self._model_id)
         if self._client is None:
             await self.start()
 
@@ -757,7 +751,7 @@ class BedrockProvider(ModelProvider):
             self._history = self._history[-_MAX_HISTORY:]
 
         request: dict[str, Any] = {
-            "modelId": self._model_id,
+            "modelId": model_id,
             "messages": self._history,
             "inferenceConfig": self._inference_config(),
         }
@@ -855,6 +849,7 @@ class BedrockProvider(ModelProvider):
         :class:`asyncio.Queue` so the event loop is never stalled (mirrors
         :meth:`stream`).
         """
+        model_id = require_model(_bare_model_id(model, self._model_id))
         if self._client is None:
             await self.start()
 
@@ -864,7 +859,7 @@ class BedrockProvider(ModelProvider):
         system_blocks, converse_messages = _translate_messages(messages, tool_name_fwd)
 
         request: dict[str, Any] = {
-            "modelId": _bare_model_id(model, self._model_id),
+            "modelId": model_id,
             "messages": converse_messages,
         }
         if system_blocks:
@@ -982,7 +977,7 @@ class BedrockProvider(ModelProvider):
             await worker  # ensure the thread is joined even on cancellation
 
         if error is not None:
-            raise _friendly_bedrock_error(error, model or self._model_id, region=self._region)
+            raise _friendly_bedrock_error(error, model_id, region=self._region)
 
         # Defensive flush — emit any unfinalized tool blocks.
         for block_index, bucket in tool_blocks.items():
@@ -998,7 +993,7 @@ class BedrockProvider(ModelProvider):
 
         context_pct = 0.0
         if input_tokens > 0:
-            ctx = _model_window(model or self._model_id, _DEFAULT_CONTEXT_WINDOW)
+            ctx = _model_window(model_id, _DEFAULT_CONTEXT_WINDOW)
             context_pct = (input_tokens / ctx) * 100
 
         yield LLMEvent(
@@ -1064,30 +1059,6 @@ BEDROCK_CAPABILITY = ProviderCapability(
 # from the control plane. If discovery can't run (no boto3/creds/permission), the
 # model list is EMPTY (the UI shows "no models discovered — check AWS creds/region")
 # rather than fake ids that may not be invocable. Discovery is authoritative.
-
-
-async def _resolve_default_model_id(region: str, profile: str | None) -> str:
-    """Pick an unpinned default from LIVE discovery — no hardcoded id.
-
-    Discovers the account's invocable models (foundation + inference profiles) and
-    returns the first that matches ``_DEFAULT_MODEL_PREFERENCE`` (a mid-tier Claude,
-    else any Claude, else Nova, else the first discovered). Returns "" when nothing
-    is discoverable (no creds/permission) — the caller then errors clearly at call
-    time rather than invoking a bogus baked id (bug #32's failure mode)."""
-    try:
-        rows = await asyncio.to_thread(_list_bedrock_models_sync, region, profile or "")
-    except Exception:
-        logger.debug("Bedrock default resolution: discovery failed", exc_info=True)
-        return ""
-    ids = [str(r.get("id", "")) for r in rows if r.get("id")]
-    if not ids:
-        return ""
-    for needle in _DEFAULT_MODEL_PREFERENCE:
-        match = next((i for i in ids if needle in i.lower()), None)
-        if match:
-            logger.info("Bedrock: auto-selected default %r (matched %r) from discovery", match, needle)
-            return match
-    return ids[0]  # nothing preferred matched → first discovered (still not hardcoded)
 
 
 def _list_bedrock_models_sync(region: str, profile: str) -> list[dict[str, Any]]:
@@ -1284,8 +1255,8 @@ def create_provider(config: dict[str, Any]) -> BedrockProvider:
     # "leave it to the model", which `output_cap` reads as unset rather than a zero-token ceiling.
     max_tokens = output_cap(config.get("max_tokens"), None)
     return BedrockProvider(
-        # Empty when unpinned → resolved from live discovery at start() (no baked id).
-        model=config.get("model") or config.get("default_model") or "",
+        # The instance's own model: its Default Model. With none, each call is refused.
+        model=own_model(config.get("model"), config),
         region=config.get("region") or DEFAULT_REGION,
         profile_name=config.get("profile") or None,
         system_prompt=config.get("system_prompt") or None,
@@ -1308,13 +1279,12 @@ def _factory(
     Bedrock is stateless. No credential is resolved (G-AUTH): the entry's
     options carry only region/model/profile.
 
-    A ``model`` kwarg (threaded by ``registry.build(name, model=…)``) overrides the
-    entry's pinned model. The config.json Bedrock entry usually has NO pinned model
-    — the active model lives in ``active_models.json`` and is resolved per use-case
-    (e.g. ``Bedrock:global.anthropic.claude-opus-4-8``) — so a caller that builds
-    the provider for a specific model (one_shot_completion's reasoning axis) MUST be
-    able to pass it, or the provider would silently fall back to the on-demand
-    default and ignore the user's selection.
+    A ``model`` kwarg (threaded by ``registry.build(name, model=…)``) is the model the call
+    is built for: core resolves the active model per use-case (e.g.
+    ``Bedrock:global.anthropic.claude-opus-4-8``) and passes it, and the provider must
+    serve exactly that. Without one, the entry's own model (the SDK's
+    ``ProviderEntry.own_model``: its model, else the Default Model the Add-instance form
+    saves). With neither, the provider is built for no model and refuses each call.
     """
     del session_key  # unused — Bedrock provider is stateless.
 
@@ -1333,10 +1303,7 @@ def _factory(
     # build kwarg. Without it every request samples at the model's default.
     temperature = per_call_temperature(kwargs)
 
-    model_override = kwargs.get("model")
-    # Unpinned (no override, no entry.model) → "" → resolved from live discovery at
-    # start(). No hardcoded default id.
-    model = str(model_override) if model_override else (entry.model or "")
+    model = str(kwargs.get("model") or "") or entry.own_model
 
     return BedrockProvider(
         model=model,

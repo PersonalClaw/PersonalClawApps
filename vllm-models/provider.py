@@ -35,6 +35,7 @@ from personalclaw.sdk.model import (
     get_default_registry,
     openai_compatible_list_models,
     output_cap,
+    own_model,
     per_call_temperature,
 )
 
@@ -194,18 +195,17 @@ def _factory(
     if temperature is not None:
         options["temperature"] = temperature
 
-    # Pop ``default_model`` (the settingsSchema field the Add-instance flow persists)
-    # so it (a) serves as the model fallback and (b) does NOT leak into extra_options
-    # → the openai SDK create() ("unexpected keyword argument 'default_model'").
-    _default_model = options.pop("default_model", None)
+    # Pop ``default_model`` (the settingsSchema field the Add-instance flow persists) so it
+    # does NOT leak into extra_options → the openai SDK create() ("unexpected keyword
+    # argument 'default_model'"). It is read as the entry's own model below.
+    options.pop("default_model", None)
 
-    # A ``model`` kwarg (threaded by ``registry.build(name, model=…)``) overrides the
-    # entry's pinned model — a per-use-case caller (e.g. one_shot_completion's
-    # reasoning axis) must be able to pin the active model, or it would silently use
-    # the entry default. Fall back to the entry's pinned model, then the configured
-    # default_model.
-    _model_override = kwargs.get("model")
-    model = str(_model_override or entry.model or _default_model or "")
+    # A ``model`` kwarg (threaded by ``registry.build(name, model=…)``) is the model the call
+    # is built for — a per-use-case caller (e.g. one_shot_completion's reasoning axis) pins
+    # the active model. Without one, the entry's own model (the SDK's
+    # ``ProviderEntry.own_model``: its model, else its Default Model). With neither, the
+    # client refuses each call rather than name none.
+    model = str(kwargs.get("model") or "") or entry.own_model
 
     # The embedding use-case binding arrives as a build kwarg — the embedder
     # constructs its provider WITH the bound model (embed() takes no per-call model).
@@ -227,7 +227,7 @@ def create_provider(config: dict) -> "VLLMProvider":
     fallback path). vLLM needs a base_url (the local server); auth is optional."""
     base_url = config.get("endpoint") or config.get("base_url") or "http://localhost:8000"
     return VLLMProvider(
-        model=config.get("model") or config.get("default_model") or "",
+        model=own_model(config.get("model"), config),  # its Default Model, else none: refused
         base_url=base_url,
     )
 

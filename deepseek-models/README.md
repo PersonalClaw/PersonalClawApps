@@ -32,7 +32,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | Key | Label | Notes |
 |---|---|---|
 | `api_key` | DeepSeek API Key | Your DeepSeek API key. Leave empty to fall back to the DEEPSEEK_API_KEY environment variable. |
-| `default_model` | Default Model | A DeepSeek model id. Empty = resolved from live /v1/models discovery. |
+| `default_model` | Default Model | A DeepSeek model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 | `endpoint` | Base URL | Optional override of the DeepSeek base URL. Empty uses https://api.deepseek.com/v1. |
 
 ## License

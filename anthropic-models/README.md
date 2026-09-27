@@ -51,7 +51,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | Key | Label | Notes |
 |---|---|---|
 | `api_key` | Anthropic API Key | Your Anthropic API key (console.anthropic.com). Leave empty to fall back to the ANTHROPIC_API_KEY environment variable. |
-| `default_model` | Default Model | Anthropic model id. Empty = newest from the app's built-in catalog. |
+| `default_model` | Default Model | An Anthropic model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 | `endpoint` | Base URL | Optional custom Anthropic-compatible base URL. Empty uses the Anthropic default. |
 
 ## License

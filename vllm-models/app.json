@@ -1,6 +1,6 @@
 {
   "name": "vllm-models",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "vLLM",
   "description": "A local vLLM server (OpenAI-compatible). Point it at your vLLM endpoint; capabilities are model-dependent.",
   "icon": "Cpu",
@@ -42,7 +42,7 @@
           "default": "",
           "x-meta": {
             "label": "Default Model",
-            "help": "The model id served by your vLLM deployment."
+            "help": "The model id served by your vLLM deployment. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models."
           }
         }
       },

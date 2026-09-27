@@ -26,10 +26,13 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the repo root: apps_testkit
 
 from apps_testkit.model_wire import (  # noqa: E402
+    LISTED,
     MODEL,
     PNG_DATA_URL,
     REPLY,
     RecordingModelServer,
+    blank_model_expected,
+    blank_model_report,
     form_options,
     image_call,
     images_sent,
@@ -118,3 +121,28 @@ async def test_a_model_that_takes_images_is_sent_the_image(listed):
     calls = recording.calls()
     assert [images_sent(call) for call in calls] == [[PNG_DATA_URL]]
     assert calls[0]["body"]["model"] == DECLARED_VISION
+
+
+# ── A call no model is chosen for ─────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def listing():
+    """An endpoint that lists only a model nobody chose (``LISTED``): a provider that picked a
+    model of its own would name it on the wire."""
+    with RecordingModelServer(models=(LISTED,)) as recording:
+        yield recording
+
+
+@pytest.mark.asyncio
+async def test_no_model_chosen_is_refused_and_the_default_model_is_named(listing):
+    """Saved with its Default Model empty and called with nothing bound, an instance is sent no
+    call, and no model is picked in its place. With a Default Model, both calls name it."""
+    report = await blank_model_report(
+        app_dir=APP_DIR,
+        entry_type="alibaba",
+        factory=provider._factory,
+        create_provider=provider.create_provider,
+        server=listing,
+    )
+    assert report == blank_model_expected(APP_DIR)

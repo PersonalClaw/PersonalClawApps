@@ -24,7 +24,7 @@ SPEC = BrandedProviderSpec(
     protocol="openai",
     default_base_url="https://api.mistral.ai/v1",
     api_key_env="MISTRAL_API_KEY",
-    default_model="",  # de-hardcoded: resolved from live /v1/models discovery at start()
+    default_model="",  # no curated pick: a call names its binding or the instance's Default Model
     capabilities=frozenset({Capability.CHAT, Capability.CODE_TOOLS, Capability.STREAMING, Capability.VISION}),
         # No hardcoded fallback (de-hardcode directive 2026-07-06): this is an
         # OpenAI-compatible provider — models come from live /v1/models discovery.

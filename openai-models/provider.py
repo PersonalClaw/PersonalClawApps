@@ -31,6 +31,7 @@ from personalclaw.sdk.model import (
     get_default_registry,
     openai_compatible_list_models,
     output_cap,
+    own_model,
     per_call_temperature,
     register_media_catalog,
 )
@@ -96,7 +97,7 @@ def _factory(
     _base = options.pop("base_url", None)
     _endpoint = options.pop("endpoint", None)
     base_url = str(_base or _endpoint) if (_base or _endpoint) else None
-    _default_model = options.pop("default_model", None)
+    options.pop("default_model", None)  # read as the entry's own model, below
     # The operator's configured cap, else the budget core derived for this call (the
     # ``max_tokens`` build kwarg), else none: the endpoint's own default.
     max_tokens = output_cap(options.pop("max_tokens", None), kwargs.get("max_tokens"))
@@ -108,13 +109,12 @@ def _factory(
     if temperature is not None:
         options["temperature"] = temperature
 
-    # A ``model`` kwarg (threaded by ``registry.build(name, model=…)``) overrides the
-    # entry's pinned model — a per-use-case caller (e.g. one_shot_completion's
-    # reasoning axis, which resolves the active model from active_models.json) must
-    # be able to pin the model, or it would silently use the entry default. With neither, the
-    # instance's Default Model setting.
-    _model_override = kwargs.get("model")
-    model = str(_model_override or entry.model or _default_model or "")
+    # A ``model`` kwarg (threaded by ``registry.build(name, model=…)``) is the model the call
+    # is built for — a per-use-case caller (e.g. one_shot_completion's reasoning axis, which
+    # resolves the active model from active_models.json) pins it. Without one, the entry's own
+    # model (the SDK's ``ProviderEntry.own_model``: its model, else its Default Model). With
+    # neither, the client refuses each call rather than name none.
+    model = str(kwargs.get("model") or "") or entry.own_model
 
     # The embedding use-case binding arrives as a build kwarg — the embedder
     # constructs its provider WITH the bound model (embed() takes no per-call model).
@@ -138,9 +138,8 @@ def create_provider(config: dict[str, Any]) -> OpenAIProvider:
     api_key = config.get("api_key", "") or os.environ.get("OPENAI_API_KEY", "")
     cred = Credential(name="openai", kind="api_key", secret=api_key, source="file")
     return OpenAIProvider(
-        # Empty when unpinned → OpenAIProvider.start() resolves it from live
-        # /v1/models discovery (no hardcoded model name — de-hardcode directive).
-        model=config.get("model") or config.get("default_model") or "",
+        # The instance's own model: its Default Model. With none, each call is refused.
+        model=own_model(config.get("model"), config),
         credential=cred,
         base_url=config.get("endpoint") or None,
     )

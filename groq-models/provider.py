@@ -43,7 +43,7 @@ SPEC = BrandedProviderSpec(
     protocol="openai",
     default_base_url="https://api.groq.com/openai/v1",
     api_key_env="GROQ_API_KEY",
-    default_model="",  # de-hardcoded: resolved from live /v1/models discovery at start()
+    default_model="",  # no curated pick: a call names its binding or the instance's Default Model
     capabilities=frozenset(
         {Capability.CHAT, Capability.CODE_TOOLS, Capability.STREAMING, Capability.VISION}
     ),
@@ -52,9 +52,9 @@ SPEC = BrandedProviderSpec(
         fallback_models=(),
     # NONE - Groq's caching IS automatic and cannot be disabled, but Groq's own docs scope
     # it to a handful of models ("openai/gpt-oss-20b", "-120b", "-safeguard-20b"; the
-    # OpenRouter matrix says Kimi K2). This app pins default_model="" and resolves the
-    # model from live /v1/models discovery, so the served model is unknown at declaration
-    # time and a provider-wide AUTOMATIC would promise hits most selections never get.
+    # OpenRouter matrix says Kimi K2). The served model is whichever one Settings → Models
+    # or the instance's Default Model names, so it is unknown at declaration time and a
+    # provider-wide AUTOMATIC would promise hits most selections never get.
     # Revisit if the posture contract ever grows a per-model axis.
     prompt_cache=PromptCache.NONE,
     notes="Groq LPU inference (OpenAI-compatible), very low latency. Bring your own Groq API key.",

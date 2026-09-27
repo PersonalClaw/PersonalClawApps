@@ -26,6 +26,7 @@ from personalclaw.sdk.model import (
     ProviderResolutionError,
     get_default_registry,
     output_cap,
+    own_model,
     per_call_temperature,
 )
 from personalclaw.sdk.net import CONNECTOR, egress_policy_for, fetch
@@ -90,7 +91,7 @@ def _factory(
     _base = options.pop("base_url", None)
     _endpoint = options.pop("endpoint", None)
     base_url = str(_base or _endpoint) if (_base or _endpoint) else None
-    _default_model = options.pop("default_model", None)
+    options.pop("default_model", None)  # read as the entry's own model, below
     # The operator's configured cap, else the budget core derived for this call (the
     # ``max_tokens`` build kwarg), else the adapter's long-standing 4096: the Messages API
     # requires one.
@@ -103,12 +104,12 @@ def _factory(
     if temperature is not None:
         options["temperature"] = temperature
 
-    # A ``model`` kwarg (threaded by ``registry.build(name, model=…)``) overrides the
-    # entry's pinned model — a per-use-case caller (e.g. one_shot_completion's
-    # reasoning axis) must be able to pin the active model, or it would silently use
-    # the entry default. With neither, the instance's Default Model setting.
-    _model_override = kwargs.get("model")
-    model = str(_model_override or entry.model or _default_model or "")
+    # A ``model`` kwarg (threaded by ``registry.build(name, model=…)``) is the model the call
+    # is built for — a per-use-case caller (e.g. one_shot_completion's reasoning axis) pins
+    # the active model. Without one, the entry's own model (the SDK's
+    # ``ProviderEntry.own_model``: its model, else its Default Model). With neither, the
+    # client refuses each call rather than name none.
+    model = str(kwargs.get("model") or "") or entry.own_model
 
     return AnthropicProvider(
         model=model,
@@ -126,9 +127,9 @@ def create_provider(config: dict[str, Any]) -> AnthropicProvider:
     api_key = config.get("api_key", "") or os.environ.get("ANTHROPIC_API_KEY", "")
     cred = Credential(name="anthropic", kind="api_key", secret=api_key, source="file")
     return AnthropicProvider(
-        # No hardcoded model id (de-hardcode directive). Unpinned → resolve from the
-        # curated catalog by family preference (a family preference, not a pinned id).
-        model=config.get("model") or config.get("default_model") or _pick_default_model(),
+        # The instance's own model: its Default Model. With none, each call is refused — the
+        # app never picks one from its catalog in its place.
+        model=own_model(config.get("model"), config),
         credential=cred,
         base_url=config.get("endpoint") or None,
     )
@@ -176,9 +177,8 @@ _API_VERSION = "2023-06-01"
 # reason and is the one recorded here.
 #
 # Refreshed 2026-07-06. Current family first so the picker surfaces today's
-# models and _pick_default_model() resolves the newest per family; still-available
-# legacy ids follow for accounts pinned to them. All current + Claude-4 models
-# support text + image input (vision) per the docs' capability note.
+# models; still-available legacy ids follow for accounts pinned to them. All current
+# + Claude-4 models support text + image input (vision) per the docs' capability note.
 #
 # Excluded deliberately: claude-mythos-5 / claude-mythos-preview (invitation-only
 # Project Glasswing — no self-serve access, so it must not appear in a picker).
@@ -197,25 +197,6 @@ _ANTHROPIC_MODELS: list[dict[str, Any]] = [
     # Deprecated (retires 2026-08-05) but still callable until then.
     {"id": "claude-opus-4-1", "capabilities": ["chat", "image_modality"]},
 ]
-
-# Family preference for the unpinned default (create_provider fallback). Returns the
-# FIRST catalog id matching the earliest-preferred family token — so the default is
-# DERIVED from the curated list (no separately-hardcoded default id), and tracks the
-# list forward automatically as models are refreshed. Opus leads per the docs'
-# "start with Claude Opus 4.8" guidance.
-_DEFAULT_MODEL_PREFERENCE = ("opus", "sonnet", "haiku", "fable")
-
-
-def _pick_default_model() -> str:
-    """Resolve the unpinned default model id from the curated catalog by family
-    preference. Falls back to the first catalog entry, then "" if the list is empty."""
-    ids = [str(m["id"]) for m in _ANTHROPIC_MODELS]
-    for family in _DEFAULT_MODEL_PREFERENCE:
-        for model_id in ids:
-            if family in model_id:
-                return model_id
-    return ids[0] if ids else ""
-
 
 def _probe_headers(key: str) -> dict[str, str]:
     return {"x-api-key": key, "anthropic-version": _API_VERSION}

@@ -1,6 +1,6 @@
 {
   "name": "google-models",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Google Gemini",
   "description": "Google Gemini models \u2014 bring your own Gemini API key. Chat, embedding, image generation (Imagen / gemini-image), video generation (Veo), and text-to-speech. One instance serves every use case.",
   "icon": "Sparkle",
@@ -51,7 +51,7 @@
           "default": "",
           "x-meta": {
             "label": "Default Model",
-            "help": "A Gemini model id. Empty = resolved from live /v1/models discovery."
+            "help": "A Gemini model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models."
           }
         },
         "endpoint": {
