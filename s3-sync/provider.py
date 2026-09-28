@@ -380,6 +380,90 @@ class S3SyncProvider(SyncTransportProvider):
             f"is running and reachable from this machine, and the settings {_ON_CARD}."
         )
 
+    def _store_refused(self, status: int, code: str) -> str:
+        """What a store's non-2xx answer to a write means, and what to do — by S3's own error
+        ``code`` where that pins the fix to one setting, else by the status's class. The
+        sentence alone: the caller says whether the cycle retries, and adds the store's words."""
+        endpoint, bucket = self._endpoint, self._bucket
+        if code == "InvalidAccessKeyId":
+            return (
+                f"The store at {endpoint} doesn't recognise the access key ID S3 Sync signs with. "
+                f"Check Access key ID {_ON_CARD}."
+            )
+        if code == "SignatureDoesNotMatch":
+            return (
+                f"The store at {endpoint} didn't accept S3 Sync's request signature, which "
+                "usually means the secret access key doesn't belong to the access key ID. Check "
+                f"Secret access key {_ON_CARD}."
+            )
+        if code == "RequestTimeTooSkewed":
+            return (
+                f"The store at {endpoint} refused S3 Sync's request because this machine's clock "
+                "is too far from the store's. Set this machine's clock to the correct time."
+            )
+        if code in ("ExpiredToken", "InvalidToken"):
+            return (
+                f"The store at {endpoint} didn't accept the session token S3 Sync signs with — it "
+                f"has expired, or isn't valid. Set a fresh Session token {_ON_CARD}, or leave it "
+                "empty and use a long-lived access key."
+            )
+        if code == "AuthorizationHeaderMalformed":
+            return (
+                f"The store at {endpoint} expects requests for bucket {bucket} signed for a "
+                f"different region than {self._region}. Set Region {_ON_CARD} to the region the "
+                "store's answer names."
+            )
+        if code == "NoSuchBucket":
+            return (
+                f"There is no bucket named {bucket} at {endpoint}. Create it, or set Bucket "
+                f"{_ON_CARD} to one that exists."
+            )
+        if code == "RequestTimeout" or status == 408:
+            return (
+                f"The store at {endpoint} gave up waiting for S3 Sync's upload to arrive. If it "
+                "keeps happening, check this machine's connection to the store."
+            )
+        if status in (429, 503):
+            return (
+                f"The store at {endpoint} was too busy to take S3 Sync's write — it is limiting "
+                "how fast it takes requests. If it keeps happening, check the store's load and any "
+                "request limits on the bucket."
+            )
+        if status in (401, 403):
+            return (
+                f"The store at {endpoint} refused S3 Sync's write to bucket {bucket}. Check Access "
+                f"key ID and Secret access key {_ON_CARD}, and that the key's policy lets it write "
+                "objects to that bucket."
+            )
+        if status == 404:
+            return (
+                f"The store at {endpoint} answered \"not found\" for bucket {bucket}: the bucket "
+                "doesn't exist there, or Endpoint URL doesn't point at an S3 API. Check Bucket and "
+                f"Endpoint URL {_ON_CARD}."
+            )
+        if status == 501:
+            return (
+                f"The store at {endpoint} doesn't support conditional writes (If-None-Match), "
+                "which S3 Sync relies on to never overwrite an object. Use a store, or a version "
+                "of it, that supports them."
+            )
+        if 300 <= status < 400:
+            return (
+                f"The store at {endpoint} redirected S3 Sync's write — usually because bucket "
+                f"{bucket} is in another region, reached through a different endpoint. Set "
+                f"Endpoint URL {_ON_CARD} to the endpoint the store's answer names, and Region to "
+                "match."
+            )
+        if status >= 500:
+            return (
+                f"The store at {endpoint} failed while handling S3 Sync's write. That trouble is "
+                "the store's own; if it keeps happening, check the store."
+            )
+        return (
+            f"The store at {endpoint} refused S3 Sync's write. Check Endpoint URL, Bucket and "
+            f"Region {_ON_CARD}."
+        )
+
     # ── SyncTransportProvider contract ───────────────────────────────────────────────
 
     def push(self, objects: list[SyncObject]) -> PushResult:
@@ -417,11 +501,17 @@ class S3SyncProvider(SyncTransportProvider):
             if 200 <= resp.status < 300:
                 pushed += 1
                 continue
+            code, said = _store_error(resp.body)
+            outcome = _outcome_for_status(resp.status, code)
+            sentence = self._store_refused(resp.status, code)
+            if outcome == "transient":
+                sentence = f"{sentence} {_RETRIES}"
+            words = f"HTTP {resp.status} {said}".strip()
             return PushResult(
                 pushed=pushed,
                 skipped=skipped,
-                outcome=_outcome_for_status(resp.status),
-                detail=f"PUT {obj.key} failed (HTTP {resp.status})",
+                outcome=outcome,
+                detail=sentence_with_detail(sentence, words),
             )
         return PushResult(pushed=pushed, skipped=skipped, outcome="delivered")
 
@@ -583,16 +673,42 @@ class S3SyncProvider(SyncTransportProvider):
         return ConnectionResult(ok=False, detail=f"unexpected response (HTTP {resp.status})")
 
 
-def _outcome_for_status(status: int) -> str:
-    """Map an HTTP status to the outbox's typed verdict.
+def _outcome_for_status(status: int, code: str = "") -> str:
+    """Map a store's HTTP status (and S3's error ``code``) to the outbox's typed verdict.
 
-    Auth/permission and malformed-request failures are ``permanent`` — retrying an
-    unauthorized PUT forever is the error loop §4.4 bans. Everything else (throttling,
-    5xx, a store mid-restart) is ``transient``.
+    ``transient`` is what can clear by itself: the store throttling (429, 503 ``SlowDown``),
+    timing out an upload (408, and S3's ``RequestTimeout``, which it sends as a 400), a
+    temporary redirect (307), or failing (5xx). Everything else — an auth or permission
+    refusal, a bucket that isn't there, a malformed request, a missing feature (501: no
+    conditional writes), a permanent redirect — is a setup the next try would meet unchanged,
+    so ``permanent``: retrying an unauthorized PUT forever is the error loop §4.4 bans.
     """
-    if status in (400, 401, 403, 405) or status == 501:
-        return "permanent"
-    return "transient"
+    if code == "RequestTimeout" or status in (307, 408, 429):
+        return "transient"
+    return "transient" if status >= 500 and status != 501 else "permanent"
+
+
+def _store_error(body: bytes) -> tuple[str, str]:
+    """S3's own ``Code`` for an error answer, and its words: ``Code (Endpoint: …) — Message``,
+    the endpoint or region it names first, since the detail is cut to a couple of hundred
+    characters and those are what the fix needs. A dash, not a colon, after the code: the
+    credential redactor reads ``InvalidAccessKeyId: The …`` as a key and its value.
+    ``("", body text)`` when the body isn't an S3 error document (a proxy's page, say)."""
+    try:
+        root = ET.fromstring(body or b"")
+    except ET.ParseError:
+        return "", " ".join((body or b"").decode("utf-8", "replace").split())
+    code = (root.findtext("{*}Code") or "").strip()
+    if not code:
+        return "", " ".join("".join(root.itertext()).split())
+    named = [
+        f"{field}: {value}"
+        for field in ("Endpoint", "Region")
+        if (value := (root.findtext(f"{{*}}{field}") or "").strip())
+    ]
+    said = f"{code} ({', '.join(named)})" if named else code
+    message = (root.findtext("{*}Message") or "").strip()
+    return code, f"{said} — {message}" if message else said
 
 
 def _outcome_for(exc: BaseException) -> str:
@@ -600,13 +716,17 @@ def _outcome_for(exc: BaseException) -> str:
 
     An egress refusal or an unusable endpoint is a **configuration** fault, which retrying
     cannot fix — it is permanent until the operator changes a setting. Network errors are
-    transient.
+    transient — and a host the guard couldn't resolve is one: DNS failing, or this machine
+    being offline, reads exactly like it, so it is retried rather than given up.
     """
     from personalclaw.sdk.net import EgressBlocked
 
     from personalclaw.sdk.sync import SyncEndpointRefused  # noqa: PLC0415
 
-    if isinstance(exc, (EgressBlocked, SyncEndpointRefused)):
+    if isinstance(exc, EgressBlocked):
+        category = getattr(getattr(exc, "decision", None), "category", "")
+        return "transient" if category == "unresolvable" else "permanent"
+    if isinstance(exc, SyncEndpointRefused):
         return "permanent"
     return "transient"
 

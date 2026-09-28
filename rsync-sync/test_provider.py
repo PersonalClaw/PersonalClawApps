@@ -14,6 +14,7 @@ The suite is split by what each half can actually prove:
 What is NOT covered here is a real transfer to a real ssh host; see the README.
 """
 
+import errno
 import hashlib
 import json
 import os
@@ -540,19 +541,45 @@ class TestConnection:
 
 class TestFailureHandling:
     def test_a_timeout_is_transient_not_permanent(self, tmp_path, monkeypatch):
-        """A hung transfer must not make the outbox discard the objects."""
+        """A hung transfer must not make the outbox discard the objects. "rsync timed out after
+        300s" used to be the whole message, with nothing to check or change."""
 
         def slow(*a, **k):
-            raise subprocess.TimeoutExpired(cmd="rsync", timeout=1)
+            raise subprocess.TimeoutExpired(cmd="rsync", timeout=300)
 
         monkeypatch.setattr(provider_mod.subprocess, "run", slow)
-        p = create_provider({"path": str(tmp_path / "t"), "staging_dir": str(tmp_path / "s")})
+        root = tmp_path / "t"
+        p = create_provider({"path": str(root), "staging_dir": str(tmp_path / "s")})
         res = p.push([SyncObject(key="k", data=b"v")])
+        says = (
+            "rsync didn't finish within 300 seconds. If it keeps happening, check that the disk "
+            f"holding the sync root path {root} is connected and responding, or raise Command "
+            f"timeout {ON_CARD}."
+        )
+        words = "Details: Command 'rsync' timed out after 300 seconds"
         assert res.outcome == "transient"
-        assert "timed out" in res.detail
+        assert res.detail == f"{says} {RETRIES} {words}"
         assert p.list_remote() == []
         assert p.cas_registry(None, b"{}") is False
         assert p.test().ok is False
+        assert p.test().detail == f"{says} {words}"
+
+    def test_a_timeout_reaching_a_host_names_the_login_to_try(self, tmp_path, monkeypatch):
+        def slow(*a, **k):
+            raise subprocess.TimeoutExpired(cmd="rsync", timeout=300)
+
+        monkeypatch.setattr(provider_mod.subprocess, "run", slow)
+        p = create_provider({**REMOTE, "staging_dir": str(tmp_path)})
+
+        res = p.push([SyncObject(key="k", data=b"v")])
+
+        assert res.outcome == "transient"
+        assert res.detail == (
+            f"rsync didn't finish within 300 seconds. If it keeps happening, check that {SSH} "
+            "logs in from a terminal here — a host that doesn't answer keeps rsync waiting — or, "
+            f"for a slow link, raise Command timeout {ON_CARD}. {RETRIES} Details: Command "
+            "'rsync' timed out after 300 seconds"
+        )
 
     def test_a_missing_rsync_binary_is_permanent(self, tmp_path):
         """Driven through a real exec of a binary that cannot exist. "cannot run rsync:
@@ -596,6 +623,117 @@ class TestFailureHandling:
             f"rsync couldn't sync with the sync root path {root} (rsync exit 23). Check Sync root "
             f"path {ON_CARD}. {RETRIES} Details: rsync: link_stat failed: No such file"
         )
+
+
+# ── the local working directory ──────────────────────────────────────────────────────
+#
+# The local half of a sync — the staging trees and the mirror under Local working directory —
+# runs before rsync does. A folder there that refused a write escaped push, pull and cas_registry
+# as a bare OSError, and the sync cycle relays what escapes as it is: "push: [Errno 13]
+# Permission denied: '…'", naming neither the setting nor what to do.
+
+
+def _blocked(tmp_path: pathlib.Path) -> tuple[RsyncSyncProvider, pathlib.Path, pathlib.Path]:
+    """A provider whose Local working directory is a file — a real refusal, on any machine and
+    as any user. Returns it, that path, and its sync root."""
+    blocker = tmp_path / "not-a-folder"
+    blocker.write_text("a file where the working directory should be", encoding="utf-8")
+    root = tmp_path / "target"
+    root.mkdir(exist_ok=True)
+    provider = RsyncSyncProvider(path=str(root), staging_dir=str(blocker), timeout_secs=60)
+    return provider, blocker, root
+
+
+def _in_the_way(workdir: pathlib.Path) -> str:
+    return (
+        f"Rsync Sync couldn't create its local working directory {workdir}, or a folder in it, "
+        f"because a file is in the way. Move that file, or set Local working directory {ON_CARD} "
+        "to another folder."
+    )
+
+
+class TestTheLocalWorkingDirectory:
+    def test_a_push_it_refuses_says_what_to_set_and_that_it_retries(self, tmp_path):
+        p, blocker, _root = _blocked(tmp_path)
+
+        res = p.push([SyncObject(key="k", data=b"v")])
+
+        assert res.outcome == "transient"
+        assert res.detail.startswith(f"{_in_the_way(blocker)} {RETRIES} Details: "), res.detail
+        assert str(blocker) in res.detail.split("Details: ", 1)[1]
+
+    @pytest.mark.parametrize(
+        ("code", "says"),
+        [
+            (
+                errno.EACCES,
+                lambda w: f"Rsync Sync isn't allowed to write to its local working directory {w}. "
+                "Fix that folder's permissions, or set Local working directory "
+                f"{ON_CARD} to a folder PersonalClaw can write to.",
+            ),
+            (
+                errno.ENOSPC,
+                lambda w: f"The disk holding Rsync Sync's local working directory {w} is full. "
+                f"Free some space on it, or set Local working directory {ON_CARD} to a folder on "
+                "another disk.",
+            ),
+            (
+                errno.EROFS,
+                lambda w: f"Rsync Sync's local working directory {w} is on a read-only disk. Set "
+                f"Local working directory {ON_CARD} to a folder PersonalClaw can write to.",
+            ),
+        ],
+        ids=["permission", "disk-full", "read-only"],
+    )
+    def test_a_folder_that_refuses_a_write_says_why(self, tmp_path, monkeypatch, code, says):
+        workdir = tmp_path / "work"
+
+        def _refuses(path, *args, **kwargs):
+            raise OSError(code, os.strerror(code), str(path))
+
+        monkeypatch.setattr(provider_mod.os, "makedirs", _refuses)
+        p = RsyncSyncProvider(path=str(tmp_path / "t"), staging_dir=str(workdir), timeout_secs=60)
+
+        res = p.push([SyncObject(key="k", data=b"v")])
+
+        assert res.outcome == "transient"
+        assert res.detail == (
+            f"{says(workdir)} {RETRIES} Details: [Errno {code}] {os.strerror(code)}: '{workdir}'"
+        )
+
+    def test_a_pull_raises_what_to_set_rather_than_the_bare_error(self, tmp_path):
+        """``pull`` has no outcome to carry a sentence, so it raises one — chained to the
+        filesystem's own error — for the cycle to report."""
+        p, blocker, _root = _blocked(tmp_path)
+
+        with pytest.raises(OSError) as caught:
+            p.pull([RemoteRef("registry.json")])
+
+        assert str(caught.value).startswith(f"{_in_the_way(blocker)} Details: "), caught.value
+        assert isinstance(caught.value.__cause__, OSError)
+
+    @pytest.mark.parametrize(
+        "expected", [None, hashlib.sha256(b"{}").hexdigest()], ids=["expect-absent", "expect-sha"]
+    )
+    def test_a_registry_swap_raises_rather_than_reading_as_a_lost_race(self, tmp_path, expected):
+        """A ``False`` would send core round its compare-and-swap loop to no purpose, then report
+        the swap lost to another machine."""
+        p, blocker, _root = _blocked(tmp_path)
+
+        with pytest.raises(OSError) as caught:
+            p.cas_registry(expected, b"{}")
+
+        assert str(caught.value).startswith(f"{_in_the_way(blocker)} Details: "), caught.value
+
+    @needs_rsync
+    def test_the_sync_cycle_reports_it_in_those_words(self, isolated_home, tmp_path, monkeypatch):
+        p, blocker, root = _blocked(tmp_path)
+        (root / "registry.json").write_bytes(b"{}")  # a registry for the cycle's read to fetch
+
+        report = _run_cycle(p, isolated_home, monkeypatch, encrypt="off")
+
+        assert report.ok is False
+        assert report.error.startswith(f"pull: {_in_the_way(blocker)} Details: "), report.error
 
 
 # ── what a failure says ─────────────────────────────────────────────────────────────

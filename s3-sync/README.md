@@ -131,6 +131,12 @@ to configure.
 A request that fails before the store answers says what went wrong and what to do — the store
 refused the connection or didn't answer, its host can't be found, its certificate isn't
 trusted, PersonalClaw won't use that endpoint — with the underlying error's own words after it.
+A write the store refuses says which setting to check for what S3 answered — an access key ID
+it doesn't recognise, a secret access key that doesn't match it, a clock too far off, an
+expired session token, the wrong region, a bucket that isn't there — with S3's error code and
+message after it. A refusal the store may lift by itself (it is busy, timed out, or failed)
+and a host that can't be found (DNS, or this machine offline) are retried on the next sync;
+a refusal that needs something changed says what, and keeps failing until it is.
 
 | Symptom | Cause |
 |---|---|
@@ -138,7 +144,7 @@ trusted, PersonalClaw won't use that endpoint — with the underlying error's ow
 | `bucket ... not found` | Typo in the bucket, or an endpoint in a different region than the bucket. |
 | "PersonalClaw's network egress rules stopped a request", or "won't use … as a sync endpoint" | The endpoint is not an `http://` or `https://` address with a host, its host is on your `security.egress` deny list (Denied hosts, under Settings → Security → Network egress), or the store redirected off the pinned host — refused by design. |
 | Sync stalls with no error | Registry CAS is losing every race — usually a store without conditional-write support. |
-| `HTTP 501` on push | Same cause: the store rejected the conditional header. |
+| "doesn't support conditional writes" on push (`HTTP 501`) | Same cause: the store rejected the conditional header. |
 
 ## License
 

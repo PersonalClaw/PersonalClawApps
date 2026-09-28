@@ -659,6 +659,19 @@ class TestClause5CalmNoModelState:
         assert models and all(not m.downloaded for m in models)
 
     @pytest.mark.asyncio
+    async def test_runtime_absent_says_why_it_is_unavailable(self, empty_comfy):
+        """🔴 Red before: the SDK's default "" — Settings → Models left it out with nothing
+        saying why."""
+        prov = create_provider({"endpoint": "http://127.0.0.1:1"})
+        assert await prov.unavailable_reason() == (
+            "ComfyUI is not reachable at http://127.0.0.1:1. PersonalClaw does not install or "
+            "start ComfyUI: start it yourself, or set the address it listens on in this app's "
+            "Configure page."
+        )
+        running = create_provider({"endpoint": empty_comfy.endpoint})
+        assert await running.unavailable_reason() == ""
+
+    @pytest.mark.asyncio
     async def test_runtime_absent_generate_names_the_endpoint(self):
         prov = create_provider({"endpoint": "http://127.0.0.1:1"})
         with pytest.raises(ImageGenError, match="not reachable"):

@@ -60,7 +60,10 @@ so a changed key or URL takes effect as soon as you save it.
 `personalclaw doctor` reports the chunk index as unreachable, with what went wrong and which
 setting to change — nothing accepting connections at the Qdrant URL, an API key the server
 refused, a local folder another Qdrant client already has open, the `qdrant-client` package
-missing — followed by the client's own error.
+missing — followed by the client's own error. An ingest or a search that meets the same trouble
+logs it in the same words, as the reason the chunk index had no answer; so does a collection
+made at another embedding model's size (see Collections). The document is still stored, and the
+search still answers from its other arms.
 
 ### Collections
 

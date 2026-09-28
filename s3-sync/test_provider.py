@@ -391,6 +391,8 @@ class _StubS3(http.server.BaseHTTPRequestHandler):
         # Keep the exact bytes that crossed the wire, so an adversarial scan can look at
         # what LEFT the machine rather than at what the store chose to keep.
         self.server.wire_bodies.append((key, data))  # type: ignore[attr-defined]
+        if self.server.put_answer is not None:  # type: ignore[attr-defined]
+            return self._send(*self.server.put_answer)  # type: ignore[attr-defined]
         exists = key in self.store
         if self.headers.get("If-None-Match") == "*" and exists:
             return self._send(412, b"<Error><Code>PreconditionFailed</Code></Error>")
@@ -447,6 +449,8 @@ class _StubServer(http.server.ThreadingHTTPServer):
         self.conditional_unsupported = False
         self.suppress_etag = False
         self.wire_bodies: list[tuple[str, bytes]] = []
+        #: ``(status, body)`` every PUT is answered with instead, when set — a store refusing.
+        self.put_answer: tuple[int, bytes] | None = None
 
     @property
     def endpoint(self) -> str:
@@ -768,11 +772,168 @@ class _CertificateRefused(Exception):
         self.certificate_error = cause
 
 
+class _Unreachable(Exception):
+    """Shaped like the HTTP client's connection error, whose socket failure rides along as
+    ``os_error`` rather than being the exception itself."""
+
+    def __init__(self, cause: OSError) -> None:
+        super().__init__(f"Cannot connect to host s3.example.com:443 ssl:default [{cause}]")
+        self.os_error = cause
+
+
 def _closed_port() -> int:
     """A loopback port nothing is listening on."""
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def _s3_error(code: str, message: str, **named: str) -> bytes:
+    """An S3 error document, as a store sends one with a refusal."""
+    extra = "".join(f"<{field}>{value}</{field}>" for field, value in named.items())
+    return (
+        f'<?xml version="1.0" encoding="UTF-8"?><Error><Code>{code}</Code>'
+        f"<Message>{message}</Message>{extra}</Error>"
+    ).encode()
+
+
+#: What each store refusal of a write says (given the store's address), and its verdict.
+#: Each used to reach the user as "PUT <key> failed (HTTP <status>)" — a status, and neither
+#: what the store said nor which setting to change.
+_STORE_REFUSALS = [
+    (
+        403,
+        _s3_error("InvalidAccessKeyId", "The Access Key Id you provided does not exist in our "
+                  "records."),
+        lambda e: f"The store at {e} doesn't recognise the access key ID S3 Sync signs with. "
+        f"Check Access key ID {ON_CARD}.",
+        "permanent",
+        "InvalidAccessKeyId — The Access Key Id you provided does not exist in our records.",
+    ),
+    (
+        403,
+        _s3_error("SignatureDoesNotMatch", "The request signature we calculated does not match "
+                  "the signature you provided. Check your key and signing method."),
+        lambda e: f"The store at {e} didn't accept S3 Sync's request signature, which usually "
+        "means the secret access key doesn't belong to the access key ID. Check Secret access "
+        f"key {ON_CARD}.",
+        "permanent",
+        "SignatureDoesNotMatch — The request signature we calculated does not match the signature "
+        "you provided. Check your key and signing method.",
+    ),
+    (
+        403,
+        _s3_error("AccessDenied", "Access Denied"),
+        lambda e: f"The store at {e} refused S3 Sync's write to bucket mybucket. Check Access key "
+        f"ID and Secret access key {ON_CARD}, and that the key's policy lets it write objects to "
+        "that bucket.",
+        "permanent",
+        "AccessDenied — Access Denied",
+    ),
+    (
+        403,
+        _s3_error("RequestTimeTooSkewed", "The difference between the request time and the "
+                  "server's time is too large."),
+        lambda e: f"The store at {e} refused S3 Sync's request because this machine's clock is too "
+        "far from the store's. Set this machine's clock to the correct time.",
+        "permanent",
+        "RequestTimeTooSkewed — The difference between the request time and the server's time is "
+        "too large.",
+    ),
+    (
+        400,
+        _s3_error("ExpiredToken", "The provided token has expired."),
+        lambda e: f"The store at {e} didn't accept the session token S3 Sync signs with — it has "
+        f"expired, or isn't valid. Set a fresh Session token {ON_CARD}, or leave it empty and use "
+        "a long-lived access key.",
+        "permanent",
+        "ExpiredToken — The provided token has expired.",
+    ),
+    (
+        400,
+        _s3_error("AuthorizationHeaderMalformed", "The authorization header is malformed; the "
+                  "region 'us-east-1' is wrong; expecting 'eu-west-1'", Region="eu-west-1"),
+        lambda e: f"The store at {e} expects requests for bucket mybucket signed for a different "
+        f"region than us-east-1. Set Region {ON_CARD} to the region the store's answer names.",
+        "permanent",
+        "AuthorizationHeaderMalformed (Region: eu-west-1) — The authorization header is malformed; "
+        "the region 'us-east-1' is wrong; expecting 'eu-west-1'",
+    ),
+    (
+        404,
+        _s3_error("NoSuchBucket", "The specified bucket does not exist"),
+        lambda e: f"There is no bucket named mybucket at {e}. Create it, or set Bucket {ON_CARD} "
+        "to one that exists.",
+        "permanent",
+        "NoSuchBucket — The specified bucket does not exist",
+    ),
+    (
+        404,
+        b"404 page not found",
+        lambda e: f'The store at {e} answered "not found" for bucket mybucket: the bucket doesn\'t '
+        "exist there, or Endpoint URL doesn't point at an S3 API. Check Bucket and Endpoint URL "
+        f"{ON_CARD}.",
+        "permanent",
+        "404 page not found",
+    ),
+    (
+        301,
+        _s3_error("PermanentRedirect", "The bucket you are attempting to access must be addressed "
+                  "using the specified endpoint.", Endpoint="mybucket.s3.eu-west-1.example.com"),
+        lambda e: f"The store at {e} redirected S3 Sync's write — usually because bucket mybucket "
+        "is in another region, reached through a different endpoint. Set Endpoint URL "
+        f"{ON_CARD} to the endpoint the store's answer names, and Region to match.",
+        "permanent",
+        "PermanentRedirect (Endpoint: mybucket.s3.eu-west-1.example.com) — The bucket you are "
+        "attempting to access must be addressed using the specified endpoint.",
+    ),
+    (
+        503,
+        _s3_error("SlowDown", "Please reduce your request rate."),
+        lambda e: f"The store at {e} was too busy to take S3 Sync's write — it is limiting how "
+        "fast it takes requests. If it keeps happening, check the store's load and any request "
+        "limits on the bucket.",
+        "transient",
+        "SlowDown — Please reduce your request rate.",
+    ),
+    (
+        500,
+        _s3_error("InternalError", "We encountered an internal error. Please try again."),
+        lambda e: f"The store at {e} failed while handling S3 Sync's write. That trouble is the "
+        "store's own; if it keeps happening, check the store.",
+        "transient",
+        "InternalError — We encountered an internal error. Please try again.",
+    ),
+    (
+        400,
+        _s3_error("RequestTimeout", "Your socket connection to the server was not read from or "
+                  "written to within the timeout period."),
+        lambda e: f"The store at {e} gave up waiting for S3 Sync's upload to arrive. If it keeps "
+        "happening, check this machine's connection to the store.",
+        "transient",
+        "RequestTimeout — Your socket connection to the server was not read from or written to "
+        "within the timeout period.",
+    ),
+    (
+        501,
+        _s3_error("NotImplemented", "A header you provided implies functionality that is not "
+                  "implemented"),
+        lambda e: f"The store at {e} doesn't support conditional writes (If-None-Match), which S3 "
+        "Sync relies on to never overwrite an object. Use a store, or a version of it, that "
+        "supports them.",
+        "permanent",
+        "NotImplemented — A header you provided implies functionality that is not implemented",
+    ),
+    (
+        405,
+        _s3_error("MethodNotAllowed", "The specified method is not allowed against this "
+                  "resource."),
+        lambda e: f"The store at {e} refused S3 Sync's write. Check Endpoint URL, Bucket and "
+        f"Region {ON_CARD}.",
+        "permanent",
+        "MethodNotAllowed — The specified method is not allowed against this resource.",
+    ),
+]
 
 
 class TestWhatAFailureSays:
@@ -785,10 +946,12 @@ class TestWhatAFailureSays:
         ("exc", "says", "outcome"),
         [
             (
+                # DNS failing, or this machine offline, reads exactly like this — and it was
+                # ``permanent``, so the outbox gave the push up.
                 _blocked("unresolvable", "host 's3.example.com' is not resolvable"),
                 "s3.example.com, the host in Endpoint URL, can't be found from this machine. "
                 f"Check Endpoint URL {ON_CARD}, and that this machine is online.",
-                "permanent",
+                "transient",
             ),
             (
                 _blocked(
@@ -817,6 +980,13 @@ class TestWhatAFailureSays:
                 f"{STORE}, or to where the store redirected it. Check that Endpoint URL "
                 f"{ON_CARD} is the store's own address, and Network egress in Settings → Security.",
                 "permanent",
+            ),
+            (
+                # The same trouble found by the HTTP client's own lookup rather than the guard's.
+                _Unreachable(socket.gaierror(8, "nodename nor servname provided, or not known")),
+                "s3.example.com, the host in Endpoint URL, can't be found from this machine. "
+                f"Check Endpoint URL {ON_CARD}, and that this machine is online.",
+                "transient",
             ),
             (
                 TimeoutError(),
@@ -859,6 +1029,28 @@ class TestWhatAFailureSays:
         assert res.detail == f"{says}{retries}{details}"
         assert probe.ok is False
         assert probe.detail == f"{says}{details}"
+
+    @pytest.mark.parametrize(
+        ("status", "body", "says", "outcome", "words"),
+        _STORE_REFUSALS,
+        ids=[
+            "unknown-key-id", "wrong-secret", "access-denied", "clock-skew", "expired-token",
+            "wrong-region", "no-such-bucket", "not-found-page", "redirect", "slow-down",
+            "internal-error", "request-timeout", "no-conditional-writes", "method-not-allowed",
+        ],
+    )
+    def test_a_write_the_store_refuses_says_why_and_what_to_do(
+        self, stub, live, status, body, says, outcome, words
+    ):
+        """Driven through the real guard and HTTP client, against a store that answers every
+        write with the refusal."""
+        stub.put_answer = (status, body)
+
+        res = live.push([SyncObject(key="k", data=b"v")])
+
+        assert res.outcome == outcome
+        retries = f" {RETRIES}" if outcome == "transient" else ""
+        assert res.detail == f"{says(stub.endpoint)}{retries} Details: HTTP {status} {words}"
 
     def test_a_store_that_is_not_running_says_so_and_that_it_retries(self):
         """Driven through the real guard and HTTP client, at a loopback port nothing listens

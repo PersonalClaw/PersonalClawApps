@@ -120,11 +120,34 @@ def test_image_availability_tracks_key(no_env_key: None, monkeypatch: pytest.Mon
     assert _run(prov.AlibabaImageProvider().is_available()) is True
 
 
-def test_generate_without_key_raises_before_network(no_env_key: None) -> None:
+# What an image call without a key says, and Settings → Models under an adapter that has none.
+_NO_KEY = (
+    "No Alibaba Model Studio API key is set. Add it in API Key on this Alibaba Model Studio "
+    "instance in Settings → Providers, or set ALIBABA_API_KEY."
+)
+
+
+def test_generate_without_key_raises_before_network(
+    no_env_key: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # This read "No Alibaba API key configured (set ALIBABA_API_KEY).", naming no setting.
+    import aiohttp
     from personalclaw.sdk.image import ImageGenError
 
-    with pytest.raises(ImageGenError, match="API key"):
+    def _no_network(*_a, **_k):
+        raise AssertionError("no request may be sent")
+
+    monkeypatch.setattr(aiohttp, "ClientSession", _no_network)
+    with pytest.raises(ImageGenError) as ei:
         _run(prov.AlibabaImageProvider().generate("a fox", model="qwen-image-2.0"))
+    assert str(ei.value) == _NO_KEY
+
+
+def test_an_adapter_without_a_key_says_why_it_is_unavailable(no_env_key: None) -> None:
+    # Settings → Models shows this under the adapter; with nothing to say it left the adapter
+    # out, so an instance whose key was missing vanished with nothing saying why.
+    assert _run(prov.AlibabaImageProvider().unavailable_reason()) == _NO_KEY
+    assert _run(prov.AlibabaImageProvider(api_key="ak").unavailable_reason()) == ""
 
 
 def test_generate_that_names_no_model_is_refused_before_network(monkeypatch) -> None:
@@ -142,10 +165,16 @@ def test_generate_that_names_no_model_is_refused_before_network(monkeypatch) -> 
 
 
 def test_edit_is_explicitly_unsupported() -> None:
+    # This read "Alibaba image editing is not supported yet.", saying nothing of what works.
     from personalclaw.sdk.image import ImageGenError
 
-    with pytest.raises(ImageGenError, match="not supported"):
+    with pytest.raises(ImageGenError) as ei:
         _run(prov.AlibabaImageProvider(api_key="ak").edit("x", source_image="s"))
+    assert str(ei.value) == (
+        "Alibaba Model Studio can make a new image from a prompt, but it can't edit one here. To "
+        "edit an image, choose a model that edits images under Image · Generation in Settings → "
+        "Models."
+    )
 
 
 # A minimal aiohttp stand-in: ClientSession().post() used as nested async
@@ -206,9 +235,15 @@ def test_generate_parses_url_and_b64_results(monkeypatch: pytest.MonkeyPatch) ->
 def test_generate_raises_on_empty_and_on_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
     from personalclaw.sdk.image import ImageGenError
 
+    # An answer without an image read "Alibaba returned no images.", with no next step.
     _fake_aiohttp(monkeypatch, 200, {"data": []})
-    with pytest.raises(ImageGenError, match="no images"):
+    with pytest.raises(ImageGenError) as ei:
         _run(prov.AlibabaImageProvider(api_key="ak").generate("a fox", model="qwen-image-2.0"))
+    assert str(ei.value) == (
+        "Alibaba Model Studio answered the image request without an image. Try again; if it "
+        "happens again, change the prompt or choose another model in Settings → Models. "
+        'Details: {"data": []}'
+    )
 
     _fake_aiohttp(monkeypatch, 429, {"error": {"message": "rate limited"}})
     with pytest.raises(ImageGenError, match="429.*rate limited"):
@@ -307,6 +342,10 @@ def _aiohttp_that_answers(monkeypatch: pytest.MonkeyPatch, answer: Any) -> None:
     (RuntimeError("server disconnected"),
      "The image request to Alibaba Model Studio failed unexpectedly. Try again in a moment. "
      "Details: server disconnected"),
+    # This read "Alibaba image generation timed out.", with no next step.
+    (asyncio.TimeoutError(),
+     "Alibaba Model Studio didn't answer the image request within 120 seconds. Try again in a "
+     "moment; if it keeps timing out, choose another model in Settings → Models."),
 ])
 def test_an_image_request_without_a_usable_answer_says_what_to_do(
     monkeypatch: pytest.MonkeyPatch, answer: Any, sentence: str,
@@ -318,6 +357,25 @@ def test_an_image_request_without_a_usable_answer_says_what_to_do(
     with pytest.raises(ImageGenError) as ei:
         _run(prov.AlibabaImageProvider(api_key="ak").generate("a fox", model="qwen-image-2.0"))
     assert str(ei.value) == sentence
+
+
+@pytest.mark.parametrize("body", [
+    "[]", '"a string"', "7", "null",   # JSON that is not an object: these raised AttributeError
+    '{"data": null}', '{"data": "x"}',  # a "data" that is not a list: TypeError, or "no images"
+])
+def test_an_answer_that_is_not_an_image_result_says_what_to_do(
+    monkeypatch: pytest.MonkeyPatch, body: str,
+) -> None:
+    from personalclaw.sdk.image import ImageGenError
+
+    _aiohttp_that_answers(monkeypatch, (200, body))
+    with pytest.raises(ImageGenError) as ei:
+        _run(prov.AlibabaImageProvider(api_key="ak").generate("a fox", model="qwen-image-2.0"))
+    assert str(ei.value) == (
+        "Alibaba Model Studio answered the image request, but not with an image result. Try "
+        "again in a moment; if it keeps happening, check Endpoint on this Alibaba Model Studio "
+        f"instance in Settings → Providers (under Advanced). Details: {body}"
+    )
 
 
 def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():

@@ -123,7 +123,8 @@ review on the host is enough.
 
 A failed sync or connection test says what went wrong and what to do — the host key isn't
 trusted yet, the host turned down the ssh login, the sync root path doesn't exist there, rsync
-isn't installed on one end — with rsync's and ssh's own words after it.
+isn't installed on one end, a run went past **Command timeout**, this machine's **Local working
+directory** can't be written — with rsync's, ssh's or the filesystem's own words after it.
 
 | Symptom | Cause |
 |---|---|

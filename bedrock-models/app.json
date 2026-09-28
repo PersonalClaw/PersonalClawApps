@@ -1,6 +1,6 @@
 {
   "name": "bedrock-models",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "displayName": "Amazon Bedrock",
   "description": "Amazon Bedrock models, authenticated with your own AWS credential chain. No key is stored by PersonalClaw. Chat (Converse API), embedding (Titan/Cohere), image generation (Nova Canvas), video generation (Nova Reel), and speech-to-text. One instance per AWS profile/region.",
   "icon": "Cloud",
@@ -46,7 +46,7 @@
           "default": "us-east-1",
           "x-meta": {
             "label": "AWS Region",
-            "help": "Bedrock region (e.g. us-east-1). Credentials come from your AWS environment / profile \u2014 no key is stored here."
+            "help": "The AWS region every call this instance makes goes to: chat, embeddings, images, video, speech-to-text and the model list. Empty uses us-east-1, whatever your AWS profile or environment names. Credentials come from your AWS environment / profile \u2014 no key is stored here."
           }
         },
         "profile": {
@@ -85,7 +85,7 @@
           "minimum": 0,
           "x-meta": {
             "label": "Max Output Tokens",
-            "help": "Ceiling on tokens Bedrock may generate per turn. 0 leaves it to the model's own default.",
+            "help": "The most tokens Bedrock may generate in one turn. 0 sends the budget PersonalClaw sets for that call, else 8192. A cap is always sent, because Bedrock's own default can be low enough to cut long answers and tool calls short.",
             "tags": [
               "advanced"
             ]

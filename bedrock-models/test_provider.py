@@ -888,3 +888,32 @@ async def test_the_served_window_is_left_to_the_resolver() -> None:
     Converse reports usage, not the limit), so the provider answers "cannot say" and core's
     resolver takes the declared window, then the catalog card, then the table."""
     assert await _bedrock_built({}).served_context_window() is None
+
+
+def test_the_readme_documents_every_setting_as_the_manifest_says_it() -> None:
+    """Max Output Tokens had no row, and the region's row named a region the code did not use."""
+    import json
+    from pathlib import Path
+
+    here = Path(__file__).parent
+    props = json.loads((here / "app.json").read_text())["provider"]["settingsSchema"]["properties"]
+    readme = (here / "README.md").read_text()
+    missing = [
+        key for key, prop in props.items()
+        if f"| `{key}` | {prop['x-meta']['label']} | {prop['x-meta']['help']} |" not in readme
+    ]
+    assert missing == []
+
+
+def test_the_max_tokens_help_names_the_cap_a_zero_sends() -> None:
+    """It said 0 leaves the cap to the model's own default; a cap is always sent."""
+    import json
+    from pathlib import Path
+
+    from provider import _DEFAULT_MAX_TOKENS
+
+    props = json.loads((Path(__file__).parent / "app.json").read_text())["provider"][
+        "settingsSchema"]["properties"]
+    assert f"else {_DEFAULT_MAX_TOKENS}." in props["max_tokens"]["x-meta"]["help"]
+    assert _bedrock_built({"max_tokens": 0})._max_tokens == _DEFAULT_MAX_TOKENS
+    assert _bedrock_built({"max_tokens": 0}, max_tokens=2048)._max_tokens == 2048

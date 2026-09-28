@@ -20,6 +20,8 @@ Qdrant runs in-process over a `tmp_path` folder, so there is no server and nothi
 from __future__ import annotations
 
 import importlib.util
+import logging
+import socket
 import struct
 import uuid
 
@@ -282,6 +284,42 @@ def test_an_unreachable_store_degrades_without_substituting(tmp_path):
 
         assert hits, "FTS5 still answers — a dead index must never fail a search"
         assert "vector" not in hits[0]["match_type"], "no silent fallback to the local vec0 index"
+    finally:
+        vs_registry.unregister_provider(dead.name)
+        store.close()
+
+
+def _closed_port() -> int:
+    """A loopback port nothing is listening on."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.mark.skipif(not HAVE_QDRANT, reason="qdrant-client not installed")
+def test_a_store_that_cannot_answer_is_logged_as_what_to_fix(tmp_path, caplog):
+    """Core logs a failed index write and a failed query in the provider's words. Those words
+    were the client's own — a connection error's "[Errno 61] Connection refused" — naming
+    neither the setting nor what to do."""
+    store = KnowledgeStore(str(tmp_path / "k.db"))
+    url = f"http://127.0.0.1:{_closed_port()}"
+    dead = QdrantVectorStore(url=url, collection="kb", timeout_secs=1)
+    says = (
+        f"Nothing is accepting connections at {url}. Check that Qdrant is running there, and that "
+        "Qdrant URL on the Qdrant Vector Store card in Settings → Providers has the right host "
+        "and port."
+    )
+    vs_registry.register_provider(dead.name, dead)
+    try:
+        with caplog.at_level(logging.WARNING):
+            q = _vec(1.0)
+            _ingest(store, "Keywordfindable", "sentinelsearchword", [q])
+            hits = HybridRetriever(store, embedder=lambda _q: q).search("sentinelsearchword", limit=5)
+
+        assert hits, "FTS5 still answers"
+        logged = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("indexing" in m and says in m for m in logged), logged  # the write
+        assert any("vector search" in m and says in m for m in logged), logged  # the query
     finally:
         vs_registry.unregister_provider(dead.name)
         store.close()

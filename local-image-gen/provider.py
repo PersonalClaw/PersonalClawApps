@@ -467,6 +467,23 @@ class LocalComfyImageProvider(ImageGenProvider):
             return False
         return resp.status == 200
 
+    async def unavailable_reason(self) -> str:
+        """Why no image can be made here, for Settings → Models: the address refused (said as
+        the refusal is), or no ComfyUI answering at it."""
+        try:
+            resp = await _guarded_fetch(f"{self._endpoint}/system_stats")
+        except _AddressRefused as e:
+            return str(e)
+        except ImageGenError:
+            resp = None
+        if resp is not None and resp.status == 200:
+            return ""
+        return (
+            f"ComfyUI is not reachable at {self._endpoint}. PersonalClaw does not install or "
+            "start ComfyUI: start it yourself, or set the address it listens on in this app's "
+            "Configure page."
+        )
+
     async def list_models(self) -> list[ImageGenModel]:
         """Catalog entries, with ``downloaded`` answered from the live runtime.
 

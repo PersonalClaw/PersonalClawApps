@@ -657,3 +657,29 @@ def test_embeddings_with_no_credentials_say_what_to_do(aws, monkeypatch):
     assert asyncio.run(adapter.unavailable_reason()) == NO_CREDENTIALS_FOUND
     assert asyncio.run(adapter.embed("a heron", model="amazon.titan-embed-text-v2:0")) is None
     assert asyncio.run(adapter.unavailable_reason()) == NO_CREDENTIALS, "the call's own failure"
+
+
+def test_image_and_video_with_no_credentials_say_why_they_are_unavailable(aws, monkeypatch):
+    """🔴 Red before: the SDK's default "" — Settings → Models left both out with nothing
+    saying why."""
+    import provider
+
+    monkeypatch.setattr(provider, "_cred_cache", {})
+    image = provider.BedrockImageProvider(region="us-east-1", name="my-bedrock")
+    video = provider.BedrockVideoProvider(region="us-east-1", name="my-bedrock", s3_bucket="clips")
+
+    assert asyncio.run(image.unavailable_reason()) == NO_CREDENTIALS_FOUND
+    assert asyncio.run(video.unavailable_reason()) == NO_CREDENTIALS_FOUND
+
+
+def test_video_with_no_bucket_says_it_needs_one():
+    import provider
+
+    video = provider.BedrockVideoProvider(region="us-east-1", name="my-bedrock", s3_bucket="")
+    video._s3_bucket = ""  # the BEDROCK_VIDEO_S3_BUCKET fallback is not this test's
+
+    assert asyncio.run(video.unavailable_reason()) == (
+        "Bedrock video generation needs an S3 bucket for Nova Reel to write the video to. Set S3 "
+        "Bucket on this Amazon Bedrock instance in Settings → Providers (under Advanced), or the "
+        "BEDROCK_VIDEO_S3_BUCKET environment variable, then try again."
+    )

@@ -1,6 +1,6 @@
 {
   "name": "google-models",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "displayName": "Google Gemini",
   "description": "Google Gemini models \u2014 bring your own Gemini API key. Chat, embedding, image generation (Imagen / gemini-image), video generation (Veo), and text-to-speech. One instance serves every use case.",
   "icon": "Sparkle",
@@ -59,7 +59,7 @@
           "default": "",
           "x-meta": {
             "label": "Base URL",
-            "help": "Optional override of the Google Gemini base URL. Empty uses https://generativelanguage.googleapis.com/v1beta/openai/.",
+            "help": "Optional. Where chat, embeddings, their model list and the connection check go (Gemini's OpenAI-compatible API). Empty uses https://generativelanguage.googleapis.com/v1beta/openai/. Image, video and speech always use Google's own address.",
             "tags": [
               "advanced"
             ]

@@ -35,6 +35,7 @@ retries on a ``False``, so a false ``False`` costs one round trip, while a false
 silently discards another machine's registration.
 """
 
+import errno
 import hashlib
 import os
 import re
@@ -102,6 +103,22 @@ _KEY_PATH_RE = re.compile(r"^[A-Za-z0-9._~/@+-]+$")
 
 class RsyncConfigError(Exception):
     """A setting that cannot be used safely. Raised at validation, never at transfer time."""
+
+
+class WorkdirUnusable(OSError):
+    """This machine's Local working directory refused what a sync needed of it, before rsync
+    ran at all. Its text is the sentence (what is wrong, the setting that fixes it) and then the
+    filesystem's own words; the ``OSError`` itself is chained.
+
+    ``push`` turns it into its outcome. ``pull`` and ``cas_registry`` have no outcome to carry a
+    sentence, so they raise it — the sync cycle reports a read or a registry swap that raised
+    as the cycle's error, in this text, rather than the bare ``[Errno 13] …`` it used to relay.
+    """
+
+    def __init__(self, sentence: str, failure: OSError) -> None:
+        super().__init__(sentence_with_detail(sentence, failure))
+        self.sentence = sentence
+        self.failure = failure
 
 
 def validate_host(host: str) -> str:
@@ -283,6 +300,80 @@ class RsyncSyncProvider(SyncTransportProvider):
             )
         return sentence_with_detail(sentence, failure)
 
+    def _workdir_unusable(self, failure: OSError) -> str:
+        """What this machine's Local working directory refusing a write says. The sentence
+        alone: the caller says whether the cycle retries, and adds the filesystem's words, which
+        name the exact path."""
+        where = self._staging_root
+        setting = f"Local working directory {_ON_CARD}"
+        if failure.errno == errno.ENOSPC:
+            return (
+                f"The disk holding Rsync Sync's local working directory {where} is full. Free "
+                f"some space on it, or set {setting} to a folder on another disk."
+            )
+        if failure.errno == errno.EROFS:
+            return (
+                f"Rsync Sync's local working directory {where} is on a read-only disk. Set "
+                f"{setting} to a folder PersonalClaw can write to."
+            )
+        if isinstance(failure, PermissionError):
+            return (
+                f"Rsync Sync isn't allowed to write to its local working directory {where}. Fix "
+                f"that folder's permissions, or set {setting} to a folder PersonalClaw can write "
+                "to."
+            )
+        if isinstance(failure, (FileExistsError, NotADirectoryError)):
+            return (
+                f"Rsync Sync couldn't create its local working directory {where}, or a folder in "
+                f"it, because a file is in the way. Move that file, or set {setting} to another "
+                "folder."
+            )
+        return (
+            f"Rsync Sync couldn't use its local working directory {where}. Check that folder, or "
+            f"set {setting} to another one."
+        )
+
+    def _stage(self, prefix: str) -> str:
+        """A fresh staging folder under the Local working directory."""
+        try:
+            return tempfile.mkdtemp(prefix=prefix, dir=_ensure_dir(self._staging_root))
+        except OSError as e:
+            raise WorkdirUnusable(self._workdir_unusable(e), e) from e
+
+    def _stage_file(self, stage: str, key: str, data: bytes) -> None:
+        """Write one object into ``stage`` at its key."""
+        target = os.path.join(stage, *key.split("/"))
+        try:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "wb") as fh:
+                fh.write(data)
+        except OSError as e:
+            raise WorkdirUnusable(self._workdir_unusable(e), e) from e
+
+    @staticmethod
+    def _not_staged(unusable: WorkdirUnusable) -> PushResult:
+        """A push the Local working directory stopped before rsync ran. ``transient``: the
+        objects wait in the outbox until the folder is fixed, which the sentence says how to do."""
+        return PushResult(
+            outcome="transient",
+            detail=sentence_with_detail(f"{unusable.sentence} {_RETRIES}", unusable.failure),
+        )
+
+    def _timed_out(self) -> str:
+        """What an rsync run stopped at Command timeout says."""
+        if self._host:
+            return (
+                f"rsync didn't finish within {self._timeout} seconds. If it keeps happening, "
+                f"check that {self._ssh_command()} logs in from a terminal here — a host that "
+                "doesn't answer keeps rsync waiting — or, for a slow link, raise Command timeout "
+                f"{_ON_CARD}."
+            )
+        return (
+            f"rsync didn't finish within {self._timeout} seconds. If it keeps happening, check "
+            f"that the disk holding the sync root path {self._path} is connected and responding, "
+            f"or raise Command timeout {_ON_CARD}."
+        )
+
     def _refused(self, proc: subprocess.CompletedProcess) -> str:
         """What a run that rsync, or the ssh under it, ended with an error means, and what to do.
         The sentence alone: the caller says whether the cycle retries, and adds rsync's words."""
@@ -371,13 +462,16 @@ class RsyncSyncProvider(SyncTransportProvider):
         # A FRESH staging tree per push holds only the objects being pushed, so the itemize
         # output maps one-to-one onto them. Reusing one growing directory would make every
         # cycle re-consider every object ever pushed.
-        stage = tempfile.mkdtemp(prefix="push-", dir=_ensure_dir(self._staging_root))
         try:
-            for obj in objects:
-                target = os.path.join(stage, *obj.key.split("/"))
-                os.makedirs(os.path.dirname(target), exist_ok=True)
-                with open(target, "wb") as fh:
-                    fh.write(obj.data)
+            stage = self._stage("push-")
+        except WorkdirUnusable as e:
+            return self._not_staged(e)
+        try:
+            try:
+                for obj in objects:
+                    self._stage_file(stage, obj.key, obj.data)
+            except WorkdirUnusable as e:
+                return self._not_staged(e)
             args = [
                 "-rt",
                 "--itemize-changes",
@@ -391,9 +485,10 @@ class RsyncSyncProvider(SyncTransportProvider):
             ]
             try:
                 proc = self._run(args)
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as e:
                 return PushResult(
-                    outcome="transient", detail=f"rsync timed out after {self._timeout}s"
+                    outcome="transient",
+                    detail=sentence_with_detail(f"{self._timed_out()} {_RETRIES}", e),
                 )
             except OSError as e:
                 return PushResult(outcome="permanent", detail=self._cannot_start(e))
@@ -437,7 +532,12 @@ class RsyncSyncProvider(SyncTransportProvider):
             return []
         # ONE invocation brings the whole tree into the persistent mirror; rsync transfers
         # only what changed, which is the entire reason to use rsync rather than N fetches.
-        mirror = _ensure_dir(self._mirror)
+        try:
+            mirror = _ensure_dir(self._mirror)
+        except OSError as e:
+            # Not an absence to drop the refs for: the target was never asked. Raised, said as
+            # what to fix, for the cycle to report.
+            raise WorkdirUnusable(self._workdir_unusable(e), e) from e
         args = ["-rt", *self._rsh_arg(), "--", self._target(), f"{mirror}/"]
         try:
             proc = self._run(args)
@@ -460,7 +560,9 @@ class RsyncSyncProvider(SyncTransportProvider):
 
     def cas_registry(self, expected_sha: str | None, data: bytes) -> bool:
         """Compare-and-swap ``registry.json``; see the module docstring on why this is
-        verify-write-verify rather than a real CAS."""
+        verify-write-verify rather than a real CAS. A Local working directory that refuses the
+        staging raises :class:`WorkdirUnusable` rather than reading as a lost race: re-pulling
+        and swapping again cannot fix a folder."""
         if not self.configured:
             return False
         if expected_sha is None:
@@ -488,10 +590,9 @@ class RsyncSyncProvider(SyncTransportProvider):
         actually transferred — so an empty itemize means the file was already there and this
         machine lost the race.
         """
-        stage = tempfile.mkdtemp(prefix="reg-", dir=_ensure_dir(self._staging_root))
+        stage = self._stage("reg-")
         try:
-            with open(os.path.join(stage, _REGISTRY_KEY), "wb") as fh:
-                fh.write(data)
+            self._stage_file(stage, _REGISTRY_KEY, data)
             args = [
                 "-rt",
                 "--itemize-changes",
@@ -513,7 +614,7 @@ class RsyncSyncProvider(SyncTransportProvider):
 
     def _read_remote_registry(self) -> bytes | None:
         """Fetch the target's current ``registry.json`` bytes, or None if unreadable."""
-        stage = tempfile.mkdtemp(prefix="regr-", dir=_ensure_dir(self._staging_root))
+        stage = self._stage("regr-")
         try:
             src = self._target(trailing_slash=False) + "/" + _REGISTRY_KEY
             # --ignore-times so a stale same-size local copy can never stand in for the
@@ -540,10 +641,9 @@ class RsyncSyncProvider(SyncTransportProvider):
         silently skips a same-length rewrite inside the same clock second and still exits 0.
         A registry going from ``{"seq":19}`` to ``{"seq":20}`` is exactly that shape.
         """
-        stage = tempfile.mkdtemp(prefix="regw-", dir=_ensure_dir(self._staging_root))
+        stage = self._stage("regw-")
         try:
-            with open(os.path.join(stage, _REGISTRY_KEY), "wb") as fh:
-                fh.write(data)
+            self._stage_file(stage, _REGISTRY_KEY, data)
             args = [
                 "-rt",
                 "--ignore-times",
@@ -570,14 +670,8 @@ class RsyncSyncProvider(SyncTransportProvider):
         args = ["-r", "--list-only", *self._rsh_arg(), "--", self._target()]
         try:
             proc = self._run(args)
-        except subprocess.TimeoutExpired:
-            return ConnectionResult(
-                ok=False,
-                detail=(
-                    f"rsync timed out after {self._timeout}s — with BatchMode set this "
-                    "usually means the host is unreachable, not that it asked for a password"
-                ),
-            )
+        except subprocess.TimeoutExpired as e:
+            return ConnectionResult(ok=False, detail=sentence_with_detail(self._timed_out(), e))
         except OSError as e:
             return ConnectionResult(ok=False, detail=self._cannot_start(e))
         where = self._target(trailing_slash=False)

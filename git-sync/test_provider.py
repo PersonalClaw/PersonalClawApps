@@ -9,8 +9,9 @@ scratch ``HOME``), here a stand-in that runs the server's side of git on this ma
 Covers the insert-only push contract (verified by cloning the remote fresh), the empty-remote
 first-machine case, list_remote's .git exclusion + prefix filtering + temp-file exclusion,
 pull's drop-on-vanish, the registry compare-and-swap (present/absent/mismatch + round-trip),
-the push-rejection → transient classification, two-machine convergence at the transport level,
-and the reachability probe.
+lost push races (a second clone pushing between the first's catch-up and its push) and the real
+conflicts no rule settles, two-machine convergence at the transport level, and the reachability
+probe.
 """
 
 from __future__ import annotations
@@ -164,20 +165,229 @@ def test_push_empty_config_is_transient(tmp_path):
     assert "no git remote" in r.detail
 
 
-def test_push_rejection_is_transient(remote, tmp_path):
-    # A push rejected because the remote moved under us is retryable, not permanent.
-    a = _provider(remote, tmp_path, name="a")
-    a.push([SyncObject("base", b"0")])  # remote now has a commit on main
+# ── lost races ───────────────────────────────────────────────────────────────────────
+#
+# A race is lost when another machine pushes between this one's catch-up and its push. It used
+# to end the push ``transient`` and leave the clone holding a commit the remote lacked; ``git
+# pull --ff-only`` could never move past that commit, so every later push was turned away too.
 
+
+class _Race:
+    """Another machine's push, run just before each ``git push`` ``loser`` makes — after its
+    catch-up, before its push: the window a real race lands in. At most ``times`` times when
+    given, and never after :meth:`over`. ``runs`` counts the races run."""
+
+    def __init__(self, monkeypatch, loser: GitSyncProvider, push, times: int | None = None):
+        self.runs = 0
+        self._over = False
+        real_run = GitSyncProvider._run
+
+        def _run(provider, args, check=True):
+            if (
+                provider is loser
+                and git_sync._subcommand(args) == "push"
+                and not self._over
+                and (times is None or self.runs < times)
+            ):
+                self.runs += 1
+                push()
+            return real_run(provider, args, check=check)
+
+        monkeypatch.setattr(GitSyncProvider, "_run", _run)
+
+    def over(self) -> None:
+        self._over = True
+
+
+def _remote_bytes(remote_url: str, tmp_path, key: str, name: str) -> bytes:
+    """``key``'s bytes on the remote, read from a fresh clone of it."""
+    dest = tmp_path / name
+    subprocess.run(["git", "clone", remote_url, str(dest)], check=True, capture_output=True,
+                   text=True)
+    return (dest / key).read_bytes()
+
+
+def test_a_push_that_loses_a_race_catches_up_and_lands(remote, tmp_path, monkeypatch, c_locale):
+    """Another machine pushes between this one's catch-up and its push. The push ended there,
+    ``transient``, with its commit left behind in the clone."""
+    a = _provider(remote, tmp_path, name="a")
     b = _provider(remote, tmp_path, name="b")
-    b.list_remote()  # establishes b's clone at the current commit
-    # Give b a diverging, unpushed local commit so a later --ff-only pull cannot save it.
-    _git(str(tmp_path / "b"), "commit", "--allow-empty", "-m", "b-local")
-    # Advance the remote out from under b via a's clone.
+    a.push([SyncObject("base", b"0")])
+
+    def b_pushes_first():
+        assert b.push([SyncObject("machines/b/seq-0001/x.jsonl", b"B")]).outcome == "delivered"
+
+    race = _Race(monkeypatch, a, b_pushes_first, times=1)
+
+    r = a.push([SyncObject("machines/a/seq-0001/x.jsonl", b"A")])
+
+    assert race.runs == 1, "the race this test is about never ran"
+    assert (r.outcome, r.pushed, r.skipped) == ("delivered", 1, 0), r.detail
+    keys = _files_in_fresh_remote_checkout(remote, tmp_path)
+    assert {"machines/a/seq-0001/x.jsonl", "machines/b/seq-0001/x.jsonl"} <= keys
+
+
+def test_after_a_push_runs_out_of_tries_the_next_one_delivers(
+    remote, tmp_path, monkeypatch, c_locale
+):
+    """The wedge itself: once a push had lost, the next was turned away as well, and so on."""
+    a = _provider(remote, tmp_path, name="a")
+    b = _provider(remote, tmp_path, name="b")
+    a.push([SyncObject("base", b"0")])
+    seqs = iter(range(1, 10))
+
+    def b_pushes_first():
+        key = f"machines/b/seq-{next(seqs):04d}/x.jsonl"
+        assert b.push([SyncObject(key, b"B")]).outcome == "delivered"
+
+    # Another machine wins every try of this push, then stops.
+    race = _Race(monkeypatch, a, b_pushes_first)
+    first = a.push([SyncObject("machines/a/seq-0001/x.jsonl", b"A")])
+    race.over()
+    assert first.outcome == "transient"
+
+    second = a.push([SyncObject("machines/a/seq-0002/x.jsonl", b"A")])
+
+    assert second.outcome == "delivered", second.detail
+    assert race.runs == 3, "the first push didn't catch up and try again after each lost race"
+    keys = _files_in_fresh_remote_checkout(remote, tmp_path)
+    assert {"machines/a/seq-0001/x.jsonl", "machines/a/seq-0002/x.jsonl"} <= keys
+    assert {f"machines/b/seq-{n:04d}/x.jsonl" for n in (1, 2, 3)} <= keys
+
+
+def test_a_clone_holding_a_commit_the_remote_lacks_catches_up_before_it_pushes(
+    remote, tmp_path, c_locale
+):
+    """The state a lost race used to leave behind, made directly: a commit the remote never got,
+    and a remote that has since moved on without it."""
+    a = _provider(remote, tmp_path, name="a")
+    a.push([SyncObject("base", b"0")])
+    b = _provider(remote, tmp_path, name="b")
+    b.list_remote()
+    (tmp_path / "b" / "stranded.jsonl").write_bytes(b"S")
+    _git(str(tmp_path / "b"), "add", "-A")
+    _git(str(tmp_path / "b"), "commit", "-m", "sync: 1 objects")
     a.push([SyncObject("moved", b"1")])
 
+    # A read catches up too, rather than serving the clone as the lost race left it.
+    assert "moved" in {ref.key for ref in b.list_remote()}
     r = b.push([SyncObject("bnew", b"2")])
-    assert r.outcome == "transient"
+
+    assert r.outcome == "delivered", r.detail
+    keys = _files_in_fresh_remote_checkout(remote, tmp_path)
+    assert {"base", "moved", "stranded.jsonl", "bnew"} <= keys
+    assert b.push([SyncObject("bnewer", b"3")]).outcome == "delivered"
+
+
+def test_a_key_the_remote_gained_while_catching_up_keeps_the_remotes_copy(
+    remote, tmp_path, monkeypatch, c_locale
+):
+    """Insert-only across a race: the remote had the key first, so its copy stays and this
+    machine's is skipped, while the rest of the push lands. Settling that needs no editor —
+    git's is set to one that fails."""
+    monkeypatch.setenv("GIT_EDITOR", "false")
+    a = _provider(remote, tmp_path, name="a")
+    b = _provider(remote, tmp_path, name="b")
+    a.push([SyncObject("base", b"0")])
+
+    def b_pushes_first():
+        assert b.push([SyncObject("shared/k.jsonl", b"theirs")]).outcome == "delivered"
+
+    race = _Race(monkeypatch, a, b_pushes_first, times=1)
+
+    r = a.push([SyncObject("shared/k.jsonl", b"ours"), SyncObject("machines/a/x.jsonl", b"A")])
+
+    assert race.runs == 1, "the race this test is about never ran"
+    assert (r.outcome, r.pushed, r.skipped) == ("delivered", 1, 1), r.detail
+    assert _remote_bytes(remote, tmp_path, "shared/k.jsonl", "verify") == b"theirs"
+    assert "machines/a/x.jsonl" in _files_in_fresh_remote_checkout(remote, tmp_path, "verify2")
+    assert (tmp_path / "a" / "shared" / "k.jsonl").read_bytes() == b"theirs"
+
+
+def test_a_commit_in_the_clone_that_conflicts_with_the_remote_says_so_and_is_not_retried(
+    remote, tmp_path, c_locale
+):
+    """A file changed by hand in the working clone and on the remote as well: no rule settles
+    that. The push said the remote had commits this machine hadn't pulled, retried it on every
+    run, and was turned away every time."""
+    a = _provider(remote, tmp_path, name="a")
+    a.push([SyncObject("notes.md", b"first\n")])
+    b = _provider(remote, tmp_path, name="b")
+    b.list_remote()
+    clone_b = tmp_path / "b"
+    (clone_b / "notes.md").write_bytes(b"edited in this clone\n")
+    _git(str(clone_b), "commit", "-am", "an edit made by hand")
+    (tmp_path / "a" / "notes.md").write_bytes(b"edited on the remote\n")
+    _git(str(tmp_path / "a"), "commit", "-am", "an edit made elsewhere")
+    _git(str(tmp_path / "a"), "push", "-q", "origin", "main")
+    head = _git(str(clone_b), "rev-parse", "HEAD").stdout
+
+    r = b.push([SyncObject("machines/b/x.jsonl", b"B")])
+
+    assert r.outcome == "permanent"
+    assert r.detail == (
+        "Git Sync couldn't put this machine's unpushed commits on top of what the git remote has: "
+        "notes.md was changed on both sides in ways git can't combine. Run git pull --rebase "
+        f"origin main in the working clone at {clone_b} and resolve it there — or, if nothing "
+        "there needs keeping, delete that folder and Git Sync clones the remote afresh on its "
+        "next run. Details: CONFLICT (content): Merge conflict in notes.md"
+    )
+    # The replay is undone, and the commit made by hand is still there for whoever resolves it.
+    assert not (clone_b / ".git" / "rebase-merge").exists()
+    assert _git(str(clone_b), "rev-parse", "HEAD").stdout == head
+    assert (clone_b / "notes.md").read_bytes() == b"edited in this clone\n"
+
+
+def test_a_key_that_is_a_file_on_the_remote_and_a_folder_here_is_a_real_conflict(
+    remote, tmp_path, monkeypatch, c_locale
+):
+    """The one conflict pushes alone can make: another machine's key is a file where this
+    push's keys need a folder."""
+    a = _provider(remote, tmp_path, name="a")
+    b = _provider(remote, tmp_path, name="b")
+    a.push([SyncObject("base", b"0")])
+
+    def b_pushes_first():
+        assert b.push([SyncObject("machines/a", b"a file")]).outcome == "delivered"
+
+    _Race(monkeypatch, a, b_pushes_first, times=1)
+
+    r = a.push([SyncObject("machines/a/seq-0001/x.jsonl", b"A")])
+
+    assert r.outcome == "permanent"
+    assert r.detail.startswith(
+        "Git Sync couldn't put this machine's unpushed commits on top of what the git remote has: "
+        "machines/a was changed on both sides in ways git can't combine. Run git pull --rebase "
+        "origin main in the working clone at "
+    ), r.detail
+    assert "Details: CONFLICT (file/directory)" in r.detail
+    assert not (tmp_path / "a" / ".git" / "rebase-merge").exists()
+
+
+def test_a_registry_swap_that_loses_a_race_leaves_the_remotes_registry_to_re_read(
+    remote, tmp_path, monkeypatch, c_locale
+):
+    """The swap is lost — and its write used to stay in the clone as a commit the remote lacked,
+    so the caller's re-read found this machine's own bytes, and every later swap and push was
+    turned away."""
+    a = _provider(remote, tmp_path, name="a")
+    b = _provider(remote, tmp_path, name="b")
+    assert a.cas_registry(None, b'{"v":1}') is True
+
+    def b_swaps_first():
+        assert b.cas_registry(_sha(b'{"v":1}'), b'{"v":"b"}') is True
+
+    race = _Race(monkeypatch, a, b_swaps_first, times=1)
+
+    assert a.cas_registry(_sha(b'{"v":1}'), b'{"v":"a"}') is False
+    assert race.runs == 1, "the race this test is about never ran"
+    # What the caller re-reads after a lost swap is the remote's registry, not the lost write…
+    refs = [ref for ref in a.list_remote() if ref.key == "registry.json"]
+    assert [obj.data for obj in a.pull(refs)] == [b'{"v":"b"}']
+    # …and the swap it retries with that lands, as does the next push.
+    assert a.cas_registry(_sha(b'{"v":"b"}'), b'{"v":"a+b"}') is True
+    assert _remote_bytes(remote, tmp_path, "registry.json", "verify") == b'{"v":"a+b"}'
+    assert a.push([SyncObject("machines/a/x.jsonl", b"A")]).outcome == "delivered"
 
 
 # ── list_remote ──────────────────────────────────────────────────────────────────────
@@ -626,27 +836,35 @@ def test_a_clone_its_folder_refuses_says_where_and_what_to_set(tmp_path, monkeyp
     ), r.detail
 
 
-def test_a_push_turned_away_by_a_moved_remote_says_so_and_that_it_retries(remote, tmp_path, c_locale):
-    """The first line of git's stderr ("To …/remote.git") used to be the whole message."""
+def test_a_push_that_keeps_losing_races_says_so_and_that_it_retries(
+    remote, tmp_path, monkeypatch, c_locale
+):
+    """Another machine pushed first every time this one caught up. "Git Sync's push was turned
+    away because the git remote has commits this machine hasn't pulled" was said after one
+    try — and every run after it, since the clone never caught up."""
     a = _provider(remote, tmp_path, name="a")
-    a.push([SyncObject("base", b"0")])
     b = _provider(remote, tmp_path, name="b")
-    b.list_remote()
-    _git(str(tmp_path / "b"), "commit", "--allow-empty", "-m", "b-local")
-    a.push([SyncObject("moved", b"1")])
+    a.push([SyncObject("base", b"0")])
+    seqs = iter(range(1, 10))
+    _Race(
+        monkeypatch,
+        a,
+        lambda: b.push([SyncObject(f"machines/b/seq-{next(seqs):04d}/x.jsonl", b"B")]),
+    )
 
-    r = b.push([SyncObject("bnew", b"2")])
+    r = a.push([SyncObject("k", b"v")])
 
     assert r.outcome == "transient"
     assert r.detail.startswith(
-        "Git Sync's push was turned away because the git remote has commits this machine "
-        f"hasn't pulled — another machine pushed first. {RETRIES} Details: "
+        "Git Sync couldn't push to the git remote: each of the 3 times it caught up with the "
+        f"remote and pushed, another push had reached it first. {RETRIES} Details: "
     ), r.detail
 
 
-def test_a_push_the_remote_rules_refuse_names_the_branch(remote, tmp_path, c_locale):
+def test_a_push_the_remote_rules_refuse_names_the_branch(remote, tmp_path, monkeypatch, c_locale):
     """A remote whose own hook declines the push. The hook's first stderr line used to be the
-    whole message, and nothing said it wasn't a race: git's "[remote rejected]" reads as one."""
+    whole message; then git's "[remote rejected]" still read as a race, so the push was
+    ``transient`` and retried on every run, though retrying cannot change the remote's rules."""
     bare = str(tmp_path / "remote.git")
     hook = os.path.join(bare, "hooks", "pre-receive")
     with open(hook, "w", encoding="utf-8") as fh:
@@ -656,14 +874,54 @@ def test_a_push_the_remote_rules_refuse_names_the_branch(remote, tmp_path, c_loc
     # place of the remote's own, and the push would land; the remote names its own directory.
     subprocess.run(["git", "-C", bare, "config", "core.hooksPath", os.path.join(bare, "hooks")],
                    check=True, capture_output=True, text=True)
+    real_run = GitSyncProvider._run
+    pushes: list[list[str]] = []
+
+    def _counting(self, args, check=True):
+        if git_sync._subcommand(args) == "push":
+            pushes.append(args)
+        return real_run(self, args, check=check)
+
+    monkeypatch.setattr(GitSyncProvider, "_run", _counting)
 
     r = _provider(remote, tmp_path).push([SyncObject("k", b"v")])
 
+    assert r.outcome == "permanent"
     assert r.detail.startswith(
         "Git Sync couldn't push to the git remote: its rules don't let this machine push to "
-        f"branch 'main'. Allow that on the remote, or set Branch {ON_CARD} to one that does."
+        f"branch 'main'. Allow that on the remote, or set Branch {ON_CARD} to one that does. "
+        "Details: "
     ), r.detail
-    assert "Details: " in r.detail
+    assert RETRIES not in r.detail
+    assert len(pushes) == 1, "a declined push was caught up and pushed again, as if a race"
+
+
+def test_a_push_that_cannot_reach_the_remote_says_so_and_that_it_retries(
+    remote, tmp_path, monkeypatch
+):
+    """The network failing at the push — retrying is what fixes it. The push was ``permanent``,
+    which gives it up."""
+    stderr = (
+        "fatal: unable to access 'https://git.example.com/owner/state.git/': Could not resolve "
+        "host: git.example.com"
+    )
+    real_run = GitSyncProvider._run
+
+    def _offline_push(self, args, check=True):
+        if git_sync._subcommand(args) == "push":
+            return subprocess.CompletedProcess(["git", *args], 128, stdout="", stderr=stderr)
+        return real_run(self, args, check=check)
+
+    monkeypatch.setattr(GitSyncProvider, "_run", _offline_push)
+
+    r = _provider(remote, tmp_path).push([SyncObject("k", b"v")])
+
+    assert r.outcome == "transient"
+    assert r.detail == (
+        "Git Sync couldn't push to the git remote: the remote couldn't be reached from this "
+        f"machine. Check that it is online and that Git remote URL {ON_CARD} names the right "
+        f"host. {RETRIES} Details: {stderr}"
+    )
 
 
 def test_a_push_that_times_out_names_the_step_and_that_it_retries(tmp_path, monkeypatch):

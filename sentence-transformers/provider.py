@@ -276,12 +276,14 @@ class NativeEmbeddingProvider(EmbeddingProvider, LocalModelProvider):
             return make_native_embed_fn(named)(text)
         return await asyncio.to_thread(_run)
 
-    async def embed_batch(self, texts: list[str], model: str = "") -> list[list[float]]:
+    async def embed_batch(self, texts: list[str], model: str = "") -> list[list[float] | None]:
+        # A text that is not embedded is ``None``, as the SDK's contract asks: an empty vector is
+        # what a store would keep as the text's vector.
         try:
             named = require_model(model)
         except ProviderResolutionError as exc:
             logger.warning("sentence-transformers refused: %s", exc)
-            return [[] for _ in texts]
+            return [None for _ in texts]
 
         def _run():
             m = load_model(named)

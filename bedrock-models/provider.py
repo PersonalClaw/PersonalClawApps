@@ -63,7 +63,11 @@ logger = logging.getLogger("bedrock_models")
 # own Default Model (the SDK's ``own_model``). One that names neither is refused before it is
 # sent (``require_model``). This used to pick a Claude from live discovery at ``start()``, so an
 # unbound call on an instance saved without a Default Model answered on a model nobody chose.
-DEFAULT_REGION = "us-west-2"
+#: The one region an instance that names none uses: for chat, every media call and the model
+#: list alike. Chat and the media calls used us-west-2 while the model list came from us-east-1,
+#: so a listed model could be one the call's region does not serve. us-east-1 is the region the
+#: Add-instance form fills in, and Bedrock serves the most models there, Nova Reel among them.
+DEFAULT_REGION = "us-east-1"
 
 # Max conversation history entries before trimming oldest (mirrors openai.py).
 _MAX_HISTORY = 50
@@ -1253,10 +1257,6 @@ BEDROCK_CAPABILITY = ProviderCapability(
 # catalog contract — rather than answer ``[]``, which reads as an account that serves
 # no models, or show fake ids that may not be invocable.
 
-#: The control-plane region discovery asks when the instance names none.
-_DEFAULT_DISCOVERY_REGION = "us-east-1"
-
-
 def _list_bedrock_models_sync(region: str, profile: str) -> list[dict[str, Any]]:
     """Query the Bedrock control plane for every text-capable model + inference
     profile. Blocking boto3 calls — run via ``asyncio.to_thread``.
@@ -1274,7 +1274,7 @@ def _list_bedrock_models_sync(region: str, profile: str) -> list[dict[str, Any]]
     import boto3  # noqa: PLC0415 — lazy per Property 11
 
     session = boto3.Session(profile_name=profile) if profile else boto3.Session()
-    client = session.client("bedrock", region_name=region or _DEFAULT_DISCOVERY_REGION)
+    client = session.client("bedrock", region_name=region or DEFAULT_REGION)
 
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -1431,7 +1431,7 @@ class BedrockCatalog(ModelCatalog):
     reports as written. There is no fallback catalog to show instead."""
 
     def __init__(self, region: str = "", profile: str = "") -> None:
-        self._region = region or ""
+        self._region = region or DEFAULT_REGION
         self._profile = profile or ""
 
     async def list_models(self) -> list[ModelInfo]:
@@ -1447,7 +1447,7 @@ class BedrockCatalog(ModelCatalog):
             except Exception as exc:  # noqa: BLE001 — every failure is said as its cause
                 failure = _discovery_failure(
                     exc,
-                    region=self._region or _DEFAULT_DISCOVERY_REGION,
+                    region=self._region,
                     profile=self._profile or None,
                 )
                 _warn_once("Listing Amazon Bedrock's models", str(failure), exc)
@@ -1589,17 +1589,6 @@ from personalclaw.sdk.video import (
     VideoResult,
 )
 from personalclaw.sdk.stt import SttError, SttProvider, TranscriptResult
-
-
-def _resolve_region(config: dict | None) -> str:
-    """Region from config → env → default."""
-    return str((config or {}).get("region", "") or os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
-
-
-def _resolve_profile(config: dict | None) -> str | None:
-    """AWS profile from config (None = default chain)."""
-    p = str((config or {}).get("profile", "") or "")
-    return p or None
 
 
 # ── Shared credential check (never blocks the event loop) ────────────────────
@@ -1749,9 +1738,9 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
     run via ``asyncio.to_thread`` so the event loop stays unblocked.
     """
 
-    def __init__(self, *, region: str = "us-east-1", profile: str | None = None,
+    def __init__(self, *, region: str = DEFAULT_REGION, profile: str | None = None,
                  name: str = "bedrock") -> None:
-        self._region = region
+        self._region = region or DEFAULT_REGION
         self._profile = profile
         self._name = name
         #: The last embedding's failure — when, and the sentence saying why — until one succeeds.
@@ -1836,20 +1825,21 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
             return None
         if vector:
             self._last_failure = None
-        return vector
+        return vector or None
 
-    async def embed_batch(self, texts: list[str], model: str = "") -> list[list[float]]:
-        """Embed multiple texts (sequential calls — Bedrock has no native batch)."""
+    async def embed_batch(self, texts: list[str], model: str = "") -> list[list[float] | None]:
+        """Embed multiple texts (sequential calls — Bedrock has no native batch): one entry per
+        text, in order, ``None`` for a text that was not embedded.
+
+        A failed text was answered with an empty vector, which core's batch path stores as the
+        text's vector: ``None`` is how it knows to keep the text without one, keyword-searchable,
+        and :meth:`unavailable_reason` says why. A call that names no model embeds nothing."""
         try:
             require_model(model)
         except ProviderResolutionError as exc:
             logger.warning("Bedrock embedding on %r refused: %s", self._name, exc)
-            return [[] for _ in texts]
-        results: list[list[float]] = []
-        for text in texts:
-            vec = await self.embed(text, model)
-            results.append(vec if vec is not None else [])
-        return results
+            return [None for _ in texts]
+        return [await self.embed(text, model) for text in texts]
 
 
 # ── Bedrock Image Generation Provider ────────────────────────────────────────
@@ -1872,9 +1862,9 @@ class BedrockImageProvider(ImageGenProvider):
     invoke_model call runs in a thread pool.
     """
 
-    def __init__(self, *, region: str = "us-east-1", profile: str | None = None,
+    def __init__(self, *, region: str = DEFAULT_REGION, profile: str | None = None,
                  name: str = "bedrock") -> None:
-        self._region = region
+        self._region = region or DEFAULT_REGION
         self._profile = profile
         self._name = name
 
@@ -1899,6 +1889,11 @@ class BedrockImageProvider(ImageGenProvider):
     async def is_available(self) -> bool:
         """True if the AWS credential chain resolves (cached, off-loop)."""
         return await _creds_ok(self._region, self._profile)
+
+    async def unavailable_reason(self) -> str:
+        """Why images can't be made, as Settings → Models shows it: why the AWS credential chain
+        cannot sign in (the chat's sentence for the same failure), else ``""``."""
+        return await _creds_problem(self._region, self._profile)
 
     async def list_models(self) -> list[ImageGenModel]:
         return list(_IMAGE_MODELS)
@@ -2088,12 +2083,12 @@ class BedrockVideoProvider(VideoGenProvider):
     def __init__(
         self,
         *,
-        region: str = "us-east-1",
+        region: str = DEFAULT_REGION,
         profile: str | None = None,
         s3_bucket: str = "",
         name: str = "bedrock",
     ) -> None:
-        self._region = region
+        self._region = region or DEFAULT_REGION
         self._profile = profile
         self._s3_bucket = s3_bucket or os.environ.get("BEDROCK_VIDEO_S3_BUCKET", "")
         self._name = name
@@ -2126,6 +2121,13 @@ class BedrockVideoProvider(VideoGenProvider):
         """True if the AWS credential chain resolves AND an S3 bucket is set
         (cached, off-loop). Video needs the bucket for Nova Reel output."""
         return bool(self._s3_bucket) and await _creds_ok(self._region, self._profile)
+
+    async def unavailable_reason(self) -> str:
+        """Why video can't be made, as Settings → Models shows it: no S3 bucket for Nova Reel to
+        write to, or why the AWS credential chain cannot sign in, else ``""``."""
+        if not self._s3_bucket:
+            return _needs_bucket(_VIDEO_NEEDS_BUCKET)
+        return await _creds_problem(self._region, self._profile)
 
     async def list_models(self) -> list[VideoGenModel]:
         return list(_VIDEO_MODELS)
@@ -2338,9 +2340,9 @@ class BedrockSTTProvider(SttProvider):
     Handles wav, mp3, mp4, flac, ogg, webm natively.
     """
 
-    def __init__(self, *, region: str = "us-east-1", profile: str | None = None,
+    def __init__(self, *, region: str = DEFAULT_REGION, profile: str | None = None,
                  name: str = "bedrock", s3_bucket: str = "") -> None:
-        self._region = region
+        self._region = region or DEFAULT_REGION
         self._profile = profile
         self._name = name
         self._s3_bucket = s3_bucket or os.environ.get("BEDROCK_VIDEO_S3_BUCKET", "")

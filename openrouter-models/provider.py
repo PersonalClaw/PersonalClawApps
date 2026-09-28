@@ -47,6 +47,7 @@ from personalclaw.sdk.model import (
     Capability,
     ConnectionResult,
     ModelCatalog,
+    ModelDiscoveryError,
     ModelInfo,
     PromptCache,
     ProviderResolutionError,
@@ -123,17 +124,27 @@ _ON_INSTANCE = "on this OpenRouter instance in Settings → Providers"
 _BASE_URL_STEP = f"check Base URL {_ON_INSTANCE} (under Advanced)"
 # Where the hosts PersonalClaw may reach are listed ("Allowed hosts", "Denied hosts").
 _EGRESS_SETTINGS = "Settings → Security → Network egress"
+# What every call without a key, and Settings → Models under an adapter that has none, says.
+_NO_KEY = (
+    f"No OpenRouter API key is set. Add it in OpenRouter API Key {_ON_INSTANCE}, or set "
+    f"{_API_KEY_ENV}."
+)
 
 # What to change when OpenRouter refuses a call as invalid or answers it "not found", which turns
-# on the call. A generation's model and options are the user's to change; a key check sends
-# nothing they chose except where it goes; a download fetches a job that already finished, so
-# only making the video again gets one.
+# on the call. A generation's model and options are the user's to change; a lookup (the key check,
+# the model listing) sends nothing they chose except where it goes; a download fetches a job that
+# already finished, so only making the video again gets one.
 _REQUEST_STEP = (
     "Choose another model in Settings → Models or change the options you asked for; if no model "
     f"works, {_BASE_URL_STEP}."
 )
-_KEY_CHECK_STEP = f"Check Base URL {_ON_INSTANCE} (under Advanced); left empty, it uses {_BASE}."
+_LOOKUP_STEP = f"Check Base URL {_ON_INSTANCE} (under Advanced); left empty, it uses {_BASE}."
+# Also the step for a job that ended without a video to download (cancelled, expired, or finished
+# with an empty file): it is over, so only making the video again gets one.
 _DOWNLOAD_STEP = "Generate the video again."
+# The next step for a call answered with something other than what OpenRouter sends for it: a
+# blip, or a Base URL that reaches some other server.
+_RETRY_STEP = f"Try again in a moment; if it keeps happening, {_BASE_URL_STEP}."
 
 # The non-public places an owner can vouch for by adding the host to Allowed hosts. A cloud
 # metadata or link-local address is never reachable, allowed or not.
@@ -158,9 +169,8 @@ SPEC = BrandedProviderSpec(
         Capability.CHAT, Capability.CODE_TOOLS, Capability.STREAMING,
         Capability.VISION, Capability.EMBEDDING,
     }),
-    # No curated fallback list. With default_model="" this makes BrandedCatalog
-    # return [] when discovery fails, so a missing/bad key yields an honestly EMPTY
-    # picker rather than fabricated model ids the user cannot actually call.
+    # No curated fallback list: a discovery that fails says why (OpenRouterCatalog
+    # below) rather than offering fabricated model ids the user cannot actually call.
     fallback_models=(),
     # AUTOMATIC - "Most providers automatically enable prompt caching" (OpenRouter
     # prompt-caching docs): the OpenAI, Grok, DeepSeek, Moonshot, Z.AI and Gemini-implicit
@@ -211,11 +221,13 @@ class OpenRouterCatalog(ModelCatalog):
         self._default_model = default_model
 
     async def list_models(self) -> list[ModelInfo]:
-        """Live models, or [] on any failure.
+        """Live models; ``[]`` only when OpenRouter lists none.
 
-        Empty is the honest answer for an unreachable endpoint or absent key: with
-        no curated fallback, the picker shows nothing rather than ids the user
-        cannot call. Never raises — discovery runs on hot Settings GETs.
+        A listing that got no list — no answer, an answer other than 200, or a body that is
+        not OpenRouter's model list — raises :class:`ModelDiscoveryError` saying why and what
+        to check, as the catalog contract asks: ``[]`` would read as an account that serves
+        no models, and there is no curated fallback to show instead. This catalog caches
+        nothing, so a failed listing is never remembered as an empty one.
         """
         url = f"{self._endpoint}/models?output_modalities={self._MODALITIES}"
         headers: dict[str, str] = {_ATTRIBUTION_HEADER: _ATTRIBUTION_VALUE}
@@ -223,15 +235,32 @@ class OpenRouterCatalog(ModelCatalog):
             headers["Authorization"] = f"Bearer {self._api_key}"
         try:
             resp = await fetch(url, policy=_json_policy(), method="GET", headers=headers)
-            if resp.status != 200:
-                return []
+        except Exception as e:  # noqa: BLE001 — every transport failure, said as its cause
+            raise ModelDiscoveryError(_unanswered_message(e, what="model listing"), url=url) from e
+        if resp.status != 200:
+            if resp.status in (401, 403) and not self._api_key:
+                # Sent without a key, so no key was refused: the listing needs one.
+                message = (
+                    f"OpenRouter asked for an API key to list its models (HTTP {resp.status}). "
+                    f"Add the key {_ON_INSTANCE}, or set {_API_KEY_ENV}."
+                )
+            else:
+                message = _status_message(
+                    resp.status, resp.text, what="model listing", step=_LOOKUP_STEP,
+                )
+            raise ModelDiscoveryError(message, url=url, status=resp.status)
+        try:
             data = json.loads(resp.text)
-        except Exception:  # noqa: BLE001 — discovery is fail-soft by contract
-            logger.debug("OpenRouter model discovery failed", exc_info=True)
-            return []
+        except (ValueError, LookupError) as e:  # not JSON, or a charset that cannot be decoded
+            raise ModelDiscoveryError(
+                _unreadable_message(e, what="model listing"), url=url, status=resp.status,
+            ) from e
+        rows = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            raise _not_a_model_list(url, resp)
 
         out: list[ModelInfo] = []
-        for m in data.get("data") or []:
+        for m in rows:
             if not isinstance(m, dict) or not m.get("id"):
                 continue
             mid = str(m["id"])
@@ -242,6 +271,8 @@ class OpenRouterCatalog(ModelCatalog):
                 description=_truncate(m.get("description", ""), 200),
                 extra={"context_length": m["context_length"]} if m.get("context_length") else {},
             ))
+        if rows and not out:
+            raise _not_a_model_list(url, resp)
         return out
 
     async def test_connection(self) -> ConnectionResult:
@@ -255,9 +286,7 @@ class OpenRouterCatalog(ModelCatalog):
         a bad key), and it is free, so the check costs nothing.
         """
         if not self._api_key:
-            return ConnectionResult(
-                ok=False, detail=f"No API key configured (set it or {_API_KEY_ENV})"
-            )
+            return ConnectionResult(ok=False, detail=_NO_KEY)
         try:
             resp = await fetch(
                 f"{self._endpoint}/key",
@@ -271,15 +300,48 @@ class OpenRouterCatalog(ModelCatalog):
             return ConnectionResult(
                 ok=False,
                 detail=_status_message(
-                    resp.status, resp.text, what="key check", step=_KEY_CHECK_STEP,
+                    resp.status, resp.text, what="key check", step=_LOOKUP_STEP,
                 ),
+                # The key was sent, so a 401 or 403 is OpenRouter refusing it. Any other
+                # status (credits, not found, a failure on its side) is not about the key.
+                rejected_credential=resp.status in (401, 403),
             )
-        # The key is real. A model count is still worth reporting, but discovery
-        # failing now means the endpoint/filter is off, not that the key is bad.
-        models = await self.list_models()
+        # The key is real. A model count is still worth reporting, and a listing that
+        # fails now says what failed in its own sentence.
+        try:
+            models = await self.list_models()
+        except ModelDiscoveryError as exc:
+            return ConnectionResult(
+                ok=False, detail=str(exc), rejected_credential=exc.rejected_credential,
+            )
         if not models:
-            return ConnectionResult(ok=False, detail="Key is valid but no models were listed")
+            # The listing answered with an empty list. Its route is public, so the key plays no
+            # part in that: from openrouter.ai it is on OpenRouter's side, and from any other Base
+            # URL it is what that server lists.
+            if self._endpoint == _BASE:
+                detail = (
+                    "OpenRouter accepted the key but listed no chat or embedding models. Try "
+                    "again in a few minutes."
+                )
+            else:
+                detail = (
+                    "OpenRouter accepted the key, but the server at Base URL listed no chat or "
+                    f"embedding models. {_LOOKUP_STEP}"
+                )
+            return ConnectionResult(ok=False, detail=detail)
         return ConnectionResult(ok=True, model_count=len(models))
+
+
+def _not_a_model_list(url: str, resp: Any) -> ModelDiscoveryError:
+    """A listing answered 200 with JSON that is not OpenRouter's model list: no ``data`` list,
+    or entries none of which carries a model id. That is not a list of none — it is some other
+    answer (a proxy's, or a changed shape) — so it is said as such, with the body as the detail.
+    """
+    return ModelDiscoveryError(
+        _unexpected_message(resp.text, what="model listing", answer="model list"),
+        url=url,
+        status=resp.status,
+    )
 
 
 def _capabilities_from_architecture(architecture: Any) -> list[str]:
@@ -479,6 +541,25 @@ def _unanswered_message(error: Exception, *, what: str) -> str:
     return sentence_with_detail(sentence, error)
 
 
+def _unreadable_message(error: Exception, *, what: str) -> str:
+    """The sentence for an OpenRouter call answered with a body that is not JSON, then the
+    parser's words."""
+    return sentence_with_detail(
+        f"OpenRouter's answer to the {what} request could not be read. {_RETRY_STEP}", error,
+    )
+
+
+def _unexpected_message(detail: Any, *, what: str, answer: str) -> str:
+    """The sentence for an OpenRouter call answered with JSON that is not what OpenRouter sends
+    for it — ``answer`` names what that is — then the JSON itself. Not a JSON object, or a field
+    missing or of the wrong type: a proxy's answer, or a changed shape."""
+    return sentence_with_detail(
+        f"OpenRouter answered the {what} request, but not with the {answer} it sends. "
+        f"{_RETRY_STEP}",
+        detail,
+    )
+
+
 def _retry_after_seconds(headers: dict[str, str]) -> float:
     """``Retry-After`` as delta-seconds, clamped to [1, 30].
 
@@ -505,6 +586,7 @@ async def _request_json(
     policy=None,
     error_cls: type[Exception] = ImageGenError,
     what: str = "request",
+    answer: str = "result",
     ok_statuses: tuple[int, ...] = (200,),
     allow_retry: bool = True,
     hint: str = "",
@@ -515,6 +597,10 @@ async def _request_json(
     unbounded backoff chain inside a chat turn is worse for the user than a clear
     "rate-limited, try again" — they can see it and decide. ``hint`` goes into the
     sentence for a request refused as invalid (see ``_status_message``).
+
+    What comes back is always a JSON object: a body that is not JSON, or JSON that is not an
+    object, raises ``error_cls`` saying so (``answer`` names what the call's answer carries), so
+    a caller reading a field never crashes on the wrong type.
     """
     data = json.dumps(body).encode() if body is not None else None
     attempt = 0
@@ -534,9 +620,12 @@ async def _request_json(
 
         if resp.status in ok_statuses:
             try:
-                return json.loads(resp.text) if resp.text else {}
-            except (json.JSONDecodeError, ValueError) as e:
-                raise error_cls(f"OpenRouter {what} returned an unparseable response.") from e
+                parsed = json.loads(resp.text) if resp.text else {}
+            except (ValueError, LookupError) as e:  # not JSON, or a charset that cannot be decoded
+                raise error_cls(_unreadable_message(e, what=what)) from e
+            if not isinstance(parsed, dict):
+                raise error_cls(_unexpected_message(resp.text, what=what, answer=answer))
+            return parsed
 
         if resp.status == 429 and allow_retry and attempt == 0:
             attempt += 1
@@ -546,19 +635,21 @@ async def _request_json(
         raise error_cls(_status_message(resp.status, resp.text, what=what, hint=hint))
 
 
-# ── Dynamic model discovery (TTL-cached, per key) ─────────────────────────────
+# ── Dynamic model discovery (TTL-cached, per list URL and key) ─────────────────
 #
 # Separate caches per route: the three endpoints return DIFFERENT descriptor
 # grammars, and only the media ones carry the per-model parameter caps the request
-# builders need. Keyed by api_key so two accounts with different model access don't
-# read each other's list.
+# builders need. A list is asked of the instance's own Base URL, as its generations
+# are, so a proxied instance lists through the same host. Keyed by that list's URL
+# and the api_key, so two accounts with different model access (or one account
+# behind two Base URLs) never read each other's list.
 
-_image_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
-_video_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_image_cache: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
+_video_cache: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
 
 
 async def _discover(
-    cache: dict[str, tuple[float, list[dict[str, Any]]]],
+    cache: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]],
     *,
     url: str,
     api_key: str,
@@ -568,9 +659,11 @@ async def _discover(
 
     A transient 5xx returning the STALE list keeps the picker populated through a
     blip; having never succeeded returns [] so an unconfigured provider shows an
-    honestly empty picker instead of invented ids.
+    honestly empty picker instead of invented ids. An answer that is not OpenRouter's
+    list (not a JSON object, no ``data`` list, or entries none of which carries an id)
+    is such a failure too, so it is never cached as a list of none.
     """
-    cached = cache.get(api_key)
+    cached = cache.get((url, api_key))
     now = time.monotonic()
     if cached and (now - cached[0]) < _DISCOVERY_TTL_S:
         return cached[1]
@@ -586,27 +679,34 @@ async def _discover(
         logger.debug("OpenRouter %s discovery failed", label, exc_info=True)
         return cached[1] if cached else []
 
-    models = [m for m in (data.get("data") or []) if isinstance(m, dict) and m.get("id")]
-    cache[api_key] = (now, models)
+    rows = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        logger.debug("OpenRouter %s discovery answered without a model list", label)
+        return cached[1] if cached else []
+    models = [m for m in rows if isinstance(m, dict) and m.get("id")]
+    if rows and not models:
+        logger.debug("OpenRouter %s discovery listed no entry with a model id", label)
+        return cached[1] if cached else []
+    cache[(url, api_key)] = (now, models)
     return models
 
 
-async def _discover_image_models(api_key: str) -> list[dict[str, Any]]:
-    """``GET /images/models`` — the dedicated route.
+async def _discover_image_models(base: str, api_key: str) -> list[dict[str, Any]]:
+    """``GET {base}/images/models`` — the dedicated route.
 
     NOT ``GET /models``: verified live that the default list is text-only (367
     models, zero with image output), so a bare listing would show an empty image
     picker while 38 image models are in fact available.
     """
     return await _discover(
-        _image_cache, url=f"{_BASE}/images/models", api_key=api_key, label="image",
+        _image_cache, url=f"{base}/images/models", api_key=api_key, label="image",
     )
 
 
-async def _discover_video_models(api_key: str) -> list[dict[str, Any]]:
-    """``GET /videos/models`` — the dedicated route (same reason as images)."""
+async def _discover_video_models(base: str, api_key: str) -> list[dict[str, Any]]:
+    """``GET {base}/videos/models`` — the dedicated route (same reason as images)."""
     return await _discover(
-        _video_cache, url=f"{_BASE}/videos/models", api_key=api_key, label="video",
+        _video_cache, url=f"{base}/videos/models", api_key=api_key, label="video",
     )
 
 
@@ -693,6 +793,11 @@ class OpenRouterImageProvider(ImageGenProvider):
     async def is_available(self) -> bool:
         return bool(self._key())
 
+    async def unavailable_reason(self) -> str:
+        """What Settings → Models says under this adapter when it can't be used: the missing
+        key, and where to add it. ``""`` when it has one."""
+        return "" if await self.is_available() else _NO_KEY
+
     async def list_models(self) -> list[ImageGenModel]:
         from personalclaw.sdk.image import active_image_gen
 
@@ -706,7 +811,7 @@ class OpenRouterImageProvider(ImageGenProvider):
             return []  # honest empty picker; no speculative unauthenticated call
 
         out: list[ImageGenModel] = []
-        for m in await _discover_image_models(key):
+        for m in await _discover_image_models(self._base(), key):
             mid = str(m["id"])
             # OpenRouter expresses geometry as resolution tokens ("1K"/"2K"/"4K")
             # AND aspect-ratio tokens ("16:9"), never as pixel dimensions here. The
@@ -731,7 +836,7 @@ class OpenRouterImageProvider(ImageGenProvider):
             model_id = require_model(model)
         except ProviderResolutionError as exc:
             raise ImageGenError(str(exc)) from exc
-        by_id = {str(m["id"]): m for m in await _discover_image_models(key)}
+        by_id = {str(m["id"]): m for m in await _discover_image_models(self._base(), key)}
         return model_id, by_id.get(model_id, {})
 
     def _geometry(self, size: str, descriptor: dict[str, Any]) -> dict[str, Any]:
@@ -812,10 +917,16 @@ class OpenRouterImageProvider(ImageGenProvider):
             policy=_long_policy(timeout_s=_IMAGE_TIMEOUT_S, max_bytes=64_000_000),
             error_cls=ImageGenError,
             what="image generation",
+            answer="images",
             hint=self._size_hint(body, descriptor or {}),
         )
+        items = data.get("data", [])
+        if not isinstance(items, list):
+            raise ImageGenError(
+                _unexpected_message(json.dumps(data), what="image generation", answer="images")
+            )
         results: list[ImageResult] = []
-        for item in data.get("data", []) or []:
+        for item in items:
             if not isinstance(item, dict):
                 continue
             b64 = str(item.get("b64_json", "") or "")
@@ -831,7 +942,12 @@ class OpenRouterImageProvider(ImageGenProvider):
                 revised_prompt=str(item.get("revised_prompt", "") or ""),
             ))
         if not results:
-            raise ImageGenError("OpenRouter returned no image data.")
+            raise ImageGenError(sentence_with_detail(
+                "OpenRouter answered the image generation request without an image. Try again; "
+                "if it happens again, change the prompt or choose another model in Settings → "
+                "Models.",
+                json.dumps(data),
+            ))
         return results
 
     async def generate(
@@ -839,7 +955,7 @@ class OpenRouterImageProvider(ImageGenProvider):
     ) -> list[ImageResult]:
         key = self._key()
         if not key:
-            raise ImageGenError(f"No OpenRouter API key configured (set {_API_KEY_ENV}).")
+            raise ImageGenError(_NO_KEY)
         model_id, descriptor = await self._resolve_model(key, model)
         body = self._build_body(model_id, prompt, size=size, n=n, descriptor=descriptor)
         return await self._post_images(body, key, descriptor=descriptor)
@@ -850,7 +966,7 @@ class OpenRouterImageProvider(ImageGenProvider):
     ) -> list[ImageResult]:
         key = self._key()
         if not key:
-            raise ImageGenError(f"No OpenRouter API key configured (set {_API_KEY_ENV}).")
+            raise ImageGenError(_NO_KEY)
         if mask:
             # A typed, honest refusal rather than a silent drop: OpenRouter's
             # /images has no mask/inpainting parameter at all, so quietly ignoring
@@ -863,10 +979,13 @@ class OpenRouterImageProvider(ImageGenProvider):
         model_id, descriptor = await self._resolve_model(key, model)
         refs_max = _range_max(descriptor, "input_references")
         if not refs_max:
-            # Checked BEFORE the request so an impossible edit costs nothing.
+            # Checked BEFORE the request so an impossible edit costs nothing. The descriptor is
+            # empty for a model the image list does not name, so the sentence says what the list
+            # shows, not what the model can do.
             raise ImageGenError(
-                f"Model {model_id!r} does not accept input images "
-                "(no input_references support)."
+                f"OpenRouter doesn't list {model_id} as taking an image to edit, so the edit was "
+                "not sent. Choose a model that takes one under Image · Generation in Settings → "
+                "Models."
             )
 
         try:
@@ -932,6 +1051,11 @@ class OpenRouterVideoProvider(VideoGenProvider):
     async def is_available(self) -> bool:
         return bool(self._key())
 
+    async def unavailable_reason(self) -> str:
+        """What Settings → Models says under this adapter when it can't be used: the missing
+        key, and where to add it. ``""`` when it has one."""
+        return "" if await self.is_available() else _NO_KEY
+
     async def list_models(self) -> list[VideoGenModel]:
         from personalclaw.sdk.video import active_video_gen
 
@@ -943,7 +1067,7 @@ class OpenRouterVideoProvider(VideoGenProvider):
             return []
 
         out: list[VideoGenModel] = []
-        for m in await _discover_video_models(key):
+        for m in await _discover_video_models(self._base(), key):
             mid = str(m["id"])
             # Every array can be null, and null means "the model doesn't express
             # this" — distinct from an empty list. Ratios come from the descriptor
@@ -967,7 +1091,7 @@ class OpenRouterVideoProvider(VideoGenProvider):
             model_id = require_model(model)
         except ProviderResolutionError as exc:
             raise VideoGenError(str(exc)) from exc
-        by_id = {str(m["id"]): m for m in await _discover_video_models(key)}
+        by_id = {str(m["id"]): m for m in await _discover_video_models(self._base(), key)}
         return model_id, by_id.get(model_id, {})
 
     def _build_body(
@@ -1005,7 +1129,7 @@ class OpenRouterVideoProvider(VideoGenProvider):
         if descriptor.get("seed") is True and opts.get("seed") is not None:
             body["seed"] = int(opts["seed"])
 
-        frames = self._frame_images(descriptor, opts)
+        frames = self._frame_images(model_id, descriptor, opts)
         if frames:
             # frame_images WINS over input_references per the documented
             # precedence, so exactly one of the two is ever sent.
@@ -1021,13 +1145,15 @@ class OpenRouterVideoProvider(VideoGenProvider):
 
     @staticmethod
     def _frame_images(
-        descriptor: dict[str, Any], opts: dict[str, Any],
+        model_id: str, descriptor: dict[str, Any], opts: dict[str, Any],
     ) -> list[dict[str, Any]]:
         """Validate caller-supplied first/last frames against the model's support.
 
         ``supported_frame_images`` is null for openai/sora-2-pro, ["first_frame"]
         for several, and both for most — so a last_frame request is validated
-        BEFORE spending a submit rather than 400-ing upstream.
+        BEFORE spending a submit rather than 400-ing upstream. The descriptor is
+        empty for a model the video list does not name, so a refusal says what the
+        list shows, not what the model can do.
         """
         raw = opts.get("frame_images")
         if not raw:
@@ -1035,7 +1161,9 @@ class OpenRouterVideoProvider(VideoGenProvider):
         supported = [str(f) for f in (descriptor.get("supported_frame_images") or [])]
         if not supported:
             raise VideoGenError(
-                f"Model {descriptor.get('id', '')!r} does not accept frame images."
+                f"OpenRouter doesn't list {model_id} as taking a first or last frame image, so "
+                "the video request was not sent. Leave the frame out, or choose a model that "
+                "takes one under Video · Generation in Settings → Models."
             )
         out: list[dict[str, Any]] = []
         for entry in raw:
@@ -1043,9 +1171,12 @@ class OpenRouterVideoProvider(VideoGenProvider):
                 continue
             ftype = str(entry.get("frame_type", "") or "first_frame")
             if ftype not in supported:
+                listed = " or ".join(f.replace("_", " ") for f in supported)
+                wanted = ftype.replace("_", " ")
                 raise VideoGenError(
-                    f"Model {descriptor.get('id', '')!r} does not support "
-                    f"frame_type {ftype!r} (supports {supported})."
+                    f"OpenRouter lists {model_id} as taking only a {listed} image, not a "
+                    f"{wanted}, so the video request was not sent. Leave the {wanted} out, or "
+                    "choose a model that takes one under Video · Generation in Settings → Models."
                 )
             out.append({"frame_type": ftype, "image_url": entry.get("image_url", {})})
         return out
@@ -1061,7 +1192,7 @@ class OpenRouterVideoProvider(VideoGenProvider):
     ) -> list[VideoResult]:
         key = self._key()
         if not key:
-            raise VideoGenError(f"No OpenRouter API key configured (set {_API_KEY_ENV}).")
+            raise VideoGenError(_NO_KEY)
 
         model_id, descriptor = await self._resolve_model(key, model)
         body = self._build_body(
@@ -1081,11 +1212,18 @@ class OpenRouterVideoProvider(VideoGenProvider):
             body=body,
             error_cls=VideoGenError,
             what="video submit",
+            answer="video job",
             ok_statuses=(200, 201, 202),
         )
-        job_id = str(data.get("id", "") or "")
+        # The job's id names the job in every later call, so one that is missing, empty or not
+        # an id at all (an object, a list) is not a job this app can follow.
+        raw_id = data.get("id")
+        is_id = isinstance(raw_id, (str, int)) and not isinstance(raw_id, bool)
+        job_id = str(raw_id).strip() if is_id else ""
         if not job_id:
-            raise VideoGenError("OpenRouter video submit returned no job id.")
+            raise VideoGenError(
+                _unexpected_message(json.dumps(data), what="video submit", answer="video job")
+            )
         # ``polling_url`` is present in the response but deliberately NOT used: we
         # construct the canonical GET /videos/{id} ourselves. A vendor-returned
         # status URL that omits part of the path is a real bug class this repo has
@@ -1097,7 +1235,12 @@ class OpenRouterVideoProvider(VideoGenProvider):
 
         A transient non-200 on a poll is swallowed and retried — one 5xx must not
         abandon (and waste) a job the user is already paying for. Every terminal
-        state raises its own message so "cancelled" never reads as "timed out".
+        state raises its own message so "cancelled" never reads as "timed out", and
+        so do a 200 that cannot be read (``_poll_answer``) and a poll the egress
+        guard refuses by policy (a denied host, a private address, a malformed URL):
+        a setting decides that, so waiting it out would only end in a timeout that
+        blames the job. A host that stops resolving is a DNS or network blip, and is
+        waited out like a lost connection.
         """
         url = f"{self._base()}/videos/{job_id}"
         elapsed = 0.0
@@ -1107,18 +1250,21 @@ class OpenRouterVideoProvider(VideoGenProvider):
                 resp = await fetch(
                     url, policy=_json_policy(), method="GET", headers=_headers(key),
                 )
+            except EgressBlocked as e:
+                if e.decision.category != "unresolvable":
+                    raise VideoGenError(_unanswered_message(e, what="video polling")) from e
+                logger.debug("OpenRouter video poll: host did not resolve", exc_info=True)
+            except Exception:  # noqa: BLE001 — a transient poll error is retried
+                logger.debug("OpenRouter video poll error", exc_info=True)
+            else:
                 if resp.status == 200:
-                    doc = json.loads(resp.text)
+                    doc = _poll_answer(resp)
                 elif resp.status in (401, 403, 402):
                     # An auth/credit failure is not transient — retrying until the
                     # timeout would just hide it behind a misleading message.
                     raise VideoGenError(
                         _status_message(resp.status, resp.text, what="video polling")
                     )
-            except VideoGenError:
-                raise
-            except Exception:  # noqa: BLE001 — a transient poll error is retried
-                logger.debug("OpenRouter video poll error", exc_info=True)
 
             status = str(doc.get("status", "") or "").lower()
             if status == _VIDEO_DONE:
@@ -1131,10 +1277,14 @@ class OpenRouterVideoProvider(VideoGenProvider):
                     str(doc.get("error") or doc.get("failure_reason") or ""),
                 ))
             if status == "cancelled":
-                raise VideoGenError("OpenRouter video job was cancelled.")
+                raise VideoGenError(
+                    "OpenRouter's video job was cancelled before it finished, so no video was "
+                    f"made. {_DOWNLOAD_STEP}"
+                )
             if status == "expired":
                 raise VideoGenError(
-                    "OpenRouter video job expired before its output could be downloaded."
+                    "OpenRouter's video job expired before its video could be downloaded, so "
+                    f"nothing was saved. {_DOWNLOAD_STEP}"
                 )
             if status and status not in _VIDEO_PENDING:
                 # Forward-compat: an unrecognized status must not crash the turn.
@@ -1143,8 +1293,11 @@ class OpenRouterVideoProvider(VideoGenProvider):
 
             await asyncio.sleep(_VIDEO_POLL_INTERVAL_S)
             elapsed += _VIDEO_POLL_INTERVAL_S
+        # The job is still OpenRouter's to finish, and a finished job is billed.
         raise VideoGenError(
-            f"OpenRouter video generation timed out after {_VIDEO_TIMEOUT_S:.0f}s."
+            f"OpenRouter's video job didn't finish within {_VIDEO_TIMEOUT_S:.0f} seconds, so "
+            "PersonalClaw stopped waiting for it; OpenRouter may still finish it and bill for "
+            "it. Generate a shorter clip, or choose a faster model in Settings → Models."
         )
 
     async def _download(
@@ -1178,7 +1331,10 @@ class OpenRouterVideoProvider(VideoGenProvider):
                 "not saved. Generate a shorter or lower-resolution clip."
             )
         if not resp.body:
-            raise VideoGenError("OpenRouter returned an empty video body.")
+            raise VideoGenError(
+                "OpenRouter's download of the finished video came back empty, so nothing was "
+                f"saved. {_DOWNLOAD_STEP}"
+            )
 
         mime = (resp.headers.get("Content-Type", "") or "").split(";")[0].strip()
         # delete=False, and deliberately NOT unlinked here: core reads the file
@@ -1201,6 +1357,24 @@ def _int_list(raw: Any) -> list[int]:
         except (TypeError, ValueError):
             continue
     return out
+
+
+def _poll_answer(resp: Any) -> dict[str, Any]:
+    """A 200 answer to a video job poll, read: a JSON object whose ``status`` is a string.
+
+    One that is not raises at once rather than being polled past. It is no blip to wait out —
+    OpenRouter's job answers carry a status — so polling on would only end in a timeout that
+    blames the wrong thing.
+    """
+    try:
+        doc = json.loads(resp.text)
+    except (ValueError, LookupError) as e:  # not JSON, or a charset that cannot be decoded
+        raise VideoGenError(_unreadable_message(e, what="video polling")) from e
+    if not isinstance(doc, dict) or not isinstance(doc.get("status"), str):
+        raise VideoGenError(
+            _unexpected_message(resp.text, what="video polling", answer="job status")
+        )
+    return doc
 
 
 # ── Media-capability config scanners ─────────────────────────────────────────

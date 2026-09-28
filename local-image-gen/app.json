@@ -1,6 +1,6 @@
 {
   "name": "local-image-gen",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "displayName": "Local Image Generation",
   "description": "Generate images with a ComfyUI server you run on your own machine. PersonalClaw does not install or start ComfyUI: start it yourself on this machine, then set its address on this app's Configure page (default http://127.0.0.1:8188). Bind a checkpoint you pulled into ComfyUI to the Image Generation use case in Models. No cloud and no API key: no prompt or pixel leaves the host, and this app downloads no weights. Recommended permissive default: FLUX.1-schnell (Apache-2.0).",
   "icon": "Image",

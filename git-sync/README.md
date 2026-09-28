@@ -65,20 +65,33 @@ clone of an empty repo succeeds and the first push publishes the branch.
 - **Insert-only, idempotent.** Each shard object is written to `<clone>/<key>` exactly
   once. A re-push of an existing key is skipped, never overwritten, so the git history stays
   append-only per object and the sync cycle can retry freely after a lost race.
-- **Pull before push.** Every push first `git pull --ff-only`s so it carries others' objects
-  and does not conflict; a pull failure against a fresh/empty remote is fine.
+- **Catch up before every step.** Every push, read and registry swap first fetches the
+  remote and replays this machine's unpushed commits on top of it (`git rebase`), so the
+  clone carries everyone's objects; a fetch failure against a fresh/empty remote is fine.
+- **A lost race is caught up in the same push.** When another machine pushes between this
+  one's catch-up and its push, git turns the push away; Git Sync catches up again and pushes
+  once more (up to three tries in all), so the push lands rather than leaving the clone
+  holding a commit the remote lacks. A key the remote gained in the meantime keeps the
+  remote's copy and counts as skipped — the same insert-only rule as every push.
 - **Registry compare-and-swap rides git.** The single shared `registry.json` is swapped only
-  when the caller's expected hash matches what the pulled clone holds; the write is then
+  when the caller's expected hash matches what the caught-up clone holds; the write is then
   committed and pushed, and **git's own push rejection is the compare-and-swap** — if the
-  remote moved under us the push is rejected and the caller re-pulls and retries. No
-  hand-rolled lock.
-- **Transient vs permanent.** A push rejected because the remote moved is reported
-  `transient` (retry). A push the remote refuses for a bad URL or denied auth is `permanent`
-  (retry will not fix it), while a failure before the push — the first clone, a step in the
-  working clone — is `transient`. A clean run is `delivered`. Every failure says what went
-  wrong and what to do — the remote didn't accept this machine's credentials, no repository
-  is visible at that URL, the working clone can't be written, git isn't installed — with
-  git's own message after it.
+  remote moved under us the push is rejected, the write is dropped from the clone, and the
+  caller re-reads the remote's registry and retries. No hand-rolled lock.
+- **What can conflict.** Shard objects never do: each key is written once, by the machine
+  whose id it carries. A real conflict takes something outside the transport — a commit made
+  by hand in the working clone that the remote also changed, or a key that is a file on one
+  side and a folder on the other. The push then says which path, and that you can run
+  `git pull --rebase origin <branch>` in the working clone to resolve it, or delete the clone
+  so Git Sync clones the remote afresh.
+- **Transient vs permanent.** A push still turned away after its tries, one that can't reach
+  the remote, and a failure before the push — the first clone, a step in the working clone —
+  are `transient` (the next sync tries again). A push the remote refuses for a bad URL,
+  denied auth or its own rules (a hook, branch protection), and a real conflict, are
+  `permanent` (retrying will not fix them). A clean run is `delivered`. Every failure says
+  what went wrong and what to do — the remote didn't accept this machine's credentials, no
+  repository is visible at that URL, the working clone can't be written, git isn't installed
+  — with git's own message after it.
 - **Deterministic committer.** The transport's automated commits use a fixed identity
   (`PersonalClaw Sync <sync@personalclaw.local>`) set via `git -c` flags, so a sync commit
   never depends on — or pollutes — ambient git config and names no real person.

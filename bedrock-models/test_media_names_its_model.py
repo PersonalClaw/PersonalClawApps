@@ -91,7 +91,7 @@ def test_an_embedding_that_names_no_model_is_refused(sent):
     adapter = prov.BedrockEmbeddingProvider(name="my-bedrock")
 
     assert _run(adapter.embed("a heron by the lake")) is None
-    assert _run(adapter.embed_batch(["a heron", "a kestrel"])) == [[], []]
+    assert _run(adapter.embed_batch(["a heron", "a kestrel"])) == [None, None]
     assert sent == [], "no client was made and nothing was sent"
 
 

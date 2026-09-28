@@ -310,51 +310,52 @@ def _closed_port() -> int:
         return s.getsockname()[1]
 
 
-@pytest.mark.parametrize(
-    ("exc", "says"),
-    [
-        (
-            _Wrapped(ConnectionRefusedError(61, "Connection refused")),
-            f"Nothing is accepting connections at {URL}. Check that Qdrant is running there, and "
-            f"that Qdrant URL {ON_CARD} has the right host and port.",
+#: Each way reaching the server can fail, and what it says (``timeout_secs`` 7).
+_FAILURES = [
+    (
+        _Wrapped(ConnectionRefusedError(61, "Connection refused")),
+        f"Nothing is accepting connections at {URL}. Check that Qdrant is running there, and "
+        f"that Qdrant URL {ON_CARD} has the right host and port.",
+    ),
+    (
+        _Wrapped(socket.gaierror(8, "nodename nor servname provided, or not known")),
+        "The host in Qdrant URL, qdrant.example.com, can't be found from this machine. Check "
+        f"Qdrant URL {ON_CARD}.",
+    ),
+    (
+        _Wrapped(TimeoutError("timed out")),
+        f"The Qdrant at {URL} didn't answer within 7 seconds. Check that it is reachable from "
+        f"this machine, or raise Timeout (seconds) {ON_CARD}.",
+    ),
+    (
+        _Wrapped(
+            ssl.SSLCertVerificationError(
+                1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
+            )
         ),
-        (
-            _Wrapped(socket.gaierror(8, "nodename nor servname provided, or not known")),
-            "The host in Qdrant URL, qdrant.example.com, can't be found from this machine. Check "
-            f"Qdrant URL {ON_CARD}.",
-        ),
-        (
-            _Wrapped(TimeoutError("timed out")),
-            f"The Qdrant at {URL} didn't answer within 7 seconds. Check that it is reachable from "
-            f"this machine, or raise Timeout (seconds) {ON_CARD}.",
-        ),
-        (
-            _Wrapped(
-                ssl.SSLCertVerificationError(
-                    1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
-                )
-            ),
-            f"Qdrant Vector Store couldn't make a secure connection to {URL}: the TLS handshake "
-            "failed, or this machine doesn't trust the server's certificate. Check that Qdrant "
-            f"URL {ON_CARD} is right, and that the server's certificate is valid for that host.",
-        ),
-        (
-            _Answered(401),
-            f"The Qdrant at {URL} refused Qdrant Vector Store's request (HTTP 401): the API key "
-            f"it sent is missing or wrong. Set Qdrant API Key {ON_CARD} to that server's key.",
-        ),
-        (
-            _Answered(404),
-            f"The Qdrant at {URL} answered with an error (HTTP 404). Check Qdrant URL and "
-            f"Collection {ON_CARD}, and that the server is healthy.",
-        ),
-        (
-            RuntimeError("the client gave up"),
-            f"Qdrant Vector Store couldn't talk to the Qdrant at {URL}. Check that Qdrant is "
-            f"running there, and Qdrant URL {ON_CARD}.",
-        ),
-    ],
-)
+        f"Qdrant Vector Store couldn't make a secure connection to {URL}: the TLS handshake "
+        "failed, or this machine doesn't trust the server's certificate. Check that Qdrant "
+        f"URL {ON_CARD} is right, and that the server's certificate is valid for that host.",
+    ),
+    (
+        _Answered(401),
+        f"The Qdrant at {URL} refused Qdrant Vector Store's request (HTTP 401): the API key "
+        f"it sent is missing or wrong. Set Qdrant API Key {ON_CARD} to that server's key.",
+    ),
+    (
+        _Answered(404),
+        f"The Qdrant at {URL} answered with an error (HTTP 404). Check Qdrant URL and "
+        f"Collection {ON_CARD}, and that the server is healthy.",
+    ),
+    (
+        RuntimeError("the client gave up"),
+        f"Qdrant Vector Store couldn't talk to the Qdrant at {URL}. Check that Qdrant is "
+        f"running there, and Qdrant URL {ON_CARD}.",
+    ),
+]
+
+
+@pytest.mark.parametrize(("exc", "says"), _FAILURES)
 def test_describe_says_what_went_wrong_reaching_the_server(monkeypatch, exc, says):
     monkeypatch.setattr(QdrantVectorStore, "_connect", _raising(exc))
 
@@ -413,6 +414,108 @@ def test_describe_says_when_the_local_folder_is_taken(tmp_path, monkeypatch):
         "use it at a time. Close whatever else has it open, or set Local folder (no server) "
         f"{ON_CARD} to another folder. Details: "
     ), info.detail
+
+
+# ── what a failed write or query says ────────────────────────────────────────────────
+#
+# upsert, delete_item and query let the client's own exception go: core logs it as the reason
+# the vector arm had no answer, so the log read "[Errno 61] Connection refused" or "Unexpected
+# Response: 401" with nothing to fix. Each now raises what describe() says, chained to that
+# exception — raising, which core's contract allows, rather than returning empty, which would
+# read as an index with nothing in it.
+
+#: The three calls, each made the way core makes it.
+_CALLS = {
+    "upsert": lambda s: s.upsert([_rec(C1, "item-a", _vec(1.0))]),
+    "delete_item": lambda s: s.delete_item("item-a"),
+    "query": lambda s: s.query(_vec(1.0), k=3),
+}
+
+
+@needs_qdrant
+@pytest.mark.parametrize("call", sorted(_CALLS))
+@pytest.mark.parametrize(("exc", "says"), _FAILURES)
+def test_a_failed_call_raises_what_went_wrong_for_core_to_log(monkeypatch, exc, says, call):
+    monkeypatch.setattr(QdrantVectorStore, "_connect", _raising(exc))
+    store = create_provider({"url": URL, "collection": "c", "timeout_secs": 7})
+
+    with pytest.raises(Exception) as caught:
+        _CALLS[call](store)
+
+    assert str(caught.value) == f"{says} Details: {exc}"
+    assert caught.value.__cause__ is exc
+
+
+@needs_qdrant
+@pytest.mark.parametrize("call", sorted(_CALLS))
+def test_a_call_nothing_answers_says_so(call):
+    """Driven through the real client, at a loopback port nothing listens on."""
+    url = f"http://127.0.0.1:{_closed_port()}"
+    store = create_provider({"url": url, "collection": "c", "timeout_secs": 1})
+
+    with pytest.raises(Exception) as caught:
+        _CALLS[call](store)
+
+    assert str(caught.value).startswith(
+        f"Nothing is accepting connections at {url}. Check that Qdrant is running there, and "
+        f"that Qdrant URL {ON_CARD} has the right host and port. Details: "
+    ), caught.value
+
+
+@needs_qdrant
+@pytest.mark.parametrize("call", sorted(_CALLS))
+def test_a_call_to_a_folder_another_client_holds_says_so(tmp_path, call):
+    """Driven through the real engine: a second client on a folder one already holds."""
+    folder = tmp_path / "q"
+    holder = QdrantVectorStore(path=str(folder), collection="c")
+    holder.upsert([_rec(C1, "item-a", _vec(1.0))])
+
+    with pytest.raises(Exception) as caught:
+        _CALLS[call](QdrantVectorStore(path=str(folder), collection="c"))
+
+    assert str(caught.value).startswith(
+        f"The local folder {folder} is already open in another Qdrant client, and only one may "
+        "use it at a time. Close whatever else has it open, or set Local folder (no server) "
+        f"{ON_CARD} to another folder. Details: "
+    ), caught.value
+    assert holder.query(_vec(1.0), k=1)[0].chunk_id == C1  # the holder still answers
+
+
+@needs_qdrant
+def test_vectors_of_another_size_say_to_start_a_new_collection(store):
+    """What switching to an embedding model of another width meets. From a local folder this
+    said the folder couldn't be opened, which it had been."""
+    store.upsert([_rec(C1, "item-a", _vec(1.0))])  # the collection is made at DIM
+
+    with pytest.raises(Exception) as caught:
+        store.upsert([_rec(C2, "item-b", [1.0, 0.0, 0.0, 0.0])])
+
+    assert str(caught.value).startswith(
+        "The collection test_chunks holds vectors of a different size than the embedding model "
+        f"in use now makes. Set Collection {ON_CARD} to a new name, and one is created at the new "
+        "size when the next document is ingested. Details: "
+    ), caught.value
+
+
+@needs_qdrant
+def test_a_local_call_that_fails_once_the_folder_is_open_does_not_blame_opening_it(
+    store, monkeypatch
+):
+    store.upsert([_rec(C1, "item-a", _vec(1.0))])
+
+    def _stopped(*args, **kwargs):
+        raise RuntimeError("the engine stopped")
+
+    monkeypatch.setattr(store._client, "query_points", _stopped)
+
+    with pytest.raises(Exception) as caught:
+        store.query(_vec(1.0), k=1)
+
+    assert str(caught.value) == (
+        f"Qdrant Vector Store's request to the Qdrant engine over its local folder {store._path} "
+        f"failed. Check that folder, or set Local folder (no server) {ON_CARD} to another one. "
+        "Details: the engine stopped"
+    )
 
 
 def test_a_url_s_credentials_never_reach_the_sentence(monkeypatch):

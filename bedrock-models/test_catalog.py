@@ -214,3 +214,36 @@ def test_a_listing_that_fails_is_logged_once_with_its_traceback(monkeypatch, cap
     )
     assert trace.startswith("Traceback (most recent call last):") and "RuntimeError" in trace
     assert "AKIA" not in trace, "the traceback is redacted as the detail is"
+
+
+def test_an_instance_that_names_no_region_uses_one_region_for_everything(monkeypatch):
+    """Chat and the media calls went to us-west-2 while the model list came from us-east-1, so a
+    listed model could be one the call's own region does not serve."""
+    import json
+    from pathlib import Path
+
+    calls: dict = {}
+    foundation = [
+        {"modelId": "amazon.nova-pro-v1:0", "modelName": "Nova Pro", "providerName": "Amazon",
+         "inferenceTypesSupported": ["ON_DEMAND"], "inputModalities": ["TEXT"],
+         "modelLifecycle": {"status": "ACTIVE"}},
+    ]
+    monkeypatch.setitem(sys.modules, "boto3", _fake_boto3(foundation, [], calls=calls))
+    assert _run(_list())  # the instance names no region
+    entry = {"name": "my-bedrock", "type": "bedrock", "options": {}}
+    media = [
+        *prov._scan_embedding([entry]), *prov._scan_image([entry]),
+        *prov._scan_video([entry]), *prov._scan_stt([entry]),
+    ]
+    chat = [
+        prov.create_provider({}),
+        prov._factory(entry=prov.ProviderEntry(name="my-bedrock", type="bedrock", model="")),
+    ]
+
+    regions = {calls["region"], *(m._region for m in media), *(c._region for c in chat)}
+    assert regions == {prov.DEFAULT_REGION} == {"us-east-1"}
+    # ...and it is the region the Add-instance form fills in, which the help says.
+    manifest = json.loads((Path(__file__).parent / "app.json").read_text())
+    region = manifest["provider"]["settingsSchema"]["properties"]["region"]
+    assert region["default"] == prov.DEFAULT_REGION
+    assert f"Empty uses {prov.DEFAULT_REGION}," in region["x-meta"]["help"]

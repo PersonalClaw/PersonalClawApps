@@ -14,8 +14,15 @@ freely after a lost race. The registry compare-and-swap rides git's own push rej
 if the remote moved under us the push is rejected and we report the lost race, cleaner
 than a hand-rolled lock. The service (never an agent) invokes ``git`` via ``subprocess``;
 no subprocess error is ever allowed to raise out of a contract method.
+
+A lost race never leaves the working clone behind the remote. Every call starts by catching
+up — fetching the remote and replaying this machine's unpushed commits on top of it — and a
+push the remote turns away because another machine pushed first catches up again and pushes
+once more, so it lands in the same call. A registry write the remote turned away is dropped
+from the clone rather than kept: it lost its swap, and the caller re-reads the remote's.
 """
 
+import contextlib
 import errno
 import hashlib
 import os
@@ -54,6 +61,14 @@ _GIT_TIMEOUT = 120
 # contributor's.
 _COMMIT_NAME = "PersonalClaw Sync"
 _COMMIT_EMAIL = "sync@personalclaw.local"
+#: The ``-c`` flags that put that identity on a commit — the transport's own, and every one a
+#: catch-up replays (a rebase re-commits, so it needs a committer too).
+_IDENTITY = ("-c", f"user.name={_COMMIT_NAME}", "-c", f"user.email={_COMMIT_EMAIL}")
+
+#: How many times one push goes to the remote. After the first, each try follows a catch-up that
+#: took in everything the remote had a moment before, so running out means other machines kept
+#: pushing in that moment — the next sync tries again, from a clone that is not stuck.
+_PUSH_TRIES = 3
 
 # ── What a failure says ──────────────────────────────────────────────────────────────
 #
@@ -105,6 +120,11 @@ _NO_REPOSITORY = (
     "not found",
 )
 _RULES = ("hook declined", "protected branch", "not allowed to push")
+# What ``git push`` prints (untranslated) when the remote has commits this clone doesn't: a lost
+# race, which a catch-up and another push recover from.
+_RACE = ("fetch first", "non-fast-forward")
+# ``git status --porcelain``'s states for a path a stopped rebase couldn't merge.
+_UNMERGED = ("DD", "AU", "UD", "UA", "DU", "AA", "UU")
 # What git prints when the working clone's own folder refuses it.
 _CLONE_DENIED = ("permission denied", "insufficient permission", "read-only file system")
 
@@ -169,6 +189,13 @@ def _remote_trouble(words: str) -> str:
             f"this machine's credentials can't see it. Check Git remote URL {_ON_CARD}."
         )
     return ""
+
+
+def _remote_wins(state: str, path: str) -> bool:
+    """Whether a path a replay couldn't merge settles on the remote's copy: a key both sides
+    added (insert-only — the remote had it first), or the registry (a write of it the remote
+    doesn't have lost its compare-and-swap). ``_catch_up`` says why nothing else can be."""
+    return state == "AA" or path == _REGISTRY_KEY
 
 
 def _git_unrunnable(failure: BaseException) -> bool:
@@ -249,15 +276,188 @@ class GitSyncProvider(SyncTransportProvider):
     def _commit(self, message: str) -> None:
         """Commit the staged tree under the transport's own deterministic identity, set via
         ``-c`` so it never leans on (or pollutes) ambient git config."""
-        self._git(
-            "-c",
-            f"user.name={_COMMIT_NAME}",
-            "-c",
-            f"user.email={_COMMIT_EMAIL}",
-            "commit",
-            "-m",
-            message,
+        self._git(*_IDENTITY, "commit", "-m", message)
+
+    @property
+    def _upstream(self) -> str:
+        """The clone's copy of the remote's branch, as the last fetch saw it."""
+        return f"refs/remotes/origin/{self._branch}"
+
+    def _rev(self, ref: str) -> str | None:
+        """The commit ``ref`` names in the working clone, or None when it names none (an unborn
+        branch, a remote branch never fetched)."""
+        cp = self._git("rev-parse", "--verify", "-q", ref, check=False)
+        sha = (cp.stdout or "").strip()
+        return sha if cp.returncode == 0 and sha else None
+
+    def _ahead(self) -> bool:
+        """Whether the clone holds commits the remote's branch doesn't — an earlier push that
+        never landed, which the next push must carry."""
+        head = self._rev("HEAD")
+        if head is None:
+            return False
+        upstream = self._rev(self._upstream)
+        if upstream is None:
+            return True  # the remote has no such branch yet, so none of this is on it
+        count = self._git("rev-list", "--count", f"{upstream}..{head}", check=False)
+        return (count.stdout or "").strip() not in ("", "0")
+
+    def _rebasing(self) -> bool:
+        """Whether a rebase is stopped part-way in the working clone."""
+        git_dir = os.path.join(self._clone, ".git")
+        return any(os.path.isdir(os.path.join(git_dir, d)) for d in ("rebase-merge", "rebase-apply"))
+
+    def _catch_up(self) -> str:
+        """Bring the working clone level with the remote's branch: fetch it, then replay this
+        machine's commits that the remote doesn't have on top of it (``git rebase``).
+
+        Returns "" once level — and also when the remote can't be fetched right now (a brand-new
+        remote with no branch yet, an offline blip), since a stale clone still serves reads and a
+        push that follows says what went wrong. Otherwise returns what a real conflict says.
+
+        What a replay can conflict on follows from the layout. Every shard object has a key of
+        its own, written once by the machine whose id it carries, so replaying one of this
+        transport's commits can only meet a key the remote already has. With the same bytes git
+        sees the change as already applied and drops it; with other bytes the remote's copy
+        stays and this machine's is skipped — the insert-only rule every push follows. The
+        shared ``registry.json`` is only ever compare-and-swapped, so a write of it the remote
+        doesn't have lost its swap: the remote's copy stays there too, and core re-reads it.
+        Anything else is a real conflict — a path that is a file on one side and a folder on the
+        other, or a file changed on both sides by something other than this transport (a commit
+        made by hand in the clone, a rewritten remote). Then the replay is undone, the clone
+        keeps its commits for whoever resolves it, and the caller is told what to do.
+        """
+        if self._rebasing():
+            # A replay an earlier run was stopped in the middle of (killed, or timed out):
+            # undo it, so this one starts from the clone's own commits.
+            self._git("rebase", "--abort", check=False)
+        fetched = self._git(
+            "fetch", "origin", f"+refs/heads/{self._branch}:{self._upstream}", check=False
         )
+        if fetched.returncode != 0:
+            return ""
+        if self._rev("HEAD") is None:
+            # Cloned while the remote was still empty, so the branch has no commits here yet:
+            # take the remote's as they are.
+            self._git("reset", "--hard", self._upstream, check=False)
+            return ""
+        count = self._git("rev-list", "--count", f"{self._upstream}..HEAD", check=False)
+        commits = int((count.stdout or "").strip() or 0) if count.returncode == 0 else 0
+        replay = self._git(*_IDENTITY, "rebase", self._upstream, check=False)
+        stops = 0
+        try:
+            # Level with the remote once the replay ends — or when git wouldn't start it at all
+            # (a change left uncommitted in the clone), which the push that follows commits.
+            while replay.returncode != 0 and self._rebasing():
+                unmerged = self._unmerged()
+                real = [path for state, path in unmerged if not _remote_wins(state, path)]
+                # Settling a stop moves the replay on to the next commit, so it stops at most
+                # once per commit it carries; a stop with nothing to settle is git's own trouble.
+                if real or not unmerged or stops == commits:
+                    break
+                stops += 1
+                for _state, path in unmerged:
+                    self._keep_remote(path)
+                if self._git("diff", "--cached", "--quiet", "HEAD", check=False).returncode == 0:
+                    # Keeping the remote's copies left this commit with nothing of its own.
+                    replay = self._git("rebase", "--skip", check=False)
+                else:
+                    # Committing the settled commit here, under its own message and author,
+                    # leaves ``--continue`` nothing to commit — so it never opens an editor.
+                    self._git(*_IDENTITY, "commit", "-C", "REBASE_HEAD")
+                    replay = self._git(*_IDENTITY, "rebase", "--continue", check=False)
+            else:
+                return ""
+            self._git("rebase", "--abort", check=False)
+        except BaseException:
+            with contextlib.suppress(subprocess.SubprocessError, OSError):
+                if self._rebasing():
+                    self._git("rebase", "--abort", check=False)
+            raise
+        return self._replay_conflict(real, replay)
+
+    def _unmerged(self) -> list[tuple[str, str]]:
+        """Each path a stopped rebase couldn't merge, with git's two-letter state for it."""
+        out = self._git(
+            "status", "--porcelain", "-z", "--no-renames", "--untracked-files=no"
+        ).stdout
+        return [
+            (entry[:2], entry[3:])
+            for entry in (out or "").split("\0")
+            if len(entry) > 3 and entry[:2] in _UNMERGED
+        ]
+
+    def _keep_remote(self, path: str) -> None:
+        """Settle ``path`` on the remote's side. Mid-rebase, git's "ours" is the branch being
+        replayed onto — the remote's."""
+        if self._git("checkout", "--ours", "--", path, check=False).returncode == 0:
+            self._git("add", "--", path)
+        else:
+            # The remote has no copy at all (it deleted the registry), so neither does the result.
+            self._git("rm", "-q", "--force", "--", path)
+
+    def _replay_conflict(self, paths: list[str], replay: subprocess.CompletedProcess) -> str:
+        """What this machine's unpushed commits not going on top of the remote's says. git's own
+        ``CONFLICT`` lines follow as the detail."""
+        if paths:
+            # A path that is a file on one side and a folder on the other is reported under a
+            # name git made up for the side it moved aside ("machines~HEAD"); the path itself is
+            # what to look at.
+            path = paths[0].split("~", 1)[0]
+            trouble = f"{path} was changed on both sides in ways git can't combine"
+        else:
+            trouble = "git stopped part-way through"
+        sentence = (
+            "Git Sync couldn't put this machine's unpushed commits on top of what the git remote "
+            f"has: {trouble}. Run git pull --rebase origin {self._branch} in the working clone at "
+            f"{self._clone} and resolve it there — or, if nothing there needs keeping, delete that "
+            "folder and Git Sync clones the remote afresh on its next run."
+        )
+        words = " ".join(
+            line[line.index("CONFLICT") :]
+            for line in (replay.stdout or "").splitlines()
+            if "CONFLICT" in line
+        )
+        return sentence_with_detail(sentence, words or _words(replay))
+
+    def _refresh(self) -> None:
+        """Best-effort catch-up for a read. A clone that can't catch up right now — offline, or
+        a real conflict, which the next push reports — still serves what it has."""
+        with contextlib.suppress(subprocess.SubprocessError, OSError):
+            self._catch_up()
+
+    def _landed(self, written: list[str], base: str | None) -> int:
+        """How many of the objects this push wrote reached the remote as this machine's copy,
+        when the push landed on top of ``base`` (the remote's branch just before it). A key the
+        remote gained from another machine while this push was catching up kept that copy."""
+        if base is None:
+            return len(written)
+        added = self._git(
+            "diff", "--name-only", "-z", "--no-renames", "--diff-filter=A", base, "HEAD",
+            check=False,
+        )
+        if added.returncode != 0:
+            return len(written)  # the push landed either way; only the tally is unknown
+        new = set((added.stdout or "").split("\0"))
+        return sum(1 for key in written if key in new)
+
+    def _undo_commit(self, before: str | None) -> None:
+        """Take back the registry commit just made on top of ``before`` (None: the branch's
+        first commit)."""
+        if before is not None:
+            self._git("reset", "--hard", before, check=False)
+            return
+        self._git("update-ref", "-d", f"refs/heads/{self._branch}", check=False)
+        self._git("read-tree", "--empty", check=False)
+        with contextlib.suppress(OSError):
+            os.remove(self._resolve(_REGISTRY_KEY))
+
+    def _restore_registry(self) -> None:
+        """Put ``registry.json`` back as the clone's last commit has it — or gone, if none has."""
+        if self._git("checkout", "HEAD", "--", _REGISTRY_KEY, check=False).returncode != 0:
+            self._git("rm", "-q", "--cached", "--ignore-unmatch", "--", _REGISTRY_KEY, check=False)
+            with contextlib.suppress(OSError):
+                os.remove(self._resolve(_REGISTRY_KEY))
 
     def _ensure_clone(self) -> None:
         """Make ``<clone>`` a checkout of the remote on the configured branch. Idempotent.
@@ -278,22 +478,32 @@ class GitSyncProvider(SyncTransportProvider):
         if self._git("checkout", self._branch, check=False).returncode != 0:
             self._git("checkout", "-B", self._branch, check=False)
 
-    def _pull_ff(self) -> None:
-        """Best-effort fast-forward pull of the configured branch. A failure — an empty
-        remote with no such ref yet, an offline blip — is swallowed: the cycle re-pulls
-        next time and a stale-but-present clone is still usable."""
-        try:
-            self._git("pull", "--ff-only", "origin", self._branch, check=False)
-        except (subprocess.SubprocessError, OSError):
-            pass
-
     @staticmethod
-    def _push_outcome(cp: subprocess.CompletedProcess) -> str:
-        """Classify a failed ``git push``: a rejection because the remote moved is
-        retryable (the cycle re-pulls and retries); anything else — bad URL, denied auth —
-        will not fix on retry."""
+    def _refusal(cp: subprocess.CompletedProcess) -> str:
+        """What kind of "no" a failed ``git push`` got: ``"rules"`` when the remote's own rules
+        (a hook, branch protection) turned it away, ``"race"`` when the remote has commits this
+        clone doesn't, else ``""``. The rules come first: a declined push is no race, however
+        its words read, and pushing it again after a catch-up would be declined again."""
         low = f"{cp.stderr or ''}\n{cp.stdout or ''}".lower()
-        if "rejected" in low or "fetch first" in low or "non-fast-forward" in low:
+        if any(needle in low for needle in _RULES):
+            return "rules"
+        if any(needle in low for needle in _RACE):
+            return "race"
+        return ""
+
+    @classmethod
+    def _push_outcome(cls, cp: subprocess.CompletedProcess) -> str:
+        """Classify a failed ``git push`` for the outbox. The remote's rules refusing it will
+        not change on a retry, so that is ``permanent``, like a bad URL or denied auth. A race
+        still lost after every catch-up, the network, or a refusal the remote may lift (its ref
+        lock busy with a push landing that same moment) is ``transient``: the cycle tries again."""
+        refusal = cls._refusal(cp)
+        if refusal == "rules" or transport_refusal(_words(cp)):
+            # A remote PersonalClaw's git does not reach (a local path) is refused the same way
+            # on every try.
+            return "permanent"
+        low = f"{cp.stderr or ''}\n{cp.stdout or ''}".lower()
+        if refusal == "race" or "rejected" in low or any(n in low for n in _UNREACHABLE):
             return "transient"
         return "permanent"
 
@@ -306,18 +516,18 @@ class GitSyncProvider(SyncTransportProvider):
             # The working clone's own remote is one PersonalClaw's git does not reach (a local
             # path). Retrying cannot change that, and the outcome is permanent.
             return sentence_with_detail(refused, words)
-        low = words.lower()
         trouble = _remote_trouble(words)
-        if any(needle in low for needle in _RULES):
+        refusal = self._refusal(cp)
+        if refusal == "rules":
             sentence = (
                 "Git Sync couldn't push to the git remote: its rules don't let this machine push "
                 f"to branch '{self._branch}'. Allow that on the remote, or set Branch "
                 f"{_ON_CARD} to one that does."
             )
-        elif "fetch first" in low or "non-fast-forward" in low:
+        elif refusal == "race":
             sentence = (
-                "Git Sync's push was turned away because the git remote has commits this "
-                "machine hasn't pulled — another machine pushed first."
+                f"Git Sync couldn't push to the git remote: each of the {_PUSH_TRIES} times it "
+                "caught up with the remote and pushed, another push had reached it first."
             )
         elif trouble:
             sentence = f"Git Sync couldn't push to the git remote: {trouble}"
@@ -353,7 +563,7 @@ class GitSyncProvider(SyncTransportProvider):
             sentence = _NO_GIT
         elif isinstance(failure, subprocess.TimeoutExpired):
             step = _subcommand(failure.cmd)
-            if step in ("clone", "push"):
+            if step in ("clone", "fetch", "push"):
                 sentence = (
                     f"git {step} didn't finish within {_GIT_TIMEOUT} seconds, so this sync "
                     "stopped. If it keeps timing out, check that the git remote is reachable from "
@@ -458,11 +668,15 @@ class GitSyncProvider(SyncTransportProvider):
         if self._refused:
             return PushResult(outcome="permanent", detail=self._refused)
         pushed = skipped = 0
+        written: list[str] = []
         try:
             self._ensure_clone()
-            # Pull first so a push does not conflict with others' objects. A pull failure on
-            # a fresh/empty remote is fine — keep going and let the push create the branch.
-            self._pull_ff()
+            # Catch up first, so the objects are checked against — and committed on top of —
+            # everything the remote has. A brand-new empty remote has nothing to catch up with;
+            # the push below creates its branch.
+            conflict = self._catch_up()
+            if conflict:
+                return PushResult(outcome="permanent", detail=conflict)
             for obj in objects:
                 target = self._resolve(obj.key)
                 # Insert-only: a key already present is skipped, never overwritten, so a
@@ -473,22 +687,39 @@ class GitSyncProvider(SyncTransportProvider):
                 os.makedirs(os.path.dirname(target) or self._clone, exist_ok=True)
                 with open(target, "wb") as fh:
                     fh.write(obj.data)
-                pushed += 1
+                written.append(obj.key)
+            pushed = len(written)
             self._git("add", "-A")
-            # Nothing staged (all skipped, or empty push) → delivered with pushed=0.
-            if not self._git("status", "--porcelain").stdout.strip():
+            if self._git("status", "--porcelain").stdout.strip():
+                self._commit(f"sync: {pushed} objects")
+            elif not self._ahead():
+                # Nothing new, and nothing of this machine's the remote lacks → delivered.
                 return PushResult(pushed=pushed, skipped=skipped, outcome="delivered")
-            self._commit(f"sync: {pushed} objects")
-            push_cp = self._git("push", "origin", self._branch, check=False)
-            if push_cp.returncode != 0:
-                outcome = self._push_outcome(push_cp)
-                return PushResult(
-                    pushed=pushed,
-                    skipped=skipped,
-                    outcome=outcome,
-                    detail=self._push_refused(push_cp, outcome),
-                )
-            return PushResult(pushed=pushed, skipped=skipped, outcome="delivered")
+            for attempt in range(1, _PUSH_TRIES + 1):
+                base = self._rev(self._upstream)
+                push_cp = self._git("push", "origin", self._branch, check=False)
+                if push_cp.returncode == 0:
+                    if attempt > 1:
+                        # Caught up in between: a key another machine pushed meanwhile kept its
+                        # copy, and counts as skipped.
+                        pushed = self._landed(written, base)
+                        skipped = len(objects) - pushed
+                    return PushResult(pushed=pushed, skipped=skipped, outcome="delivered")
+                if attempt == _PUSH_TRIES or self._refusal(push_cp) != "race":
+                    break
+                # Lost the race: another machine pushed between the catch-up and this push. Catch
+                # up again — this commit goes on top of theirs — and push once more.
+                conflict = self._catch_up()
+                if conflict:
+                    return PushResult(pushed=pushed, skipped=skipped, outcome="permanent",
+                                      detail=conflict)
+            outcome = self._push_outcome(push_cp)
+            return PushResult(
+                pushed=pushed,
+                skipped=skipped,
+                outcome=outcome,
+                detail=self._push_refused(push_cp, outcome),
+            )
         except (subprocess.SubprocessError, OSError) as e:
             # Clone/pull/commit blew up mid-cycle — retryable.
             return PushResult(
@@ -504,7 +735,7 @@ class GitSyncProvider(SyncTransportProvider):
             self._ensure_clone()
         except (subprocess.SubprocessError, OSError):
             return []
-        self._pull_ff()  # best-effort refresh; internally safe
+        self._refresh()  # best-effort; internally safe
         if not os.path.isdir(self._clone):
             return []
         refs: list[RemoteRef] = []
@@ -536,10 +767,10 @@ class GitSyncProvider(SyncTransportProvider):
     def pull(self, refs: list[RemoteRef]) -> list[SyncObject]:
         if self._idle or self._refused:
             return []
-        # The clone is already current from list_remote's pull; refresh best-effort if it
+        # The clone is already current from list_remote's catch-up; refresh best-effort if it
         # exists, but never establish it here.
         if os.path.isdir(os.path.join(self._clone, ".git")):
-            self._pull_ff()
+            self._refresh()
         out: list[SyncObject] = []
         for ref in refs:
             try:
@@ -554,9 +785,11 @@ class GitSyncProvider(SyncTransportProvider):
     def cas_registry(self, expected_sha: str | None, data: bytes) -> bool:
         if self._idle or self._refused:
             return False
+        before: str | None = None
+        wrote = committed = False
         try:
             self._ensure_clone()
-            self._pull_ff()
+            self._catch_up()
             target = self._resolve(_REGISTRY_KEY)
             if os.path.exists(target):
                 with open(target, "rb") as fh:
@@ -568,19 +801,35 @@ class GitSyncProvider(SyncTransportProvider):
             elif expected_sha is not None:
                 # Absent: only a None expectation ("expected absent") may proceed.
                 return False
+            before = self._rev("HEAD")
             os.makedirs(os.path.dirname(target) or self._clone, exist_ok=True)
+            wrote = True
             with open(target, "wb") as fh:
                 fh.write(data)
             self._git("add", _REGISTRY_KEY)
-            # Identical bytes already committed → the desired state is present, no swap.
-            if not self._git("status", "--porcelain").stdout.strip():
+            if self._git("status", "--porcelain").stdout.strip():
+                self._commit("sync: registry")
+                committed = True
+            elif not self._ahead():
+                # Identical bytes already committed and on the remote → the desired state is
+                # present, no swap.
                 return True
-            self._commit("sync: registry")
             # git's own push rejection IS the compare-and-swap: if the remote moved under
             # us the push is rejected and we report the lost race for the caller to retry.
-            return self._git("push", "origin", self._branch, check=False).returncode == 0
+            if self._git("push", "origin", self._branch, check=False).returncode == 0:
+                return True
         except (subprocess.SubprocessError, OSError):
-            return False
+            pass
+        # The write never reached the remote, so it mustn't stay in the clone either: the
+        # caller's re-read would find these bytes instead of the remote's, and a later push
+        # would carry them onto whatever registry the remote has by then — a write with no
+        # compare at all.
+        with contextlib.suppress(subprocess.SubprocessError, OSError):
+            if committed:
+                self._undo_commit(before)
+            elif wrote:
+                self._restore_registry()
+        return False
 
     def test(self) -> ConnectionResult:
         if not self._repo_url:

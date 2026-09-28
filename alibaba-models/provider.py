@@ -53,6 +53,11 @@ _IMAGE_TIMEOUT_S = 120.0
 # that names it says so.
 _ON_INSTANCE = "on this Alibaba Model Studio instance in Settings → Providers"
 _ENDPOINT_STEP = f"check Endpoint {_ON_INSTANCE} (under Advanced)"
+# What an image call without a key, and Settings → Models under an adapter that has none, says.
+_NO_KEY = (
+    f"No Alibaba Model Studio API key is set. Add it in API Key {_ON_INSTANCE}, or set "
+    "ALIBABA_API_KEY."
+)
 # What to change when Model Studio refuses an image request as invalid or answers it "not found":
 # the model or options asked for, or the regional endpoint, which may not serve that model.
 _REQUEST_STEP = (
@@ -214,6 +219,11 @@ class AlibabaImageProvider(ImageGenProvider):
     async def is_available(self) -> bool:
         return bool(self._key())
 
+    async def unavailable_reason(self) -> str:
+        """What Settings → Models says under this adapter when it can't be used: the missing
+        key, and where to add it. ``""`` when it has one."""
+        return "" if await self.is_available() else _NO_KEY
+
     async def list_models(self) -> list[ImageGenModel]:
         return list(_IMAGE_MODELS)
 
@@ -236,7 +246,7 @@ class AlibabaImageProvider(ImageGenProvider):
             raise ImageGenError(str(exc)) from exc
         key = self._key()
         if not key:
-            raise ImageGenError("No Alibaba API key configured (set ALIBABA_API_KEY).")
+            raise ImageGenError(_NO_KEY)
 
         # Use the OpenAI-compat images endpoint at the configured base URL.
         base = self._endpoint.rstrip("/")
@@ -260,12 +270,26 @@ class AlibabaImageProvider(ImageGenProvider):
         except ImageGenError:
             raise
         except asyncio.TimeoutError as e:
-            raise ImageGenError("Alibaba image generation timed out.") from e
+            raise ImageGenError(sentence_with_detail(
+                "Alibaba Model Studio didn't answer the image request within "
+                f"{_IMAGE_TIMEOUT_S:.0f} seconds. Try again in a moment; if it keeps timing out, "
+                "choose another model in Settings → Models.",
+                e,
+            )) from e
         except Exception as e:
             raise ImageGenError(_unanswered_message(e)) from e
 
+        # JSON that is not an object (a list, a string, a number, null), or whose "data" is not a
+        # list, is not Model Studio's image result. It used to crash here instead of saying so.
+        items = data.get("data", []) if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            raise ImageGenError(sentence_with_detail(
+                "Alibaba Model Studio answered the image request, but not with an image result. "
+                f"Try again in a moment; if it keeps happening, {_ENDPOINT_STEP}.",
+                text,
+            ))
         results: list[ImageResult] = []
-        for item in data.get("data", []):
+        for item in items:
             if not isinstance(item, dict):
                 continue
             img_url = item.get("url", "")
@@ -276,7 +300,12 @@ class AlibabaImageProvider(ImageGenProvider):
                     revised_prompt=item.get("revised_prompt", ""),
                 ))
         if not results:
-            raise ImageGenError("Alibaba returned no images.")
+            raise ImageGenError(sentence_with_detail(
+                "Alibaba Model Studio answered the image request without an image. Try again; if "
+                "it happens again, change the prompt or choose another model in Settings → "
+                "Models.",
+                text,
+            ))
         return results
 
     async def edit(
@@ -290,7 +319,13 @@ class AlibabaImageProvider(ImageGenProvider):
         n: int = 1,
         **opts: Any,
     ) -> list[ImageResult]:
-        raise ImageGenError("Alibaba image editing is not supported yet.")
+        # Image edits go through the same Image · Generation binding as new images, so the way to
+        # edit is to bind a model from a provider that edits.
+        raise ImageGenError(
+            "Alibaba Model Studio can make a new image from a prompt, but it can't edit one here. "
+            "To edit an image, choose a model that edits images under Image · Generation in "
+            "Settings → Models."
+        )
 
 
 def _error_detail(text: str) -> str:

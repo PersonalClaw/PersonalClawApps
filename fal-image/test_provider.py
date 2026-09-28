@@ -153,6 +153,16 @@ class TestFalImageProvider:
         assert await FalImageProvider(api_key="").is_available() is False
         assert await FalImageProvider(api_key="k").is_available() is True
 
+    @pytest.mark.asyncio
+    async def test_without_a_key_it_says_why_it_is_unavailable(self, monkeypatch):
+        """🔴 Red before: the SDK's default "" — Settings → Models left it out with nothing
+        saying why."""
+        monkeypatch.setattr("provider._resolve_fal_key", lambda: ("", ""))
+        assert await FalImageProvider(api_key="").unavailable_reason() == (
+            "No FAL API key configured (set a 'fal' provider or FAL_KEY)."
+        )
+        assert await FalImageProvider(api_key="k").unavailable_reason() == ""
+
 
 class TestFalVideoProvider:
     @pytest.mark.asyncio
@@ -240,6 +250,16 @@ class TestFalVideoProvider:
         monkeypatch.setattr("provider._resolve_fal_key", lambda: ("", ""))
         assert await FalVideoProvider(api_key="").is_available() is False
         assert await FalVideoProvider(api_key="k").is_available() is True
+
+    @pytest.mark.asyncio
+    async def test_without_a_key_it_says_why_it_is_unavailable(self, monkeypatch):
+        """🔴 Red before: the SDK's default "" — Settings → Models left it out with nothing
+        saying why."""
+        monkeypatch.setattr("provider._resolve_fal_key", lambda: ("", ""))
+        assert await FalVideoProvider(api_key="").unavailable_reason() == (
+            "No FAL API key configured (set a 'fal' provider or FAL_KEY)."
+        )
+        assert await FalVideoProvider(api_key="k").unavailable_reason() == ""
 
 
 class TestFalNamesItsModel:

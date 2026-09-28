@@ -288,6 +288,31 @@ def test_a_refused_key_says_which_setting_to_fix(home, qdrant, saved, status):
     assert "wrong-key" not in info.detail
 
 
+@pytest.mark.parametrize(
+    ("saved", "status"), [({}, 401), ({"api_key": "wrong-key"}, 403)], ids=["none", "wrong"]
+)
+def test_a_refused_key_on_a_write_or_query_says_which_setting_to_fix(home, qdrant, saved, status):
+    """The same refusal met by the calls core makes. Each raised the client's "Unexpected
+    Response: 401 …", which core logs as the reason the vector arm had no answer."""
+    _configure_save({"url": qdrant.url, "collection": "kb", **saved})
+    store = _built_on_enable()
+    calls = {
+        "upsert": lambda: store.upsert([_record()]),
+        "delete_item": lambda: store.delete_item("item-a"),
+        "query": lambda: store.query([1.0, 0.0, 0.0, 0.0], k=1),
+    }
+
+    for name, call in calls.items():
+        with pytest.raises(Exception) as caught:
+            call()
+        assert str(caught.value).startswith(
+            f"The Qdrant at {qdrant.url} refused Qdrant Vector Store's request (HTTP {status}): "
+            "the API key it sent is missing or wrong. Set Qdrant API Key on the Qdrant Vector "
+            "Store card in Settings → Providers to that server's key. Details: "
+        ), (name, caught.value)
+        assert "wrong-key" not in str(caught.value), name
+
+
 def test_the_key_stays_out_of_the_settings_file_and_uninstall_removes_it(home, qdrant):
     _configure_save({"url": qdrant.url, "collection": "kb", "api_key": KEY})
 

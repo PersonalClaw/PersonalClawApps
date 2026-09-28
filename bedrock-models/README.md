@@ -34,11 +34,12 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 | Key | Label | Notes |
 |---|---|---|
-| `region` | AWS Region | Bedrock region (e.g. us-west-2). Credentials come from your AWS environment / profile — no key is stored here. |
+| `region` | AWS Region | The AWS region every call this instance makes goes to: chat, embeddings, images, video, speech-to-text and the model list. Empty uses us-east-1, whatever your AWS profile or environment names. Credentials come from your AWS environment / profile — no key is stored here. |
+| `profile` | AWS Profile | Optional named profile from ~/.aws. Empty uses the default credential chain (env / SSO / instance role). Add a second instance with a different profile to use another AWS account. |
 | `default_model` | Default Chat Model | A Bedrock chat model id (full versioned id). The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
-| `profile` | AWS Profile | Optional named profile from ~/.aws. Empty uses the default credential chain (env / SSO / instance role). |
-| `system_prompt` | System Prompt | Optional system prompt prepended to every turn. |
-| `video_s3_bucket` | S3 Bucket | Where Nova Reel writes each generated video, and where speech-to-text uploads each recording for Amazon Transcribe (deleting it afterwards). Required for video generation and speech-to-text; nothing else uses it. Falls back to the `BEDROCK_VIDEO_S3_BUCKET` env var. |
+| `system_prompt` | System Prompt | Optional system prompt prepended to every chat turn. |
+| `max_tokens` | Max Output Tokens | The most tokens Bedrock may generate in one turn. 0 sends the budget PersonalClaw sets for that call, else 8192. A cap is always sent, because Bedrock's own default can be low enough to cut long answers and tool calls short. |
+| `video_s3_bucket` | S3 Bucket | S3 bucket Bedrock's media features stage files in: Nova Reel writes each generated video there, and speech-to-text uploads each recording there for Amazon Transcribe, deleting it afterwards. Required for video generation and speech-to-text; nothing else uses it. Falls back to the BEDROCK_VIDEO_S3_BUCKET env var. |
 
 ## Prompt caching
 

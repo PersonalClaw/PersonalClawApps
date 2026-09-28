@@ -218,7 +218,7 @@ def test_an_embedding_that_names_no_model_is_refused_and_loads_nothing(monkeypat
 
     provider = prov.create_provider()
     assert _run(provider.embed("a heron")) is None
-    assert _run(provider.embed_batch(["a heron", "a kestrel"])) == [[], []]
+    assert _run(provider.embed_batch(["a heron", "a kestrel"])) == [None, None]
     assert loaded == []
 
 

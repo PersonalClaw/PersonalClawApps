@@ -416,7 +416,7 @@ def test_an_embedding_the_account_cannot_use_says_why(monkeypatch, caplog):
 
     vectors = _run(adapter.embed_batch(["a heron", "a kestrel", "a wren"], model=EMBEDDER))
 
-    assert vectors == [[], [], []]
+    assert vectors == [None, None, None]
     assert _run(adapter.unavailable_reason()) == NO_ACCESS
     warned = [
         r.getMessage().split("\n", 1)[0]
@@ -426,6 +426,17 @@ def test_an_embedding_the_account_cannot_use_says_why(monkeypatch, caplog):
     assert warned == [f"Bedrock embedding on 'my-bedrock' failed: {NO_ACCESS}"], (
         "said once, not once per item"
     )
+
+
+def test_a_batch_answers_none_for_a_text_it_could_not_embed(monkeypatch):
+    """A failed text came back as an empty vector, which core's batch path stores as that text's
+    vector. ``None`` is how it keeps the text without one; the rest of the batch is kept."""
+    _embedding_boto3(monkeypatch, [[0.1, 0.2], _denied(), [0.3, 0.4], []])
+    adapter = prov.BedrockEmbeddingProvider(region="us-east-1", name="my-bedrock")
+
+    vectors = _run(adapter.embed_batch(["a heron", "a kestrel", "a wren", "a rook"], model=EMBEDDER))
+
+    assert vectors == [[0.1, 0.2], None, [0.3, 0.4], None], "an empty embedding is no embedding"
 
 
 def test_an_embedding_that_works_again_has_nothing_to_say(monkeypatch):

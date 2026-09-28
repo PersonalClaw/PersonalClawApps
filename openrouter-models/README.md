@@ -61,7 +61,8 @@ account that backs that instance's chat.
 
 OpenRouter's default `GET /models` listing is **text-only** — it returns 367 chat
 models and silently omits every image, video, and embedding model. This app therefore
-never calls the bare route. It uses:
+never calls the bare route. It uses these, at the instance's Base URL like every other
+call, so a proxied instance lists its models through the same host:
 
 - `GET /models?output_modalities=text,embeddings` — chat + embedding (397 models)
 - `GET /images/models` — image generation (38 models, with per-model parameter caps)
@@ -73,9 +74,11 @@ snapped to a value in that model's `supported_durations`, and an aspect ratio ab
 from `supported_aspect_ratios` is not sent. Requesting a parameter a model doesn't
 advertise is a 400 upstream, so an unadvertised parameter is omitted entirely.
 
-Discovery lists are cached for 5 minutes per key. A transient failure degrades to the
-last good list; having never succeeded, the picker is honestly **empty** rather than
-showing model ids the key cannot actually call.
+The image and video lists are cached for 5 minutes per key and Base URL. A transient
+failure there degrades to the last good list; having never succeeded, those pickers are
+honestly **empty** rather than showing model ids the key cannot actually call. The
+chat + embedding list is not cached, and a listing that fails says why (its cause and
+what to check) instead of reading as an account that serves no models.
 
 ### Image sizes
 

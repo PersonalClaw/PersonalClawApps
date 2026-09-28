@@ -1,9 +1,10 @@
 """Catalog tests for the OpenRouter app — live discovery only.
 
-There is no curated fallback catalog: when discovery fails the picker is honestly
-empty rather than showing model ids the user cannot call (the de-hardcode
-directive). These tests lock that, plus the modality-filtered discovery URL that
-makes the declared ``embedding`` capability real.
+There is no curated fallback catalog: a discovery that fails raises
+``ModelDiscoveryError`` saying why, rather than showing model ids the user cannot
+call or an empty list that reads as an account serving no models. These tests lock
+that, plus the modality-filtered discovery URL that makes the declared
+``embedding`` capability real.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ def _stub_openai(monkeypatch):
 import provider as prov  # app-local; registers on import
 
 from personalclaw.llm.catalog import ModelCatalog, ModelManager
+from personalclaw.sdk.model import ModelDiscoveryError
 
 
 def _run(coro):
@@ -78,21 +80,122 @@ def test_catalog_is_plain_catalog():
     assert not isinstance(cat, ModelManager)  # hosted API, no local model management
 
 
-def test_empty_list_when_endpoint_unreachable(monkeypatch):
-    # Endpoint 500 → EMPTY list. No curated fallback, no invented ids: an
-    # unreachable provider shows nothing rather than models that would 404 on use.
-    _patch_fetch(monkeypatch, _FakeFetchResponse(500, {}))
-    assert _run(prov.create_catalog({"api_key": "k"}).list_models()) == []
+_LISTING_URL = "https://openrouter.ai/api/v1/models?output_modalities=text,embeddings"
+_RETRY_LISTING = (
+    "Try again in a moment; if it keeps happening, check Base URL on this OpenRouter instance "
+    "in Settings → Providers (under Advanced)."
+)
 
 
-def test_empty_list_when_response_unparseable(monkeypatch):
+def _listing_failure(catalog) -> ModelDiscoveryError:
+    with pytest.raises(ModelDiscoveryError) as ei:
+        _run(catalog.list_models())
+    return ei.value
+
+
+@pytest.mark.parametrize(("status", "payload", "sentence"), [
+    (500, {"error": {"message": "Internal Server Error", "code": 500}},
+     "OpenRouter failed on its side (model listing, HTTP 500). Try again in a few minutes. "
+     "Details: Internal Server Error"),
+    (404, {"error": {"message": "Not Found", "code": 404}},
+     "OpenRouter answered the model listing request with HTTP 404 (not found). Check Base URL "
+     "on this OpenRouter instance in Settings → Providers (under Advanced); left empty, it uses "
+     "https://openrouter.ai/api/v1. Details: Not Found"),
+])
+def test_a_listing_answered_with_an_error_raises_what_to_do(monkeypatch, status, payload, sentence):
+    # No curated fallback and no invented ids, and no [] either: that read as an account that
+    # serves no models, when the listing never got a list.
+    _patch_fetch(monkeypatch, _FakeFetchResponse(status, payload))
+    exc = _listing_failure(prov.create_catalog({"api_key": "k"}))
+    assert str(exc) == sentence
+    assert (exc.url, exc.status, exc.rejected_credential) == (_LISTING_URL, status, False)
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_a_listing_that_refuses_the_key_flags_it(monkeypatch, status):
+    _patch_fetch(monkeypatch, _FakeFetchResponse(
+        status, {"error": {"message": "User not found.", "code": status}}))
+    exc = _listing_failure(prov.create_catalog({"api_key": "k"}))
+    assert str(exc) == (
+        "OpenRouter rejected the API key (model listing). Check the key in Settings → "
+        "Providers, or OPENROUTER_API_KEY."
+    )
+    assert exc.rejected_credential is True
+
+
+def test_a_keyless_listing_that_is_refused_asks_for_a_key(monkeypatch):
+    # Sent with no key, so "rejected the API key" would not be true: none was sent.
+    _patch_fetch(monkeypatch, _FakeFetchResponse(
+        401, {"error": {"message": "No auth credentials found", "code": 401}}))
+    exc = _listing_failure(prov.create_catalog({}))
+    assert str(exc) == (
+        "OpenRouter asked for an API key to list its models (HTTP 401). Add the key on this "
+        "OpenRouter instance in Settings → Providers, or set OPENROUTER_API_KEY."
+    )
+
+
+def test_a_listing_that_gets_no_answer_says_what_to_check(monkeypatch):
+    async def _fake_fetch(url, *, policy=None, method="GET", headers=None, data=None, **kw):
+        raise ConnectionResetError(54, "Connection reset by peer")
+
+    for target in ("personalclaw.net.client.fetch", "personalclaw.sdk.net.fetch",
+                   "personalclaw.net.fetch", "provider.fetch"):
+        monkeypatch.setattr(target, _fake_fetch, raising=False)
+    exc = _listing_failure(prov.create_catalog({"api_key": "k"}))
+    assert str(exc) == (
+        "The connection to OpenRouter failed during the model listing. Check this computer's "
+        "internet connection and try again; if Base URL is set on this OpenRouter instance in "
+        "Settings → Providers (under Advanced), check it too. Details: [Errno 54] Connection "
+        "reset by peer"
+    )
+    assert (exc.url, exc.status, exc.rejected_credential) == (_LISTING_URL, None, False)
+
+
+def test_an_unreadable_listing_raises_rather_than_listing_none(monkeypatch):
     class _Garbage:
         status = 200
         text = "<html>not json</html>"
         headers: dict[str, str] = {}
 
     _patch_fetch(monkeypatch, _Garbage())
+    exc = _listing_failure(prov.create_catalog({"api_key": "k"}))
+    assert str(exc) == (
+        f"OpenRouter's answer to the model listing request could not be read. {_RETRY_LISTING} "
+        "Details: Expecting value: line 1 column 1 (char 0)"
+    )
+
+
+@pytest.mark.parametrize("payload", [
+    [], "a string", 7, None,             # JSON that is not an object: these raised AttributeError
+    {}, {"data": "x"}, {"data": None},   # an object with no "data" list: these listed none
+    {"data": [{"name": "no id"}]},       # entries, none of them carrying a model id
+])
+def test_a_listing_that_is_not_openrouters_list_raises_rather_than_listing_none(
+    monkeypatch, payload,
+):
+    _patch_fetch(monkeypatch, _FakeFetchResponse(200, payload))
+    exc = _listing_failure(prov.create_catalog({"api_key": "k"}))
+    assert str(exc) == (
+        "OpenRouter answered the model listing request, but not with the model list it sends. "
+        f"{_RETRY_LISTING} Details: {json.dumps(payload)}"
+    )
+    assert (exc.status, exc.rejected_credential) == (200, False)
+
+
+def test_a_listing_of_none_is_an_empty_list(monkeypatch):
+    # The one [] left: OpenRouter answered with its list, and the list is empty.
+    _patch_fetch(monkeypatch, _FakeFetchResponse(200, {"data": []}))
     assert _run(prov.create_catalog({"api_key": "k"}).list_models()) == []
+
+
+def test_a_failed_listing_is_not_remembered(monkeypatch):
+    # Once the endpoint answers, the next listing has its models: the failure was not kept
+    # as an empty list.
+    cat = prov.create_catalog({"api_key": "k"})
+    _patch_fetch(monkeypatch, _FakeFetchResponse(500, {}))
+    _listing_failure(cat)
+    _patch_fetch(monkeypatch, _FakeFetchResponse(200, {"data": [{"id": "live-model-1"}]}))
+    assert [m.id for m in _run(cat.list_models())] == ["live-model-1"]
 
 
 def test_live_models_win(monkeypatch):
@@ -158,7 +261,12 @@ def test_test_connection_needs_key(monkeypatch):
     cat._api_key = ""
     result = _run(cat.test_connection())
     assert result.ok is False
-    assert "OPENROUTER_API_KEY" in result.detail
+    # This read "No API key configured (set it or OPENROUTER_API_KEY)", naming no setting.
+    assert result.detail == (
+        "No OpenRouter API key is set. Add it in OpenRouter API Key on this OpenRouter instance "
+        "in Settings → Providers, or set OPENROUTER_API_KEY."
+    )
+    assert result.rejected_credential is False  # nothing was sent, so nothing was refused
 
 
 def test_test_connection_reports_model_count(monkeypatch):
@@ -168,10 +276,21 @@ def test_test_connection_reports_model_count(monkeypatch):
     assert result.model_count == 2
 
 
-def test_test_connection_fails_when_no_models(monkeypatch):
+@pytest.mark.parametrize(("endpoint", "detail"), [
+    ("", "OpenRouter accepted the key but listed no chat or embedding models. Try again in a "
+         "few minutes."),
+    ("https://proxy.example/v1",
+     "OpenRouter accepted the key, but the server at Base URL listed no chat or embedding "
+     "models. Check Base URL on this OpenRouter instance in Settings → Providers (under "
+     "Advanced); left empty, it uses https://openrouter.ai/api/v1."),
+])
+def test_test_connection_fails_when_no_models(monkeypatch, endpoint, detail):
+    # This read "Key is valid but no models were listed", with no next step. The listing
+    # route is public, so an empty list is the server's own answer, whatever the key.
     _patch_fetch(monkeypatch, _FakeFetchResponse(200, {"data": []}))
-    result = _run(prov.create_catalog({"api_key": "k"}).test_connection())
+    result = _run(prov.create_catalog({"api_key": "k", "endpoint": endpoint}).test_connection())
     assert result.ok is False
+    assert result.detail == detail
 
 
 def _patch_fetch_by_route(monkeypatch, routes: dict[str, "_FakeFetchResponse"]):
@@ -214,6 +333,23 @@ def test_test_connection_rejects_a_bad_key_even_though_models_is_public(monkeypa
     assert any("/key" in u for u in seen), "never probed the authenticated route"
 
 
+@pytest.mark.parametrize(("status", "rejected"), [
+    (401, True), (403, True),                    # OpenRouter refused the key it was sent
+    (402, False), (404, False), (500, False),    # credits, the address, OpenRouter's own side
+])
+def test_test_connection_flags_the_key_only_when_openrouter_refuses_it(
+    monkeypatch, status, rejected,
+):
+    # A refused key never said so, so the page could not say to update it.
+    _patch_fetch_by_route(monkeypatch, {
+        "/key": _FakeFetchResponse(
+            status, {"error": {"message": "upstream words", "code": status}}),
+    })
+    result = _run(prov.create_catalog({"api_key": "k"}).test_connection())
+    assert result.ok is False
+    assert result.rejected_credential is rejected
+
+
 def test_test_connection_ok_path_probes_key_then_counts_models(monkeypatch):
     seen = _patch_fetch_by_route(monkeypatch, {
         "/key": _FakeFetchResponse(200, {"data": {"label": "fake-openrouter-1", "usage": 0}}),
@@ -223,6 +359,28 @@ def test_test_connection_ok_path_probes_key_then_counts_models(monkeypatch):
     assert result.ok is True
     assert result.model_count == 2
     assert any("/key" in u for u in seen) and any("/models" in u for u in seen)
+
+
+@pytest.mark.parametrize(("status", "detail", "rejected"), [
+    (404, "OpenRouter answered the model listing request with HTTP 404 (not found). Check Base "
+          "URL on this OpenRouter instance in Settings → Providers (under Advanced); left empty, "
+          "it uses https://openrouter.ai/api/v1. Details: upstream words", False),
+    (401, "OpenRouter rejected the API key (model listing). Check the key in Settings → "
+          "Providers, or OPENROUTER_API_KEY.", True),
+])
+def test_test_connection_with_an_accepted_key_says_why_the_listing_failed(
+    monkeypatch, status, detail, rejected,
+):
+    # This read "Key is valid but no models were listed" whatever had gone wrong.
+    _patch_fetch_by_route(monkeypatch, {
+        "/key": _FakeFetchResponse(200, {"data": {"label": "fake-openrouter-1", "usage": 0}}),
+        "/models": _FakeFetchResponse(
+            status, {"error": {"message": "upstream words", "code": status}}),
+    })
+    result = _run(prov.create_catalog({"api_key": "k"}).test_connection())
+    assert result.ok is False
+    assert result.detail == detail
+    assert result.rejected_credential is rejected
 
 
 def test_test_connection_answered_not_found_points_at_base_url(monkeypatch):
@@ -273,6 +431,7 @@ def test_test_connection_that_gets_no_answer_says_what_to_check(monkeypatch, err
         {"api_key": "k", "endpoint": "https://proxy.invalid/v1"}).test_connection())
     assert result.ok is False
     assert result.detail == detail
+    assert result.rejected_credential is False  # no answer, so no refusal
 
 
 def test_catalog_replaces_the_stock_branded_catalog():

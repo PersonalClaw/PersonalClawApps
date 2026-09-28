@@ -35,7 +35,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 |---|---|---|
 | `api_key` | Google Gemini API Key | Your Google Gemini API key. Leave empty to fall back to the GEMINI_API_KEY environment variable. |
 | `default_model` | Default Model | A Gemini model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
-| `endpoint` | Base URL | Optional override of the Google Gemini base URL. Empty uses https://generativelanguage.googleapis.com/v1beta/openai/. |
+| `endpoint` | Base URL | Optional. Where chat, embeddings, their model list and the connection check go (Gemini's OpenAI-compatible API). Empty uses https://generativelanguage.googleapis.com/v1beta/openai/. Image, video and speech always use Google's own address. |
 
 ## License
 

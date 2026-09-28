@@ -29,6 +29,11 @@ IDS. Qdrant point ids must be an unsigned integer or a UUID, and PersonalClaw ch
 32-char hex (``uuid4().hex``). They are converted to canonical UUID form for the id and ALSO
 carried verbatim in the payload, because the id is what makes an upsert idempotent while the
 payload is what core joins back to its own ``chunks`` table.
+
+FAILURES. Core's contract lets a method on an unreachable store raise or return empty; core
+treats a raise as "this arm cannot answer" and logs it. Returning empty would read as "no
+vectors" — a store that lost everything, or a query nothing matched — so a failed call raises,
+said as what is wrong and what to do (:class:`QdrantStoreError`), never swallowed.
 """
 
 from __future__ import annotations
@@ -84,6 +89,12 @@ def _shown(url: str) -> str:
     if "@" not in parts.netloc:
         return url
     return urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[1]))
+
+
+class QdrantStoreError(RuntimeError):
+    """A Qdrant call that failed, said as what is wrong and what to do. Its text is that
+    sentence and then the client's own words — the text core logs when this arm cannot answer —
+    and the client's exception is chained as ``__cause__``."""
 
 
 def _causes(exc: BaseException) -> Iterator[BaseException]:
@@ -176,31 +187,34 @@ class QdrantVectorStore(VectorStoreProvider):
     def upsert(self, records: Sequence[VectorRecord]) -> int:
         if not records:
             return 0  # an item that produced no embedded chunks is not an error
-        from qdrant_client.models import PointStruct
+        try:
+            from qdrant_client.models import PointStruct
 
-        dim = len(records[0].vector)
-        self._ensure_collection(dim)
-        points = [
-            PointStruct(
-                id=_point_id(r.chunk_id),
-                vector=list(r.vector),
-                payload={
-                    # chunk_id verbatim: the point id is a re-spelled UUID, and core joins on
-                    # the original.
-                    "chunk_id": r.chunk_id,
-                    "item_id": r.item_id,
-                    "chunk_index": r.chunk_index,
-                    "section": r.section,
-                    "line_start": r.line_start,
-                    "line_end": r.line_end,
-                },
-            )
-            for r in records
-            if len(r.vector) == dim
-        ]
-        if not points:
-            return 0
-        self._connect().upsert(collection_name=self._collection, points=points, wait=True)
+            dim = len(records[0].vector)
+            self._ensure_collection(dim)
+            points = [
+                PointStruct(
+                    id=_point_id(r.chunk_id),
+                    vector=list(r.vector),
+                    payload={
+                        # chunk_id verbatim: the point id is a re-spelled UUID, and core joins
+                        # on the original.
+                        "chunk_id": r.chunk_id,
+                        "item_id": r.item_id,
+                        "chunk_index": r.chunk_index,
+                        "section": r.section,
+                        "line_start": r.line_start,
+                        "line_end": r.line_end,
+                    },
+                )
+                for r in records
+                if len(r.vector) == dim
+            ]
+            if not points:
+                return 0
+            self._connect().upsert(collection_name=self._collection, points=points, wait=True)
+        except Exception as exc:  # noqa: BLE001 - every failure is said, then raised for core
+            raise self._failed(exc) from exc
         return len(points)
 
     def delete_item(self, item_id: str) -> int:
@@ -210,33 +224,39 @@ class QdrantVectorStore(VectorStoreProvider):
         is about to mint new ones — a re-chunk. Filtering on the payload is what makes this
         idempotent for an item the store never held.
         """
-        from qdrant_client.models import FieldCondition, Filter, FilterSelector, MatchValue
+        try:
+            from qdrant_client.models import FieldCondition, Filter, FilterSelector, MatchValue
 
-        client = self._connect()
-        if not client.collection_exists(self._collection):
-            return 0
-        client.delete(
-            collection_name=self._collection,
-            points_selector=FilterSelector(
-                filter=Filter(
-                    must=[FieldCondition(key="item_id", match=MatchValue(value=item_id))]
-                )
-            ),
-            wait=True,
-        )
+            client = self._connect()
+            if not client.collection_exists(self._collection):
+                return 0
+            client.delete(
+                collection_name=self._collection,
+                points_selector=FilterSelector(
+                    filter=Filter(
+                        must=[FieldCondition(key="item_id", match=MatchValue(value=item_id))]
+                    )
+                ),
+                wait=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - every failure is said, then raised for core
+            raise self._failed(exc) from exc
         # Qdrant's delete reports an operation status, not a row count.
         return 0
 
     def query(self, vector: Sequence[float], *, k: int) -> list[VectorHit]:
-        client = self._connect()
-        if not client.collection_exists(self._collection):
-            return []
-        res = client.query_points(
-            collection_name=self._collection,
-            query=list(vector),
-            limit=max(1, int(k)),
-            with_payload=True,
-        )
+        try:
+            client = self._connect()
+            if not client.collection_exists(self._collection):
+                return []
+            res = client.query_points(
+                collection_name=self._collection,
+                query=list(vector),
+                limit=max(1, int(k)),
+                with_payload=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - every failure is said, then raised for core
+            raise self._failed(exc) from exc
         hits: list[VectorHit] = []
         for p in res.points:
             payload = p.payload or {}
@@ -292,6 +312,11 @@ class QdrantVectorStore(VectorStoreProvider):
                 detail=sentence_with_detail(self._unreachable(exc), exc),
             )
 
+    def _failed(self, exc: BaseException) -> QdrantStoreError:
+        """What ``upsert``/``delete_item``/``query`` raise for a failed call: the same sentence
+        ``describe`` gives, with the client's words after it."""
+        return QdrantStoreError(sentence_with_detail(self._unreachable(exc), exc))
+
     def _unreachable(self, exc: BaseException) -> str:
         """What a failed connect or call means, and what to do — the client's own words
         ("[Errno 61] Connection refused", "Unexpected Response: 401 …") say neither."""
@@ -301,6 +326,14 @@ class QdrantVectorStore(VectorStoreProvider):
                 "Qdrant Vector Store couldn't load qdrant-client, the Python package it talks to "
                 "Qdrant through. Reinstall Qdrant Vector Store from the Store — that package "
                 "ships with this app, not with PersonalClaw itself."
+            )
+        if any("vector dimension error" in str(c).lower() for c in causes):
+            # Qdrant's own words, from a server and from a local folder alike, for vectors of
+            # another size than the collection was made for.
+            return (
+                f"The collection {self._collection} holds vectors of a different size than the "
+                f"embedding model in use now makes. Set Collection {_ON_CARD} to a new name, and "
+                "one is created at the new size when the next document is ingested."
             )
         if self._path:
             folder = f"Local folder (no server) {_ON_CARD}"
@@ -314,6 +347,12 @@ class QdrantVectorStore(VectorStoreProvider):
                 return (
                     f"Qdrant Vector Store isn't allowed to use the local folder {self._path}. Fix "
                     f"that folder's permissions, or set {folder} to one PersonalClaw can write to."
+                )
+            if self._client is not None:
+                # The folder opened; what failed is a call made to the engine over it.
+                return (
+                    "Qdrant Vector Store's request to the Qdrant engine over its local folder "
+                    f"{self._path} failed. Check that folder, or set {folder} to another one."
                 )
             return (
                 f"Qdrant Vector Store couldn't open its local folder {self._path}. Check that "

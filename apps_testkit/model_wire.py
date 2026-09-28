@@ -486,11 +486,11 @@ def _media_call(kind: str, name: str, adapter: Any, folder: Path) -> Any:
 
 def _returned_nothing(value: Any) -> bool:
     """A speech, embedding or diarization contract's "nothing": ``None``, an empty result, or a
-    batch whose every vector is empty."""
+    batch with no vector in it (each entry ``None``, or empty)."""
     if value is None:
         return True
     if isinstance(value, (list, tuple)):
-        return all(isinstance(item, (list, tuple)) and not item for item in value)
+        return all(item is None or (isinstance(item, (list, tuple)) and not item) for item in value)
     return value in ("", b"")
 
 

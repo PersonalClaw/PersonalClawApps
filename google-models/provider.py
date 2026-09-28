@@ -21,8 +21,10 @@ Base URLs:
   - OpenAI-compat: https://generativelanguage.googleapis.com/v1beta/openai/
   - Native Gemini: https://generativelanguage.googleapis.com/v1beta/
 
-Auth: OpenAI-compat uses ``Authorization: Bearer {key}``; native endpoints use
-the ``?key={key}`` query parameter.
+Auth: OpenAI-compat uses ``Authorization: Bearer {key}``; the native image, video and
+model-list calls send the key in the ``x-goog-api-key`` header, the form Gemini documents,
+so no URL they ask for carries it. An HTTP library's error, a traceback and a log line can
+each quote a URL.
 
 Bring your own API key (config ``api_key`` or the ``GEMINI_API_KEY`` env var).
 """
@@ -30,11 +32,15 @@ Bring your own API key (config ``api_key`` or the ``GEMINI_API_KEY`` env var).
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import os
+import tempfile
 import time
 from typing import Any
+from urllib.parse import urljoin, urlsplit
 
 from personalclaw.sdk.image import (
     ImageGenError,
@@ -66,6 +72,12 @@ _KEY_SETTING = (
     "Google Gemini API Key on this Google Gemini instance in Settings → Providers "
     "(or GEMINI_API_KEY)"
 )
+#: Why a media adapter with no key is unavailable, and what its call is refused with.
+_NO_KEY = f"No Gemini API key is set. Add it as {_KEY_SETTING}."
+_NO_IMAGE = (
+    "Gemini's answer to the {what} request had no image in it. Try again; if it happens again, "
+    "change the prompt or choose another model in Settings → Models."
+)
 
 
 def _named(model: str, error: type[Exception]) -> str:
@@ -76,8 +88,15 @@ def _named(model: str, error: type[Exception]) -> str:
         raise error(str(exc)) from exc
 
 
-_OPENAI_COMPAT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
-_NATIVE_BASE = "https://generativelanguage.googleapis.com/v1beta/"
+_GEMINI_HOST = "generativelanguage.googleapis.com"
+_OPENAI_COMPAT_BASE = f"https://{_GEMINI_HOST}/v1beta/openai/"
+_NATIVE_BASE = f"https://{_GEMINI_HOST}/v1beta/"
+
+
+def _key_header(key: str) -> dict[str, str]:
+    """The header a native call sends its API key in (Gemini's documented ``x-goog-api-key``)."""
+    return {"x-goog-api-key": key}
+
 
 # 600s, not 300s: a timeout that fires on a job the upstream provider is still
 # happily working on reports FAILURE for something that succeeds — and the user is
@@ -86,6 +105,44 @@ _NATIVE_BASE = "https://generativelanguage.googleapis.com/v1beta/"
 _VIDEO_TIMEOUT_S = 600.0
 _VIDEO_POLL_INTERVAL_S = 5.0
 _IMAGE_TIMEOUT_S = 120.0
+# Fetching the finished video. Veo's clips are seconds long, so both bounds are generous; they
+# exist so a server that never stops sending cannot fill the disk.
+_VIDEO_DOWNLOAD_TIMEOUT_S = 180.0
+_VIDEO_MAX_BYTES = 200 * 1024 * 1024
+_MAX_REDIRECTS = 5
+
+
+class _NotAnObject(ValueError):
+    """A 200 whose body is JSON but not the object every one of these calls answers with."""
+
+
+_JSON_KINDS = {
+    list: "a list", str: "a string", int: "a number", float: "a number", bool: "true or false",
+    type(None): "null",
+}
+
+
+def _json_object(text: str) -> dict[str, Any]:
+    """Gemini's answer, parsed. A list, a string or a number (what a proxy or a changed API can
+    answer with) is refused like a body that is not JSON; each of them used to raise
+    AttributeError at the first ``.get``, which reached the user as no sentence at all."""
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        kind = _JSON_KINDS.get(type(data), "something else")
+        raise _NotAnObject(f"the answer is JSON but {kind}, not an object")
+    return data
+
+
+def _object(value: Any) -> dict[str, Any]:
+    """``value`` when it is a JSON object, else an empty one: a field of the wrong type in an
+    answer is read as missing, never as an AttributeError."""
+    return value if isinstance(value, dict) else {}
+
+
+def _objects(value: Any) -> list[dict[str, Any]]:
+    """The objects in ``value`` when it is a JSON list; anything else holds none."""
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
 
 # ── Chat provider (branded, OpenAI-compat) ───────────────────────────────────
 
@@ -138,20 +195,22 @@ async def _discover_models(api_key: str) -> list[dict[str, Any]]:
     if cached and (now - cached[0]) < _DISCOVERY_TTL_S:
         return cached[1]
 
-    url = f"{_NATIVE_BASE}models?key={api_key}&pageSize=200"
+    url = f"{_NATIVE_BASE}models?pageSize=200"
     timeout = aiohttp.ClientTimeout(total=20)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url) as resp:
+            async with session.get(
+                url, headers=_key_header(api_key), allow_redirects=False,
+            ) as resp:
                 if resp.status != 200:
                     logger.debug("Gemini model discovery HTTP %s", resp.status)
                     return cached[1] if cached else []
-                data = json.loads(await resp.text())
+                data = _json_object(await resp.text())
     except Exception:
         logger.debug("Gemini model discovery failed", exc_info=True)
         return cached[1] if cached else []
 
-    models = data.get("models", []) or []
+    models = _objects(data.get("models"))
     _discovery_cache[api_key] = (now, models)
     return models
 
@@ -160,19 +219,24 @@ def _model_id(m: dict[str, Any]) -> str:
     return str(m.get("name", "")).removeprefix("models/")
 
 
+def _methods(m: dict[str, Any]) -> list[Any]:
+    methods = m.get("supportedGenerationMethods")
+    return methods if isinstance(methods, list) else []
+
+
 def _is_video_gen(m: dict[str, Any]) -> bool:
-    return "predictLongRunning" in m.get("supportedGenerationMethods", [])
+    return "predictLongRunning" in _methods(m)
 
 
 def _is_imagen(m: dict[str, Any]) -> bool:
-    return "predict" in m.get("supportedGenerationMethods", [])
+    return "predict" in _methods(m)
 
 
 def _is_content_image(m: dict[str, Any]) -> bool:
     """generateContent models that OUTPUT images (gemini-*-image family)."""
     mid = _model_id(m).lower()
     return (
-        "generateContent" in m.get("supportedGenerationMethods", [])
+        "generateContent" in _methods(m)
         and ("image" in mid or "banana" in mid)
         and "tts" not in mid
     )
@@ -212,6 +276,10 @@ class GeminiImageProvider(ImageGenProvider):
     async def is_available(self) -> bool:
         return bool(self._key())
 
+    async def unavailable_reason(self) -> str:
+        """Why images can't be made, for Settings → Models: a missing key is the only way."""
+        return "" if self._key() else _NO_KEY
+
     async def list_models(self) -> list[ImageGenModel]:
         from personalclaw.sdk.image import active_image_gen
 
@@ -243,7 +311,7 @@ class GeminiImageProvider(ImageGenProvider):
         model_id = _named(model, ImageGenError).removeprefix("models/")
         key = self._key()
         if not key:
-            raise ImageGenError("No Gemini API key configured (set GEMINI_API_KEY).")
+            raise ImageGenError(_NO_KEY)
 
         # Discovery says which API the named model speaks (Imagen's predict, or generateContent).
         by_id = {_model_id(m): m for m in await _discover_models(key)}
@@ -273,7 +341,7 @@ class GeminiImageProvider(ImageGenProvider):
                         raise ImageGenError(
                             _status_message(resp.status, text, what="Imagen", key=key)
                         )
-                    data = json.loads(text)
+                    data = _json_object(text)
         except ImageGenError:
             raise
         except asyncio.TimeoutError as e:
@@ -282,18 +350,16 @@ class GeminiImageProvider(ImageGenProvider):
             raise ImageGenError(_unanswered_message(e, what="Imagen", key=key)) from e
 
         results: list[ImageResult] = []
-        for item in data.get("data", []):
-            if not isinstance(item, dict):
-                continue
-            img_url = item.get("url", "")
-            b64 = item.get("b64_json", "")
+        for item in _objects(data.get("data")):
+            img_url = str(item.get("url") or "")
+            b64 = str(item.get("b64_json") or "")
             if img_url or b64:
                 results.append(ImageResult(
                     url=img_url, b64=b64,
-                    revised_prompt=item.get("revised_prompt", ""),
+                    revised_prompt=str(item.get("revised_prompt") or ""),
                 ))
         if not results:
-            raise ImageGenError("Imagen returned no images.")
+            raise ImageGenError(_NO_IMAGE.format(what="Imagen"))
         return results
 
     async def _generate_via_content(
@@ -302,7 +368,7 @@ class GeminiImageProvider(ImageGenProvider):
         """gemini-*-image path — generateContent with IMAGE response modality."""
         import aiohttp
 
-        url = f"{_NATIVE_BASE}models/{model_id}:generateContent?key={key}"
+        url = f"{_NATIVE_BASE}models/{model_id}:generateContent"
         body = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseModalities": ["IMAGE"]},
@@ -311,14 +377,15 @@ class GeminiImageProvider(ImageGenProvider):
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(
-                    url, headers={"Content-Type": "application/json"}, json=body,
+                    url, headers={**_key_header(key), "Content-Type": "application/json"},
+                    json=body, allow_redirects=False,
                 ) as resp:
                     text = await resp.text()
                     if resp.status != 200:
                         raise ImageGenError(
                             _status_message(resp.status, text, what="image", key=key)
                         )
-                    data = json.loads(text)
+                    data = _json_object(text)
         except ImageGenError:
             raise
         except asyncio.TimeoutError as e:
@@ -327,17 +394,15 @@ class GeminiImageProvider(ImageGenProvider):
             raise ImageGenError(_unanswered_message(e, what="image", key=key)) from e
 
         results: list[ImageResult] = []
-        for cand in data.get("candidates", []):
-            for part in cand.get("content", {}).get("parts", []):
-                inline = part.get("inlineData", {})
-                if inline and str(inline.get("mimeType", "")).startswith("image/"):
-                    b64 = inline.get("data", "")
-                    if b64:
-                        results.append(ImageResult(
-                            b64=b64, mime=inline.get("mimeType", "image/png"),
-                        ))
+        for cand in _objects(data.get("candidates")):
+            for part in _objects(_object(cand.get("content")).get("parts")):
+                inline = _object(part.get("inlineData"))
+                mime = str(inline.get("mimeType") or "")
+                b64 = str(inline.get("data") or "")
+                if mime.startswith("image/") and b64:
+                    results.append(ImageResult(b64=b64, mime=mime))
         if not results:
-            raise ImageGenError("Gemini returned no image in the response.")
+            raise ImageGenError(_NO_IMAGE.format(what="image"))
         return results
 
     async def edit(
@@ -380,6 +445,10 @@ class GeminiVideoProvider(VideoGenProvider):
     async def is_available(self) -> bool:
         return bool(self._key())
 
+    async def unavailable_reason(self) -> str:
+        """Why video can't be made, for Settings → Models: a missing key is the only way."""
+        return "" if self._key() else _NO_KEY
+
     async def list_models(self) -> list[VideoGenModel]:
         from personalclaw.sdk.video import active_video_gen
 
@@ -416,7 +485,7 @@ class GeminiVideoProvider(VideoGenProvider):
         model_id = _named(model, VideoGenError).removeprefix("models/")
         key = self._key()
         if not key:
-            raise VideoGenError("No Gemini API key configured (set GEMINI_API_KEY).")
+            raise VideoGenError(_NO_KEY)
 
         op_name = await self._submit(model_id, prompt, aspect_ratio=aspect_ratio, key=key)
         return await self._poll_and_fetch(op_name, key=key)
@@ -427,7 +496,7 @@ class GeminiVideoProvider(VideoGenProvider):
         """Submit the generation job; returns the long-running operation name."""
         import aiohttp
 
-        url = f"{_NATIVE_BASE}models/{model_id}:predictLongRunning?key={key}"
+        url = f"{_NATIVE_BASE}models/{model_id}:predictLongRunning"
         parameters: dict[str, Any] = {}
         if aspect_ratio:
             parameters["aspectRatio"] = aspect_ratio
@@ -439,47 +508,83 @@ class GeminiVideoProvider(VideoGenProvider):
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(
-                    url, headers={"Content-Type": "application/json"}, json=body,
+                    url, headers={**_key_header(key), "Content-Type": "application/json"},
+                    json=body, allow_redirects=False,
                 ) as resp:
                     text = await resp.text()
                     if resp.status != 200:
                         raise VideoGenError(
                             _status_message(resp.status, text, what="Veo video", key=key)
                         )
-                    data = json.loads(text)
+                    data = _json_object(text)
         except VideoGenError:
             raise
         except Exception as e:
             raise VideoGenError(_unanswered_message(e, what="Veo video", key=key)) from e
 
-        op_name = str(data.get("name", ""))
+        op_name = str(data.get("name") or "")
         if not op_name:
-            raise VideoGenError("Veo submit returned no operation name.")
+            raise VideoGenError(
+                "Gemini answered the Veo video request without naming the job it started, so "
+                "no video can be fetched. Try again in a moment."
+            )
         return op_name
 
     async def _poll_and_fetch(self, op_name: str, *, key: str) -> list[VideoResult]:
-        """Poll the operation until done, then extract the video URI(s)."""
+        """Poll the operation until done, then fetch the video(s) it made.
+
+        A poll that fails in a way another poll can outlast (a 429, a 5xx, a dropped
+        connection) is retried until the deadline; one that cannot (the key refused, the job
+        unknown, an answer that is not the JSON object Gemini sends) says so at once, rather
+        than after ten minutes as a timeout.
+        """
         import aiohttp
 
-        url = f"{_NATIVE_BASE}{op_name}?key={key}"
+        url = f"{_NATIVE_BASE}{op_name}"
         timeout = aiohttp.ClientTimeout(total=30)
         elapsed = 0.0
         data: dict[str, Any] = {}
+        last_problem = ""
         while elapsed < _VIDEO_TIMEOUT_S:
             try:
                 async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(url) as resp:
+                    async with session.get(
+                        url, headers=_key_header(key), allow_redirects=False,
+                    ) as resp:
                         text = await resp.text()
                         if resp.status == 200:
-                            data = json.loads(text)
+                            data = _json_object(text)
                             if data.get("done"):
                                 break
-            except Exception:
+                        elif resp.status == 404:
+                            raise VideoGenError(sentence_with_detail(
+                                "Gemini no longer knows the Veo video job PersonalClaw was "
+                                "waiting on (HTTP 404), so its video can't be fetched. Try "
+                                "again.",
+                                _scrubbed(_error_detail(text), key),
+                            ))
+                        elif 400 <= resp.status < 500 and resp.status not in (408, 429):
+                            raise VideoGenError(
+                                _status_message(resp.status, text, what="Veo video", key=key)
+                            )
+                        else:
+                            last_problem = f"HTTP {resp.status}: {_error_detail(text)}"
+            except VideoGenError:
+                raise
+            except (_NotAnObject, json.JSONDecodeError, UnicodeDecodeError) as e:
+                raise VideoGenError(_unanswered_message(e, what="Veo video", key=key)) from e
+            except Exception as e:  # noqa: BLE001 — a dropped poll is retried until the deadline
                 logger.debug("Veo poll error", exc_info=True)
+                last_problem = str(e) or type(e).__name__
             await asyncio.sleep(_VIDEO_POLL_INTERVAL_S)
             elapsed += _VIDEO_POLL_INTERVAL_S
         else:
-            raise VideoGenError("Veo generation timed out (operation not done).")
+            raise VideoGenError(sentence_with_detail(
+                f"Veo's video job did not finish within {int(_VIDEO_TIMEOUT_S // 60)} minutes, "
+                "so PersonalClaw stopped waiting and no video was saved. Try again later; if it "
+                "keeps happening, choose another model in Settings → Models.",
+                _scrubbed(last_problem, key),
+            ))
 
         err = data.get("error")
         if err:
@@ -491,41 +596,132 @@ class GeminiVideoProvider(VideoGenProvider):
             ))
 
         results: list[VideoResult] = []
-        response = data.get("response", {})
+        response = _object(data.get("response"))
         # Documented shape: response.generateVideoResponse.generatedSamples[].video.uri
-        gv = response.get("generateVideoResponse", {})
-        for sample in gv.get("generatedSamples", []) or []:
-            uri = (sample.get("video") or {}).get("uri", "")
+        gv = _object(response.get("generateVideoResponse"))
+        for sample in _objects(gv.get("generatedSamples")):
+            uri = str(_object(sample.get("video")).get("uri") or "")
             if uri:
-                results.append(VideoResult(url=_with_key(uri, key), mime="video/mp4"))
+                results.append(await _video_file(uri, key=key))
         # Alternate shape: response.predictions[].video / videoUri / bytesBase64Encoded
-        for pred in response.get("predictions", []) or []:
-            if not isinstance(pred, dict):
-                continue
-            uri = str(pred.get("videoUri", "") or "")
-            video = pred.get("video")
-            if not uri and isinstance(video, dict):
-                uri = str(video.get("uri", "") or "")
+        for pred in _objects(response.get("predictions")):
+            uri = str(pred.get("videoUri") or _object(pred.get("video")).get("uri") or "")
             if uri:
-                results.append(VideoResult(url=_with_key(uri, key), mime="video/mp4"))
+                results.append(await _video_file(uri, key=key))
                 continue
-            b64 = pred.get("bytesBase64Encoded", "")
+            b64 = str(pred.get("bytesBase64Encoded") or "")
             if b64:
-                results.append(VideoResult(
-                    url=f"data:video/mp4;base64,{b64}", mime="video/mp4",
-                ))
+                try:
+                    video = base64.b64decode(b64, validate=True)
+                except (binascii.Error, ValueError):
+                    continue
+                results.append(VideoResult(local_path=_saved_video(video), mime="video/mp4"))
 
         if not results:
-            raise VideoGenError("Veo returned no video in the operation result.")
+            raise VideoGenError(
+                "Veo's video job finished, but Gemini's answer had no video in it. Try again; if "
+                "it happens again, change the prompt or choose another model in Settings → "
+                "Models."
+            )
         return results
 
 
-def _with_key(uri: str, key: str) -> str:
-    """Veo file URIs require the API key to download."""
-    if "generativelanguage.googleapis.com" in uri and "key=" not in uri:
-        sep = "&" if "?" in uri else "?"
-        return f"{uri}{sep}key={key}"
-    return uri
+# ── Fetching a finished video ────────────────────────────────────────────────
+
+
+def _on_gemini(url: str) -> bool:
+    """Whether ``url`` is Gemini's own address: the one host the API key is ever sent to. The
+    host is compared, not searched for, so an address that only mentions it gets no key."""
+    parts = urlsplit(url)
+    return parts.scheme == "https" and parts.hostname == _GEMINI_HOST
+
+
+def _saved_video(video: bytes) -> str:
+    """Write ``video`` to a new file of its own and return the file's path, for core to save."""
+    fd, path = tempfile.mkstemp(prefix="gemini-video-", suffix=".mp4")
+    with os.fdopen(fd, "wb") as f:
+        f.write(video)
+    return path
+
+
+async def _video_file(uri: str, *, key: str) -> VideoResult:
+    """The video Veo made at ``uri``, as core will save it.
+
+    A file on Gemini's own address needs the API key, and the key goes in the header, never the
+    URL, so this fetches it here: core would ask for a URL with no way to add the header.
+    Gemini's own instructions fetch it with redirects followed. The key is sent only while the
+    address stays on Gemini's host; an address anywhere else, whether ``uri`` itself or where a
+    redirect leads, is handed to core as it is, and core fetches it through its egress guard,
+    with no key.
+    """
+    import aiohttp
+
+    if not _on_gemini(uri):
+        return VideoResult(url=uri, mime="video/mp4")
+    url = uri
+    timeout = aiohttp.ClientTimeout(total=_VIDEO_DOWNLOAD_TIMEOUT_S)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            for _hop in range(_MAX_REDIRECTS + 1):
+                async with session.get(
+                    url, headers=_key_header(key), allow_redirects=False,
+                ) as resp:
+                    location = resp.headers.get("Location", "")
+                    if resp.status in (301, 302, 303, 307, 308) and location:
+                        url = urljoin(url, location)
+                        if not _on_gemini(url):
+                            return VideoResult(url=url, mime="video/mp4")
+                        continue
+                    if resp.status != 200:
+                        raise VideoGenError(
+                            _download_failed(resp.status, await resp.text(), key=key)
+                        )
+                    mime = resp.headers.get("Content-Type", "").split(";")[0].strip()
+                    return VideoResult(
+                        local_path=await _streamed_to_file(resp),
+                        mime=mime if mime.startswith("video/") else "video/mp4",
+                    )
+    except VideoGenError:
+        raise
+    except Exception as e:
+        raise VideoGenError(_unanswered_message(e, what="Veo video download", key=key)) from e
+    raise VideoGenError(
+        f"Gemini redirected the Veo video download more than {_MAX_REDIRECTS} times, so the "
+        "video could not be saved. Try again in a moment."
+    )
+
+
+async def _streamed_to_file(resp: Any) -> str:
+    """The body of ``resp`` written to a new file, whose path is returned. More than
+    ``_VIDEO_MAX_BYTES`` is refused, and a partial file is never left behind."""
+    fd, path = tempfile.mkstemp(prefix="gemini-video-", suffix=".mp4")
+    size = 0
+    try:
+        with os.fdopen(fd, "wb") as f:
+            async for chunk in resp.content.iter_chunked(65536):
+                size += len(chunk)
+                if size > _VIDEO_MAX_BYTES:
+                    raise VideoGenError(
+                        f"The video Veo made is larger than {_VIDEO_MAX_BYTES // (1024 * 1024)} "
+                        "MB, so PersonalClaw did not save it. Try again, or choose another model "
+                        "in Settings → Models."
+                    )
+                f.write(chunk)
+    except BaseException:
+        os.unlink(path)
+        raise
+    return path
+
+
+def _download_failed(status: int, text: str, *, key: str) -> str:
+    """What a failed fetch of a finished video means. A 404 here is the file, not the model."""
+    if status == 404:
+        return sentence_with_detail(
+            "Gemini no longer has the video Veo made (HTTP 404), so it could not be saved. Try "
+            "again.",
+            _scrubbed(_error_detail(text), key),
+        )
+    return _status_message(status, text, what="Veo video download", key=key)
 
 
 # ── TTS Provider ─────────────────────────────────────────────────────────────
@@ -694,8 +890,9 @@ def _error_detail(text: str) -> str:
 
 
 def _scrubbed(words: str, key: str) -> str:
-    """``words`` without the API key. The native calls carry it in the URL (``?key=…``), and an
-    HTTP library's error can quote the URL it was asked for."""
+    """``words`` without the API key. No URL these calls ask for carries it, but an answer can
+    still quote a request back (a proxy's error page can echo its headers), so the words a
+    sentence relays are cleared of it anyway."""
     return words.replace(key, "[REDACTED: credential]") if key else words
 
 
@@ -745,7 +942,7 @@ def _unanswered_message(error: Exception, *, what: str, key: str) -> str:
     connect, answered with something that is not JSON, or failed some other way."""
     if isinstance(error, asyncio.TimeoutError):
         sentence = f"The {what} request to Gemini timed out. Try again in a moment."
-    elif isinstance(error, (json.JSONDecodeError, UnicodeDecodeError)):
+    elif isinstance(error, (json.JSONDecodeError, UnicodeDecodeError, _NotAnObject)):
         sentence = (
             f"Gemini's answer to the {what} request could not be read. Try again in a moment."
         )

@@ -280,6 +280,13 @@ class FalImageProvider(ImageGenProvider):
     async def is_available(self) -> bool:
         return bool(self._api_key or _resolve_fal_key()[0])
 
+    async def unavailable_reason(self) -> str:
+        """Why nothing can be made, for Settings → Models: what a call without a key says."""
+        if self._api_key:
+            return ""
+        key, refusal = _resolve_fal_key()
+        return "" if key else _no_key_message(refusal)
+
     async def list_models(self) -> list[ImageGenModel]:
         from personalclaw.sdk.image import active_image_gen
 
@@ -364,6 +371,13 @@ class FalVideoProvider(VideoGenProvider):
 
     async def is_available(self) -> bool:
         return bool(self._api_key or _resolve_fal_key()[0])
+
+    async def unavailable_reason(self) -> str:
+        """Why nothing can be made, for Settings → Models: what a call without a key says."""
+        if self._api_key:
+            return ""
+        key, refusal = _resolve_fal_key()
+        return "" if key else _no_key_message(refusal)
 
     async def list_models(self) -> list[VideoGenModel]:
         from personalclaw.sdk.video import active_video_gen
