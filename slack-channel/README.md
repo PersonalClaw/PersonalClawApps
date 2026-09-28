@@ -83,6 +83,13 @@ has ended. If nobody answers in that time, the call does not run and the thread 
 answered in time, so it did not run*: that is not a Reject, and the security log records it as
 decided by nobody.
 
+## Compaction
+
+`!compact` compacts the thread's conversation and says how much that freed (*✅ Compacted: freed
+42% of the conversation (12,000 → 6,960 characters)*), or that there was nothing to compact. When
+the agent compacts the conversation on its own in the middle of a reply, the thread says so in the
+same words, in a message after the reply, and the reply keeps everything it said before.
+
 ## Results from your schedules
 
 A schedule can send its results here too. In the schedule's Advanced → Notify channel, pick

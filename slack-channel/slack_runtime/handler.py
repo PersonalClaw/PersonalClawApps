@@ -46,6 +46,7 @@ from personalclaw.sdk.channel import ConversationLog, HistoryConsolidator
 from personalclaw.sdk.channel import HOOK_REPLY, TOOL_AUTO_APPROVE, TOOL_DENY, validate_file_path
 from personalclaw.sdk.channel import save_conversation_turn
 from personalclaw.sdk.channel import (
+    COMPACTION_AUTOMATIC,
     EVENT_COMPACTION_STATUS,
     EVENT_COMPLETE,
     EVENT_PERMISSION_REQUEST,
@@ -1622,6 +1623,20 @@ def _append_footer_actions(
     return footer_blocks
 
 
+#: What `!compact` says of a pass that found nothing to reclaim (`noop`): the conversation is already
+#: short, which is neither a failure nor a compaction.
+_NOTHING_TO_COMPACT = "✅ Nothing to compact — this conversation is already short enough."
+
+
+def _compacted_line(summary: str) -> str:
+    """How the thread says the conversation was compacted, and by how much (``summary``).
+
+    One sentence for a `!compact` that did it and for the agent's own pass between two steps of a
+    turn (``COMPACTION_AUTOMATIC``): it is the same pass, and the conversation changed the same way.
+    """
+    return f"✅ Compacted: {summary}" if summary else "✅ Context compacted."
+
+
 async def _handle_compact_command(
     slack: SlackClientOps,
     sessions: SessionManager,
@@ -1661,11 +1676,13 @@ async def _handle_compact_command(
             async for event in provider.stream_command("/compact"):
                 if event.kind == EVENT_COMPACTION_STATUS:
                     if event.text == "completed":
-                        summary = event.title or ""
-                        result_text = (
-                            f"✅ Compacted: {summary}" if summary else "✅ Context compacted."
-                        )
+                        result_text = _compacted_line(event.title or "")
                         outcome = "completed"
+                    elif event.text == "noop":
+                        # The pass ran and found nothing to reclaim: there is no later result to
+                        # wait for.
+                        result_text = _NOTHING_TO_COMPACT
+                        outcome = "noop"
                     elif event.text == "failed":
                         error = event.title or "unknown error"
                         result_text = f"❌ Compaction failed: {error}"
@@ -1680,10 +1697,7 @@ async def _handle_compact_command(
         if not result_text:
             cr = await provider.wait_for_compaction(timeout=120.0)
             if cr["type"] == "completed":
-                summary = cr.get("summary", "")
-                result_text = (
-                    f"✅ Compacted: {summary}" if summary else "✅ Context compacted."
-                )
+                result_text = _compacted_line(cr.get("summary", ""))
                 outcome = "completed"
             elif cr["type"] == "failed":
                 error = cr.get("summary", "")
@@ -2058,6 +2072,9 @@ async def handle_message(
 
     accumulated = ""
     thinking_accumulated = ""
+    # How much each compaction the agent did on its own during this turn freed, said once the
+    # reply is posted (`COMPACTION_AUTOMATIC`).
+    compacted_on_its_own: list[str] = []
     stream_buffer = ""  # unsent chunks for streaming API (buffered between rate-limited appends)
     bracket_hold = ""  # text held back from '[' until ']' to filter [OPTIONS: ...]
     last_edit = 0.0
@@ -2325,6 +2342,13 @@ async def handle_message(
                 status_ctrl.set_phase("thinking")
                 status_ctrl.on_progress()
                 thinking_accumulated += event.text
+
+            elif event.kind == EVENT_COMPACTION_STATUS and event.text == COMPACTION_AUTOMATIC:
+                # The agent compacted the conversation on its own between two steps. The answer
+                # streamed so far stays, and this is its own message after the reply rather than
+                # a line inside it, so the answer the thread keeps is only the answer.
+                status_ctrl.on_progress()
+                compacted_on_its_own.append(event.title or "")
 
             elif event.kind == EVENT_TOOL_CALL:
                 _tool_gap = True
@@ -2679,6 +2703,15 @@ async def handle_message(
     else:
         # No stream was started (e.g. no text chunks) — post the final text directly
         await slack.post_message(channel, clean_text or _NO_RESPONSE, reply_ts)
+
+    # The agent's own compaction during the turn, in the words `!compact` gives the same pass.
+    for summary in compacted_on_its_own:
+        notice, _ = redact_exfiltration_urls(_compacted_line(summary))
+        notice, _ = redact_credentials(notice)
+        try:
+            await slack.post_message(channel, notice, reply_ts)
+        except Exception:
+            logger.warning("Failed to post the compaction notice", exc_info=True)
 
     # Post thinking/reasoning as a thread reply between response and timing footer
     if thinking_accumulated:

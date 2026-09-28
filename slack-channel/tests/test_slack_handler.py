@@ -2178,6 +2178,28 @@ class TestCompactCommand:
         assert any("Deferred summary" in t for t in texts)
 
     @pytest.mark.asyncio
+    async def test_compact_with_nothing_to_compact_says_so(self):
+        """🔴 Before: a pass that found nothing to reclaim (`noop`) was not read, so the thread
+        waited on a compaction that was never coming and said it timed out."""
+        provider = self._make_provider_with_compact(
+            [LLMEvent(kind="compaction_status", text="noop")]
+        )
+
+        async def wait_for_compaction(timeout=120.0):
+            # What a runtime that compacts in place answers: there is nothing more to wait for.
+            return {"type": "timeout"}
+
+        provider.wait_for_compaction = wait_for_compaction
+        sessions = self._make_sessions_with_active(provider)
+        slack = MockSlackClient()
+
+        await handle_message(slack, sessions, "C1", "!compact", "thread1", "msg1", "U_OWNER")
+
+        texts = self._posted_texts(slack)
+        assert "✅ Nothing to compact — this conversation is already short enough." in texts
+        assert not any("timed out" in t for t in texts), texts
+
+    @pytest.mark.asyncio
     async def test_compact_exception_cleans_up(self):
         """When stream_command raises, handler posts error and removes session."""
         provider = FakeProvider()
@@ -2211,6 +2233,69 @@ class TestCompactCommand:
         assert footer["blocks"][0]["type"] == "context"
         assert "Finished in" in footer["text"]
         assert "ctx" not in footer["text"], "Footer must NOT include stale ctx% after compact"
+
+
+class TestTheAgentsOwnCompactionIsSaid:
+    """The agent compacts the conversation on its own between two steps of a turn
+    (`COMPACTION_AUTOMATIC`). 🔴 Before: the thread said nothing, so it lost its middle without a
+    word. It says so now, in the words `!compact` gives the same pass, once the reply is posted,
+    and the answer keeps both halves."""
+
+    SUMMARY = "freed 40% of the conversation (10,000 → 6,000 characters)"
+
+    def _turn(self):
+        from personalclaw.sdk.channel import COMPACTION_AUTOMATIC
+
+        return FakeProvider(
+            [
+                LLMEvent(kind="text_chunk", text="Looking through the logs."),
+                LLMEvent(kind="compaction_status", text=COMPACTION_AUTOMATIC, title=self.SUMMARY),
+                LLMEvent(kind="text_chunk", text=" Here is what I found."),
+            ]
+        )
+
+    async def _compact_command_says(self) -> str:
+        """What `!compact` posts for a pass that freed ``SUMMARY``."""
+        compact = TestCompactCommand()
+        provider = compact._make_provider_with_compact(
+            [LLMEvent(kind="compaction_status", text="completed", title=self.SUMMARY)]
+        )
+        slack = MockSlackClient()
+        await handle_message(
+            slack, compact._make_sessions_with_active(provider), "C1", "!compact", "thread1",
+            "msg1", "U_OWNER",
+        )
+        [said] = [t for t in compact._posted_texts(slack) if self.SUMMARY in t]
+        return said
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("streamed", [False, True], ids=["updated", "streamed"])
+    async def test_the_thread_says_it_after_the_reply_in_compacts_words(self, streamed):
+        set_owner_id("U_OWNER")
+        set_allowed_users({"U_OWNER"})
+        slack = MockSlackClient()
+        slack._stream_enabled = streamed
+
+        await handle_message(
+            slack, FakeSessionManager(self._turn()), "C1", "why did it fail?", "thread1", "msg1",
+            "U_OWNER",
+        )
+
+        said = [
+            (i, a[1]["text"]) for i, a in enumerate(slack.actions)
+            if a[0] == "post" and self.SUMMARY in a[1]["text"]
+        ]
+        assert [text for _, text in said] == [await self._compact_command_says()], slack.actions
+        [(at, _)] = said
+        reply = [
+            (i, a[1]["text"]) for i, a in enumerate(slack.actions)
+            if a[0] in ("update", "stop_stream") and "Here is what I found." in (a[1]["text"] or "")
+        ]
+        assert reply and all(i < at for i, _ in reply), "the notice follows the reply"
+        assert all("Looking through the logs." in text for _, text in reply), reply
+        assert not any(self.SUMMARY in text for _, text in reply), "the answer is only the answer"
+        footer = [i for i, a in enumerate(slack.actions) if a[0] == "blocks"]
+        assert footer and at < footer[-1], "and it comes before the turn's footer"
 
 
 class TestBuildTimingFooter:
