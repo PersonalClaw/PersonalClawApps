@@ -32,6 +32,20 @@ A PR that adds or changes an app must meet all of:
 - **Ship a `README.md` and a `LICENSE`** in the app directory.
 - **Manifest completeness.** `manifest-validate` parses every `app.json` against
   core's real `AppManifest` parser and requires a stable round-trip.
+- **Nothing published names what is private.** This repository is public, and so
+  is everything that reaches it: code, comments, tests, fixtures, READMEs, docs,
+  commit messages and PR text. Never write an employer's or any organisation's
+  internal names, hosts, tools, documents, people or ticket ids into any of it,
+  nor a reference to private planning (a plan's name, a work-item id, a ledger
+  row, a ruling). Describe the behaviour and its reason in product terms instead:
+  "validate at the boundary", not the title of the document that taught it.
+  Fixtures use invented names and the domains RFC 2606 reserves (`example.com`,
+  `.test`, `.invalid`), never a real person, account, workspace or id, and a
+  binary fixture carries no identity metadata (no author, company or account in a
+  document's or an image's properties). This is a practice, not a check: a list
+  of names to catch, even as digests, would publish every name on it and still
+  never be complete, so none exists and none should be added. Re-read your diff
+  for it before you commit.
 
 Run one bundle locally with the same dependency posture as CI:
 

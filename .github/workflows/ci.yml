@@ -124,8 +124,8 @@ jobs:
       - name: Every test runs against a scratch PersonalClaw home
         # conftest.py gives every test its own; pytest.ini makes pytest load it however it starts.
         run: python -m pytest .github/tests/test_scratch_home.py -q
-      - name: The publication-hygiene rail reds on a planted internal reference
-        # Drives the rail's own script against seeded repos: one control per denylist kind.
+      - name: The publication-hygiene rail reds on a planted defect
+        # Drives the rail's own script against seeded repos: one control per rule and field.
         run: python -m pytest .github/tests/test_publication_hygiene.py -q
       - name: Run each bundle's tests (per-bundle)
         # The repository runner is the single definition shared by CI and local use:

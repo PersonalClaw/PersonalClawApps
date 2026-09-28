@@ -31,6 +31,19 @@ PersonalClaw gateway via the platform's typed provider contracts. Full contract:
   editing `ui/src/`, run `npm ci && npm run build` in `ui/` and commit the result. The
   `ui-bundles` job rebuilds every bundle and fails on any difference.
 
+## Nothing published names what is private
+
+Code, comments, tests, fixtures, READMEs, docs, commit messages and PR text are all
+published. Never write an employer's or any organisation's internal names, hosts,
+tools, documents, people or ticket ids into them, nor a reference to private
+planning (a plan's name, a work-item id, a ledger row, a ruling); describe the
+behaviour and its reason in product terms instead. Fixtures use invented names and
+the domains RFC 2606 reserves (`example.com`, `.test`, `.invalid`), never a real
+person, account, workspace or id, and a binary fixture carries no identity metadata.
+This is a practice, not a check: a list of names to catch, even as digests,
+publishes the names and is never complete, so none exists and none is added. Re-read
+your diff for it before you commit.
+
 ## Per-app deliverables
 
 `test_provider.py` / `test_server.py`, a `README.md`, a `LICENSE`, and the
