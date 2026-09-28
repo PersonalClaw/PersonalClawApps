@@ -103,7 +103,12 @@ def wired(monkeypatch, tmp_path):
         smtp, AGENT, owner_id=AGENT,
         threads=ThreadStore(path_provider=lambda: tmp_path / "threads.json"),
     )
-    return transport, imap, smtp, state, captured
+    # Registered, as the gateway registers it: the door reads what the channel declares.
+    from personalclaw import channel_transports
+
+    channel_transports.register_transport(transport, app=_APP)
+    yield transport, imap, smtp, state, captured
+    channel_transports.unregister_transport(transport.name)
 
 
 def _mail(uid: int, imap: FakeImapServer, **kwargs) -> None:
@@ -126,6 +131,7 @@ class TestCapabilities:
         assert caps.reactions is False  # email has no reaction concept
         assert caps.typing_indicator is False
         assert caps.max_text_len == 0  # unbounded
+        assert caps.speaks_as_owner is True  # a mail goes out from the owner's own mailbox
 
     def test_streaming_falsity_is_declared_as_no_edits(self):
         """The plan says "capabilities declare streaming=false", but the shipped
@@ -463,21 +469,15 @@ class TestSelfMessageFilter:
 
 class TestTrustSeamIntegration:
     @pytest.mark.asyncio
-    async def test_an_unknown_sender_gets_the_canned_reply_and_no_session(self, wired):
+    async def test_an_unknown_sender_is_sent_nothing_and_gets_no_session(self, wired):
+        """What happens to their mail instead: test_a_stranger_is_sent_nothing.py."""
         transport, imap, smtp, state, captured = wired
         _mail(1, imap, from_addr="stranger@example.com")
         await transport._poll_once(transport._settings())
         await asyncio.sleep(0)
         assert "text" not in captured
-        assert smtp.sent, "the canned pairing reply should have been sent"
-        assert "pairing code" in smtp.body_text()
-
-    @pytest.mark.asyncio
-    async def test_the_canned_reply_threads_onto_their_message(self, wired):
-        transport, imap, smtp, _, _ = wired
-        _mail(1, imap, from_addr="stranger@example.com", message_id="<s1@example.com>")
-        await transport._poll_once(transport._settings())
-        assert smtp.header("In-Reply-To") == "<s1@example.com>"
+        assert smtp.sent == [], "a stranger was mailed from the owner's address"
+        assert len(state.notified) == 1, "the owner was not told someone new wrote"
 
     @pytest.mark.asyncio
     async def test_the_unknown_sender_notification_fires_once(self, wired):
@@ -610,7 +610,7 @@ class TestPairingByReply:
         _mail(1, imap, plain="how about 00000000")
         await transport._poll_once(transport._settings())
         assert is_allowed_sender("email", BOB) is False
-        assert "pairing code" in smtp.body_text()  # got the canned nudge instead
+        assert smtp.sent == []  # and no pairing note either: their mail waits for the owner
 
     @pytest.mark.asyncio
     async def test_no_active_code_means_no_pairing(self, wired):

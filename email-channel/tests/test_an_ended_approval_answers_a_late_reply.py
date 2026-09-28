@@ -11,6 +11,9 @@ Core now ends every approval it asks here (Approve or Deny in a reply, an answer
 nobody answering in time, the work that asked stopping first) and resolves the prompt's record with
 how it ended. The wait keeps no clock of its own, the mail says how long PersonalClaw waits, and a
 reply after the end is consumed and answered in the prompt's thread with how it ended.
+
+The endings were kept in memory, so a restart forgot them all and a reply after it reached the
+agent again. Each approval is now kept in the app's own data from the moment its mail goes out.
 """
 
 from __future__ import annotations
@@ -48,16 +51,13 @@ class _Asks:
     tool_meta: dict = {}
 
 
-@pytest.fixture
-def mailbox(monkeypatch, tmp_path):
-    """A configured transport over fake IMAP and SMTP, the real core door with the turn captured,
-    and the owner allowed and known by their address."""
-    _configure()
+def _started(tmp_path):
+    """A transport over fake IMAP and SMTP, as the gateway starts one, with the turn captured. Its
+    delivery keeps its approvals where the app keeps them, so a second one started over the same
+    home is this channel after a restart."""
     from personalclaw.channel_inbound import reset_admissions
 
     reset_admissions()
-    monkeypatch.setenv(owner_id_credential("email"), OWNER)
-    allow_sender("email", OWNER)
     captured: dict = {}
     imap, smtp = FakeImapServer(), FakeSmtpServer()
     transport = EmailTransport()
@@ -70,6 +70,16 @@ def mailbox(monkeypatch, tmp_path):
         threads=ThreadStore(path_provider=lambda: tmp_path / "threads.json"),
     )
     return transport, imap, smtp, captured
+
+
+@pytest.fixture
+def mailbox(monkeypatch, tmp_path):
+    """A configured transport, the real core door with the turn captured, and the owner allowed
+    and known by their address."""
+    _configure()
+    monkeypatch.setenv(owner_id_credential("email"), OWNER)
+    allow_sender("email", OWNER)
+    return _started(tmp_path)
 
 
 class _Asked:
@@ -212,6 +222,94 @@ async def test_a_message_that_answers_no_approval_still_reaches_the_agent(mailbo
             break
         await asyncio.sleep(0.005)
     assert "what did it change" in captured.get("text", ""), "an ordinary mail was swallowed"
+
+
+# ── a restart forgets no approval ───────────────────────────────────────────────────────────
+
+
+async def _reply_after_a_restart(tmp_path, token: str):
+    """The owner's reply to *token*, read by this channel started again over the same home."""
+    transport, imap, smtp, captured = _started(tmp_path)
+    _mail(1, imap, from_addr=OWNER, plain=f"{APPROVE_WORD} {token}")
+    await transport._poll_once(transport._settings())
+    return smtp, captured
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ended", sorted(ENDED_ANSWERS))
+async def test_a_late_reply_after_a_restart_is_still_told_how_the_approval_ended(
+    ended, mailbox, tmp_path
+):
+    """🔴 Before: the endings were kept in memory only, so after a restart the reply matched
+    nothing and reached the agent as a new message."""
+    transport, _, _, _ = mailbox
+    asked = await _Asked(transport._delivery).prompted()
+    await asked.ends(ended)
+
+    smtp, captured = await _reply_after_a_restart(tmp_path, asked.token)
+
+    assert "text" not in captured, "after a restart the late reply reached the agent"
+    await _mailed(smtp, 1)
+    assert smtp.header("To") == OWNER
+    assert smtp.body_text().strip() == ENDED_ANSWERS[ended]
+
+
+@pytest.mark.asyncio
+async def test_a_reply_to_an_approval_a_crash_cut_short_is_told_it_is_no_longer_waiting(
+    mailbox, tmp_path
+):
+    """A process that stops without ending its wait (a crash) records no ending, yet the owner
+    may still reply to its mail. That approval is written down when its mail goes out, so the
+    reply after the restart is answered, and approves nothing."""
+    transport, _, _, _ = mailbox
+    asked = await _Asked(transport._delivery).prompted()  # still waiting when it "crashes"
+
+    smtp, captured = await _reply_after_a_restart(tmp_path, asked.token)
+
+    assert "text" not in captured, "after a crash the reply reached the agent"
+    await _mailed(smtp, 1)
+    assert smtp.body_text().strip() == (
+        "This approval is no longer waiting. Your reply changes nothing."
+    )
+    asked.wait.cancel()
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_mail_after_a_restart_still_reaches_the_agent(mailbox, tmp_path):
+    """The floor of the two above: what is kept is approvals, and nothing else is swallowed."""
+    transport, _, _, _ = mailbox
+    asked = await _Asked(transport._delivery).prompted()
+    await asked.ends("approved")
+
+    restarted, imap, _, captured = _started(tmp_path)
+    _mail(1, imap, from_addr=OWNER, plain=f"about {asked.token}: what did it change?")
+    await restarted._poll_once(restarted._settings())
+
+    for _ in range(200):  # the turn is started as a task of its own
+        if "text" in captured:
+            break
+        await asyncio.sleep(0.005)
+    assert "what did it change" in captured.get("text", ""), "an ordinary mail was swallowed"
+
+
+def test_the_kept_approvals_are_bounded(tmp_path):
+    """The newest ones are kept, so a long-lived mailbox cannot grow the record without limit."""
+    from email_runtime.delivery import _ENDED_KEPT, EndedApprovalStore, _EndedApproval
+
+    store = EndedApprovalStore(path_provider=lambda: tmp_path / "approvals.json")
+    for n in range(_ENDED_KEPT + 3):
+        store.record(f"T{n:07d}", _EndedApproval("approved", f"req-{n}", OWNER, "<t@example.com>"))
+
+    again = EndedApprovalStore(path_provider=lambda: tmp_path / "approvals.json").items()
+    assert len(again) == _ENDED_KEPT
+    assert again[0][0] == "T0000003" and again[-1][0] == f"T{_ENDED_KEPT + 2:07d}"
+
+
+def test_an_unreadable_record_reads_as_empty(tmp_path):
+    from email_runtime.delivery import EndedApprovalStore
+
+    (tmp_path / "approvals.json").write_text("{not json", encoding="utf-8")
+    assert EndedApprovalStore(path_provider=lambda: tmp_path / "approvals.json").items() == []
 
 
 # ── the wait is PersonalClaw's ──────────────────────────────────────────────────────────────

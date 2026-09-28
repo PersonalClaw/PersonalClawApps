@@ -95,7 +95,12 @@ def wired(tmp_path):
         smtp, AGENT, owner_id=AGENT,
         threads=ThreadStore(path_provider=lambda: tmp_path / "threads.json"),
     )
+    # Registered, as the gateway registers it: the door reads what the channel declares.
+    from personalclaw import channel_transports
+
+    channel_transports.register_transport(transport, app=_APP)
     yield transport, imap, smtp, state, captured
+    channel_transports.unregister_transport(transport.name)
     reset_admissions()
 
 
@@ -160,12 +165,15 @@ async def test_a_code_in_automated_mail_pairs_nobody(wired):
 
 
 @pytest.mark.asyncio
-async def test_a_person_and_an_explicit_no_are_still_answered(wired):
-    """The floor: the same stranger, writing as a person, gets the one pairing reply."""
+async def test_a_person_and_an_explicit_no_still_reach_the_owner(wired):
+    """The floor: the same stranger, writing as a person, reaches the owner, who is told once
+    and answers them from the Inbox if they choose. Nothing is mailed to them from here."""
     transport, imap, smtp, state, _ = wired
     await _deliver(transport, imap, "dana@example.test", {"Auto-Submitted": "no"})
-    assert [str(m["To"]) for m in smtp.sent] == ["dana@example.test"]
+    assert smtp.sent == []
     assert len(state.notified) == 1
+    [row] = state._inbox_store.items.values()
+    assert row.sender_id == "dana@example.test"
 
 
 class TestAutomatedReason:

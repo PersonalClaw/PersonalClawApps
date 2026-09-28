@@ -58,7 +58,8 @@ evolve without breaking it:
 - `personalclaw.sdk.channel` — the transport ABC, `ChannelMessage`, the sender-trust seam
   (`guard_inbound`, `redeem_pairing_code`, `is_tracked_channel`), `run_chat`,
   `ProviderSettings`, `AppConfig`, `atomic_write`.
-- `personalclaw.sdk.util` — `app_data_dir` (the UID cursor + thread state).
+- `personalclaw.sdk.util` — `app_data_dir` (the UID cursor, thread state and the approvals it
+  mailed).
 - `personalclaw.sdk.cli` — `SetupContext` / `DoctorLine`.
 
 Core masks every text it hands the delivery handle (keys and exfiltration URLs), the words of a
@@ -147,12 +148,12 @@ removes them. Passwords an earlier release's setup saved under `EMAIL_IMAP_PASS`
   STARTTLS is refused with *the SMTP server … doesn't offer STARTTLS, so nothing was sent to
   it*.
 - **A first connection starts after the newest message.** The mail already in the folder
-  when you set the channel up is never answered; mail that arrives after it is. The same
-  happens when the server renumbers the folder (`UIDVALIDITY` changes).
+  when you set the channel up is never read as the channel's; mail that arrives after it is.
+  The same happens when the server renumbers the folder (`UIDVALIDITY` changes).
 - **Mail a program sent is never answered** (RFC 3834): `Auto-Submitted` other than `no`,
   an empty `Return-Path`, `Precedence: bulk` / `list` / `junk`, mailing-list headers, and
-  no-reply or daemon senders. Such mail gets no reply, no turn and no notification. An
-  allowed correspondent's automated mail still reaches your automations.
+  no-reply or daemon senders. Such mail gets no reply, no turn, no notification and no Inbox
+  row. An allowed correspondent's automated mail still reaches your automations.
 - **The status is what the connections last did.** It reads ready while the receiver runs,
   its last poll read the folder and the last send went out. Otherwise it names what failed
   (a refused login, an untrusted certificate, an unreachable server), and Test agrees
@@ -183,11 +184,27 @@ and **any other present value — including a typo — turns it on**.
 Who may talk is owned by the **core sender-trust seam** (`channel_trust`, provider
 `email`) — this app keeps no allowlist of its own.
 
-1. An unknown address gets one canned reply asking for a pairing code, and you get one
-   owner notification: both at most once a day per address, however often it writes.
-2. Run `personalclaw pair email` for an 8-digit code (TTL 10 min, single use).
-3. They **reply with the code anywhere in the body** — quoting and signatures are fine.
-4. From then on they converse; each thread gets its own session.
+**A stranger is sent nothing.** This mailbox is yours, and what the app sends goes out from
+your address, so it never answers someone PersonalClaw does not know: a reply would tell them
+the address is read, and it would be mail you never agreed to send. Their mail waits in
+PersonalClaw's **Inbox** as someone new, and you get one notification, at most once a day per
+address, however often it writes. From the Inbox you choose:
+
+- **Reply**: what you write goes to them, in their thread, when you press Send.
+- **Pair**: they can talk to your agent from their next mail on (this one is not handed to it).
+- **Ignore**: the row is dismissed, and they hear nothing.
+
+A thread you mute in the Inbox holds nothing more, and nothing in it is announced: you are told
+only of mail that is in your Inbox.
+
+Or pair them with a code:
+
+1. Run `personalclaw pair email` for an 8-digit code (TTL 10 min, single use), and give it to
+   them yourself (a reply from the Inbox works).
+2. They **reply with the code anywhere in the body** — quoting and signatures are fine. They
+   are told they are paired: the one mail this app sends on its own to someone it did not
+   know.
+3. From then on they converse; each thread gets its own session.
 
 **The owner** is the address approvals and anything else for you are sent to. Pair it from
 Configure → **Pair as owner**: mail the code the page shows to the mailbox from that address,
@@ -241,7 +258,10 @@ wait*, up to a week). If nobody answers by then, the call does not run, and that
 This app keeps no clock of its own: the approval ends when PersonalClaw ends it, however it
 ends (a reply here, an answer in PersonalClaw, the wait running out, or the work that asked for
 it stopping first). A reply after that decides nothing and does not reach the agent as a
-message: it is answered in its thread with how the approval ended.
+message: it is answered in its thread with how the approval ended. That holds after a restart
+too: the app keeps each approval it mailed, and how it ended, in its own data from the moment the
+mail goes out (the newest 256). A reply to one a stopped gateway never saw end is told it is no
+longer waiting.
 
 Notifications can reach the mailbox too. A notification rule with the **Channel DM** target
 sends its note to the owner on the first connected channel that reaches them, in name order,

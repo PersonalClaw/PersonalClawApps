@@ -6,7 +6,10 @@ It asserts what this bundle's own suite deliberately does not re-litigate per ch
 the connect/send echo shapes, the completeness of the capability dict, the health/test
 shapes, the unknown-sender flow (canned reply + one actionable owner request, deduped),
 that non-owner group content enters a session FENCED, and — because Telegram declares
-``edits=True`` — that the edit stream is throttled and force-flushes on stop.
+``edits=True`` — that the edit stream is throttled and force-flushes on stop, and takes every
+status a call can have. With the owner's press wired, it asserts how an approval prompt ends
+however it ends, and what a press after that is told, driven at ``resolve_callback``, where a
+button press arrives.
 
 Everything Telegram-specific (MarkdownV2 rendering, the 4096 cap, offset persistence)
 stays in this bundle's other test modules. This file is the shared floor.
@@ -18,10 +21,31 @@ import pytest
 
 from personalclaw.sdk.channel import ChannelContractError, assert_channel_contract
 
-from telegram_runtime.delivery import _EDIT_MIN_INTERVAL, TelegramDelivery
+from telegram_runtime.delivery import _APPROVE, _DENY, _EDIT_MIN_INTERVAL, TelegramDelivery
 from telegram_runtime.transport import TelegramTransport
 
 from test_delivery import FakeAPI
+
+OWNER = "42"
+
+
+def _press(delivery: TelegramDelivery, api: FakeAPI):
+    """The owner's Approve or Deny on a prompt, through the handler a button press reaches;
+    returns what the owner's press was answered with."""
+
+    async def press(pending, approve: bool) -> str:
+        answered = len(api.answers)
+        await delivery.resolve_callback(
+            {
+                "id": f"cq-{answered}",
+                "data": f"{_APPROVE if approve else _DENY}:{pending.request_id}",
+                "from": {"id": OWNER},
+            }
+        )
+        told = api.answers[answered:]
+        return str(told[-1]["text"] or "") if told else ""
+
+    return press
 
 
 def _wired() -> tuple[TelegramTransport, TelegramDelivery, FakeAPI, object]:
@@ -33,7 +57,7 @@ def _wired() -> tuple[TelegramTransport, TelegramDelivery, FakeAPI, object]:
     invented.
     """
     api = FakeAPI()
-    delivery = TelegramDelivery(api, lambda: "42")
+    delivery = TelegramDelivery(api, lambda: OWNER)
     clock = {"t": 0.0}
     delivery._now = lambda: clock["t"]  # type: ignore[method-assign]
     return TelegramTransport({"bot_token": "123:conformance"}), delivery, api, clock
@@ -50,6 +74,7 @@ def test_telegram_transport_meets_the_channel_contract():
         # Telegram drives its own long-poll loop from start_inbound and normalizes each
         # update in _on_message; it does not implement the generic receive() iterator.
         inbound_via="_on_message",
+        press=_press(delivery, api),
     )
 
 
@@ -84,4 +109,24 @@ def test_the_kit_is_actually_asserting_something_here():
             min_edit_interval=_EDIT_MIN_INTERVAL,
             clock=lambda t: clock.__setitem__("t", t),
             inbound_via="_on_message",
+        )
+
+
+def test_the_kit_catches_a_late_press_told_nothing_of_how_it_ended():
+    """The approvals clause reaches this app: a delivery that forgot how its approvals ended
+    answers every late press alike, and the kit names it."""
+
+    class Forgetful(TelegramDelivery):
+        async def resolve_callback(self, cq):  # type: ignore[no-untyped-def]
+            self._ended.clear()
+            await super().resolve_callback(cq)
+
+    api = FakeAPI()
+    delivery = Forgetful(api, lambda: OWNER)
+    with pytest.raises(ChannelContractError, match=r"\[approvals\].*answered alike"):
+        assert_channel_contract(
+            TelegramTransport({"bot_token": "123:conformance"}),
+            delivery=delivery,
+            inbound_via="_on_message",
+            press=_press(delivery, api),
         )

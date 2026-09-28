@@ -8,23 +8,45 @@ so instead of a throttle the kit asserts that ``start_stream`` returns ``""`` â€
 never update.
 
 The rest is the shared floor: connect/send echo shapes, capability-dict completeness,
-health/test shapes, the unknown-sender flow, and non-owner content entering a session
-FENCED. Email-specific behaviour (MIME threading headers, UIDVALIDITY recovery, the
-reply-token approval) stays in this bundle's other test modules.
+health/test shapes, the unknown-sender flow (no reply at all: this channel speaks as its
+owner), and non-owner content entering a session FENCED. With the owner's reply wired, how
+an approval ends however it ends, and what a reply after that is told, driven at
+``resolve_reply_token``, where a reply arrives. Email-specific behaviour (MIME threading
+headers, UIDVALIDITY recovery) stays in this bundle's other test modules.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from personalclaw.sdk.channel import ChannelContractError, assert_channel_contract
+from personalclaw.sdk.channel import (
+    ChannelContractError,
+    assert_channel_contract,
+    owner_id_credential,
+)
 
-from email_runtime.delivery import EmailDelivery
+from email_runtime.delivery import APPROVE_WORD, DENY_WORD, EmailDelivery
 from email_runtime.transport import EmailTransport
 
 from _fakes import FakeSmtpServer
 
 AGENT = "agent@example.com"
+OWNER = "owner@example.org"
+
+
+def _reply(delivery: EmailDelivery, smtp: FakeSmtpServer):
+    """The owner's APPROVE or DENY reply to a prompt, through the handler an inbound reply
+    reaches; returns what the owner was mailed back ("" when nothing was)."""
+
+    async def press(pending, approve: bool) -> str:
+        mailed = len(smtp.sent)
+        word = APPROVE_WORD if approve else DENY_WORD
+        assert delivery.resolve_reply_token(f"{word} {pending.token}", OWNER)
+        for task in list(delivery._answering):  # the answer to a late reply goes on its own
+            await task
+        return smtp.body_text().strip() if len(smtp.sent) > mailed else ""
+
+    return press
 
 
 def _configured(tmp_path) -> EmailTransport:
@@ -46,14 +68,17 @@ def _configured(tmp_path) -> EmailTransport:
     return transport
 
 
-def test_email_transport_meets_the_channel_contract(tmp_path):
-    transport = _configured(tmp_path)
+def test_email_transport_meets_the_channel_contract(tmp_path, monkeypatch):
+    monkeypatch.setenv(owner_id_credential("email"), OWNER)
+    smtp = FakeSmtpServer()
+    delivery = EmailDelivery(smtp, AGENT, owner_id=AGENT)
     assert_channel_contract(
-        transport,
-        delivery=EmailDelivery(FakeSmtpServer(), AGENT, owner_id=AGENT),
+        _configured(tmp_path),
+        delivery=delivery,
         # No min_edit_interval/clock: email declares edits=False, so the kit asserts the
         # MUST-NOT half (start_stream returns "") instead of a throttle.
         inbound_via="_dispatch",
+        press=_reply(delivery, smtp),
     )
 
 
@@ -79,4 +104,24 @@ def test_the_kit_catches_a_channel_that_pretends_to_stream():
             EmailTransport({}),
             delivery=PretendsToStream(FakeSmtpServer(), AGENT, owner_id=AGENT),
             inbound_via="_dispatch",
+        )
+
+
+def test_the_kit_catches_a_late_reply_told_nothing_of_how_it_ended(tmp_path, monkeypatch):
+    """The approvals clause reaches this app: a delivery that answers every late reply alike
+    is named by the kit."""
+    monkeypatch.setenv(owner_id_credential("email"), OWNER)
+
+    class OneAnswer(EmailDelivery):
+        def _answer_late(self, ended):  # type: ignore[no-untyped-def]
+            super()._answer_late(ended._replace(outcome=""))
+
+    smtp = FakeSmtpServer()
+    delivery = OneAnswer(smtp, AGENT, owner_id=AGENT)
+    with pytest.raises(ChannelContractError, match=r"\[approvals\].*answered alike"):
+        assert_channel_contract(
+            _configured(tmp_path),
+            delivery=delivery,
+            inbound_via="_dispatch",
+            press=_reply(delivery, smtp),
         )

@@ -157,7 +157,12 @@ def wired(tmp_path):
         smtp, AGENT, owner_id=AGENT,
         threads=ThreadStore(path_provider=lambda: tmp_path / "threads.json"),
     )
+    # Registered, as the gateway registers it: the door reads what the channel declares.
+    from personalclaw import channel_transports
+
+    channel_transports.register_transport(transport, app=APP_NAME)
     yield transport, imap, smtp
+    channel_transports.unregister_transport(transport.name)
     reset_admissions()
 
 
@@ -353,10 +358,11 @@ def test_the_event_carries_the_QUOTE_STRIPPED_text_not_the_raw_body(
 
 
 def test_a_DENIED_sender_arms_NOTHING(event_store, wired, registered_source, monkeypatch):
-    """🔴 An unknown correspondent gets the pairing nudge and fires no trigger.
+    """🔴 An unknown correspondent is held for the owner and fires no trigger.
 
     A ``From`` address is trivially forged, so the allowlist decision is core's and the tap
-    must read its verdict. Asserted against the door really having refused, so a change that
+    must read its verdict. Asserted against the door really having refused (their mail waits
+    in the Inbox as someone new, and nothing was mailed to them), so a change that
     accidentally allows the sender fails LOUDLY here instead of quietly passing.
     """
     from personalclaw.trigger_sources import NAMESPACE_PREFIX
@@ -375,7 +381,10 @@ def test_a_DENIED_sender_arms_NOTHING(event_store, wired, registered_source, mon
 
     _fire_through_the_gateway(_drive)
 
-    assert smtp.sent, "the door did not refuse — this test proves nothing"
+    state = transport._services.dashboard_state
+    held = [row.sender_id for row in state._inbox_store.items.values()]
+    assert held == [STRANGER], "the door did not refuse — this test proves nothing"
+    assert smtp.sent == []
     assert not calls, "a DENIED sender fired an automation"
     assert _run_count(event_store) == 0
 

@@ -78,7 +78,10 @@ approvals wait; this app keeps no clock of its own for them.
 
 A prompt PersonalClaw asks offers **Approve** and **Reject**. **Trust session** is on the prompts
 of a thread this app runs itself, where it lets the rest of that thread's tool calls run
-without asking. Such a prompt goes once it is answered.
+without asking. Such a prompt waits as long as PersonalClaw's approval wait, and goes once it
+has ended. If nobody answers in that time, the call does not run and the thread says *⌛ Nobody
+answered in time, so it did not run*: that is not a Reject, and the security log records it as
+decided by nobody.
 
 ## Results from your schedules
 

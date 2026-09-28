@@ -30,15 +30,68 @@ actual behaviour.
 from __future__ import annotations
 
 import pytest
+from slack_helpers import MockSlackClient
 
+import slack_runtime.handler as H
 from personalclaw.sdk.channel import ChannelContractError, assert_channel_contract
 
+from slack_runtime.delivery import SlackDelivery
 from slack_runtime.transport import SlackTransport
 
 #: Slack's inbound is Socket-Mode, connected inside ``start_inbound`` (the one hook the
 #: gateway calls at boot); the message router lives in ``slack_runtime.handler`` rather
 #: than on the transport, so ``start_inbound`` IS this transport's inbound proof.
 _INBOUND_VIA = "start_inbound"
+
+OWNER = "U_OWNER"
+
+
+@pytest.fixture
+def owner():
+    """The owner the approval prompts ask, and whose press answers them."""
+    H.set_owner_id(OWNER)
+    for state in (H._pending_approvals, H._ended_prompts):
+        state.clear()
+    yield OWNER
+    for state in (H._pending_approvals, H._ended_prompts):
+        state.clear()
+    H.set_owner_id("")
+
+
+def _press(slack: MockSlackClient):
+    """The owner's Approve or Reject on the prompt the delivery just posted, through the
+    handler a Slack button press reaches; returns what the owner was told there."""
+
+    async def press(pending, approve: bool) -> str:
+        prompt = [
+            a[1]
+            for a in slack.actions
+            if a[0] == "blocks" and any(b.get("type") == "actions" for b in a[1]["blocks"])
+        ][-1]
+        told_before = sum(1 for a in slack.actions if a[0] == "ephemeral")
+        await H.handle_interaction(
+            prompt["channel"],
+            prompt["ts"],
+            "approve_tool" if approve else "reject_tool",
+            user_id=OWNER,
+            slack=slack,
+        )
+        told = [a[1]["text"] for a in slack.actions if a[0] == "ephemeral"][told_before:]
+        return told[-1] if told else ""
+
+    return press
+
+
+def test_slack_delivery_meets_the_approval_and_streaming_clauses(owner):
+    """How a Slack prompt ends, however it ends, what a press after that is told, and every
+    status a stream is given. Driven at the handler, where a button press arrives."""
+    slack = MockSlackClient()
+    assert_channel_contract(
+        SlackTransport({}),
+        delivery=SlackDelivery(slack, lambda: owner),
+        inbound_via=_INBOUND_VIA,
+        press=_press(slack),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -142,3 +195,22 @@ def test_non_owner_content_is_fenced_before_the_agent():
     assert fence_untrusted_inbound(raw, "U_OWNER", trusted=True) == raw
     # An empty message has nothing to fence.
     assert fence_untrusted_inbound("", "U_STRANGER", trusted=False) == ""
+
+
+def test_the_kit_catches_a_late_press_told_nothing_of_how_it_ended(owner):
+    """The approvals clause reaches this app: with how each prompt ended forgotten, every late
+    press is answered alike, and the kit names it."""
+    slack = MockSlackClient()
+    pressed = _press(slack)
+
+    async def forgetful(pending, approve: bool) -> str:
+        H._ended_prompts.clear()
+        return await pressed(pending, approve)
+
+    with pytest.raises(ChannelContractError, match=r"\[approvals\].*answered alike"):
+        assert_channel_contract(
+            SlackTransport({}),
+            delivery=SlackDelivery(slack, lambda: owner),
+            inbound_via=_INBOUND_VIA,
+            press=forgetful,
+        )

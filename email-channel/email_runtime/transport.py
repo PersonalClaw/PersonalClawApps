@@ -15,8 +15,9 @@ poll loop started by :meth:`start_inbound`, which the gateway calls once at boot
    session linking and the turn itself all live in core, so this transport can't forget
    any of them. A reply containing an active pairing code redeems it BEFORE the door
    (the plan's "pairing code = a reply containing the code" — an in-body search core's
-   whole-message check cannot do), and the transport keeps only the outbound half,
-   delivering the verdict's canned reply in-thread. Core mirrors agent replies back out
+   whole-message check cannot do). A stranger is sent nothing: this mailbox is the
+   owner's, so the channel declares ``speaks_as_owner`` and core holds the stranger's
+   mail in the Inbox for the owner to answer. Core mirrors agent replies back out
    through the
    :class:`~email_runtime.delivery.EmailDelivery` this transport registers at boot.
 
@@ -178,11 +179,14 @@ class EmailTransport(ChannelTransportProvider):
           :meth:`_try_pairing` (``redeem_owner_pairing_code``); core reads the owner with
           ``owner_id_for`` each time it asks (:meth:`owner_pairing_hint` says how, over the
           code). The owner id was otherwise a variable set by hand.
+        * ``speaks_as_owner`` → a mail from this app goes out from the owner's own mailbox, so
+          core hands it no pairing note for a stranger and holds the stranger's mail in the
+          Inbox as someone new, for the owner to reply to, pair or ignore.
         """
         return ChannelCapabilities(
             inbound=True, threads=True, attachments=True, reactions=False,
             edits=False, rich_text=True, typing_indicator=False, max_text_len=0,
-            owner_pairing=True,
+            owner_pairing=True, speaks_as_owner=True,
         )
 
     def owner_pairing_hint(self) -> str:
@@ -531,9 +535,9 @@ class EmailTransport(ChannelTransportProvider):
         from personalclaw.sdk.channel import is_allowed_sender
 
         if mail.automated:
-            # RFC 3834: nothing may answer mail a program sent. The door would — the pairing
-            # nudge to a stranger, the agent's answer to a correspondent — and would tell the
-            # owner someone is writing, so the mail never reaches it: an answer to an
+            # RFC 3834: nothing may answer mail a program sent. The door would — the agent's
+            # answer to a correspondent — and would hold a stranger's in the Inbox and tell
+            # the owner someone is writing, so the mail never reaches it: an answer to an
             # auto-reply loops, and one to a list or a no-reply address is backscatter. An
             # allowed correspondent's mail still reaches this bundle's automations (the same
             # allowlist the door reads), which answer nobody.
@@ -552,8 +556,9 @@ class EmailTransport(ChannelTransportProvider):
         if await self._try_pairing(cm, text, settings):
             return
 
-        # Remember the inbound message FIRST so any reply — the agent's, or the
-        # door's canned nudge — threads under the sender's own message.
+        # Remember the inbound message FIRST so any reply — the agent's, a pairing
+        # confirmation, or the owner's own from the Inbox — threads under the sender's
+        # own message.
         if self._delivery is not None:
             self._delivery.note_inbound(mail)
             # An ALLOWED sender's body may carry an approval reply-token; an answer is
@@ -568,14 +573,17 @@ class EmailTransport(ChannelTransportProvider):
         # The guarded door. Core applies the trust gate, the non-owner-content
         # fence, redaction, session linking and the turn itself — the routing this
         # transport used to carry a copy of. An email to our mailbox is a direct
-        # message by construction (no "room" concept), so is_dm is always True. This
-        # transport keeps only the outbound half: the canned reply, delivered
-        # in-thread so the nudge lands under the sender's own message.
+        # message by construction (no "room" concept), so is_dm is always True. A
+        # stranger's mail is held in the Inbox for the owner (``speaks_as_owner``).
         cm_for_door = cm if text == cm.text else replace(cm, text=text)
         verdict = await self._services.deliver_channel_inbound(
             PROVIDER, cm_for_door, is_dm=True
         )
-        if verdict.canned_reply and self._delivery is not None:
+        # The one reply this app sends on its own to someone PersonalClaw did not know: that
+        # they just paired, with a code the owner gave them. It goes in-thread. Any other
+        # reply the door hands back stays unsent: a mail from here goes out as the owner,
+        # and a stranger is answered by nobody but the owner.
+        if verdict.canned_reply and verdict.meta.get("paired") and self._delivery is not None:
             try:
                 await self._delivery.deliver_text(
                     cm.channel_id, verdict.canned_reply, cm.thread_id

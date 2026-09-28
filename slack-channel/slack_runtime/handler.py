@@ -56,7 +56,7 @@ from personalclaw.sdk.channel import (
     ModelProvider,
 )
 from personalclaw.sdk.channel import parse_title, session_restrictions, trust_mode
-from personalclaw.sdk.channel import approval_brief_for
+from personalclaw.sdk.channel import approval_brief_for, approval_window_secs
 from personalclaw.sdk.channel import is_sensitive_path, redact_credentials, redact_exfiltration_urls
 from personalclaw.sdk.channel import sel
 from personalclaw.sdk.channel import SessionManager
@@ -107,9 +107,6 @@ def _should_auto_approve_spawn(context_builder, event_title: str) -> bool:
 
 # Min interval between Slack message edits (avoid rate limits)
 _EDIT_INTERVAL = 1.0
-
-# Timeout for user to click approve/reject before auto-rejecting
-_APPROVAL_TIMEOUT = 120.0
 
 # Block Kit's cap on the blocks in one message: an approval prompt whose arguments need more
 # code sections than that runs over several messages (`_approval_messages`).
@@ -802,6 +799,15 @@ class _PendingApproval:
 
 _OUTCOME_APPROVED = "approved"
 _OUTCOME_REJECTED = "rejected"
+_OUTCOME_EXPIRED = "expired"
+_OUTCOME_CANCELLED = "cancelled"
+
+# What the thread says about a call its approval did not let run: a Reject, or nobody answering
+# in time, which is not a Deny.
+_UNRUN_LINES = {
+    _OUTCOME_REJECTED: "🚫 _Tool use rejected._",
+    _OUTCOME_EXPIRED: "⌛ _Nobody answered in time, so it did not run._",
+}
 
 # What :func:`handle_interaction` returns for the owner's press on a prompt that has ended.
 LATE_PRESS = "late_press"
@@ -2490,7 +2496,7 @@ async def handle_message(
                         await _append_stream(stream_buffer)
                         stream_buffer = ""
 
-                outcome = await _request_approval(
+                ended = await _request_approval(
                     slack,
                     client,
                     channel,
@@ -2501,22 +2507,17 @@ async def handle_message(
                 )
                 task.resume()
                 status_ctrl.resume_stall_watchdog()
-                sel().log_tool_invocation(
-                    session_key=session_key,
-                    source="slack",
-                    tool_name=event.title,
-                    tool_kind=event.tool_kind,
-                    outcome="approved" if outcome != _OUTCOME_REJECTED else "rejected",
-                    request_id=event.request_id,
-                    metadata={"reason": "interactive"},
-                )
-                if outcome == _OUTCOME_REJECTED:
-                    if use_slack_stream and _active_task_id:
-                        assert stream_ts is not None
-                        await _append_task(_active_task_id, _active_task_title, "error")
-                        _active_task_id = ""
-                    if not use_slack_stream:
-                        accumulated += "\n🚫 _Tool use rejected._"
+                if ended != _OUTCOME_APPROVED:
+                    # The thread says why the call did not run, streamed or not: an expired
+                    # prompt is gone by now, and nobody pressed anything to know it ended.
+                    if use_slack_stream:
+                        if _active_task_id:
+                            assert stream_ts is not None
+                            await _append_task(_active_task_id, _active_task_title, "error")
+                            _active_task_id = ""
+                        await _append_stream(f"\n{_UNRUN_LINES[ended]}")
+                    else:
+                        accumulated += f"\n{_UNRUN_LINES[ended]}"
                     break
 
             elif event.kind == EVENT_COMPLETE:
@@ -2902,11 +2903,15 @@ async def _request_approval(
     session_key: str = "",
     is_dm: bool = True,
 ) -> str:
-    """Post approval buttons, wait for click, return 'approved' or 'rejected'.
+    """Ask the owner about *event* in the thread, and wait as long as PersonalClaw waits for any
+    approval (``approval_window_secs``, read now). Returns how it ended: ``approved``,
+    ``rejected`` (the owner pressed Reject) or ``expired`` (nobody answered in that window, so the
+    call does not run). A wait the turn's own stop cancels ends ``cancelled`` and re-raises.
 
-    The prompt goes once it is answered. If it cannot be deleted it is closed instead, saying
-    how it ended, so no button is left that answers nothing: a timeout reads as nobody
-    answering, not as a Deny."""
+    Each ending is audited here, once, the way core audits its own: a press was decided by the
+    owner, an unanswered or stopped wait by nobody, so the audit log's rejections are only real
+    ones. The prompt goes once it has ended; if it cannot be deleted it is closed instead, saying
+    how, so no button is left that answers nothing."""
     approval_ts = await _post_approval(slack, channel, thread_ts, event, is_dm=is_dm)
 
     key = f"{channel}:{approval_ts}"
@@ -2914,23 +2919,45 @@ async def _request_approval(
     _pending_approvals[key] = pending
 
     try:
-        outcome = ended = await asyncio.wait_for(pending.future, timeout=_APPROVAL_TIMEOUT)
+        ended = await asyncio.wait_for(pending.future, timeout=approval_window_secs())
     except asyncio.TimeoutError:
-        outcome, ended = _OUTCOME_REJECTED, "expired"
+        ended = _OUTCOME_EXPIRED
         await provider.reject_tool(event.request_id)
     except asyncio.CancelledError:
-        _close_prompt_later(slack, channel, approval_ts, event, is_dm=is_dm, outcome="cancelled")
+        _audit_ending(event, session_key, _OUTCOME_CANCELLED)
+        _close_prompt_later(
+            slack, channel, approval_ts, event, is_dm=is_dm, outcome=_OUTCOME_CANCELLED
+        )
         raise
     finally:
         _pending_approvals.pop(key, None)
 
+    _audit_ending(event, session_key, ended)
     _record_ending(key, ended)
     try:
         await slack.delete_message(channel, approval_ts)
     except Exception:
         await close_prompt(slack, channel, approval_ts, event, is_dm=is_dm, outcome=ended)
 
-    return outcome
+    return ended
+
+
+def _audit_ending(event: LLMEvent, session_key: str, ended: str) -> None:
+    """The one audit row of an approval this app asked for itself, saying who decided it: the
+    owner for a press, nobody for a wait that expired or was stopped."""
+    decided_by = "you" if ended in (_OUTCOME_APPROVED, _OUTCOME_REJECTED) else "nobody"
+    try:
+        sel().log_tool_invocation(
+            session_key=session_key,
+            source="slack",
+            tool_name=event.title,
+            tool_kind=event.tool_kind,
+            outcome=ended,
+            request_id=event.request_id,
+            metadata={"reason": "interactive", "decided_by": decided_by},
+        )
+    except Exception:
+        logger.warning("Could not audit an approval that ended %s", ended, exc_info=True)
 
 
 async def close_prompt(

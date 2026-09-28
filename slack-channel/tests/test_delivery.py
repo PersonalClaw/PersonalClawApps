@@ -152,6 +152,26 @@ class TestNewChannelDeliveryMethods:
         client.stop_stream.assert_awaited_once_with("C1", "sts")
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("status", "title", "mark"),
+        [
+            ("complete", "Doing", "complete"),
+            ("failed", "Doing (failed)", "error"),
+            ("rejected", "Doing (rejected)", "error"),
+            ("expired", "Doing (no answer in time, not run)", "error"),
+            ("cancelled", "Doing (cancelled, not run)", "error"),
+            ("paused", "Doing (paused)", "pending"),
+        ],
+    )
+    async def test_a_calls_task_says_how_it_ended(self, status, title, mark):
+        """Slack's red mark cannot say which ending it is, so the title does; a call that did
+        not run never reads as done, and a status this app does not know is shown by name."""
+        client = MagicMock()
+        client.append_task = AsyncMock(return_value=True)
+        await _delivery(client).append_stream_task("C1", "sts", "t1", "Doing", status)
+        client.append_task.assert_awaited_once_with("C1", "sts", "t1", title, mark)
+
+    @pytest.mark.asyncio
     async def test_resolve_user_name_prefers_real_name(self):
         client = MagicMock()
         client.get_user_info = AsyncMock(return_value={"name": "u", "real_name": "Real Name"})

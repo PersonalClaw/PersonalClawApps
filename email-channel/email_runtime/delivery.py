@@ -60,6 +60,8 @@ _APP = "email-channel"
 #: The channel's provider key: core keeps this channel's owner under it (``owner_id_for``).
 _PROVIDER = "email"
 _THREADS_FILE = "threads.json"
+#: The approvals asked by mail and how each ended (:class:`EndedApprovalStore`).
+_APPROVALS_FILE = "approvals.json"
 #: Bound the persisted thread map so a long-lived mailbox can't grow it without limit.
 #: Oldest entries age out; a thread that falls out simply starts a fresh chain.
 MAX_THREADS = 500
@@ -224,6 +226,8 @@ class _PendingApproval:
 class _EndedApproval(NamedTuple):
     """How an approval asked by mail ended, and the thread it was asked in."""
 
+    #: how it ended, or "" while it waits: read back after a restart, "" is an approval whose
+    #: process stopped before it ended
     outcome: str
     request_id: str
     channel: str
@@ -231,12 +235,73 @@ class _EndedApproval(NamedTuple):
     thread: str
 
 
+class EndedApprovalStore:
+    """Every approval asked by mail, by its reply token, and how it ended, in the app's own data.
+
+    A reply can come long after its approval ended, and after a restart as easily as before one.
+    Kept in memory only, a restart forgot every ending, and a reply to one reached the agent as a
+    new message. So an approval is written down when its mail goes out, with no ending yet, and
+    again when it ends. One read back with no ending was asked by a process that stopped before
+    it ended (a crash), and a reply to it is told it is no longer waiting. The newest
+    ``_ENDED_KEPT`` are kept.
+
+    The file is the record, read at each use rather than cached: a settings save starts a new
+    delivery while the old one may still end an approval it asked, and each writes what the other
+    wrote. An unreadable file is read as empty, with a warning: nothing it held can be recovered,
+    and a reply it would have answered only reaches the agent as text, which approves nothing.
+    """
+
+    def __init__(self, path_provider: Any = None) -> None:
+        self._path_provider = path_provider or (lambda: app_data_dir(_APP) / _APPROVALS_FILE)
+
+    def _read(self) -> "OrderedDict[str, _EndedApproval]":
+        records: OrderedDict[str, _EndedApproval] = OrderedDict()
+        path = self._path_provider()
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return records
+        except (OSError, ValueError):
+            logger.warning("email: could not read the approvals asked by mail at %s", path)
+            return records
+        if not isinstance(data, dict):
+            logger.warning("email: the approvals asked by mail at %s are not a record", path)
+            return records
+        for token, entry in data.items():
+            if isinstance(entry, dict):
+                records[str(token)] = _EndedApproval(
+                    str(entry.get("outcome", "")),
+                    str(entry.get("request_id", "")),
+                    str(entry.get("channel", "")),
+                    str(entry.get("thread", "")),
+                )
+        return records
+
+    def record(self, token: str, approval: _EndedApproval) -> None:
+        """Write *approval* down under *token*, as the newest."""
+        records = self._read()
+        records.pop(token, None)
+        records[token] = approval
+        while len(records) > _ENDED_KEPT:
+            records.popitem(last=False)
+        try:
+            atomic_write(
+                self._path_provider(),
+                json.dumps({t: a._asdict() for t, a in records.items()}) + "\n",
+            )
+        except OSError:
+            logger.warning("email: could not save the approvals asked by mail", exc_info=True)
+
+    def items(self) -> list[tuple[str, _EndedApproval]]:
+        return list(self._read().items())
+
+
 class EmailDelivery:
     """Renders + delivers gateway results over SMTP. Implements ChannelDelivery."""
 
     def __init__(
         self, sender: SmtpSender, from_addr: str, owner_id: str = "",
-        threads: ThreadStore | None = None,
+        threads: ThreadStore | None = None, approvals: EndedApprovalStore | None = None,
     ) -> None:
         self._sender = sender
         self._from = from_addr
@@ -245,9 +310,10 @@ class EmailDelivery:
         # keyed by the uppercase reply token; the transport matches an inbound body
         # against these to resolve an approval.
         self._pending: dict[str, _PendingApproval] = {}
-        # How each ended approval ended, by its token, with where it was asked, so a reply to it
-        # is answered with that instead of becoming a message to the agent.
-        self._ended: OrderedDict[str, _EndedApproval] = OrderedDict()
+        # Every approval asked by mail and how it ended, by its token, with where it was asked,
+        # kept across restarts, so a reply to one that ended is answered with that instead of
+        # becoming a message to the agent.
+        self._ended = approvals if approvals is not None else EndedApprovalStore()
         # Background sends of those answers, kept until they are sent.
         self._answering: set[asyncio.Task[Any]] = set()
         #: Why the most recent send failed, or "" when it went out (or none was tried). The
@@ -568,6 +634,8 @@ class EmailDelivery:
         if not sent:
             self._pending.pop(token, None)
             return None
+        # Written down as soon as the owner can reply to it: a reply after a crash still finds it.
+        self._ended.record(token, _EndedApproval("", request_id, channel, thread_ts or sent))
 
         if on_prompted:
             try:
@@ -580,9 +648,9 @@ class EmailDelivery:
             outcome = await pending.future
         finally:
             self._pending.pop(token, None)
-            self._ended[token] = _EndedApproval(outcome, request_id, channel, thread_ts or sent)
-            while len(self._ended) > _ENDED_KEPT:
-                self._ended.popitem(last=False)
+            self._ended.record(
+                token, _EndedApproval(outcome, request_id, channel, thread_ts or sent)
+            )
         return outcome == "approved"
 
     def _answer_late(self, ended: _EndedApproval) -> None:
@@ -645,7 +713,7 @@ class EmailDelivery:
                 # request to stop must never be read as consent.
                 pending.future.set_result("rejected" if denied else "approved")
             return True
-        for token, ended in list(self._ended.items()):
+        for token, ended in self._ended.items():
             if not _answers(upper, token):
                 continue
             # A reply to an approval that has ended decides nothing, and it is not a new message

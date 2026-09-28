@@ -5,7 +5,8 @@ mailbox, "I don't recognize you yet…" went from the owner's own address to eve
 ten senders already in the inbox — a school newsletter and a no-reply address among them,
 one sender twice — and each raised an owner notification. The UIDVALIDITY branch already
 started from the newest message; a first connection now does the same. Mail that arrives
-after it is the channel's, and a stranger's first message still gets its one reply.
+after it is the channel's: a stranger's first message reaches the owner, who is told once, and
+it waits in the Inbox (nothing is mailed to a stranger from the owner's address at all now).
 
 Trust runs through the REAL core door into the isolated tmp home, as in test_transport.py;
 IMAP and SMTP are the injected fakes.
@@ -102,7 +103,12 @@ def fresh(tmp_path):
     )
     # What start_inbound does: the cursor comes from the app's data dir, and there is none.
     transport._cursor, transport._uidvalidity = transport._load_cursor()
+    # Registered, as the gateway registers it: the door reads what the channel declares.
+    from personalclaw import channel_transports
+
+    channel_transports.register_transport(transport, app=_APP)
     yield transport, imap, smtp, state, captured
+    channel_transports.unregister_transport(transport.name)
     reset_admissions()
 
 
@@ -123,7 +129,7 @@ async def test_the_first_poll_answers_nobody_whose_mail_was_already_there(fresh)
 
 @pytest.mark.asyncio
 async def test_mail_after_the_first_poll_is_the_channels(fresh):
-    """The floor: the channel still answers — once — a stranger who writes after setup."""
+    """The floor: a stranger who writes after setup reaches the owner, once, and waits for them."""
     transport, imap, smtp, state, _ = fresh
     await transport._poll_once(transport._settings())
     imap.add(len(SEEDED) + 1, build_message(from_addr="dana@example.test", to_addr=NOOR,
@@ -131,9 +137,10 @@ async def test_mail_after_the_first_poll_is_the_channels(fresh):
     await transport._poll_once(transport._settings())
     await asyncio.sleep(0)
 
-    assert [str(m["To"]) for m in smtp.sent] == ["dana@example.test"]
-    assert "pairing code" in smtp.body_text()
+    assert smtp.sent == [], "a stranger was mailed from the owner's address"
     assert len(state.notified) == 1
+    [row] = state._inbox_store.items.values()
+    assert (row.sender_id, row.refs.get("someone_new")) == ("dana@example.test", "email")
 
 
 @pytest.mark.asyncio
@@ -169,8 +176,8 @@ async def test_a_first_connection_that_fails_sets_no_start(fresh):
 
 
 @pytest.mark.asyncio
-async def test_an_empty_folder_starts_at_zero_and_answers_its_first_mail(fresh):
-    transport, imap, smtp, _, _ = fresh
+async def test_an_empty_folder_starts_at_zero_and_reads_its_first_mail(fresh):
+    transport, imap, smtp, state, _ = fresh
     imap.messages["INBOX"] = {}
     await transport._poll_once(transport._settings())
     assert transport._cursor == 0
@@ -178,7 +185,8 @@ async def test_an_empty_folder_starts_at_zero_and_answers_its_first_mail(fresh):
     imap.add(1, build_message(from_addr="dana@example.test", to_addr=NOOR,
                               message_id="<first@test>", plain="hi"))
     await transport._poll_once(transport._settings())
-    assert [str(m["To"]) for m in smtp.sent] == ["dana@example.test"]
+    assert len(state.notified) == 1, "the first mail after an empty folder reached nobody"
+    assert smtp.sent == []
 
 
 @pytest.mark.asyncio
