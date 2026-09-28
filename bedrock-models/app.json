@@ -1,6 +1,6 @@
 {
   "name": "bedrock-models",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "displayName": "Amazon Bedrock",
   "description": "Amazon Bedrock models, authenticated with your own AWS credential chain. No key is stored by PersonalClaw. Chat (Converse API), embedding (Titan/Cohere), image generation (Nova Canvas), video generation (Nova Reel), and speech-to-text. One instance per AWS profile/region.",
   "icon": "Cloud",
@@ -20,6 +20,9 @@
       "boto3>=1.34"
     ]
   },
+  "loggerRoots": [
+    "bedrock_models"
+  ],
   "provider": {
     "type": "model",
     "providerType": "bedrock",
@@ -92,8 +95,8 @@
           "type": "string",
           "default": "",
           "x-meta": {
-            "label": "Video S3 Bucket",
-            "help": "S3 bucket for Nova Reel video-generation output. Falls back to the BEDROCK_VIDEO_S3_BUCKET env var. Required only for video generation.",
+            "label": "S3 Bucket",
+            "help": "S3 bucket Bedrock's media features stage files in: Nova Reel writes each generated video there, and speech-to-text uploads each recording there for Amazon Transcribe, deleting it afterwards. Required for video generation and speech-to-text; nothing else uses it. Falls back to the BEDROCK_VIDEO_S3_BUCKET env var.",
             "tags": [
               "advanced"
             ]

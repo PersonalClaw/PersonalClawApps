@@ -169,8 +169,9 @@ def test_the_catalog_lists_transcribe_for_speech_to_text(monkeypatch):
     assert [m.id for m in models if "chat" in m.capabilities] == [chat["id"]]
 
 
-def test_an_account_the_listings_did_not_reach_lists_nothing(monkeypatch):
-    """No Transcribe row on its own: an empty catalog is how an unreachable account reads."""
+def test_an_account_that_lists_no_models_gets_no_transcribe_row_either(monkeypatch):
+    """No Transcribe row on its own: it is listed beside the models of an account the listings
+    reached. (One they could not reach raises its cause instead, ``test_catalog.py``.)"""
     assert _listed(monkeypatch, []) == []
 
 
@@ -194,3 +195,22 @@ def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
     )
     report = asyncio.run(media_refusal_report(adapters, edit=False))
     assert report == media_refusal_expected(adapters, edit=False)
+
+
+# ── the S3 bucket's help names every feature that needs it ────────────────────────────────
+
+
+def test_the_bucket_help_names_every_feature_that_needs_it(monkeypatch):
+    """🔴 Red on main: "Required only for video generation." Speech-to-text needs the bucket
+    too: Transcribe reads each recording from it, and the adapter is unavailable without it."""
+    from pathlib import Path
+
+    monkeypatch.delenv("BEDROCK_VIDEO_S3_BUCKET", raising=False)
+    manifest = json.loads((Path(__file__).parent / "app.json").read_text(encoding="utf-8"))
+    field = manifest["provider"]["settingsSchema"]["properties"]["video_s3_bucket"]["x-meta"]
+
+    assert field["label"] == "S3 Bucket"
+    assert "Required for video generation and speech-to-text; nothing else uses it." in field["help"]
+    # What the help says is what the adapters do: without the bucket neither is available.
+    assert _run(prov.BedrockVideoProvider(name="my-bedrock").is_available()) is False
+    assert _run(prov.BedrockSTTProvider(name="my-bedrock").is_available()) is False

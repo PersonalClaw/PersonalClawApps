@@ -34,6 +34,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | `default_model` | Default Chat Model | A Bedrock chat model id (full versioned id). The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 | `profile` | AWS Profile | Optional named profile from ~/.aws. Empty uses the default credential chain (env / SSO / instance role). |
 | `system_prompt` | System Prompt | Optional system prompt prepended to every turn. |
+| `video_s3_bucket` | S3 Bucket | Where Nova Reel writes each generated video, and where speech-to-text uploads each recording for Amazon Transcribe (deleting it afterwards). Required for video generation and speech-to-text; nothing else uses it. Falls back to the `BEDROCK_VIDEO_S3_BUCKET` env var. |
 
 ## Prompt caching
 
@@ -55,6 +56,8 @@ to be worth caching, so short turns may report no reads at all — that is norma
 ## Authentication
 
 Uses your ambient AWS credential chain (environment variables, `~/.aws` profile, SSO). PersonalClaw stores no AWS key for this provider — configure the region/profile in the provider settings.
+
+When that chain can't sign in — no credentials found, a profile that isn't in your AWS config, a `credential_process` command that fails, an SSO sign-in that has expired, a region name that isn't one, no connection to AWS — the chat, the connection test and the Models page say which it is and what to do (sign in with your AWS tool, fix the profile or region, or choose another profile), with the AWS SDK's own message after that.
 
 ## License
 

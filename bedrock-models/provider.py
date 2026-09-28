@@ -24,9 +24,11 @@ import base64
 import binascii
 import json
 import logging
+import os
 import re
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, NoReturn
+from urllib.parse import urlsplit
 
 from personalclaw.sdk.model import (
     EVENT_COMPLETE,
@@ -38,8 +40,8 @@ from personalclaw.sdk.model import (
 )
 from personalclaw.sdk.model import CACHE_HINT_KEY, Capability, PromptCache, ProviderCapability
 from personalclaw.sdk.model import (
-    ConnectionResult,
     ModelCatalog,
+    ModelDiscoveryError,
     ModelInfo,
     ProviderEntry,
     ProviderResolutionError,
@@ -50,7 +52,10 @@ from personalclaw.sdk.model import (
     require_model,
 )
 
-logger = logging.getLogger(__name__)
+#: Named, not ``__name__``: core loads this module under a private name, and a log reaches the
+#: gateway log only under a root the manifest declares (``loggerRoots``). Under its module name
+#: every line here reached no handler, so "check the gateway log" pointed at nothing.
+logger = logging.getLogger("bedrock_models")
 
 # NO model id is chosen here, hardcoded or discovered. A call names its model: the chat binding
 # in Settings → Models (e.g. ``Bedrock:global.anthropic.claude-opus-4-8``), else the instance's
@@ -152,6 +157,18 @@ _NOT_AUTHORIZED_RE = re.compile(r"not authorized to perform:\s*(?P<action>[\w:*-
 _REJECTED_CREDENTIAL_CODES = frozenset(
     {"UnrecognizedClientException", "ExpiredTokenException", "ExpiredToken", "InvalidClientTokenId"}
 )
+#: The calls boto3 makes to turn a profile's IAM role into credentials. A refusal of one is about
+#: the profile's role, never about a Bedrock model, so it must not read as access to a model.
+_ROLE_OPERATIONS = frozenset({"AssumeRole", "AssumeRoleWithWebIdentity", "AssumeRoleWithSAML"})
+
+#: Where an instance's AWS Region and AWS Profile are set. AWS Profile sits under the form's
+#: Advanced disclosure, so a step that names it says so.
+_ON_INSTANCE = "on this Amazon Bedrock instance in Settings → Providers"
+_SET_PROFILE = f"set AWS Profile {_ON_INSTANCE} (under Advanced)"
+
+#: The most of an SDK error's own words a sentence carries after "Details:" — short enough that
+#: the longest sentence below, with them, fits the 600 characters a connection result keeps.
+_DETAIL_CHARS = 200
 
 
 def _aws_error_code(error: Exception) -> str:
@@ -165,12 +182,176 @@ def _aws_error_code(error: Exception) -> str:
     return found.group(1) if found else ""
 
 
-def _friendly_bedrock_error(error: Exception, model_id: str, *, region: str = "") -> Exception:
+def _aws_operation(error: Exception) -> str:
+    """The AWS operation a botocore ``ClientError`` answered (``AssumeRole``), else ""."""
+    name = getattr(error, "operation_name", None)
+    if isinstance(name, str) and name:
+        return name
+    found = re.search(r"when calling the (\w+) operation", str(error))
+    return found.group(1) if found else ""
+
+
+def _botocore(error: BaseException, *names: str) -> bool:
+    """Whether ``error`` is one of botocore's exceptions ``names``.
+
+    Told by class name and module along its MRO, because this module never imports botocore: it
+    must load without the SDK installed."""
+    return any(
+        cls.__name__ in names and cls.__module__.partition(".")[0] == "botocore"
+        for cls in type(error).__mro__
+    )
+
+
+def _from_credential_command(error: BaseException) -> bool:
+    """Whether ``error`` came from running a profile's ``credential_process`` command.
+
+    botocore wraps a command that exits non-zero in its own error, but lets one that prints
+    something other than JSON, or that cannot be started, through as the ``ValueError`` or
+    ``OSError`` it is. For those the frame it was raised in is what says where it came from."""
+    if _botocore(error, "CredentialRetrievalError"):
+        return (getattr(error, "kwargs", None) or {}).get("provider") == "custom-process"
+    if not isinstance(error, (ValueError, OSError)):
+        return False
+    frame = error.__traceback__
+    while frame is not None:
+        if frame.tb_frame.f_code.co_name == "_retrieve_credentials_using":
+            return True
+        frame = frame.tb_next
+    return False
+
+
+def _with_detail(sentence: str, error: BaseException) -> str:
+    """``sentence``, which says what is wrong and what to do, then the SDK's own words after it.
+
+    Those words are kept, not hidden, and can be anything a credential command printed, so
+    they are redacted BEFORE they are cut: a credential cut in half would slip past the
+    redactor."""
+    from personalclaw.sdk.channel import redact_credentials  # noqa: PLC0415 — failure path only
+
+    words, _ = redact_credentials(" ".join(str(error).split()))
+    if not words:
+        return sentence
+    if len(words) > _DETAIL_CHARS:
+        words = words[:_DETAIL_CHARS].rstrip() + "…"
+    return f"{sentence} Details: {words}"
+
+
+def _profile_in_use(profile: str | None) -> str:
+    """The AWS profile boto3 signs in with: the instance's AWS Profile, else the one the
+    environment names (botocore reads ``AWS_DEFAULT_PROFILE``, then ``AWS_PROFILE``). ""
+    when neither names one, and boto3 walks the default credential chain."""
+    return (
+        profile
+        or os.environ.get("AWS_DEFAULT_PROFILE", "")
+        or os.environ.get("AWS_PROFILE", "")
+    )
+
+
+# The AWS files are named by their folder, ~/.aws, never by a path into it: the Store's install
+# scanner reads a credential file's path in an app's code as the app reading that file, and
+# says so on the install's consent.
+def _aws_setup_problem(error: BaseException, *, region: str, profile: str | None) -> str | None:
+    """What is missing or wrong in the AWS setup Bedrock signs in with, and what to do about it.
+
+    PersonalClaw stores no AWS key: boto3 signs every call with the AWS credential chain, and
+    when that chain cannot produce credentials botocore says so in its own words ("Unable to
+    locate credentials", or whatever a profile's credential command printed). Those name nothing
+    a user can change here, so each case says what is missing and the next step: sign in with the
+    AWS tool, fix the profile or the region, or choose another profile. The same sentence serves
+    the chat, the connection test and the Models page. ``None`` when ``error`` is not about the
+    setup."""
+    in_use = _profile_in_use(profile)
+    whose = f"the AWS profile '{in_use}'" if in_use else "your default AWS profile"
+    flag = f" --profile {in_use}" if in_use else ""
+    code = _aws_error_code(error)
+    if _from_credential_command(error):
+        sentence = (
+            f"The command {whose} runs to get its AWS credentials (its credential_process) "
+            "failed. Run that command in a terminal to see why, fix it or sign in again, then try "
+            f"again, or {_SET_PROFILE} to a different profile."
+        )
+    elif _botocore(error, "NoCredentialsError"):
+        found = (
+            f"No AWS credentials were found for {whose}."
+            if in_use
+            else "No AWS credentials were found: this Amazon Bedrock instance names no AWS "
+            "profile, and the default credential chain has none."
+        )
+        sentence = (
+            f"{found} Sign in with your AWS tool (for example `aws sso login{flag}`, or "
+            f"`aws configure{flag}` to enter access keys), then try again, or {_SET_PROFILE} to a "
+            "profile that has credentials."
+        )
+    elif _botocore(error, "PartialCredentialsError"):
+        sentence = (
+            "Only part of a set of AWS credentials was found, so Amazon Bedrock can't sign in "
+            "with them. Complete or remove that set with your AWS tool, then try again, or "
+            f"{_SET_PROFILE} to a profile that has credentials."
+        )
+    elif _botocore(error, "ProfileNotFound"):
+        missing = (getattr(error, "kwargs", None) or {}).get("profile") or in_use
+        sentence = (
+            f"The AWS profile '{missing}' isn't in your AWS config (the config and credentials "
+            f"files in ~/.aws). Add it with your AWS tool (for example `aws configure "
+            f"--profile {missing}`), then try again, or {_SET_PROFILE} to a profile you have."
+        )
+    elif _botocore(error, "SSOError", "TokenRetrievalError"):
+        sentence = (
+            f"The AWS SSO sign-in for {whose} has expired or hasn't been made. Sign in with "
+            f"`aws sso login{flag}`, then try again."
+        )
+    elif _botocore(error, "LoginError"):
+        sentence = (
+            f"The AWS sign-in for {whose} can't be used. Sign in again with `aws login{flag}`, "
+            "then try again."
+        )
+    elif _botocore(error, "RefreshWithMFAUnsupportedError"):
+        sentence = (
+            f"{whose[0].upper()}{whose[1:]} needs an MFA code to refresh its credentials, and "
+            "Amazon Bedrock can't ask you for one. Refresh them with your AWS tool, then try "
+            f"again, or {_SET_PROFILE} to a profile that doesn't need MFA."
+        )
+    elif _botocore(error, "InvalidConfigError", "ConfigParseError"):
+        sentence = (
+            f"The AWS configuration of {whose} can't be used. Correct it in the config file in "
+            f"~/.aws, then try again, or {_SET_PROFILE} to a different profile."
+        )
+    elif _botocore(error, "InvalidRegionError"):
+        named = (getattr(error, "kwargs", None) or {}).get("region_name") or region
+        sentence = (
+            f"'{named}' isn't an AWS region name. Set AWS Region {_ON_INSTANCE} to one like "
+            "us-east-1, then try again."
+        )
+    elif _botocore(error, "EndpointConnectionError", "ConnectTimeoutError"):
+        url = str((getattr(error, "kwargs", None) or {}).get("endpoint_url") or "")
+        host = urlsplit(url).hostname or url or "its endpoint"
+        sentence = (
+            f"No connection could be made to AWS at {host}. Check that this machine is online "
+            f"and that {region} is a region Amazon Bedrock runs in (AWS Region {_ON_INSTANCE}), "
+            "then try again."
+        )
+    elif _aws_operation(error) in _ROLE_OPERATIONS and code not in _REJECTED_CREDENTIAL_CODES:
+        sentence = (
+            f"AWS refused to let {whose} assume its IAM role ({code}). Check that the "
+            "role exists and lets the identity the profile starts from assume it, then try "
+            f"again, or {_SET_PROFILE} to a different profile."
+        )
+    else:
+        return None
+    return _with_detail(sentence, error)
+
+
+def _friendly_bedrock_error(
+    error: Exception, model_id: str, *, region: str = "", profile: str | None = None
+) -> Exception:
     """Map an opaque botocore Bedrock error to the sentence that names its fix.
 
     Returned as the SDK's ``ProviderResolutionError``, which the chat shows as written: the fix
     for each of these is outside PersonalClaw, and only this app knows where.
 
+    * The AWS setup Bedrock signs in with, when that is what failed: no credentials, a failing
+      credential command, an expired sign-in, a missing profile, a bad region, no connection
+      (:func:`_aws_setup_problem`).
     * A model whose mandatory data-retention policy isn't enabled for this account
       (``ValidationException: data retention mode 'default' is not available for this model``).
     * ``AccessDeniedException`` naming an IAM action: the identity's policy lacks it, so the fix is
@@ -182,6 +363,9 @@ def _friendly_bedrock_error(error: Exception, model_id: str, *, region: str = ""
 
     Everything else passes through unchanged.
     """
+    setup = _aws_setup_problem(error, region=region or DEFAULT_REGION, profile=profile)
+    if setup is not None:
+        return ProviderResolutionError(setup)
     msg = str(error)
     if "data retention" in msg and "not available for this model" in msg:
         return ProviderResolutionError(
@@ -212,6 +396,17 @@ def _friendly_bedrock_error(error: Exception, model_id: str, *, region: str = ""
             "different model in Settings → Models."
         )
     return error
+
+
+def _raise_friendly(
+    error: Exception, model_id: str, *, region: str, profile: str | None
+) -> NoReturn:
+    """Raise :func:`_friendly_bedrock_error`'s sentence for ``error``, chained to it so the
+    gateway log keeps the SDK's traceback — or ``error`` itself when nothing here maps it."""
+    friendly = _friendly_bedrock_error(error, model_id, region=region, profile=profile)
+    if friendly is error:
+        raise error
+    raise friendly from error
 
 
 # Model → context window tokens (shared JSON, same file openai.py/anthropic.py read).
@@ -691,6 +886,10 @@ class BedrockProvider(ModelProvider):
         ~0.5-1.5s on the first chat turn, which stalled other tabs' WebSocket
         handshakes and emptied the composer model list (the "warmup blocks the
         websocket" symptom). So the blocking build runs in a worker thread.
+
+        Building the client is also where boto3 resolves credentials: a missing profile, a
+        credential command that fails, or a region that isn't one fails HERE, before any
+        request, so its sentence is made here too — :func:`_raise_friendly`, as a request's.
         """
 
         def _build_client() -> Any:
@@ -716,7 +915,10 @@ class BedrockProvider(ModelProvider):
                 "bedrock-runtime", region_name=self._region, config=boto_config
             )
 
-        self._client = await asyncio.to_thread(_build_client)
+        try:
+            self._client = await asyncio.to_thread(_build_client)
+        except Exception as exc:  # noqa: BLE001 — said as its fix, or re-raised as it is
+            _raise_friendly(exc, self._model_id, region=self._region, profile=self._profile)
         logger.info(
             "Bedrock provider ready: model=%s region=%s profile=%s",
             self._model_id or "<none chosen>",
@@ -806,7 +1008,7 @@ class BedrockProvider(ModelProvider):
             await worker  # ensure the thread is joined even on cancellation
 
         if error is not None:
-            raise _friendly_bedrock_error(error, self._model_id, region=self._region)
+            _raise_friendly(error, self._model_id, region=self._region, profile=self._profile)
 
         if input_tokens > 0:
             ctx = _model_window(self._model_id, _DEFAULT_CONTEXT_WINDOW)
@@ -977,7 +1179,7 @@ class BedrockProvider(ModelProvider):
             await worker  # ensure the thread is joined even on cancellation
 
         if error is not None:
-            raise _friendly_bedrock_error(error, model_id, region=self._region)
+            _raise_friendly(error, model_id, region=self._region, profile=self._profile)
 
         # Defensive flush — emit any unfinalized tool blocks.
         for block_index, bucket in tool_blocks.items():
@@ -1056,9 +1258,14 @@ BEDROCK_CAPABILITY = ProviderCapability(
 # imported (Property 11) so importing this module is SDK-free.
 
 # NO hardcoded fallback catalog (user directive 2026-07-06): Bedrock is discovered
-# from the control plane. If discovery can't run (no boto3/creds/permission), the
-# model list is EMPTY (the UI shows "no models discovered — check AWS creds/region")
-# rather than fake ids that may not be invocable. Discovery is authoritative.
+# from the control plane, and discovery is authoritative. When it can't list anything
+# (no credentials, a failing credential command, a denied permission, no connection),
+# ``list_models`` RAISES ``ModelDiscoveryError`` naming why and what to do — the
+# catalog contract — rather than answer ``[]``, which reads as an account that serves
+# no models, or show fake ids that may not be invocable.
+
+#: The control-plane region discovery asks when the instance names none.
+_DEFAULT_DISCOVERY_REGION = "us-east-1"
 
 
 def _list_bedrock_models_sync(region: str, profile: str) -> list[dict[str, Any]]:
@@ -1071,14 +1278,18 @@ def _list_bedrock_models_sync(region: str, profile: str) -> list[dict[str, Any]]
       * ``list_inference_profiles()`` — cross-region / system profiles (the
         ``us.*`` ids) which are the only way to call models that don't offer
         ON_DEMAND (e.g. newer Claude). Each profile id is directly invocable.
+
+    A listing that fails leaves its models out of what the others found. When nothing was
+    listed and a listing failed, that failure is raised: it is the answer, not ``[]``.
     """
     import boto3  # noqa: PLC0415 — lazy per Property 11
 
     session = boto3.Session(profile_name=profile) if profile else boto3.Session()
-    client = session.client("bedrock", region_name=region or "us-east-1")
+    client = session.client("bedrock", region_name=region or _DEFAULT_DISCOVERY_REGION)
 
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
+    failed: list[Exception] = []
 
     # ── Foundation models (ON_DEMAND text generators) ──
     try:
@@ -1118,7 +1329,8 @@ def _list_bedrock_models_sync(region: str, profile: str) -> list[dict[str, Any]]
                 "name": f"{label}" + (f" ({provider})" if provider and provider not in label else ""),
                 "capabilities": caps,
             })
-    except Exception:
+    except Exception as exc:
+        failed.append(exc)
         logger.debug("Bedrock list_foundation_models failed", exc_info=True)
 
     # ── Foundation models (EMBEDDING output) ──
@@ -1143,7 +1355,8 @@ def _list_bedrock_models_sync(region: str, profile: str) -> list[dict[str, Any]]
                 "name": f"{label}" + (f" ({provider})" if provider and provider not in label else ""),
                 "capabilities": ["embedding"],
             })
-    except Exception:
+    except Exception as exc:
+        failed.append(exc)
         logger.debug("Bedrock list_foundation_models(EMBEDDING) failed", exc_info=True)
 
     # ── Inference profiles (cross-region / system — the us.* invocable ids) ──
@@ -1167,9 +1380,12 @@ def _list_bedrock_models_sync(region: str, profile: str) -> list[dict[str, Any]]
             if not token:
                 break
             paginator_kwargs = {"nextToken": token}
-    except Exception:
+    except Exception as exc:
+        failed.append(exc)
         logger.debug("Bedrock list_inference_profiles failed", exc_info=True)
 
+    if failed and not out:
+        raise failed[0]
     return out
 
 
@@ -1180,11 +1396,50 @@ _BEDROCK_CACHE: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
 _BEDROCK_CACHE_TTL = 300.0  # seconds
 
 
+def _discovery_failure(error: Exception, *, region: str, profile: str | None) -> ModelDiscoveryError:
+    """Why Bedrock's models could not be listed, as the connection test and the Models page say
+    it: the cause and what to do, then the SDK's own words.
+
+    The AWS setup's sentence when that is what failed (:func:`_aws_setup_problem`); a listing
+    call the identity's IAM policy does not allow; credentials AWS turned down. Anything else is
+    said as a listing that did not answer. No ``status`` is given: that would read as a stored
+    key the endpoint refused ("update its key"), and this instance stores no key."""
+    setup = _aws_setup_problem(error, region=region, profile=profile)
+    if setup is not None:
+        return ModelDiscoveryError(setup)
+    msg = str(error)
+    code = _aws_error_code(error)
+    named = _NOT_AUTHORIZED_RE.search(msg) if code == "AccessDeniedException" else None
+    if named:
+        sentence = (
+            f"Your AWS credentials aren't allowed to call {named['action']} in {region}, so "
+            "Amazon Bedrock's models can't be listed. Add that action to the IAM policy of the "
+            f"identity Bedrock signs in as, then try again, or {_SET_PROFILE} to a profile that "
+            "has it."
+        )
+    elif code in _REJECTED_CREDENTIAL_CODES or "security token included in the request is" in msg:
+        in_use = _profile_in_use(profile)
+        flag = f" --profile {in_use}" if in_use else ""
+        sentence = (
+            "AWS turned down the credentials Bedrock used: their security token is invalid or "
+            f"has expired. Sign in to AWS again (`aws sso login{flag}` for an SSO profile), then "
+            "try again."
+        )
+    else:
+        sentence = (
+            f"No model list came back from Amazon Bedrock in {region}. Try again; if it keeps "
+            "failing, check the gateway log."
+        )
+    return ModelDiscoveryError(_with_detail(sentence, error))
+
+
 class BedrockCatalog(ModelCatalog):
-    """Discovers Bedrock models from the AWS control plane (boto3 chain auth),
-    cached for ``_BEDROCK_CACHE_TTL`` seconds. Falls back to a curated catalog on
-    any failure (boto3 missing, no creds, permission/region error) so the dropdown
-    is never empty. Config-only: reads region/profile from the entry options."""
+    """Discovers Bedrock models from the AWS control plane (boto3 chain auth), cached for
+    ``_BEDROCK_CACHE_TTL`` seconds. Config-only: reads region/profile from the entry options.
+
+    Its connection test is the catalog contract's own: listing is the connectivity signal, and a
+    listing that could not run raises :class:`ModelDiscoveryError` with its cause, which the test
+    reports as written. There is no fallback catalog to show instead."""
 
     def __init__(self, region: str = "", profile: str = "") -> None:
         self._region = region or ""
@@ -1200,15 +1455,17 @@ class BedrockCatalog(ModelCatalog):
         else:
             try:
                 rows = await asyncio.to_thread(_list_bedrock_models_sync, self._region, self._profile)
-            except Exception:
-                logger.debug("Bedrock dynamic discovery failed", exc_info=True)
-                rows = []
+            except Exception as exc:  # noqa: BLE001 — every failure is said as its cause
+                failure = _discovery_failure(
+                    exc,
+                    region=self._region or _DEFAULT_DISCOVERY_REGION,
+                    profile=self._profile or None,
+                )
+                _warn_once("Listing Amazon Bedrock's models", str(failure), exc)
+                raise failure from exc
             rows.sort(key=lambda m: m.get("name", "").lower())
             if rows:
                 _BEDROCK_CACHE[key] = (time.monotonic(), rows)
-            # Discovery failed/empty → return [] (no hardcoded floor). The catalog is
-            # authoritative; a keyless/misconfigured account shows an empty list, not
-            # fake ids.
         models = [
             ModelInfo(id=r["id"], name=r.get("name", r["id"]), capabilities=list(r.get("capabilities", ["chat"])))
             for r in rows
@@ -1219,24 +1476,6 @@ class BedrockCatalog(ModelCatalog):
             # to. Listed for an account the listings reached, so a binding can name it.
             models.append(ModelInfo(id=TRANSCRIBE_MODEL, name="Amazon Transcribe", capabilities=["stt"]))
         return models
-
-    async def test_connection(self) -> ConnectionResult:
-        # A successful control-plane list is the connectivity signal. The fallback
-        # catalog is non-empty even without creds, so distinguish real discovery
-        # (cached/live rows) from the fallback by re-checking the cache after list.
-        import time
-
-        models = await self.list_models()
-        key = (self._region, self._profile)
-        cached = _BEDROCK_CACHE.get(key)
-        live = bool(cached and (time.monotonic() - cached[0]) < _BEDROCK_CACHE_TTL)
-        if live:
-            return ConnectionResult(ok=True, model_count=len(models))
-        return ConnectionResult(
-            ok=False,
-            detail="Could not reach the AWS Bedrock control plane (check credentials/region); showing a fallback catalog.",
-            model_count=len(models),
-        )
 
 
 def create_catalog(options: dict[str, Any] | None = None, *, model: str = "") -> BedrockCatalog:
@@ -1344,7 +1583,6 @@ get_default_registry().register_catalog("bedrock", create_catalog)
 # resolution, and wrap all synchronous boto3 calls in ``asyncio.to_thread`` /
 # ``run_in_executor`` so the event loop is never blocked.
 
-import os
 import tempfile
 import time as _time
 
@@ -1428,6 +1666,50 @@ async def _creds_ok(region: str, profile: str | None) -> bool:
 # (the SDK's ``require_model``). Each adapter used to put Bedrock's first model of its kind in
 # its place (Titan Embed, Nova Canvas, Nova Reel), and the speech adapter ran Transcribe for a
 # binding that named no model at all.
+
+
+def _media_failure(
+    what: str, error: Exception, model_id: str, *, region: str, profile: str | None
+) -> str:
+    """The sentence a failed image or video generation reports: the chat's own sentence for the
+    same failure (:func:`_friendly_bedrock_error` — the AWS setup, model access, credentials AWS
+    turned down), else that ``what`` failed, what to do, and the SDK's words after it."""
+    friendly = _friendly_bedrock_error(error, model_id, region=region, profile=profile)
+    if friendly is not error:
+        return str(friendly)
+    return _with_detail(
+        f"Bedrock {what} failed. Try again; if it keeps failing, check the gateway log.", error
+    )
+
+
+#: When each failure was last logged at WARNING, by what failed and the sentence saying why. A
+#: failure repeats with every call that meets it (the Models page lists models on every read), so
+#: the gateway log says it once every ``_WARN_EVERY`` seconds, with its traceback, and at DEBUG in
+#: between.
+_WARNED_AT: dict[tuple[str, str], float] = {}
+_WARN_EVERY = 300.0
+
+
+def _warn_once(what: str, sentence: str, error: BaseException) -> None:
+    """Log that ``what`` failed: ``sentence``, then ``error``'s traceback, redacted as the
+    sentence's detail is, since what a credential command printed is in it. At WARNING the first
+    time in ``_WARN_EVERY`` seconds, else at DEBUG. The sentence's own words, not its SDK detail,
+    are what makes it the same failure."""
+    import traceback  # noqa: PLC0415 — failure path only
+
+    from personalclaw.sdk.channel import redact_credentials  # noqa: PLC0415
+
+    key = (what, sentence.split(" Details: ", 1)[0])
+    now = _time.monotonic()
+    at = _WARNED_AT.get(key)
+    repeat = at is not None and now - at < _WARN_EVERY
+    if not repeat:
+        if len(_WARNED_AT) > 64:
+            _WARNED_AT.clear()
+        _WARNED_AT[key] = now
+    trace, _ = redact_credentials("".join(traceback.format_exception(error)).rstrip())
+    level = logging.DEBUG if repeat else logging.WARNING
+    logger.log(level, "%s failed: %s\n%s", what, sentence, trace)
 
 
 # ── Bedrock Embedding Provider ───────────────────────────────────────────────
@@ -1613,7 +1895,11 @@ class BedrockImageProvider(ImageGenProvider):
         try:
             images_b64 = await asyncio.to_thread(self._generate_sync, prompt, model_id, size, n)
         except Exception as exc:
-            raise ImageGenError(f"Bedrock image generation failed: {exc}") from exc
+            sentence = _media_failure(
+                "image generation", exc, model_id, region=self._region, profile=self._profile
+            )
+            _warn_once(f"Bedrock image generation on {self._name!r}", sentence, exc)
+            raise ImageGenError(sentence) from exc
 
         results: list[ImageResult] = []
         for b64_str in images_b64:
@@ -1662,7 +1948,8 @@ class BedrockVideoProvider(VideoGenProvider):
     2. ``get_async_invoke`` polls until ``status == 'Completed'``
     3. Download the MP4 from the S3 output path
 
-    Requires ``video_s3_bucket`` in config or ``BEDROCK_VIDEO_S3_BUCKET`` env var.
+    Requires the instance's S3 Bucket (``video_s3_bucket``, which speech-to-text uses too) or the
+    ``BEDROCK_VIDEO_S3_BUCKET`` env var.
     """
 
     def __init__(
@@ -1714,8 +2001,9 @@ class BedrockVideoProvider(VideoGenProvider):
         """Blocking submit → poll → download. Returns local file path to the MP4."""
         if not self._s3_bucket:
             raise VideoGenError(
-                "Bedrock video generation requires an S3 bucket. Set 'video_s3_bucket' in "
-                "the Bedrock provider config or set the BEDROCK_VIDEO_S3_BUCKET environment variable."
+                "Bedrock video generation needs an S3 bucket for Nova Reel to write the video to. "
+                f"Set S3 Bucket {_ON_INSTANCE} (under Advanced), or the BEDROCK_VIDEO_S3_BUCKET "
+                "environment variable, then try again."
             )
 
         client = self._get_runtime_client()
@@ -1787,7 +2075,11 @@ class BedrockVideoProvider(VideoGenProvider):
         except VideoGenError:
             raise
         except Exception as exc:
-            raise VideoGenError(f"Bedrock video generation failed: {exc}") from exc
+            sentence = _media_failure(
+                "video generation", exc, model_id, region=self._region, profile=self._profile
+            )
+            _warn_once(f"Bedrock video generation on {self._name!r}", sentence, exc)
+            raise VideoGenError(sentence) from exc
 
         return [VideoResult(local_path=local_path, mime="video/mp4", duration_s=6.0)]
 
@@ -1811,8 +2103,10 @@ TRANSCRIBE_MODEL = "amazon-transcribe"
 class BedrockSTTProvider(SttProvider):
     """Speech-to-text via Amazon Transcribe (the real AWS transcription service).
 
-    Uploads the audio to S3, runs a Transcribe job, and returns the verbatim
-    transcript. Deterministic — no hallucination, no prompt engineering needed.
+    Uploads the audio to the instance's S3 Bucket — the one video generation writes to
+    (``video_s3_bucket``, or the ``BEDROCK_VIDEO_S3_BUCKET`` env var), so speech-to-text needs
+    it set too — runs a Transcribe job, returns the verbatim transcript, and deletes the upload.
+    Deterministic — no hallucination, no prompt engineering needed.
     Handles wav, mp3, mp4, flac, ogg, webm natively.
     """
 

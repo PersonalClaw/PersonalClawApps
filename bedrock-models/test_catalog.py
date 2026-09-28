@@ -2,9 +2,10 @@
 
 ``BedrockCatalog.list_models`` queries ``bedrock.list_foundation_models``
 (ON_DEMAND text models) + ``list_inference_profiles`` (the cross-region ``us.*``
-ids), using the entry's region/profile. On any failure it falls back to a small
-curated catalog so the dropdown is never empty. This logic moved out of core into
-the app during the model-catalog-isolation slice; the test moved with it.
+ids), using the entry's region/profile. There is no fallback catalog: when nothing
+could be listed it raises ``ModelDiscoveryError`` naming why, which the connection
+test reports as written. This logic moved out of core into the app during the
+model-catalog-isolation slice; the test moved with it.
 """
 
 from __future__ import annotations
@@ -111,18 +112,105 @@ def test_discovery_paginates_profiles(monkeypatch):
     assert {m["id"] for m in models if "chat" in m["capabilities"]} == {"us.a", "us.b"}
 
 
-def test_discovery_empty_when_boto3_missing(monkeypatch):
-    # boto3 import failure inside the sync worker → EMPTY list (no hardcoded fallback,
-    # per the de-hardcode directive). Discovery is authoritative; the UI shows no
-    # models rather than fake ids.
+def test_discovery_that_cannot_run_raises_its_cause_not_an_empty_list(monkeypatch):
+    """🔴 Red on main: ``[]``, which reads as an account that serves no models, and a connection
+    test claiming a fallback catalog that does not exist. No fake ids either way."""
+    from personalclaw.sdk.model import ModelDiscoveryError
+
     def _boom(*a, **k):
         raise ImportError("No module named 'boto3'")
     monkeypatch.setattr(prov, "_list_bedrock_models_sync", _boom)
+    said = (
+        "No model list came back from Amazon Bedrock in us-east-1. Try again; if it keeps "
+        "failing, check the gateway log. Details: No module named 'boto3'"
+    )
 
-    assert _run(_list()) == []
+    with pytest.raises(ModelDiscoveryError) as failed:
+        _run(_list())
+    assert str(failed.value) == said
+    result = _run(prov.create_catalog({}).test_connection())
+    assert (result.ok, result.detail, result.rejected_credential) == (False, said, False)
+
+
+def test_a_listing_that_fails_leaves_out_only_its_own_models(monkeypatch):
+    """The inference-profile listing refused, the model listings answered: what they listed is
+    the catalog, and nothing is raised for the part that failed."""
+    client = MagicMock()
+    client.list_foundation_models.return_value = {"modelSummaries": [
+        {"modelId": "amazon.nova-pro-v1:0", "modelName": "Nova Pro", "providerName": "Amazon",
+         "inferenceTypesSupported": ["ON_DEMAND"], "inputModalities": ["TEXT"],
+         "modelLifecycle": {"status": "ACTIVE"}},
+    ]}
+    client.list_inference_profiles.side_effect = RuntimeError("listing refused")
+    session = MagicMock()
+    session.client.return_value = client
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(Session=lambda **k: session))
+
+    assert "amazon.nova-pro-v1:0" in {m["id"] for m in _run(_list(region="us-east-1"))}
+
+
+def test_every_listing_failing_raises_the_first_failure(monkeypatch):
+    """Nothing listed and every listing failed: the first failure is the answer."""
+    client = MagicMock()
+    client.list_foundation_models.side_effect = RuntimeError("models refused")
+    client.list_inference_profiles.side_effect = RuntimeError("profiles refused")
+    session = MagicMock()
+    session.client.return_value = client
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(Session=lambda **k: session))
+
+    with pytest.raises(RuntimeError, match="models refused"):
+        prov._list_bedrock_models_sync("us-east-1", "")
 
 
 def test_discovery_empty_when_no_models(monkeypatch):
     # AWS reachable but returns nothing → empty list (no hardcoded floor).
     monkeypatch.setattr(prov, "_list_bedrock_models_sync", lambda region, profile: [])
     assert _run(_list(region="eu-west-1")) == []
+
+
+# ── the gateway log ─────────────────────────────────────────────────────────────────────────
+
+
+def test_the_apps_log_reaches_the_gateway_log():
+    """🔴 Red before: the module logged under its own name, core loads it under a private one, and
+    no handler reached either, so a failed listing said "check the gateway log" and that log held
+    nothing. Core adds the gateway log's handler to each root an installed app's manifest
+    declares."""
+    import json
+    from pathlib import Path
+
+    manifest = json.loads((Path(__file__).parent / "app.json").read_text(encoding="utf-8"))
+
+    assert prov.logger.name in manifest["loggerRoots"]
+
+
+def test_a_listing_that_fails_is_logged_once_with_its_traceback(monkeypatch, caplog):
+    """The catalog is asked on every Models page read, so the log says a failure once every few
+    minutes, not once per read."""
+    import logging
+
+    def _unanswered(region, profile):
+        raise RuntimeError("the control plane did not answer AKIAIOSFODNN7EXAMPLE")
+
+    monkeypatch.setattr(prov, "_list_bedrock_models_sync", _unanswered)
+    monkeypatch.setattr(prov, "_WARNED_AT", {})
+    caplog.set_level(logging.DEBUG, logger="bedrock_models")
+
+    for _ in range(2):
+        with pytest.raises(prov.ModelDiscoveryError):
+            _run(_list(region="us-east-1"))
+
+    warned = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "bedrock_models" and r.levelno == logging.WARNING
+    ]
+    assert len(warned) == 1, warned
+    said, trace = warned[0].split("\n", 1)
+    assert said == (
+        "Listing Amazon Bedrock's models failed: No model list came back from Amazon Bedrock in "
+        "us-east-1. Try again; if it keeps failing, check the gateway log. Details: the control "
+        "plane did not answer [REDACTED: credential]"
+    )
+    assert trace.startswith("Traceback (most recent call last):") and "RuntimeError" in trace
+    assert "AKIA" not in trace, "the traceback is redacted as the detail is"
