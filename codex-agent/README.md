@@ -1,6 +1,6 @@
 # OpenAI Codex
 
-Run the OpenAI Codex CLI as an agent (acp:codex) via the Zed ACP adapter. Codex manages its own configuration and authentication; every tool call routes through PersonalClaw's host approval gate.
+Run the OpenAI Codex CLI as an agent (acp:codex) via the Zed ACP adapter. Codex manages its own configuration and authentication; every tool call routes through PersonalClaw's host approval gate. Enabling it installs its ACP adapter (@agentclientprotocol/codex-acp) from npm into your PersonalClaw home when no copy is installed; a failed install says why on its card, with Retry.
 
 **OpenAI Codex** is an **ACP agent bundle** — it registers an `acp:codex` agent via `personalclaw.sdk.acp` and appears in the Agents list.
 
@@ -29,7 +29,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | Key | Label | Notes |
 |---|---|---|
 | `model` | Default Model | Optional. Leave empty to use the Codex CLI's own current default (recommended). The adapter advertises the live model set for selection; set this only to pin a specific model. |
-| `acp_bin` | ACP Adapter Path | Optional absolute path to the codex-acp adapter. Empty auto-resolves: PATH → node-manager dirs → npx @zed-industries/codex-acp. Equivalent to the CODEX_ACP_BIN env var. |
+| `acp_bin` | ACP Adapter Path | Optional absolute path to the codex-acp adapter. Empty finds it: PATH → node-manager dirs → the copy PersonalClaw installed in its home when you enabled the app → npx @agentclientprotocol/codex-acp. Equivalent to the CODEX_ACP_BIN env var. |
 
 ## Authentication
 

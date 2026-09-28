@@ -237,3 +237,30 @@ def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
     adapters = media_adapters(Path(__file__).parent, prov.create_provider)
     report = asyncio.run(media_refusal_report(adapters))
     assert report == media_refusal_expected(adapters)
+
+
+def test_the_declared_floor_is_a_release_whose_model_card_can_stay_local():
+    """The fetch hands the model a card told to stay local
+    (``SentenceTransformerModelCardData(local_files_only=True)``), or it asks Hugging Face about
+    the base model through a lookup no token setting reaches. 5.6 is the oldest release that was
+    checked for it, so nothing older may satisfy the declaration."""
+    import json
+    from pathlib import Path
+
+    from packaging.requirements import Requirement
+
+    manifest = json.loads((Path(__file__).parent / "app.json").read_text(encoding="utf-8"))
+    [declared] = [
+        Requirement(d)
+        for d in manifest["dependencies"]["pythonDependencies"]
+        if d.startswith("sentence-transformers")
+    ]
+    assert declared.specifier.contains("5.6.0") and not declared.specifier.contains("5.5.9")
+
+
+def test_the_installed_library_takes_the_local_model_card():
+    import pytest
+
+    library = pytest.importorskip("sentence_transformers")
+    card = library.SentenceTransformerModelCardData(local_files_only=True)
+    assert card.local_files_only is True

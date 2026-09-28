@@ -29,6 +29,13 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 Needs the `sentence-transformers` Python package (declared as an app dependency; the gateway installs it into `<home>/app-python` at install time, importable without a restart). Models run fully locally; no API key.
 
+It declares `sentence-transformers>=5.6`, the oldest release this app was checked against for the
+one thing it relies on beyond the download: a model card told to stay local
+(`SentenceTransformerModelCardData(local_files_only=True)`). Left to itself, the model card asks
+Hugging Face about the base model as a model loads and again as it is saved, through a lookup no
+token setting reaches. The download itself sends only the token PersonalClaw resolved, or none,
+and models download into the PersonalClaw home (`models`).
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

@@ -1,8 +1,8 @@
 {
   "name": "claude-code-agent",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "displayName": "Claude Code",
-  "description": "Run Anthropic's Claude Code as an agent (acp:claude-code) via the Zed ACP adapter. It runs with a Claude config of its own that starts empty, so none of your auto-approve rules come along and every tool asks through PersonalClaw's approval gate. Sign in to Claude once for it (Settings \u2192 Providers \u2192 Claude Code \u2192 Sign in); PersonalClaw stores no key. Turn off Isolated Claude settings to use your own ~/.claude, rules included.",
+  "description": "Run Anthropic's Claude Code as an agent (acp:claude-code) via the Zed ACP adapter. It runs with a Claude config of its own that starts empty, so none of your auto-approve rules come along and every tool asks through PersonalClaw's approval gate. Sign in to Claude once for it (Settings \u2192 Providers \u2192 Claude Code \u2192 Sign in); PersonalClaw stores no key. Turn off Isolated Claude settings to use your own ~/.claude, rules included. Enabling it installs its ACP adapter (@agentclientprotocol/claude-agent-acp) from npm into your PersonalClaw home when no copy is installed; a failed install says why on its card, with Retry.",
   "icon": "SquareTerminal",
   "author": "PersonalClaw",
   "license": "MIT",
@@ -41,7 +41,7 @@
           "default": "",
           "x-meta": {
             "label": "ACP Adapter Path",
-            "help": "Optional absolute path to the claude-code-acp adapter. Empty auto-resolves: PATH \u2192 node-manager dirs \u2192 npx @zed-industries/claude-code-acp. Equivalent to the CLAUDE_CODE_ACP_BIN env var.",
+            "help": "Optional absolute path to the claude-agent-acp adapter. Empty finds it: PATH \u2192 node-manager dirs \u2192 the copy PersonalClaw installed in its home when you enabled the app \u2192 npx @agentclientprotocol/claude-agent-acp. Equivalent to the CLAUDE_CODE_ACP_BIN env var.",
             "tags": [
               "advanced"
             ]

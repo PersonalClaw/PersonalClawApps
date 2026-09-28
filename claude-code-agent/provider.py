@@ -1,14 +1,14 @@
 """``acp:claude-code`` bundle — Claude Code as a removable ACP agent provider.
 
 Drives Anthropic's Claude Code through the canonical ACP adapter
-``@agentclientprotocol/claude-agent-acp`` (the renamed home of the former
-``@zed-industries/claude-code-acp``; built on ``@agentclientprotocol/sdk``, which
+``@agentclientprotocol/claude-agent-acp`` (built on ``@agentclientprotocol/sdk``, which
 speaks newline-delimited JSON — the ``ClaudeCodeDialect`` selects that framing).
 This module owns everything Claude-specific so the core ACP layer never names Claude:
 
 * **Binary resolution** — env ``CLAUDE_CODE_ACP_BIN`` → ``claude-agent-acp`` on
-  PATH / node-manager dirs → ``npx -y @agentclientprotocol/claude-agent-acp`` (via
-  the neutral :func:`personalclaw.acp.cli_resolve.resolve_acp_cli`). The adapter
+  PATH / node-manager dirs / the copy installed in the PersonalClaw home when the app was
+  enabled → ``npx -y @agentclientprotocol/claude-agent-acp`` (via the neutral
+  :func:`personalclaw.acp.cli_resolve.resolve_acp_cli`). The adapter
   delegates the model turn to the Claude Code CLI, which it locates via the
   ``CLAUDE_CODE_EXECUTABLE`` env we resolve here (override → ``which claude``).
 * **Dialect** — ``"claude-code"`` (the committed core ``ClaudeCodeDialect``:
@@ -188,7 +188,10 @@ def resolve_command(*, provision: bool = False) -> list[str] | None:
 
     When *provision* is set and the only resolution would be the fragile
     ``npx -y`` fallback, install the adapter under a Node >= 20 into the managed
-    prefix and re-resolve to that on-disk binary (see the codex bundle's twin).
+    prefix and re-resolve to that on-disk binary (see the codex bundle's twin). Core lets that
+    install happen only while the app is being installed or enabled, so any other load (a
+    gateway start) finds what is installed and installs nothing; a failure is kept, and said on
+    the app's card with Retry.
     """
     argv = resolve_acp_cli(
         env_var=_ACP_BIN_ENV,
@@ -223,8 +226,9 @@ def login_command(*, isolated: bool = True) -> list[str]:
 def create_provider(config: dict | None = None):
     """Bundle factory — register the ``acp:claude-code`` AgentProvider entry.
 
-    Invoked by the extension system's ``agent``-type handler on enable (with the
-    bundle's settings config). Resolves the adapter argv + Claude binary, applies
+    Invoked by the extension system's ``agent``-type handler whenever the app loads — as it is
+    installed or enabled, and at each gateway start — with the bundle's settings config.
+    Resolves the adapter argv + Claude binary, applies
     config isolation (``isolated_config``, on unless set off), and publishes the
     ``acp_agent`` registry entry. Returns
     ``None`` (agents are config/registry-based — same contract as the
@@ -240,8 +244,9 @@ def create_provider(config: dict | None = None):
     # (dialect skips set_model → CLI uses its own current default). De-hardcode.
     model = str(config.get("model", "") or "").strip()
 
-    # Provision the adapter under a Node >= 20 when it would otherwise only run
-    # via the fragile npx fallback (see resolve_command / the codex twin).
+    # Provision the adapter under a Node >= 20 when it would otherwise only run via the fragile
+    # npx fallback (see resolve_command / the codex twin). It installs only as the app is
+    # installed or enabled; at a gateway start this finds what is installed.
     command = resolve_command(provision=True)
     isolated = _isolated(config)
     env = _build_env(isolated=isolated) if command else {}

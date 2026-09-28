@@ -80,7 +80,9 @@ def resolve_command(*, provision: bool = False) -> list[str] | None:
     adapter under a Node ≥20 interpreter into the managed prefix and re-resolve
     to that on-disk binary — turning "fetch-and-run every spawn via npx" into a
     durable, version-safe install. Falls back to the npx argv if provisioning
-    can't run (e.g. no Node ≥20), preserving today's best-effort behavior.
+    can't run (e.g. no Node ≥20). Core lets that install happen only while the app is being
+    installed or enabled, so a gateway start installs nothing; a failure is kept, and said on
+    the app's card with Retry.
     """
     argv = resolve_acp_cli(
         env_var=_ACP_BIN_ENV,
@@ -158,11 +160,11 @@ def create_provider(config: dict | None = None):
     # (dialect skips set_model → CLI uses its own current default). De-hardcode.
     model = str(config.get("model", "") or "").strip()
 
-    # Provision the codex-acp adapter on first registration when it isn't
-    # installed anywhere (would otherwise run via the fragile npx fallback):
-    # install it under a Node >= 20 into the managed prefix so every spawn uses a
-    # durable, version-safe on-disk binary. Best-effort — falls back to npx if a
-    # new-enough Node isn't available.
+    # Provision the codex-acp adapter as the app is installed or enabled when it isn't
+    # installed anywhere (would otherwise run via the fragile npx fallback): install it under a
+    # Node >= 20 into the managed prefix so every spawn uses a durable, version-safe on-disk
+    # binary. Best-effort — falls back to npx if a new-enough Node isn't available. At a gateway
+    # start this finds what is installed and installs nothing.
     command = resolve_command(provision=True)
     env = _build_env() if command else {}
     register_acp_cli_entry(

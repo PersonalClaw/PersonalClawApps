@@ -1,6 +1,6 @@
 # Claude Code
 
-Run Anthropic's Claude Code as an agent (acp:claude-code) via the Zed ACP adapter. It runs with a Claude config of its own that starts empty, so none of your auto-approve rules come along and every tool asks through PersonalClaw's approval gate. Sign in to Claude once for it; PersonalClaw stores no key.
+Run Anthropic's Claude Code as an agent (acp:claude-code) via the Zed ACP adapter. It runs with a Claude config of its own that starts empty, so none of your auto-approve rules come along and every tool asks through PersonalClaw's approval gate. Sign in to Claude once for it; PersonalClaw stores no key. Enabling it installs its ACP adapter (@agentclientprotocol/claude-agent-acp) from npm into your PersonalClaw home when no copy is installed; a failed install says why on its card, with Retry.
 
 **Claude Code** is an **ACP agent bundle** — it registers an `acp:claude-code` agent via `personalclaw.sdk.acp` and appears in the Agents list.
 
@@ -31,7 +31,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 |---|---|---|
 | `isolated_config` | Isolated Claude settings | On by default. Claude runs with `CLAUDE_CONFIG_DIR` set to `<PersonalClaw home>/cc-config`, which starts with an empty `settings.json`: nothing is copied from your `~/.claude`, or from a `CLAUDE_CONFIG_DIR` you set. Off: Claude uses your own `~/.claude`, auto-approve rules included. |
 | `model` | Default Model | Optional. Leave empty to use the Claude CLI's own current default (recommended). The Claude adapter advertises the live model set for selection; set this only to pin a specific model. |
-| `acp_bin` | ACP Adapter Path | Optional absolute path to the claude-code-acp adapter. Empty auto-resolves: PATH → node-manager dirs → npx @zed-industries/claude-code-acp. Equivalent to the CLAUDE_CODE_ACP_BIN env var. |
+| `acp_bin` | ACP Adapter Path | Optional absolute path to the claude-agent-acp adapter. Empty finds it: PATH → node-manager dirs → the copy PersonalClaw installed in its home when you enabled the app → npx @agentclientprotocol/claude-agent-acp. Equivalent to the CLAUDE_CODE_ACP_BIN env var. |
 
 ## Authentication
 
