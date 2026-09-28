@@ -579,16 +579,39 @@ def test_a_remote_at_a_local_path_is_refused_with_the_reason_and_the_alternative
     assert not (tmp_path / "c").exists(), "git ran for a refused remote"
 
 
-def test_a_refusal_git_reports_is_said_in_the_transports_words(remote, tmp_path):
+def test_a_clone_whose_remote_was_changed_to_a_local_path_goes_back_to_git_remote_url(
+    remote, tmp_path
+):
     """A clone whose remote was changed to a local path after it was made (the clone's own
-    `.git/config` is what git reads) is refused by git. The detail says why, and what to use
-    instead, in PersonalClaw's words first; git's own follow as the detail."""
+    `.git/config` is what git reads). Its fetches and pushes went where that said, and git's
+    refusal of the path was the transport's last word; the clone is now taken back to Git remote
+    URL, and the push lands there."""
     p = _provider(remote, tmp_path)
     p.push([SyncObject("first.jsonl", b"one")])
     local = tmp_path / "elsewhere.git"
     subprocess.run(["git", "init", "--bare", "-b", "main", str(local)], check=True,
                    capture_output=True, text=True)
     _git(str(tmp_path / "clone"), "remote", "set-url", "origin", str(local))
+    local_refs = _refs(local)
+
+    r = p.push([SyncObject("second.jsonl", b"two")])
+
+    assert r.outcome == "delivered", r
+    assert _refs(local) == local_refs
+    assert {"first.jsonl", "second.jsonl"} <= _files_in_fresh_remote_checkout(remote, tmp_path)
+
+
+def test_a_refusal_git_reports_is_said_in_the_transports_words(remote, tmp_path):
+    """A remote git itself won't reach: here the owner's own url rewrite sends Git remote URL to
+    a local path, which the transport's check before git runs doesn't see. The detail says why,
+    and what to use instead, in PersonalClaw's words first; git's own follow as the detail."""
+    p = _provider(remote, tmp_path)
+    p.push([SyncObject("first.jsonl", b"one")])
+    local = tmp_path / "elsewhere.git"
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(local)], check=True,
+                   capture_output=True, text=True)
+    with open(os.path.join(os.environ["HOME"], ".gitconfig"), "a", encoding="utf-8") as fh:
+        fh.write(f'[url "{local}"]\n\tinsteadOf = {remote}\n')
 
     r = p.push([SyncObject("second.jsonl", b"two")])
 
@@ -1263,3 +1286,506 @@ def test_a_push_that_cannot_write_its_clone_says_where_and_what_to_set(tmp_path,
         f"permissions, or set Local working clone {ON_CARD} to a folder PersonalClaw can write "
         f"to. {RETRIES} Details: "
     ), r.detail
+
+
+# ── the remote's refusals that still read as git's generic "no" ─────────────────────────
+#
+# Each of these fell through to the generic sentence ("Check Git remote URL and Branch …"), as
+# a ``transient`` push retried on every run, or was taken for the branch's ref lock. git names
+# the reason in brackets ("[remote rejected] main -> main (<reason>)") and, for a ref it could
+# not update, why on the remote's own error line; the reasons' words differ between git
+# versions ("failed to update ref", "failed to update refs"), so the cause line is what decides.
+
+
+def _refs(bare) -> str:
+    """Every ref in the bare repository at *bare*, with the commit it names."""
+    return subprocess.run(
+        ["git", "-C", str(bare), "for-each-ref", "--format=%(refname) %(objectname)"],
+        check=True, capture_output=True, text=True,
+    ).stdout
+
+
+def test_a_push_to_a_branch_the_remote_hides_says_so_and_is_not_retried(
+    remote, tmp_path, monkeypatch, c_locale
+):
+    """A remote set to hide the branch from pushes (``receive.hideRefs``) turns every push to it
+    away as "deny updating a hidden ref", and no retry changes that."""
+    subprocess.run(["git", "-C", str(tmp_path / "remote.git"), "config", "receive.hideRefs",
+                    "refs/heads/main"], check=True, capture_output=True, text=True)
+    pushes = _count_pushes(monkeypatch)
+
+    r = _provider(remote, tmp_path).push([SyncObject("k", b"v")])
+
+    assert r.outcome == "permanent", r.detail
+    assert r.detail.startswith(
+        "Git Sync couldn't push to the git remote: it hides branch 'main', and takes no push to "
+        f"a branch it hides. Set Branch {ON_CARD} to one it doesn't hide, or stop hiding this "
+        "one there (git's receive.hideRefs or transfer.hideRefs setting). Details: "
+    ), r.detail
+    assert len(pushes) == 1
+
+
+def test_a_remote_missing_objects_its_own_branch_needs_says_its_repository_is_damaged(
+    remote, tmp_path, monkeypatch, c_locale
+):
+    """The remote's repository lost the commit its branch points at, so it can't connect what a
+    push sends to what it holds: "missing necessary objects". No push can land until it is
+    repaired."""
+    p = _provider(remote, tmp_path)
+    assert p.push([SyncObject("base", b"0")]).outcome == "delivered"
+    bare = tmp_path / "remote.git"
+    tip = subprocess.run(["git", "-C", str(bare), "rev-parse", "main"], check=True,
+                         capture_output=True, text=True).stdout.strip()
+    (bare / "objects" / tip[:2] / tip[2:]).unlink()
+    pushes = _count_pushes(monkeypatch)
+
+    r = p.push([SyncObject("k", b"v")])
+
+    assert r.outcome == "permanent", r.detail
+    assert r.detail.startswith(
+        "Git Sync couldn't push to the git remote: its repository is missing objects its own "
+        "history needs, so no push to it can land. Run git fsck in that repository to see what "
+        f"is missing and restore it from a backup, or set Git remote URL {ON_CARD} to another "
+        "repository. Details: "
+    ), r.detail
+    assert len(pushes) == 1
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes into a read-only directory anyway")
+def test_a_remote_that_cannot_write_its_branch_says_so_rather_than_a_lock(
+    remote, tmp_path, monkeypatch, c_locale
+):
+    """The remote's folder of branches isn't writable by the account this machine pushes as. Its
+    "cannot lock ref … Permission denied" was taken for a lock another push held: tried three
+    times, and said to remove a lock file there was none of."""
+    p = _provider(remote, tmp_path)
+    assert p.push([SyncObject("base", b"0")]).outcome == "delivered"
+    heads = tmp_path / "remote.git" / "refs" / "heads"
+    heads.chmod(0o555)
+    try:
+        pushes = _count_pushes(monkeypatch)
+        r = p.push([SyncObject("k", b"v")])
+    finally:
+        heads.chmod(0o755)
+
+    assert r.outcome == "permanent", r.detail
+    assert r.detail.startswith(
+        "Git Sync couldn't push to the git remote: the remote couldn't store what this machine "
+        "sent — the repository there isn't writable by the account this machine pushes as, or "
+        "the disk it is on is full. Fix that on the remote. Details: "
+    ), r.detail
+    assert len(pushes) == 1
+
+
+def test_a_branch_whose_name_clashes_with_one_the_remote_has_says_which(
+    remote, tmp_path, monkeypatch, c_locale
+):
+    """git keeps branch names as paths, so 'sync' can't sit beside a 'sync/main' the remote
+    already has: "refname conflict". It was taken for a ref lock and tried again."""
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "clone", remote, str(seed)], check=True, capture_output=True,
+                   text=True)
+    (seed / "f").write_text("x\n", encoding="utf-8")
+    _git(str(seed), "add", "-A")
+    _git(str(seed), "commit", "-m", "x")
+    _git(str(seed), "push", "origin", "HEAD:refs/heads/sync/main")
+    pushes = _count_pushes(monkeypatch)
+
+    r = GitSyncProvider(repo_url=remote, local_clone=str(tmp_path / "c"), branch="sync").push(
+        [SyncObject("k", b"v")]
+    )
+
+    assert r.outcome == "permanent", r.detail
+    assert r.detail.startswith(
+        "Git Sync couldn't push to the git remote: it has a branch 'sync/main', and git can't "
+        "keep branch 'sync' beside it, since one name is a folder of the other. Set Branch "
+        f"{ON_CARD} to another name. Details: "
+    ), r.detail
+    assert len(pushes) == 1
+
+
+def _pushes_answered(monkeypatch, returncode: int, stderr: str) -> list[list[str]]:
+    """Every ``git push`` the transport runs answered with *stderr*; the rest run for real."""
+    real_run = GitSyncProvider._run
+    pushes: list[list[str]] = []
+
+    def _answered(self, args, check=True):
+        if git_sync._subcommand(args) == "push":
+            pushes.append(args)
+            return subprocess.CompletedProcess(["git", *args], returncode, stdout="",
+                                               stderr=stderr)
+        return real_run(self, args, check=check)
+
+    monkeypatch.setattr(GitSyncProvider, "_run", _answered)
+    return pushes
+
+
+def test_a_branch_another_push_moved_under_this_one_is_a_lost_race(
+    remote, tmp_path, monkeypatch, c_locale
+):
+    """Another push moved the branch between the remote advertising it and updating it: "is at
+    … but expected …". That is a lost race, caught up with and pushed again, not a lock. git
+    forbids a remote's own hook to move a ref inside a push, so no test here can make the remote
+    say it; its words are receive-pack's own, handed to the transport's push step."""
+    stderr = (
+        "remote: error: cannot lock ref 'refs/heads/main': is at "
+        "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c but expected "
+        "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d\n"
+        "To ssh://example.invalid/srv/state.git\n"
+        " ! [remote rejected] main -> main (incorrect old value provided)\n"
+        "error: failed to push some refs to 'ssh://example.invalid/srv/state.git'"
+    )
+    pushes = _pushes_answered(monkeypatch, 1, stderr)
+
+    r = _provider(remote, tmp_path).push([SyncObject("k", b"v")])
+
+    assert r.outcome == "transient", r.detail
+    assert r.detail == sentence_with_detail(
+        "Git Sync couldn't push to the git remote: each of the 3 times it caught up with the "
+        f"remote and pushed, another push had reached it first. {RETRIES}",
+        stderr,
+    ), r.detail
+    assert len(pushes) == 3, "a lost race was not caught up with and pushed again"
+
+
+def test_a_branch_the_remote_could_not_update_for_its_own_reason_is_tried_again(
+    remote, tmp_path, monkeypatch, c_locale
+):
+    """git's reason for a ref its store refused ("failed to update refs") with a cause this
+    transport has no words of its own for: the push landed its objects but not the branch. The
+    cause line is a stand-in; each cause known by name has its own test above."""
+    stderr = (
+        "remote: error: pc-fixture: the ref store refused the update\n"
+        "To ssh://example.invalid/srv/state.git\n"
+        " ! [remote rejected] main -> main (failed to update refs)\n"
+        "error: failed to push some refs to 'ssh://example.invalid/srv/state.git'"
+    )
+    _pushes_answered(monkeypatch, 1, stderr)
+
+    r = _provider(remote, tmp_path).push([SyncObject("k", b"v")])
+
+    assert r.outcome == "transient", r.detail
+    assert r.detail == sentence_with_detail(
+        "Git Sync couldn't push to the git remote: it took what this machine sent but couldn't "
+        "move branch 'main' to it. If it keeps happening, check that repository on the remote. "
+        f"{RETRIES}",
+        stderr,
+    ), r.detail
+
+
+# ── a lock file an interrupted git left in the working clone ────────────────────────────
+#
+# git names the file ("Unable to create '…/main.lock': File exists."). Only the index's lock
+# was said as that; any other stopped the catch-up without a word, or read as git failing.
+
+
+def _lock_left(clone, rel: str) -> str:
+    return (
+        f"Git Sync couldn't update its working clone at {clone}: another git process is using "
+        f"it, or an interrupted one left {rel} behind. Wait for it to finish, or, if no git is "
+        f"running there, remove that file. {RETRIES}"
+    )
+
+
+def test_a_stale_lock_on_the_clones_copy_of_the_branch_is_named_not_taken_for_a_race(
+    remote, tmp_path, monkeypatch, c_locale
+):
+    """An interrupted fetch left the clone's copy of the remote's branch locked. Every catch-up
+    after it failed without a word, so each push met a remote it hadn't caught up with and, after
+    three tries, said another machine kept pushing first."""
+    a = _provider(remote, tmp_path, name="a")
+    b = _provider(remote, tmp_path, name="b")
+    assert a.push([SyncObject("base", b"0")]).outcome == "delivered"
+    assert b.push([SyncObject("machines/b/x.jsonl", b"B")]).outcome == "delivered"
+    lock = tmp_path / "a" / ".git" / "refs" / "remotes" / "origin" / "main.lock"
+    lock.write_text("", encoding="utf-8")
+    pushes = _count_pushes(monkeypatch)
+
+    r = a.push([SyncObject("machines/a/x.jsonl", b"A")])
+
+    assert r.outcome == "transient", r.detail
+    assert r.detail.startswith(
+        _lock_left(tmp_path / "a", ".git/refs/remotes/origin/main.lock") + " Details: "
+    ), r.detail
+    assert pushes == [], "a clone that couldn't catch up pushed anyway"
+    lock.unlink()
+    assert a.push([SyncObject("machines/a/y.jsonl", b"A2")]).outcome == "delivered"
+
+
+def test_a_stale_lock_on_the_clones_branch_is_named_where_the_commit_stops(
+    remote, tmp_path, c_locale
+):
+    """The clone's own branch locked: the commit failed, and said only that git commit failed
+    there."""
+    p = _provider(remote, tmp_path)
+    assert p.push([SyncObject("base", b"0")]).outcome == "delivered"
+    (tmp_path / "clone" / ".git" / "refs" / "heads" / "main.lock").write_text("", encoding="utf-8")
+
+    r = p.push([SyncObject("k", b"v")])
+
+    assert r.outcome == "transient", r.detail
+    assert r.detail.startswith(
+        _lock_left(tmp_path / "clone", ".git/refs/heads/main.lock") + " Details: "
+    ), r.detail
+
+
+def test_a_stale_lock_a_replay_meets_is_named_not_taken_for_a_conflict(
+    remote, tmp_path, c_locale
+):
+    """The same lock met while this machine's unpushed commits were being put on top of the
+    remote's: the replay stopped part-way, and that was reported as a conflict to resolve by
+    hand, never to be tried again."""
+    a = _provider(remote, tmp_path, name="a")
+    b = _provider(remote, tmp_path, name="b")
+    assert a.push([SyncObject("base", b"0")]).outcome == "delivered"
+    assert b.push([SyncObject("machines/b/x.jsonl", b"B")]).outcome == "delivered"
+    (tmp_path / "a" / "stranded.jsonl").write_bytes(b"S")
+    _git(str(tmp_path / "a"), "add", "-A")
+    _git(str(tmp_path / "a"), "commit", "-m", "sync: 1 objects")
+    lock = tmp_path / "a" / ".git" / "refs" / "heads" / "main.lock"
+    lock.write_text("", encoding="utf-8")
+
+    r = a.push([SyncObject("machines/a/x.jsonl", b"A")])
+
+    assert r.outcome == "transient", r.detail
+    assert r.detail.startswith(
+        _lock_left(tmp_path / "a", ".git/refs/heads/main.lock") + " Details: "
+    ), r.detail
+    lock.unlink()
+    assert a.push([SyncObject("machines/a/y.jsonl", b"A2")]).outcome == "delivered"
+    keys = _files_in_fresh_remote_checkout(remote, tmp_path)
+    assert {"stranded.jsonl", "machines/b/x.jsonl", "machines/a/y.jsonl"} <= keys
+
+
+def test_a_registry_swap_a_stale_lock_stops_says_so_rather_than_losing_a_race(
+    remote, tmp_path, c_locale
+):
+    """The swap caught up first, met the lock, and answered False: a lost race, which the
+    cycle re-reads and retries until it gives up as "registry CAS lost"."""
+    a = _provider(remote, tmp_path, name="a")
+    b = _provider(remote, tmp_path, name="b")
+    assert a.push([SyncObject("base", b"0")]).outcome == "delivered"
+    assert b.push([SyncObject("machines/b/x.jsonl", b"B")]).outcome == "delivered"
+    (tmp_path / "a" / ".git" / "refs" / "remotes" / "origin" / "main.lock").write_text(
+        "", encoding="utf-8"
+    )
+
+    with pytest.raises(Exception) as caught:
+        a.cas_registry(None, b'{"seq": 1}')
+
+    assert str(caught.value).startswith(
+        _lock_left(tmp_path / "a", ".git/refs/remotes/origin/main.lock") + " Details: "
+    ), caught.value
+    assert not (tmp_path / "a" / "registry.json").exists(), "the swap's write stayed in the clone"
+
+
+# ── a changed Git remote URL ─────────────────────────────────────────────────────────────
+#
+# The working clone kept the remote it was first cloned from as its origin, and every fetch and
+# push went there, whatever Git remote URL said after — to a remote the owner may have left on
+# purpose, and git-sync keeps shards plaintext.
+
+
+def _two_remotes(tmp_path, ssh_url):
+    """The remote a working clone was made from, and the one Git remote URL names now."""
+    old_bare, new_bare = tmp_path / "old.git", tmp_path / "new.git"
+    return old_bare, ssh_url(_bare(old_bare)), new_bare, ssh_url(_bare(new_bare))
+
+
+def _left_beside(tmp_path) -> list[str]:
+    """Anything a swap left next to the working clone."""
+    return sorted(p.name for p in tmp_path.iterdir() if p.name.startswith(".clone"))
+
+
+def test_a_changed_git_remote_url_takes_the_working_clone_to_the_new_remote(
+    tmp_path, ssh_url, c_locale
+):
+    old_bare, old, new_bare, new = _two_remotes(tmp_path, ssh_url)
+    clone = tmp_path / "clone"
+    first = GitSyncProvider(repo_url=old, local_clone=str(clone))
+    assert first.push([SyncObject("machines/a/seq-0001/x.jsonl", b"1")]).outcome == "delivered"
+    old_refs = _refs(old_bare)
+
+    r = GitSyncProvider(repo_url=new, local_clone=str(clone)).push(
+        [SyncObject("machines/a/seq-0002/x.jsonl", b"2")]
+    )
+
+    assert r.outcome == "delivered", r.detail
+    assert _refs(old_bare) == old_refs, "a push after the change reached the old remote"
+    # The new remote gets this machine's push, and nothing the old remote held.
+    assert _files_in_fresh_remote_checkout(new, tmp_path) == {"machines/a/seq-0002/x.jsonl"}
+    assert _git(str(clone), "config", "--get", "remote.origin.url").stdout.strip() == new
+    assert _left_beside(tmp_path) == []
+
+
+def test_after_a_url_change_the_reads_and_the_registry_swap_use_the_new_remote(
+    tmp_path, ssh_url, c_locale
+):
+    old_bare, old, _new_bare, new = _two_remotes(tmp_path, ssh_url)
+    seed = GitSyncProvider(repo_url=new, local_clone=str(tmp_path / "seed"))
+    assert seed.push([SyncObject("machines/b/seq-0001/y.jsonl", b"new")]).outcome == "delivered"
+    clone = tmp_path / "clone"
+    first = GitSyncProvider(repo_url=old, local_clone=str(clone))
+    assert first.push([SyncObject("machines/a/seq-0001/x.jsonl", b"old")]).outcome == "delivered"
+    old_refs = _refs(old_bare)
+    p = GitSyncProvider(repo_url=new, local_clone=str(clone))
+
+    assert [ref.key for ref in p.list_remote()] == ["machines/b/seq-0001/y.jsonl"]
+    pulled = p.pull(
+        [RemoteRef("machines/b/seq-0001/y.jsonl"), RemoteRef("machines/a/seq-0001/x.jsonl")]
+    )
+    assert [(o.key, o.data) for o in pulled] == [("machines/b/seq-0001/y.jsonl", b"new")]
+    assert p.cas_registry(None, b'{"seq": 1}') is True
+    assert p.test().ok is True
+
+    assert _refs(old_bare) == old_refs
+    assert _remote_bytes(new, tmp_path, "registry.json", "verify") == b'{"seq": 1}'
+
+
+def test_a_pull_after_a_url_change_serves_nothing_of_the_old_remote_and_fetches_nothing(
+    tmp_path, ssh_url, monkeypatch, c_locale
+):
+    """A pull never makes the clone; it read the old one — after fetching the old remote —
+    and handed its objects over as the new remote's."""
+    _old_bare, old, _new_bare, new = _two_remotes(tmp_path, ssh_url)
+    clone = tmp_path / "clone"
+    first = GitSyncProvider(repo_url=old, local_clone=str(clone))
+    assert first.push([SyncObject("machines/a/seq-0001/x.jsonl", b"old")]).outcome == "delivered"
+    real_run = GitSyncProvider._run
+    fetched: list[list[str]] = []
+
+    def _counting(self, args, check=True):
+        if git_sync._subcommand(args) == "fetch":
+            fetched.append(args)
+        return real_run(self, args, check=check)
+
+    monkeypatch.setattr(GitSyncProvider, "_run", _counting)
+
+    pulled = GitSyncProvider(repo_url=new, local_clone=str(clone)).pull(
+        [RemoteRef("machines/a/seq-0001/x.jsonl")]
+    )
+
+    assert pulled == []
+    assert fetched == []
+
+
+def test_a_registry_swap_after_a_url_change_writes_the_new_remotes_registry(
+    tmp_path, ssh_url, c_locale
+):
+    old_bare, old, _new_bare, new = _two_remotes(tmp_path, ssh_url)
+    clone = tmp_path / "clone"
+    first = GitSyncProvider(repo_url=old, local_clone=str(clone))
+    assert first.cas_registry(None, b'{"seq": 1}') is True
+    old_refs = _refs(old_bare)
+
+    assert GitSyncProvider(repo_url=new, local_clone=str(clone)).cas_registry(
+        None, b'{"seq": 7}'
+    ) is True
+
+    assert _refs(old_bare) == old_refs
+    assert _remote_bytes(new, tmp_path, "registry.json", "verify") == b'{"seq": 7}'
+
+
+def test_a_new_git_remote_url_that_cannot_be_cloned_keeps_the_old_clone_and_reaches_neither(
+    tmp_path, ssh_url, monkeypatch, c_locale
+):
+    old_bare, old, _new_bare, _new = _two_remotes(tmp_path, ssh_url)
+    clone = tmp_path / "clone"
+    first = GitSyncProvider(repo_url=old, local_clone=str(clone))
+    assert first.push([SyncObject("machines/a/seq-0001/x.jsonl", b"1")]).outcome == "delivered"
+    old_refs = _refs(old_bare)
+    p = GitSyncProvider(repo_url=ssh_url(tmp_path / "does-not-exist.git"), local_clone=str(clone))
+    pushes = _count_pushes(monkeypatch)
+
+    r = p.push([SyncObject("machines/a/seq-0002/x.jsonl", b"2")])
+    p.list_remote()
+    p.pull([RemoteRef("machines/a/seq-0001/x.jsonl")])
+    p.cas_registry(None, b"{}")
+
+    assert r.outcome == "transient", r.detail
+    assert r.detail.startswith(
+        f"Git Sync couldn't clone the git remote into {clone}: no repository at that address is "
+        "visible to this machine — it doesn't exist, or this machine's credentials can't see it. "
+        f"Check Git remote URL {ON_CARD}. {RETRIES} Details: "
+    ), r.detail
+    assert pushes == []
+    assert _refs(old_bare) == old_refs
+    assert _git(str(clone), "config", "--get", "remote.origin.url").stdout.strip() == old
+    assert (clone / "machines" / "a" / "seq-0001" / "x.jsonl").read_bytes() == b"1"
+    assert _left_beside(tmp_path) == []
+
+
+@pytest.mark.parametrize("theirs", ["a commit", "a file"])
+def test_a_working_clone_holding_the_owners_own_work_is_never_replaced(
+    tmp_path, ssh_url, monkeypatch, c_locale, theirs
+):
+    """Local working clone pointed at a repository of the owner's, with a remote of its own. It
+    was taken for the working clone: the objects were committed into it — with anything else
+    uncommitted there — and pushed to that repository's remote."""
+    own_bare, own = tmp_path / "own.git", ssh_url(_bare(tmp_path / "own.git"))
+    sync_bare, sync = tmp_path / "sync.git", ssh_url(_bare(tmp_path / "sync.git"))
+    folder = tmp_path / "project"
+    subprocess.run(["git", "clone", own, str(folder)], check=True, capture_output=True, text=True)
+    if theirs == "a commit":
+        (folder / "notes.md").write_text("the owner's notes\n", encoding="utf-8")
+        _git(str(folder), "add", "-A")
+        _git(str(folder), "commit", "-m", "notes")
+        _git(str(folder), "push", "origin", "HEAD:main")
+    else:
+        (folder / "draft.txt").write_text("not committed yet\n", encoding="utf-8")
+    files = sorted(str(p.relative_to(folder)) for p in folder.rglob("*"))
+    refs = (_refs(own_bare), _refs(sync_bare))
+    pushes = _count_pushes(monkeypatch)
+    p = GitSyncProvider(repo_url=sync, local_clone=str(folder))
+    says = (
+        f"The working clone at {folder} doesn't point at Git remote URL — it was cloned from "
+        "another remote, or its own settings send pushes elsewhere — and it holds commits or "
+        "files Git Sync didn't make, so Git Sync leaves it as it is and syncs through neither "
+        f"remote. Set Local working clone {ON_CARD} to a new folder, or delete that one if "
+        "nothing in it needs keeping, and Git Sync clones Git remote URL there on its next run."
+    )
+
+    r = p.push([SyncObject("machines/a/seq-0001/x.jsonl", b"1")])
+    probe = p.test()
+
+    assert (r.outcome, r.detail) == ("permanent", says)
+    assert (probe.ok, probe.detail) == (False, says), "the probe was green beside a sync refused"
+    assert p.list_remote() == [] and p.pull([RemoteRef("notes.md")]) == []
+    with pytest.raises(git_sync.GitSyncFailed, match="leaves it as it is"):
+        p.cas_registry(None, b"{}")
+    assert pushes == []
+    assert sorted(str(p.relative_to(folder)) for p in folder.rglob("*")) == files
+    assert (_refs(own_bare), _refs(sync_bare)) == refs
+
+
+@pytest.mark.parametrize(
+    "setting",
+    [
+        ("remote.origin.pushurl", "{elsewhere}"),
+        ("url.{elsewhere}.pushInsteadOf", "{sync}"),
+        ("--add", "remote.origin.url", "{elsewhere}"),
+    ],
+    ids=["push-url", "push-rewrite", "second-url"],
+)
+def test_a_working_clone_whose_own_settings_send_pushes_elsewhere_is_replaced(
+    tmp_path, ssh_url, c_locale, setting
+):
+    """Anything that can write the working clone can write its ``.git/config``. A push URL, a
+    rewrite or a second URL there sent every push to another remote as well as, or instead of,
+    Git remote URL, while the clone's origin still read as Git remote URL."""
+    sync = ssh_url(_bare(tmp_path / "sync.git"))
+    elsewhere_bare = tmp_path / "elsewhere.git"
+    elsewhere = ssh_url(_bare(elsewhere_bare))
+    clone = tmp_path / "clone"
+    p = GitSyncProvider(repo_url=sync, local_clone=str(clone))
+    assert p.push([SyncObject("machines/a/seq-0001/x.jsonl", b"1")]).outcome == "delivered"
+    _git(str(clone), "config", *(s.format(elsewhere=elsewhere, sync=sync) for s in setting))
+    elsewhere_refs = _refs(elsewhere_bare)
+
+    r = p.push([SyncObject("machines/a/seq-0002/x.jsonl", b"2")])
+
+    assert r.outcome == "delivered", r.detail
+    assert _refs(elsewhere_bare) == elsewhere_refs, "a push went where the clone's settings sent it"
+    keys = _files_in_fresh_remote_checkout(sync, tmp_path)
+    assert {"machines/a/seq-0001/x.jsonl", "machines/a/seq-0002/x.jsonl"} <= keys
+    assert _left_beside(tmp_path) == []

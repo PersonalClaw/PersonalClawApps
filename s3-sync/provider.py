@@ -22,8 +22,8 @@ Consequences that are easy to miss and are load-bearing here:
   compatible stores prefer.
 * **A truncated body is an integrity failure, never data.** ``fetch`` caps the body at
   ``policy.max_bytes`` and reports ``truncated=True`` rather than raising. A silently
-  short shard is corruption, so :meth:`pull` drops any truncated object instead of
-  handing back a prefix of it.
+  short shard is corruption, so :meth:`pull` refuses any truncated object — it raises,
+  naming the object and the cap — instead of handing back a prefix of it.
 
 **Credentials are explicit, never ambient.** The env fallbacks are
 ``PERSONALCLAW_S3_*`` — deliberately NOT ``AWS_ACCESS_KEY_ID`` / ``AWS_PROFILE`` / the
@@ -53,6 +53,7 @@ from personalclaw.sdk.sync import (
     RemoteRef,
     SyncObject,
     SyncTransportProvider,
+    is_routing_key,
     sync_egress_policy,
 )
 
@@ -77,6 +78,23 @@ _LIST_PAGE_SIZE = 1000
 #: to the same key is still in progress. That is not "already present" (a 412): the key may not
 #: exist yet, so the write is tried again. ``""`` is a 409 that came with no S3 error body.
 _WRITE_IN_PROGRESS = ("ConditionalRequestConflict", "OperationAborted", "")
+
+
+class S3RequestFailed(RuntimeError):
+    """A request a listing, a read or the registry swap needed that didn't get its answer — it
+    raised, the store refused it, or what came back can't be used — said as what is wrong and
+    what to do, then the store's (or the request's) own words.
+
+    ``list_remote``, ``pull`` and ``cas_registry`` raise it, having no outcome to carry a
+    sentence. Answering empty, or ``False``, instead read as a bucket with nothing in it, or as a
+    swap another machine won: the sync cycle took an empty registry, published as if this were
+    the first machine, and reported its registry swap lost five times over — to no other machine
+    at all. Raised, the cycle records it as its failure, in this text.
+    """
+
+    def __init__(self, sentence: str, words: object) -> None:
+        super().__init__(sentence_with_detail(sentence, words))
+        self.sentence = sentence
 
 
 def _utcnow() -> datetime:
@@ -276,6 +294,12 @@ class S3SyncProvider(SyncTransportProvider):
         )
         return headers
 
+    def _policy(self) -> Any:
+        """The egress policy every request runs under. Derived per request from the CONFIGURED
+        endpoint, never cached and never hand-built: the operator can change
+        ``security.egress`` under a long-lived process and the next request must reflect it."""
+        return sync_egress_policy(self._endpoint)
+
     def _request(
         self,
         method: str,
@@ -288,16 +312,14 @@ class S3SyncProvider(SyncTransportProvider):
         """Sign and perform one request through the guarded egress chokepoint.
 
         Returns the ``FetchResponse``. Raises whatever ``fetch`` raises (notably
-        ``EgressBlocked`` and ``SyncEndpointRefused``) — callers turn those into typed
-        transport outcomes rather than letting them escape into the sync cycle.
+        ``EgressBlocked`` and ``SyncEndpointRefused``) — callers turn those into a push's typed
+        outcome, or into :class:`S3RequestFailed` said as what went wrong, and never let the
+        bare exception escape into the sync cycle.
         """
         from personalclaw.sdk.net import fetch
 
         query = query or {}
-        # The policy is derived per request from the CONFIGURED endpoint, never cached and
-        # never hand-built: the operator can change `security.egress` under a long-lived
-        # process and the next request must reflect it.
-        policy = sync_egress_policy(self._endpoint)
+        policy = self._policy()
         full_url = url
         if query:
             qs = "&".join(
@@ -385,14 +407,24 @@ class S3SyncProvider(SyncTransportProvider):
             f"is running and reachable from this machine, and the settings {_ON_CARD}."
         )
 
-    def _store_refused(self, status: int, code: str, *, probe: bool = False) -> str:
+    def _store_refused(
+        self,
+        status: int,
+        code: str,
+        *,
+        action: str = "write",
+        key: str = "",
+        condition: str = "If-None-Match",
+    ) -> str:
         """What a store's non-2xx answer means, and what to do — by S3's own error ``code``
-        where that pins the fix to one setting, else by the status's class. ``probe`` is the
-        connection test's zero-key listing rather than a push's write. The sentence alone: the
-        caller says whether the cycle retries, and adds the store's words."""
+        where that pins the fix to one setting, else by the status's class. ``action`` is what S3
+        Sync asked for: a ``write`` (a push, or the registry swap, conditional on the
+        ``condition`` header), a ``read`` of the object ``key``, or a ``list`` of the bucket — any
+        listing, the connection test's among them. The sentence alone: the caller says whether
+        the cycle retries, and adds the store's words."""
         endpoint, bucket = self._endpoint, self._bucket
-        request = "request" if probe else "write"
-        if status == 409 and not probe and code in _WRITE_IN_PROGRESS:
+        request = {"write": "write", "read": "read", "list": "request"}[action]
+        if status == 409 and action == "write" and code in _WRITE_IN_PROGRESS:
             return (
                 f"The store at {endpoint} was still busy with another conditional write to the "
                 "same object when S3 Sync's write arrived, so it turned this one away."
@@ -403,10 +435,14 @@ class S3SyncProvider(SyncTransportProvider):
                 f"Check Access key ID {_ON_CARD}."
             )
         if code == "SignatureDoesNotMatch":
+            # Some S3-compatible stores answer a signature made for the wrong region this way,
+            # rather than with AuthorizationHeaderMalformed naming the region they expect.
             return (
-                f"The store at {endpoint} didn't accept S3 Sync's request signature, which "
-                "usually means the secret access key doesn't belong to the access key ID. Check "
-                f"Secret access key {_ON_CARD}."
+                f"The store at {endpoint} didn't accept S3 Sync's request signature: the secret "
+                "access key doesn't belong to the access key ID, or — on some S3-compatible "
+                f"stores — Region ({self._region}) isn't the one the store is set up for. Check "
+                f"Secret access key {_ON_CARD}; if it is right, set Region there to the store's "
+                "region."
             )
         if code == "RequestTimeTooSkewed":
             return (
@@ -431,7 +467,7 @@ class S3SyncProvider(SyncTransportProvider):
                 f"{_ON_CARD} to one that exists."
             )
         if code == "RequestTimeout" or status == 408:
-            what = "request" if probe else "upload"
+            what = "upload" if action == "write" else "request"
             return (
                 f"The store at {endpoint} gave up waiting for S3 Sync's {what} to arrive. If it "
                 "keeps happening, check this machine's connection to the store."
@@ -442,8 +478,14 @@ class S3SyncProvider(SyncTransportProvider):
                 "limiting how fast it takes requests. If it keeps happening, check the store's "
                 "load and any request limits on the bucket."
             )
+        if status in (401, 403) and action == "read":
+            return (
+                f"The store at {endpoint} refused S3 Sync's read of {key} in bucket {bucket}. "
+                f"Check Access key ID and Secret access key {_ON_CARD}, and that the key's policy "
+                "lets it read objects in that bucket."
+            )
         if status in (401, 403):
-            may = "list" if probe else "write objects to"
+            may = "list" if action == "list" else "write objects to"
             return (
                 f"The store at {endpoint} refused S3 Sync's {request} to bucket {bucket}. Check "
                 f"Access key ID and Secret access key {_ON_CARD}, and that the key's policy lets "
@@ -455,14 +497,14 @@ class S3SyncProvider(SyncTransportProvider):
                 "doesn't exist there, or Endpoint URL doesn't point at an S3 API. Check Bucket and "
                 f"Endpoint URL {_ON_CARD}."
             )
-        if status == 501:
-            if probe:
-                return (
-                    f"The store at {endpoint} doesn't support ListObjectsV2, the listing S3 Sync "
-                    "reads the bucket with. Use a store, or a version of it, that supports it."
-                )
+        if status == 501 and action == "list":
             return (
-                f"The store at {endpoint} doesn't support conditional writes (If-None-Match), "
+                f"The store at {endpoint} doesn't support ListObjectsV2, the listing S3 Sync "
+                "reads the bucket with. Use a store, or a version of it, that supports it."
+            )
+        if action == "write" and (status == 501 or code == "NotImplemented"):
+            return (
+                f"The store at {endpoint} doesn't support conditional writes ({condition}), "
                 "which S3 Sync relies on to never overwrite an object. Use a store, or a version "
                 "of it, that supports them."
             )
@@ -482,6 +524,75 @@ class S3SyncProvider(SyncTransportProvider):
             f"The store at {endpoint} refused S3 Sync's {request}. Check Endpoint URL, Bucket and "
             f"Region {_ON_CARD}."
         )
+
+    def _too_large(self, key: str) -> str:
+        """What an object larger than the most PersonalClaw downloads from a sync store says —
+        that most is the cap of the policy the request ran under — with the step that fits the
+        object: a shard is data a machine synced, and anything else S3 Sync never writes that
+        large."""
+        what = (
+            f"The object {self._prefix}{key} in bucket {self._bucket} is larger than "
+            f"{_size(self._policy().max_bytes)}, the most PersonalClaw downloads from a sync "
+            "store, so S3 Sync can't read it"
+        )
+        if not is_routing_key(key):
+            return (
+                f"{what}: a machine's synced data has grown past that. To keep syncing it, use a "
+                "transport without that limit, such as Rsync Sync."
+            )
+        where = f"{self._prefix} in bucket {self._bucket}" if self._prefix else "the bucket"
+        return (
+            f"{what}, and S3 Sync never writes one that size, so something else put it there. "
+            f"Move it out of {where}."
+        )
+
+    def _not_a_listing(self) -> str:
+        """What a 2xx answer to a listing that isn't an S3 listing says."""
+        return (
+            f"The store at {self._endpoint} answered S3 Sync's listing of bucket {self._bucket} "
+            "with something that isn't an S3 listing. Check that Endpoint URL "
+            f"{_ON_CARD} is the address of the store's S3 API."
+        )
+
+    def _raised(self, exc: BaseException) -> S3RequestFailed:
+        """The error a listing, a read or the registry swap raises for a request that raised:
+        said as a push's is, and that the cycle retries when a push's would be retried."""
+        sentence = self._request_failed(exc)
+        if _outcome_for(exc) == "transient":
+            sentence = f"{sentence} {_RETRIES}"
+        return S3RequestFailed(sentence, exc)
+
+    def _refusal(self, resp: Any, code: str, words: str, **how: str) -> S3RequestFailed:
+        """The error a listing, a read or the registry swap raises for the store's non-2xx
+        answer: said as :meth:`_store_refused` says it for ``how``, and that the cycle retries
+        when a push's would be retried."""
+        sentence = self._store_refused(resp.status, code, **how)
+        if _outcome_for_status(resp.status, code) == "transient":
+            sentence = f"{sentence} {_RETRIES}"
+        return S3RequestFailed(sentence, words)
+
+    def _get(self, key: str) -> Any:
+        """GET the object ``key``: the store's whole answer, or None when the store doesn't have
+        it — a 404, for which the contract drops the ref, unless S3's code says the bucket itself
+        is gone. Anything else raises :class:`S3RequestFailed`: a request that raised, a refusal,
+        or a body cut off at the download cap."""
+        try:
+            resp = self._request("GET", self._object_url(key))
+        except Exception as e:  # noqa: BLE001 — every failure is said, then raised
+            raise self._raised(e) from e
+        if 200 <= resp.status < 300:
+            if resp.truncated:
+                # `fetch` caps the body at the policy's max_bytes and REPORTS the cap rather than
+                # raising. Handing back a prefix of a shard would be silent corruption that the
+                # merge would happily apply.
+                size = _header(resp.headers, "Content-Length")
+                words = f"HTTP {resp.status}, Content-Length {size}" if size else ""
+                raise S3RequestFailed(self._too_large(key), words or f"HTTP {resp.status}")
+            return resp
+        code, words = _answer(resp)
+        if resp.status == 404 and code != "NoSuchBucket":
+            return None
+        raise self._refusal(resp, code, words, action="read", key=f"{self._prefix}{key}")
 
     # ── SyncTransportProvider contract ───────────────────────────────────────────────
 
@@ -522,12 +633,11 @@ class S3SyncProvider(SyncTransportProvider):
             if 200 <= resp.status < 300:
                 pushed += 1
                 continue
-            code, said = _store_error(resp.body)
+            code, words = _answer(resp)
             outcome = _outcome_for_status(resp.status, code)
             sentence = self._store_refused(resp.status, code)
             if outcome == "transient":
                 sentence = f"{sentence} {_RETRIES}"
-            words = f"HTTP {resp.status} {said}".strip()
             return PushResult(
                 pushed=pushed,
                 skipped=skipped,
@@ -537,8 +647,9 @@ class S3SyncProvider(SyncTransportProvider):
         return PushResult(pushed=pushed, skipped=skipped, outcome="delivered")
 
     def list_remote(self, prefix: str = "") -> list[RemoteRef]:
-        # An unconfigured or unreachable store is an EMPTY remote, not an exception: a
-        # fresh machine legitimately has nothing there yet, and the cycle reconciles.
+        # EMPTY only when there is nothing there: an unconfigured transport, or a listing the
+        # store answered with no objects in it — a fresh bucket, before any machine has synced.
+        # A listing that fails raises, said as what went wrong — see :class:`S3RequestFailed`.
         if not self.configured:
             return []
         refs: list[RemoteRef] = []
@@ -554,14 +665,17 @@ class S3SyncProvider(SyncTransportProvider):
                 query["continuation-token"] = token
             try:
                 resp = self._request("GET", base, query=query)
-            except Exception:  # noqa: BLE001 — an unreachable store lists as empty
-                return refs
+            except Exception as e:  # noqa: BLE001 — every failure is said, then raised
+                raise self._raised(e) from e
             if not (200 <= resp.status < 300):
-                return refs
+                code, words = _answer(resp)
+                raise self._refusal(resp, code, words, action="list")
             try:
                 root = ET.fromstring(resp.body)
             except ET.ParseError:
-                return refs
+                root = None
+            if root is None or root.tag.rsplit("}", 1)[-1] != "ListBucketResult":
+                raise S3RequestFailed(self._not_a_listing(), _answer(resp)[1])
             for node in root.findall("{*}Contents"):
                 key = (node.findtext("{*}Key") or "").strip()
                 if not key:
@@ -586,7 +700,14 @@ class S3SyncProvider(SyncTransportProvider):
                 break
             token = (root.findtext("{*}NextContinuationToken") or "").strip()
             if not token:
-                break
+                # The rest of the listing, with no way to ask for it: what came back so far
+                # would read as all there is, and every object after it as gone.
+                raise S3RequestFailed(
+                    f"The store at {self._endpoint} said its listing of bucket {self._bucket} "
+                    "goes on, but not where it continues, so S3 Sync can't read the rest. Use a "
+                    "store, or a version of it, that supports ListObjectsV2.",
+                    f"HTTP {resp.status}, IsTruncated true with no NextContinuationToken",
+                )
         return refs
 
     def pull(self, refs: list[RemoteRef]) -> list[SyncObject]:
@@ -594,19 +715,9 @@ class S3SyncProvider(SyncTransportProvider):
             return []
         out: list[SyncObject] = []
         for ref in refs:
-            try:
-                resp = self._request("GET", self._object_url(ref.key))
-            except Exception:  # noqa: BLE001 — a ref we cannot fetch is dropped, not raised
-                continue
-            if not (200 <= resp.status < 300):
-                continue
-            if resp.truncated:
-                # `fetch` caps the body at policy.max_bytes and REPORTS the cap rather than
-                # raising. Handing back a prefix of a shard would be silent corruption that
-                # the merge would happily apply, so a truncated object is dropped. It is
-                # reported as an absence, which the cycle retries, not as data.
-                continue
-            out.append(SyncObject(key=ref.key, data=resp.body))
+            resp = self._get(ref.key)
+            if resp is not None:  # None is a ref the store no longer has: dropped, not raised
+                out.append(SyncObject(key=ref.key, data=resp.body))
         return out
 
     def cas_registry(self, expected_sha: str | None, data: bytes) -> bool:
@@ -617,45 +728,51 @@ class S3SyncProvider(SyncTransportProvider):
         expected) followed by ``If-Match: <etag>``. Both conditions are evaluated by the
         store, so two machines racing cannot both win.
 
-        A store that does NOT implement conditional writes makes this return ``False``
-        (a lost race) rather than falling back to an unconditional PUT. That is deliberate:
-        an unconditional registry write silently discards the other machine's registration,
-        and a visibly stalled CAS is a far better failure than losing a peer's state.
+        ``False`` is a lost race and nothing else: the condition failed (a 412), the registry
+        holds other bytes than the caller expected, or it is gone when the caller expected some.
+        Anything else that stops the swap raises :class:`S3RequestFailed`, said as what is
+        wrong — a request that raised, a refusal, a read cut off at the download cap, a read
+        with no ETag to make the write conditional on, a store without conditional writes —
+        rather than reading as a race core retries to no purpose, then reports lost.
+
+        It never falls back to an unconditional PUT, however the store answers: an
+        unconditional registry write silently discards another machine's registration.
         """
         if not self.configured:
             return False
         url = self._object_url(_REGISTRY_KEY)
         condition: dict[str, str]
         if expected_sha is None:
-            condition = {"if-none-match": "*"}
+            header, condition = "If-None-Match", {"if-none-match": "*"}
         else:
-            try:
-                current = self._request("GET", url)
-            except Exception:  # noqa: BLE001
-                return False
-            if current.status == 404:
-                # Caller expected a specific sha but the registry is gone — a lost race.
-                return False
-            if not (200 <= current.status < 300) or current.truncated:
-                return False
-            if hashlib.sha256(current.body).hexdigest() != expected_sha:
-                # Someone else swapped it since the caller read it: re-pull and retry.
+            current = self._get(_REGISTRY_KEY)
+            if current is None or hashlib.sha256(current.body).hexdigest() != expected_sha:
+                # Gone, or swapped by someone else since the caller read it: re-pull and retry.
                 return False
             etag = _header(current.headers, "ETag")
             if not etag:
-                # No ETag means we cannot make the write conditional, and an unconditional
-                # one could clobber a peer. Refuse.
-                return False
-            condition = {"if-match": etag}
+                # No ETag means the write cannot be made conditional, and an unconditional one
+                # could clobber a peer. Refused, and said.
+                sent = ", ".join(sorted({str(k) for k in current.headers or {}})) or "none"
+                raise S3RequestFailed(
+                    f"The store at {self._endpoint} sent {self._prefix}{_REGISTRY_KEY} back "
+                    "without an ETag, so S3 Sync can't make its registry write conditional — and "
+                    "it never writes the registry unconditionally, which could discard another "
+                    "machine's registration. If a proxy sits between this machine and the store, "
+                    "let it pass the ETag header through; otherwise use a store that sends one.",
+                    f"HTTP {current.status} with headers {sent}",
+                )
+            header, condition = "If-Match", {"if-match": etag}
         try:
             resp = self._request("PUT", url, payload=data, extra_headers=condition)
-        except Exception:  # noqa: BLE001
-            return False
+        except Exception as e:  # noqa: BLE001 — every failure is said, then raised
+            raise self._raised(e) from e
         if 200 <= resp.status < 300:
             return True
-        # 412 = the condition failed (a real lost race). 501/400 = the store does not
-        # support conditional writes; both refuse rather than clobber.
-        return False
+        if resp.status == 412:
+            return False  # the condition failed: another machine swapped it first
+        code, words = _answer(resp)
+        raise self._refusal(resp, code, words, condition=header)
 
     def test(self) -> ConnectionResult:
         if not self.configured:
@@ -680,14 +797,9 @@ class S3SyncProvider(SyncTransportProvider):
                 extra={"endpoint": self._endpoint, "region": self._region},
             )
         # Said as a push's refusal is — by S3's own code, then the status — for the listing.
-        code, said = _store_error(resp.body)
-        return ConnectionResult(
-            ok=False,
-            detail=sentence_with_detail(
-                self._store_refused(resp.status, code, probe=True),
-                f"HTTP {resp.status} {said}".strip(),
-            ),
-        )
+        code, words = _answer(resp)
+        sentence = self._store_refused(resp.status, code, action="list")
+        return ConnectionResult(ok=False, detail=sentence_with_detail(sentence, words))
 
 
 def _outcome_for_status(status: int, code: str = "") -> str:
@@ -705,6 +817,18 @@ def _outcome_for_status(status: int, code: str = "") -> str:
     if status == 409 and code in _WRITE_IN_PROGRESS:
         return "transient"  # another conditional write to the key, still in progress
     return "transient" if status >= 500 and status != 501 else "permanent"
+
+
+def _answer(resp: Any) -> tuple[str, str]:
+    """A store's non-2xx answer as S3's own error ``code`` and the words kept after the sentence:
+    ``HTTP <status>``, then what the store said (see :func:`_store_error`)."""
+    code, said = _store_error(resp.body)
+    return code, f"HTTP {resp.status} {said}".strip()
+
+
+def _size(n: int) -> str:
+    """``n`` bytes, said the way a limit reads: in megabytes, once it is some."""
+    return f"{n / 1_000_000:g} MB" if n >= 1_000_000 else f"{n:,} bytes"
 
 
 def _store_error(body: bytes) -> tuple[str, str]:

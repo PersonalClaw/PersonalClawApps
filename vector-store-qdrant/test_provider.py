@@ -288,6 +288,71 @@ def test_a_write_of_another_size_is_refused_before_anything_is_sent(store, monke
     assert sent == [], "vectors of another size were sent to the collection"
 
 
+# ── a collection this app didn't make ───────────────────────────────────────────────
+#
+# This app writes and searches one plain unnamed vector per point. A collection of named vectors
+# or multivectors, made by something else, has no one size: the size check let every write and
+# search through, and the engine's refusal was said as the local folder failing.
+
+def _not_ours(found: str) -> str:
+    """What the ``test_chunks`` collection, of the shape ``found`` names, says."""
+    return (
+        "The collection test_chunks wasn't made by Qdrant Vector Store: its vectors aren't the one "
+        "plain unnamed vector per point this app writes and searches. Set Collection "
+        f"{ON_CARD} to a new name, and one is created when the next document is ingested. "
+        f"Details: {found}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("shape", "found"),
+    [
+        ("named", "its vectors are named: image, text"),
+        ("multivector", "its vectors are multivectors"),
+    ],
+)
+def test_a_collection_this_app_did_not_make_is_said_before_anything_is_sent(
+    store, monkeypatch, shape, found
+):
+    """It said "Qdrant Vector Store's request to the Qdrant engine over its local folder …
+    failed", after the engine's "Unnamed vectors are not allowed", "Dense vector is not found"
+    or a TypeError, and the Store card read "connected"."""
+    from qdrant_client import models
+
+    plain = models.VectorParams(size=DIM, distance=models.Distance.COSINE)
+    config = (
+        {"text": plain, "image": plain}
+        if shape == "named"
+        else models.VectorParams(
+            size=DIM,
+            distance=models.Distance.COSINE,
+            multivector_config=models.MultiVectorConfig(
+                comparator=models.MultiVectorComparator.MAX_SIM
+            ),
+        )
+    )
+    store._connect().create_collection("test_chunks", vectors_config=config)
+    sent: list[str] = []
+    for call in ("upsert", "query_points"):
+        real = getattr(store._client, call)
+
+        def _counting(*args, _real=real, _call=call, **kwargs):
+            sent.append(_call)
+            return _real(*args, **kwargs)
+
+        monkeypatch.setattr(store._client, call, _counting)
+
+    with pytest.raises(Exception) as write:
+        store.upsert([_rec(C1, "item-a", _vec(1.0))])
+    with pytest.raises(Exception) as search:
+        store.query(_vec(1.0), k=1)
+
+    assert (str(write.value), str(search.value)) == (_not_ours(found), _not_ours(found))
+    assert sent == [], "a write or search reached a collection this app can't use"
+    info = store.describe()
+    assert (info.reachable, info.dimension, info.detail) == (True, None, _not_ours(found))
+
+
 # ── dimension + collection lifecycle ────────────────────────────────────────────────
 
 

@@ -29,10 +29,11 @@ never rewritten), but the registry is rewritten every cycle, so registry writes 
 **There is no compare-and-swap.** ``rsync`` has a create-only primitive
 (``--ignore-existing``, whose ``--itemize-changes`` output reports whether the file was
 actually created) but nothing conditional for an overwrite. :meth:`cas_registry` therefore
-verifies, writes, and re-reads — and reports failure whenever it cannot prove its own bytes
-landed. That bias is deliberate: core's CAS loop re-pulls, re-merges peers' entries and
-retries on a ``False``, so a false ``False`` costs one round trip, while a false ``True``
-silently discards another machine's registration.
+verifies, writes, and re-reads — and reports a lost race whenever the bytes it finds are not
+the ones it expected, or not its own after its write. That bias is deliberate: core's CAS loop
+re-pulls, re-merges peers' entries and retries on a ``False``, so a false ``False`` costs one
+round trip, while a false ``True`` silently discards another machine's registration. An rsync
+run that fails is no race, and raises instead: no re-pull fixes it.
 """
 
 import errno
@@ -90,6 +91,9 @@ _LOGIN_REFUSED = re.compile(
     r"|permission denied, please try again"
     r"|too many authentication failures"
 )
+#: GNU rsync's errno for "No such file or directory", which it prints after those words in
+#: whatever language the host's rsync speaks.
+_ENOENT = re.compile(r"\(2\)\s*$")
 
 #: Hostnames (and the optional ``user@``) may contain only these characters. Deliberately
 #: strict: anything outside this set is either meaningless to ssh or a way to smuggle an
@@ -122,13 +126,15 @@ class WorkdirUnusable(OSError):
 
 
 class RsyncFailed(RuntimeError):
-    """An rsync run a read needed that didn't complete — it timed out, couldn't start, or ended
-    with an error — said as what is wrong and what to do, then rsync's (or ssh's) own words.
+    """An rsync run a listing, a read or the registry swap needed that didn't complete — it
+    timed out, couldn't start, or ended with an error — said as what is wrong and what to do,
+    then rsync's (or ssh's) own words.
 
-    ``pull`` raises it, having no outcome to carry a sentence. Returning nothing instead read as
-    a remote with nothing on it: the sync cycle took an empty registry, published as if this
-    were the first machine, and reported its registry swap lost five times over — to no other
-    machine at all. Raised, the cycle records the read as its failure, in this text.
+    ``list_remote``, ``pull`` and ``cas_registry`` raise it, having no outcome to carry a
+    sentence. Answering empty, or ``False``, instead read as a remote with nothing on it, or as a
+    swap another machine won: the sync cycle took an empty registry, published as if this were
+    the first machine, and reported its registry swap lost five times over — to no other machine
+    at all. Raised, the cycle records it as its failure, in this text.
     """
 
     def __init__(self, sentence: str, words: object) -> None:
@@ -285,6 +291,16 @@ class RsyncSyncProvider(SyncTransportProvider):
             env=child_process_env(ssh_agent=True),
         )
 
+    def _run_or_fail(self, args: list[str]) -> subprocess.CompletedProcess:
+        """Run one rsync invocation a listing, a read or the registry swap needs, raising
+        :class:`RsyncFailed` — said as a push's failure is — when it times out or can't start."""
+        try:
+            return self._run(args)
+        except subprocess.TimeoutExpired as e:
+            raise RsyncFailed(self._timed_out(), e) from e
+        except OSError as e:
+            raise RsyncFailed(self._not_started(e), e) from e
+
     # ── what a failure says ──────────────────────────────────────────────────────────
 
     def _ssh_command(self) -> str:
@@ -363,13 +379,14 @@ class RsyncSyncProvider(SyncTransportProvider):
             f"set {setting} to another one."
         )
 
-    def _pull_refused(self, proc: subprocess.CompletedProcess) -> str:
-        """What a pull that rsync ended with an error says. A pull's receiving side is this
-        machine's own mirror, under the Local working directory, so an error naming the mirror
-        is that folder's — its disk full, read-only, or not writable. Anything else is the
-        target's, or the ssh under rsync, said as for any run."""
+    def _run_refused(self, proc: subprocess.CompletedProcess, local: str) -> str:
+        """What a run that rsync ended with an error says, where ``local`` is this machine's side
+        of it: the mirror a pull comes down into, or the staging folder a registry read or write
+        goes through, both under the Local working directory. An error naming it is that
+        folder's — its disk full, read-only, or not writable. Anything else is the target's, or
+        the ssh under rsync, said as for any run."""
         words = _words(proc)
-        if self._mirror not in words:
+        if local not in words:
             return self._refused(proc)
         low = words.lower()
         if "no space left on device" in low:
@@ -499,6 +516,32 @@ class RsyncSyncProvider(SyncTransportProvider):
             f"{proc.returncode}). Check Sync root path {_ON_CARD}."
         )
 
+    def _missing(self, proc: subprocess.CompletedProcess, name: str = "") -> bool:
+        """Whether a failed run says the sync root path — or the file ``name`` in it — isn't
+        there: "No such file or directory" on a line naming that path.
+
+        Each rsync words it its own way — GNU rsync ``change_dir "/srv/sync" failed: No such
+        file or directory (2)``, openrsync ``error: /srv/sync/: (l)stat: No such file or
+        directory`` — so it is read off the path and the error, not the line's shape, and by GNU
+        rsync's errno too, for a host whose rsync speaks another language. A path the host's
+        shell resolves, under ``~`` or relative to the SSH login's home, rsync names in full, so
+        only its part after that is matched."""
+        path = self._path.rstrip("/")
+        if name:
+            path = f"{path}/{name}" if path else name
+        loose = not path.startswith("/")
+        if path.startswith("~"):
+            path = path[1:].lstrip("/")
+        if not path:
+            return False  # the login's own home, which is always there
+        lead = r"(?:\S*/)?" if loose else ""
+        named = re.compile(rf"(?:^|[\s\"']){lead}{re.escape(path)}/?(?=[\"':\s]|$)")
+        return any(
+            named.search(line)
+            and ("no such file or directory" in line.lower() or _ENOENT.search(line))
+            for line in _words(proc).splitlines()
+        )
+
     # ── SyncTransportProvider contract ───────────────────────────────────────────────
 
     def push(self, objects: list[SyncObject]) -> PushResult:
@@ -556,17 +599,17 @@ class RsyncSyncProvider(SyncTransportProvider):
             shutil.rmtree(stage, ignore_errors=True)
 
     def list_remote(self, prefix: str = "") -> list[RemoteRef]:
-        # An unreachable target lists as EMPTY, not as an error: a fresh machine legitimately
-        # has nothing there yet, and the cycle reconciles against what it asked for.
+        # EMPTY only while there is nothing there yet: an unconfigured transport, or a sync root
+        # path that doesn't exist yet, which the first machine's first push creates. A listing
+        # that fails otherwise raises, said as what went wrong — see :class:`RsyncFailed`.
         if not self.configured:
             return []
-        args = ["-r", "--list-only", *self._rsh_arg(), "--", self._target()]
-        try:
-            proc = self._run(args)
-        except (subprocess.TimeoutExpired, OSError):
-            return []
-        if proc.returncode != 0:
-            return []
+        proc = self._run_or_fail(["-r", "--list-only", *self._rsh_arg(), "--", self._target()])
+        # 24 is files that vanished while rsync listed them; the rest of the listing stands.
+        if proc.returncode not in (0, 24):
+            if self._missing(proc):
+                return []
+            raise RsyncFailed(self._refused(proc), _words(proc))
         refs: list[RemoteRef] = []
         for key, size, fingerprint in _parse_listing(proc.stdout):
             if not key.startswith(prefix):
@@ -585,20 +628,14 @@ class RsyncSyncProvider(SyncTransportProvider):
             # Not an absence to drop the refs for: the target was never asked. Raised, said as
             # what to fix, for the cycle to report.
             raise WorkdirUnusable(self._workdir_unusable(e), e) from e
-        args = ["-rt", *self._rsh_arg(), "--", self._target(), f"{mirror}/"]
         # A run that fails is not an empty remote: raised, said as what went wrong, for the
         # cycle to record — see :class:`RsyncFailed`.
-        try:
-            proc = self._run(args)
-        except subprocess.TimeoutExpired as e:
-            raise RsyncFailed(self._timed_out(), e) from e
-        except OSError as e:
-            raise RsyncFailed(self._not_started(e), e) from e
+        proc = self._run_or_fail(["-rt", *self._rsh_arg(), "--", self._target(), f"{mirror}/"])
         # 24 is rsync's "some files vanished before they could be transferred" — another
         # machine rewriting the registry through a temporary file while this one copied. The
         # rest arrived, and a ref that didn't is dropped below like any the target no longer has.
         if proc.returncode not in (0, 24):
-            raise RsyncFailed(self._pull_refused(proc), _words(proc))
+            raise RsyncFailed(self._run_refused(proc, mirror), _words(proc))
         out: list[SyncObject] = []
         for ref in refs:
             local = os.path.join(mirror, *ref.key.split("/"))
@@ -614,26 +651,28 @@ class RsyncSyncProvider(SyncTransportProvider):
 
     def cas_registry(self, expected_sha: str | None, data: bytes) -> bool:
         """Compare-and-swap ``registry.json``; see the module docstring on why this is
-        verify-write-verify rather than a real CAS. A Local working directory that refuses the
-        staging raises :class:`WorkdirUnusable` rather than reading as a lost race: re-pulling
-        and swapping again cannot fix a folder."""
+        verify-write-verify rather than a real CAS.
+
+        ``False`` is a lost race and nothing else: a registry already there when this machine
+        expected none, one with other bytes than the caller expected — before this machine's
+        write or after it — or none there when it expected one. An rsync run that fails raises
+        :class:`RsyncFailed`, and a Local working directory that refuses the staging raises
+        :class:`WorkdirUnusable`: re-pulling and swapping again fixes neither, and a ``False``
+        would send core round its loop to no purpose, then report the swap lost to another
+        machine."""
         if not self.configured:
             return False
         if expected_sha is None:
             return self._create_only_registry(data)
         current = self._read_remote_registry()
-        if current is None:
-            # Caller expected specific bytes but we cannot read them — a lost race.
+        if current is None or hashlib.sha256(current).hexdigest() != expected_sha:
+            # Gone, or swapped by another machine since the caller read it — a lost race.
             return False
-        if hashlib.sha256(current).hexdigest() != expected_sha:
-            return False
-        if not self._write_registry(data):
-            return False
+        self._write_registry(data)
         # READ-BACK VERIFY. Without --ignore-times rsync would have skipped a same-length
         # same-second rewrite and still exited 0; and with no CAS, a peer may have written
         # between our check and our write. Both show up here as bytes that are not ours.
-        after = self._read_remote_registry()
-        return after == data
+        return self._read_remote_registry() == data
 
     # ── registry helpers ─────────────────────────────────────────────────────────────
 
@@ -642,7 +681,7 @@ class RsyncSyncProvider(SyncTransportProvider):
 
         ``--ignore-existing`` will not overwrite, and ``--itemize-changes`` names the files
         actually transferred — so an empty itemize means the file was already there and this
-        machine lost the race.
+        machine lost the race. A run that fails raises.
         """
         stage = self._stage("reg-")
         try:
@@ -656,40 +695,41 @@ class RsyncSyncProvider(SyncTransportProvider):
                 f"{stage}/",
                 self._target(),
             ]
-            try:
-                proc = self._run(args)
-            except (subprocess.TimeoutExpired, OSError):
-                return False
+            proc = self._run_or_fail(args)
             if proc.returncode != 0:
-                return False
+                raise RsyncFailed(self._run_refused(proc, stage), _words(proc))
             return _REGISTRY_KEY in _transferred_paths(proc.stdout)
         finally:
             shutil.rmtree(stage, ignore_errors=True)
 
     def _read_remote_registry(self) -> bytes | None:
-        """Fetch the target's current ``registry.json`` bytes, or None if unreadable."""
+        """The target's current ``registry.json`` bytes, or None when it has none — the file
+        isn't there, or the sync root path isn't. A run that fails otherwise raises."""
         stage = self._stage("regr-")
         try:
             src = self._target(trailing_slash=False) + "/" + _REGISTRY_KEY
             # --ignore-times so a stale same-size local copy can never stand in for the
             # target's real bytes (the staging dir is fresh, but the flag states the intent).
             args = ["-t", "--ignore-times", *self._rsh_arg(), "--", src, f"{stage}/"]
-            try:
-                proc = self._run(args)
-            except (subprocess.TimeoutExpired, OSError):
-                return None
-            if proc.returncode != 0:
-                return None
+            proc = self._run_or_fail(args)
+            # 24: the file vanished as rsync copied it, which the read below finds.
+            if proc.returncode not in (0, 24):
+                if self._missing(proc, _REGISTRY_KEY):
+                    return None
+                raise RsyncFailed(self._run_refused(proc, stage), _words(proc))
             try:
                 with open(os.path.join(stage, _REGISTRY_KEY), "rb") as fh:
                     return fh.read()
-            except OSError:
+            except FileNotFoundError:
                 return None
+            except OSError as e:
+                raise WorkdirUnusable(self._workdir_unusable(e), e) from e
         finally:
             shutil.rmtree(stage, ignore_errors=True)
 
-    def _write_registry(self, data: bytes) -> bool:
-        """Overwrite ``registry.json`` on the target, forcing the transfer.
+    def _write_registry(self, data: bytes) -> None:
+        """Overwrite ``registry.json`` on the target, forcing the transfer. A run that fails
+        raises.
 
         ``--ignore-times`` is load-bearing, not defensive: rsync's size+mtime quick check
         silently skips a same-length rewrite inside the same clock second and still exits 0.
@@ -706,11 +746,9 @@ class RsyncSyncProvider(SyncTransportProvider):
                 f"{stage}/",
                 self._target(),
             ]
-            try:
-                proc = self._run(args)
-            except (subprocess.TimeoutExpired, OSError):
-                return False
-            return proc.returncode == 0
+            proc = self._run_or_fail(args)
+            if proc.returncode != 0:
+                raise RsyncFailed(self._run_refused(proc, stage), _words(proc))
         finally:
             shutil.rmtree(stage, ignore_errors=True)
 

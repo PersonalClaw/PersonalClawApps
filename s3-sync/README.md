@@ -85,8 +85,9 @@ both do. The transport uses them for two things:
   still matches what this machine read.
 
 If your store does *not* implement conditional writes, the registry CAS **refuses** rather
-than falling back to an unconditional PUT. Sync will visibly stall instead of silently
-discarding another machine's registration. Use `dir-sync` or `git-sync` on such a store.
+than falling back to an unconditional PUT: the sync stops with an error saying the store
+doesn't support them, instead of silently discarding another machine's registration. Use
+`dir-sync` or `git-sync` on such a store.
 
 ## How requests are made
 
@@ -104,8 +105,8 @@ Because egress is pinned to the endpoint host, addressing is **path-style**
 (`<endpoint>/<bucket>/<key>`) rather than virtual-host style — the latter puts the bucket in
 the hostname, which is not the host that was pinned.
 
-A truncated response body is treated as an integrity failure and dropped, never merged as a
-short shard.
+A response body cut off at that cap is treated as an integrity failure, never merged as a
+short shard: the sync stops with an error naming the object and the cap.
 
 ## Layout in the bucket
 
@@ -131,22 +132,26 @@ to configure.
 A request that fails before the store answers says what went wrong and what to do — the store
 refused the connection or didn't answer, its host can't be found, its certificate isn't
 trusted, PersonalClaw won't use that endpoint — with the underlying error's own words after it.
-A write the store refuses — and the connection test's listing, the same way — says which
-setting to check for what S3 answered — an access key ID it doesn't recognise, a secret access
-key that doesn't match it, a clock too far off, an expired session token, the wrong region, a
-bucket that isn't there — with S3's error code and message after it. A refusal the store may
-lift by itself (it is busy, timed out, failed, or was still finishing another conditional write
-to the same object) and a host that can't be found (DNS, or this machine offline) are retried
-on the next sync; a refusal that needs something changed says what, and keeps failing until it
-is.
+A write, a read or a listing the store refuses — the connection test's listing among them —
+says which setting to check for what S3 answered — an access key ID it doesn't recognise, a
+secret access key that doesn't match it, a clock too far off, an expired session token, the
+wrong region, a bucket that isn't there — with S3's error code and message after it. A listing,
+a read or a registry swap that fails stops the sync with that as its error, rather than reading
+as an empty bucket or as a swap another machine won; an empty bucket still lists as empty, and
+an object the store no longer has is skipped. A refusal the store may lift by itself (it is
+busy, timed out, failed, or was still finishing another conditional write to the same object)
+and a host that can't be found (DNS, or this machine offline) are retried on the next sync; a
+refusal that needs something changed says what, and keeps failing until it is.
 
 | Symptom | Cause |
 |---|---|
-| "refused S3 Sync's request" or "…write" (`HTTP 403`) | Wrong key, or a bucket policy that does not grant the three actions. A **region mismatch** can read as an auth failure too, since SigV4 binds the signature to the region; where the store says so, the message names Region instead. |
+| "refused S3 Sync's request", "…write" or "…read" (`HTTP 403`) | Wrong key, or a bucket policy that does not grant the three actions. |
+| "didn't accept S3 Sync's request signature" (`HTTP 403`) | The secret access key doesn't belong to the access key ID — or, on some S3-compatible stores, **Region** isn't the one the store is set up for: SigV4 binds the signature to the region, and those stores refuse the signature rather than name the region they expect. Check **Secret access key** first, then **Region**. A store that does name the region gets a message that names Region alone. |
 | "There is no bucket named …", or "answered \"not found\"" | Typo in the bucket, or an endpoint that isn't the store's S3 API. |
 | "PersonalClaw's network egress rules stopped a request", or "won't use … as a sync endpoint" | The endpoint is not an `http://` or `https://` address with a host, its host is on your `security.egress` deny list (Denied hosts, under Settings → Security → Network egress), or the store redirected off the pinned host — refused by design. |
-| Sync stalls with no error | Registry CAS is losing every race — usually a store without conditional-write support. |
-| "doesn't support conditional writes" on push (`HTTP 501`) | Same cause: the store rejected the conditional header. |
+| "doesn't support conditional writes" (`HTTP 501`), on a push or the registry swap | The store rejected the conditional header — see What the store must support. |
+| "is larger than …, the most PersonalClaw downloads from a sync store" | A shard past the response body cap: a machine's synced data grew past it, and a transport without the cap, such as `rsync-sync`, can carry it. For `registry.json` or the salt object, something other than this app put a large object at that key. |
+| "registry CAS lost after 5 attempts" | Other machines swapped the registry each time this one tried; a later sync tries again. |
 
 ## Network
 

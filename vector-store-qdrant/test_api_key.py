@@ -71,10 +71,12 @@ class KeyedQdrant:
         self.key = key
         self.seen: list[tuple[str, str, str | None]] = []
         self.collections: dict[str, dict[str, tuple[list[float], dict]]] = {}
-        #: The vector size each collection was made with. Like a store that doesn't check it,
-        #: the fake keeps a vector of any size it is sent — so only the provider's own check
-        #: stands between a wrong-size vector and the collection.
-        self.sizes: dict[str, int] = {}
+        #: The vector size each collection was made with, or its named vectors' sizes by name.
+        #: Like a store that doesn't check it, the fake keeps a vector of any size it is sent —
+        #: so only the provider's own check stands between a wrong-size vector and the
+        #: collection — unless ``strict``, when it refuses one the way Qdrant does.
+        self.sizes: dict[str, int | dict[str, int]] = {}
+        self.strict = False
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -134,6 +136,12 @@ class KeyedQdrant:
         if method == "GET" and not rest:
             return 200, _ok(_collection_info(self.sizes[name], len(points)))
         if method == "PUT" and rest == ["points"]:
+            size = self.sizes[name]
+            for p in body["points"]:
+                if self.strict and isinstance(size, int) and len(p["vector"]) != size:
+                    # Qdrant's own words for a vector of another size than the collection's.
+                    error = f"Wrong input: Vector dimension error: expected dim: {size}, got "
+                    return 400, {"status": {"error": f"{error}{len(p['vector'])}"}, "time": 0.0}
             for p in body["points"]:
                 points[str(p["id"])] = (p["vector"], p.get("payload") or {})
             return 200, _ok({"operation_id": 1, "status": "completed"})
@@ -155,15 +163,21 @@ def _ok(result) -> dict:
     return {"result": result, "status": "ok", "time": 0.0}
 
 
-def _collection_info(size: int, count: int) -> dict:
-    """Just enough of Qdrant's collection info for the client to read the vector size from."""
+def _collection_info(size: int | dict[str, int], count: int) -> dict:
+    """Just enough of Qdrant's collection info for the client to read the vector size from: one
+    unnamed vector's, or each named vector's."""
+    vectors = (
+        {name: {"size": each, "distance": "Cosine"} for name, each in size.items()}
+        if isinstance(size, dict)
+        else {"size": size, "distance": "Cosine"}
+    )
     return {
         "status": "green",
         "optimizer_status": "ok",
         "segments_count": 1,
         "points_count": count,
         "config": {
-            "params": {"vectors": {"size": size, "distance": "Cosine"}},
+            "params": {"vectors": vectors},
             "hnsw_config": {"m": 16, "ef_construct": 100, "full_scan_threshold": 10000},
             "optimizer_config": {"default_segment_number": 0, "flush_interval_sec": 5},
         },
@@ -360,6 +374,72 @@ def test_a_write_or_query_of_another_size_is_named_before_it_reaches_the_server(
 
     assert (str(write.value), str(search.value)) == (says, says)
     assert list(qdrant.collections["kb"]) == [str(uuid.UUID(hex=C1))], "the odd vector was stored"
+    assert ("POST", "/collections/kb/points/query") not in {(m, p) for m, p, _ in qdrant.calls()}
+
+
+def _size_reads(qdrant) -> int:
+    """How many times the collection's info, which holds its vector size, was read."""
+    return sum(1 for m, p, _ in qdrant.calls() if (m, p) == ("GET", "/collections/kb"))
+
+
+def test_the_collections_size_is_read_once_not_before_every_call(qdrant):
+    """Server mode. The size was read before every write and search: one more request each. It is
+    read once, and trusted while the vectors written and searched fit it."""
+    QdrantVectorStore(url=qdrant.url, collection="kb", api_key=KEY).upsert([_record()])
+    store = QdrantVectorStore(url=qdrant.url, collection="kb", api_key=KEY)  # another process
+
+    store.upsert([_record()])
+    store.query([1.0, 0.0, 0.0, 0.0], k=1)
+    store.query([0.0, 1.0, 0.0, 0.0], k=1)
+
+    assert _size_reads(qdrant) == 1, "the size was read again for calls whose vectors fit it"
+
+
+def test_a_size_the_server_no_longer_holds_is_said_as_that_then_read_again(qdrant):
+    """Trusting the size between calls means a collection dropped and made again at another size,
+    under the same name, is met by the server. Its refusal ("Vector dimension error") is said as
+    what it is, and the next call reads the size afresh, so it sends nothing the server refuses."""
+    store = QdrantVectorStore(url=qdrant.url, collection="kb", api_key=KEY)
+    assert store.upsert([_record()]) == 1  # made at DIM
+    qdrant.collections["kb"], qdrant.sizes["kb"], qdrant.strict = {}, 2, True  # made again
+
+    with pytest.raises(Exception) as refused:
+        store.upsert([_record()])
+    writes = [(m, p) for m, p, _ in qdrant.calls() if (m, p) == ("PUT", "/collections/kb/points")]
+    with pytest.raises(Exception) as again:
+        store.upsert([_record()])
+
+    says = (
+        "The collection kb holds vectors of a different size than the embedding model in use now "
+        "makes. Set Collection on the Qdrant Vector Store card in Settings → Providers to a new "
+        "name, and one is created at the new size when the next document is ingested. Details: "
+    )
+    assert str(refused.value).startswith(says), refused.value
+    assert str(again.value) == f"{says}the collection's vectors have 2 dimensions; these have 4"
+    after = [(m, p) for m, p, _ in qdrant.calls() if (m, p) == ("PUT", "/collections/kb/points")]
+    assert after == writes, "a vector of a size the server no longer holds was sent again"
+    assert qdrant.collections["kb"] == {}
+
+
+def test_a_collection_of_named_vectors_is_never_written_or_searched(qdrant):
+    """Server mode. Named vectors have no one size, so the size check let the write through, and
+    this fake kept it, as a store that doesn't check would."""
+    qdrant.collections["kb"], qdrant.sizes["kb"] = {}, {"text": DIM}
+    store = QdrantVectorStore(url=qdrant.url, collection="kb", api_key=KEY)
+    says = (
+        "The collection kb wasn't made by Qdrant Vector Store: its vectors aren't the one plain "
+        "unnamed vector per point this app writes and searches. Set Collection on the Qdrant "
+        "Vector Store card in Settings → Providers to a new name, and one is created when the "
+        "next document is ingested. Details: its vectors are named: text"
+    )
+
+    with pytest.raises(Exception) as write:
+        store.upsert([_record()])
+    with pytest.raises(Exception) as search:
+        store.query([1.0, 0.0, 0.0, 0.0], k=1)
+
+    assert (str(write.value), str(search.value)) == (says, says)
+    assert qdrant.collections["kb"] == {}, "a vector was written to a collection it can't use"
     assert ("POST", "/collections/kb/points/query") not in {(m, p) for m, p, _ in qdrant.calls()}
 
 

@@ -84,17 +84,27 @@ clone of an empty repo succeeds and the first push publishes the branch.
   side and a folder on the other. The push then says which path, and that you can run
   `git pull --rebase origin <branch>` in the working clone to resolve it, or delete the clone
   so Git Sync clones the remote afresh.
-- **Transient vs permanent.** A push still turned away after its tries (another push first, or
-  the branch's ref lock taken), one that can't reach the remote, and a failure before the push
-  — the first clone, a step in the working clone — are `transient` (the next sync tries
-  again). A push the remote refuses for a bad URL, denied auth, its own rules (a hook, branch
-  protection), a branch checked out in its working tree (point at a bare repository instead),
-  a shallow working clone, a repository it can't store the objects in, or a branch name it
-  won't take — and a real conflict — are `permanent` (retrying will not fix them). A Branch
-  that git doesn't accept as a branch name is refused before git runs. A clean run is
-  `delivered`. Every failure says what went wrong and what to do — the remote didn't accept
-  this machine's credentials, no repository is visible at that URL, the working clone can't be
-  written, git isn't installed — with git's own message after it.
+- **Transient vs permanent.** A push still turned away after its tries (another push first,
+  the branch moved under it, or the branch's ref lock taken), one that can't reach the remote,
+  a branch the remote couldn't update for a reason of its own, and a failure before the push —
+  the first clone, a step in the working clone, a lock file an interrupted git left there —
+  are `transient` (the next sync tries again). A push the remote refuses for a bad URL, denied
+  auth, its own rules (a hook, branch protection), a branch checked out in its working tree
+  (point at a bare repository instead), a shallow working clone, a branch it hides from
+  pushes, objects its own repository is missing (a damaged repository: run `git fsck` there),
+  a repository it can't store the objects or the branch in, a branch name clashing with one it
+  has (`sync` beside `sync/main`), or a branch name it won't take — and a real conflict — are
+  `permanent` (retrying will not fix them). A Branch that git doesn't accept as a branch name
+  is refused before git runs. A clean run is `delivered`. Every failure says what went wrong
+  and what to do — the remote didn't accept this machine's credentials, no repository is
+  visible at that URL, the working clone can't be written, which lock file is in the way, git
+  isn't installed — with git's own message after it.
+- **A changed Git remote URL.** The working clone always syncs with Git remote URL. When the
+  setting changes — or the clone's own `.git/config` points it anywhere else — Git Sync clones
+  Git remote URL into a new folder beside the old clone and swaps it in once that clone has
+  succeeded; until one does, it fetches from and pushes to neither remote. It replaces only a
+  clone holding nothing but what Git Sync put there. A folder with commits or files of anyone
+  else's is left as it is, and the sync says to set Local working clone to a new folder.
 - **Deterministic committer.** The transport's automated commits use a fixed identity
   (`PersonalClaw Sync <sync@personalclaw.local>`) set via `git -c` flags, so a sync commit
   never depends on — or pollutes — ambient git config and names no real person.
@@ -109,7 +119,10 @@ clone of an empty repo succeeds and the first push publishes the branch.
   can write its `.git`, so git runs with the settings that stop a repository's hooks,
   file-system monitor, ssh command and credential helpers from running
   (`personalclaw.sdk.git.git_argv`), and with PersonalClaw's child environment: none of the
-  gateway's secrets, and the SSH agent only for a command that talks to the remote.
+  gateway's secrets, and the SSH agent only for a command that talks to the remote. Nor does it
+  send a push anywhere but Git remote URL: an origin, push URL, second URL or url rewrite set
+  there gets the clone replaced by a fresh clone of Git remote URL — or, when it holds anything
+  Git Sync didn't make, left alone and not synced through.
 - **The repo holds shard objects only.** Secrets are excluded upstream by the durability
   layer before anything reaches a transport, so this app never sees `.env`, API keys, or the
   credential store — it cannot sync what it is never handed.

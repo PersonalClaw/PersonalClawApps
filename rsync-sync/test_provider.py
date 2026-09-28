@@ -34,6 +34,7 @@ from provider import (
     validate_remote_path,
 )
 
+from personalclaw.sdk.net import sentence_with_detail
 from personalclaw.sdk.sync import RemoteRef, SyncObject
 
 HAVE_RSYNC = shutil.which("rsync") is not None
@@ -559,8 +560,12 @@ class TestFailureHandling:
         words = "Details: Command 'rsync' timed out after 300 seconds"
         assert res.outcome == "transient"
         assert res.detail == f"{says} {RETRIES} {words}"
-        assert p.list_remote() == []
-        assert p.cas_registry(None, b"{}") is False
+        # A listing and a registry swap raise it: they answered empty, and False, which read as
+        # a target with nothing on it and a swap another machine won.
+        for read in (p.list_remote, lambda: p.cas_registry(None, b"{}")):
+            with pytest.raises(provider_mod.RsyncFailed) as caught:
+                read()
+            assert str(caught.value) == f"{says} {words}"
         assert p.test().ok is False
         assert p.test().detail == f"{says} {words}"
 
@@ -1021,6 +1026,300 @@ class TestAPullThatFails:
         out = p.pull([RemoteRef("registry.json"), RemoteRef("gone.jsonl")])
 
         assert [(o.key, o.data) for o in out] == [("registry.json", b'{"seq":1}')]
+
+
+# ── a listing or a registry swap whose rsync run fails ───────────────────────────────
+#
+# list_remote answered [] and the registry swap False for every rsync run that failed, which
+# read as a target with nothing on it, or as a swap another machine won. Now the run's failure
+# is raised, said as a push's is. What stays: a sync root path that doesn't exist yet lists as
+# empty — the first machine's first push creates it — and a registry that isn't there when one
+# was expected is a lost race.
+
+#: Every refusal a push names, but the one that says the sync root path isn't there.
+_NOT_MISSING = [row for row in _REFUSALS if "No such file or directory" not in row[1]]
+
+
+@pytest.fixture
+def over_ssh(tmp_path, monkeypatch):
+    """``over_ssh(path)``: a provider for ``path`` on example.invalid, whose ssh is a stand-in
+    that runs the host's side with this machine's own rsync — in a login home of its own, and
+    through its shell, which resolves ``~`` and a relative path as a login's does. Returns that
+    and the login home."""
+    home = tmp_path / "login-home"
+    home.mkdir()
+    stand_in = tmp_path / "ssh-stand-in"
+    stand_in.write_text(
+        "#!/bin/sh\n"
+        # ssh's own options, then the host; what follows is the command the host runs.
+        "while [ $# -gt 0 ]; do\n"
+        '  case "$1" in -o|-p|-i|-l) shift 2 ;; -*) shift ;; *) break ;; esac\n'
+        "done\n"
+        "shift\n"
+        f'cd "{home}" && exec env -i PATH="$PATH" HOME="{home}" LC_ALL=C /bin/sh -c "$*"\n'
+    )
+    stand_in.chmod(0o755)
+    monkeypatch.setattr(RsyncSyncProvider, "_rsh_arg", lambda self: ["-e", str(stand_in)])
+
+    def make(path: str) -> RsyncSyncProvider:
+        return RsyncSyncProvider(
+            host="example.invalid", path=path, staging_dir=str(tmp_path / "s"), timeout_secs=60
+        )
+
+    return make, home
+
+
+def _unreadable(where: str, who: str, path: str) -> str:
+    """What a sync root path, or the registry in it, that the login can't read says."""
+    return (
+        f"The sync root path {path} {where} doesn't let {who} read or write it. Fix that folder's "
+        f"permissions, or set Sync root path {ON_CARD} to one {who} can write to."
+    )
+
+
+class TestAListingThatFails:
+    @needs_rsync
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root reads an unreadable folder anyway")
+    def test_a_listing_is_empty_only_while_the_root_doesnt_exist_yet(self, tmp_path):
+        root = tmp_path / "target"
+        p = RsyncSyncProvider(path=str(root), staging_dir=str(tmp_path / "s"), timeout_secs=60)
+        assert p.list_remote() == [], "a root not there yet is the first machine's to create"
+
+        root.mkdir()
+        root.chmod(0o000)
+        try:
+            with pytest.raises(provider_mod.RsyncFailed) as caught:
+                p.list_remote()
+        finally:
+            root.chmod(0o755)
+
+        says = _unreadable("on this machine", "PersonalClaw", str(root))
+        assert str(caught.value).startswith(f"{says} Details: "), caught.value
+
+    @needs_rsync
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root reads an unreadable folder anyway")
+    def test_over_ssh_a_root_not_there_yet_lists_as_empty_however_it_is_written(
+        self, tmp_path, over_ssh
+    ):
+        """A real rsync on both ends. The host's rsync names a folder under ``~``, or relative to
+        the login's home, by its full path there."""
+        make, home = over_ssh
+        for path in (str(tmp_path / "gone"), "~/gone", "gone"):
+            assert make(path).list_remote() == [], path
+
+        locked = home / "locked"
+        locked.mkdir()
+        locked.chmod(0o000)
+        try:
+            with pytest.raises(provider_mod.RsyncFailed) as caught:
+                make("~/locked").list_remote()
+        finally:
+            locked.chmod(0o755)
+
+        says = _unreadable("on example.invalid", "this machine's SSH login", "~/locked")
+        assert str(caught.value).startswith(f"{says} Details: "), caught.value
+
+    def test_each_rsync_s_words_for_a_root_not_there_yet_read_the_same(
+        self, tmp_path, monkeypatch
+    ):
+        """GNU rsync (as CI's Ubuntu runs it) and openrsync (as macOS ships it) word a missing
+        root differently — and GNU rsync on a host that speaks another language says it in that
+        language, with the errno after. A line naming some other path is no missing root."""
+        gnu = 'rsync: [sender] change_dir "{}" failed: {} (2)\n'
+        for path, stderr in (
+            ("/srv/sync", gnu.format("/srv/sync", "No such file or directory")),
+            ("/srv/sync", gnu.format("/srv/sync", "Datei oder Verzeichnis nicht gefunden")),
+            ("/srv/sync", "rsync(4242): error: /srv/sync/: (l)stat: No such file or directory\n"),
+            ("~/sync", gnu.format("/home/user/sync", "No such file or directory")),
+            ("sync", gnu.format("/home/user/sync", "No such file or directory")),
+        ):
+            monkeypatch.setattr(provider_mod.subprocess, "run", _answering(23, stderr))
+            p = create_provider({**REMOTE, "path": path, "staging_dir": str(tmp_path)})
+            assert p.list_remote() == [], stderr
+
+        for stderr in (
+            gnu.format("/srv/sync-old", "No such file or directory"),
+            "Warning: Identity file /keys/id_sync not accessible: No such file or directory.\n"
+            "backup@nas.example.com: Permission denied (publickey).\r\n",
+        ):
+            monkeypatch.setattr(provider_mod.subprocess, "run", _answering(255, stderr))
+            p = create_provider({**REMOTE, "staging_dir": str(tmp_path)})
+            with pytest.raises(provider_mod.RsyncFailed):
+                p.list_remote()
+
+    @pytest.mark.parametrize(("code", "stderr", "says"), _NOT_MISSING)
+    def test_a_listing_the_host_refuses_raises_the_same_words(
+        self, tmp_path, monkeypatch, code, stderr, says
+    ):
+        monkeypatch.setattr(provider_mod.subprocess, "run", _answering(code, stderr))
+        p = create_provider({**REMOTE, "staging_dir": str(tmp_path)})
+
+        with pytest.raises(provider_mod.RsyncFailed) as caught:
+            p.list_remote()
+
+        assert str(caught.value) == f"{says} Details: {' '.join(stderr.split())}"
+
+    def test_a_listing_rsync_cannot_start_for_raises_what_to_install(self, tmp_path):
+        """Driven through a real exec of a binary that cannot exist."""
+        p = RsyncSyncProvider(
+            path=str(tmp_path / "t"),
+            staging_dir=str(tmp_path / "s"),
+            rsync_bin="/nonexistent/pc-fixture-rsync",
+        )
+
+        with pytest.raises(provider_mod.RsyncFailed) as caught:
+            p.list_remote()
+
+        assert str(caught.value) == (
+            "Rsync Sync runs the rsync command, and PersonalClaw couldn't start it on this "
+            "machine: it isn't installed, isn't on the PATH PersonalClaw runs with, or isn't "
+            "executable. Install rsync where PersonalClaw can run it. Details: [Errno 2] No such "
+            "file or directory: '/nonexistent/pc-fixture-rsync'"
+        )
+
+
+class TestARegistrySwapThatFails:
+    @pytest.mark.parametrize("expected", [None, hashlib.sha256(b"{}").hexdigest()],
+                             ids=["create", "swap"])
+    @pytest.mark.parametrize(("code", "stderr", "says"), _NOT_MISSING)
+    def test_a_swap_whose_rsync_run_fails_raises_rather_than_losing_the_race(
+        self, tmp_path, monkeypatch, code, stderr, says, expected
+    ):
+        """A ``False`` sent core round its loop four more times, then reported the swap lost to
+        another machine."""
+        monkeypatch.setattr(provider_mod.subprocess, "run", _answering(code, stderr))
+        p = create_provider({**REMOTE, "staging_dir": str(tmp_path)})
+
+        with pytest.raises(provider_mod.RsyncFailed) as caught:
+            p.cas_registry(expected, b'{"machines":{"B":1}}')
+
+        assert str(caught.value) == f"{says} Details: {' '.join(stderr.split())}"
+
+    def test_a_registry_not_there_when_one_was_expected_is_still_a_lost_race(
+        self, tmp_path, monkeypatch
+    ):
+        """In each rsync's words — and a run the host refused is no such registry."""
+        sha = hashlib.sha256(b"{}").hexdigest()
+        for stderr in (
+            'rsync: [sender] link_stat "/srv/sync/registry.json" failed: No such file or '
+            "directory (2)\n",
+            'rsync: [sender] link_stat "/srv/sync/registry.json" failed: Datei oder Verzeichnis '
+            "nicht gefunden (2)\n",
+            "rsync(4242): error: '/srv/sync/registry.json': (l)stat: No such file or directory\n",
+        ):
+            monkeypatch.setattr(provider_mod.subprocess, "run", _answering(23, stderr))
+            p = create_provider({**REMOTE, "staging_dir": str(tmp_path)})
+            assert p.cas_registry(sha, b"{}") is False, stderr
+
+        monkeypatch.setattr(provider_mod.subprocess, "run", _answering(255, _REFUSALS[2][1]))
+        with pytest.raises(provider_mod.RsyncFailed):
+            create_provider({**REMOTE, "staging_dir": str(tmp_path)}).cas_registry(sha, b"{}")
+
+    @needs_rsync
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root reads an unreadable file anyway")
+    def test_over_ssh_a_registry_not_there_is_a_lost_race_and_one_it_cannot_read_raises(
+        self, tmp_path, over_ssh
+    ):
+        make, home = over_ssh
+        sha = hashlib.sha256(b"{}").hexdigest()
+        root = home / "sync"
+        root.mkdir()
+        assert make("~/sync").cas_registry(sha, b"{}") is False, "no registry there yet"
+        assert make("~/gone").cas_registry(sha, b"{}") is False, "no sync root there yet"
+
+        registry = root / "registry.json"
+        registry.write_bytes(b"{}")
+        registry.chmod(0o000)
+        try:
+            with pytest.raises(provider_mod.RsyncFailed) as caught:
+                make("~/sync").cas_registry(sha, b'{"machines":{"B":1}}')
+        finally:
+            registry.chmod(0o644)
+
+        says = _unreadable("on example.invalid", "this machine's SSH login", "~/sync")
+        assert str(caught.value).startswith(f"{says} Details: "), caught.value
+        assert registry.read_bytes() == b"{}"
+
+    def test_an_error_naming_the_staging_folder_names_the_local_working_directory(
+        self, tmp_path, monkeypatch
+    ):
+        """A registry read comes down into a staging folder under the Local working directory:
+        its refusal is that folder's, not the sync root's."""
+        workdir = tmp_path / "work"
+        p = create_provider({**REMOTE, "staging_dir": str(workdir)})
+
+        def fills_the_stage(argv, **kwargs):
+            stage = argv[-1].rstrip("/")
+            stderr = f'rsync: [receiver] write failed on "{stage}/registry.json": No space left '
+            return subprocess.CompletedProcess(
+                argv, 11, stdout="", stderr=f"{stderr}on device (28)\n"
+            )
+
+        monkeypatch.setattr(provider_mod.subprocess, "run", fills_the_stage)
+
+        with pytest.raises(provider_mod.RsyncFailed) as caught:
+            p.cas_registry(hashlib.sha256(b"{}").hexdigest(), b"{}")
+
+        assert str(caught.value).startswith(
+            f"The disk holding Rsync Sync's local working directory {workdir} is full. Free some "
+            f"space on it, or set Local working directory {ON_CARD} to a folder on another disk. "
+            "Details: "
+        ), caught.value
+
+
+class TestTheSyncCycleSaysWhatFailed:
+    """Driven through core's real sync cycle against a real rsync. A listing that failed read as
+    an empty target, and a registry swap that failed as one another machine won: the cycle
+    published as the first machine, then reported "registry CAS lost after 5 attempts" — with
+    no error, and ok."""
+
+    @needs_rsync
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root reads an unreadable folder anyway")
+    def test_a_listing_it_cannot_make(self, isolated_home, local, target, monkeypatch):
+        target.chmod(0o000)
+        try:
+            report = _run_cycle(local, isolated_home, monkeypatch, encrypt="off")
+        finally:
+            target.chmod(0o755)
+
+        assert report.ok is False
+        says = _unreadable("on this machine", "PersonalClaw", str(target))
+        assert report.error.startswith(f"pull: {says} Details: "), report.error
+        assert "CAS lost" not in repr(report)
+
+    @needs_rsync
+    def test_a_registry_write_the_target_refuses(
+        self, isolated_home, tmp_path, target, monkeypatch
+    ):
+        """The target refuses the registry's creation — as a host whose sync root the login
+        can't create files in does — played by an rsync that refuses that one run and hands
+        every other to the real rsync."""
+        refused = f'rsync: [Receiver] mkstemp "{target}/.registry.json.Xy12Ab" failed: Permission '
+        fixture = tmp_path / "pc-fixture-rsync"
+        fixture.write_text(
+            "#!/bin/sh\n"
+            'for arg in "$@"; do\n'
+            '  case "$arg" in */reg-*/)\n'
+            f"    echo '{refused}denied (13)' >&2\n"
+            "    exit 23 ;;\n"
+            "  esac\n"
+            "done\n"
+            f'exec "{shutil.which("rsync")}" "$@"\n'
+        )
+        fixture.chmod(0o755)
+        p = RsyncSyncProvider(
+            path=str(target), staging_dir=str(tmp_path / "s"), timeout_secs=60,
+            rsync_bin=str(fixture),
+        )
+        _seed_task(isolated_home, "task-a", "a row")
+
+        report = _run_cycle(p, isolated_home, monkeypatch, encrypt="off")
+
+        assert report.ok is False
+        says = _unreadable("on this machine", "PersonalClaw", str(target))
+        assert report.error == "push: " + sentence_with_detail(says, f"{refused}denied (13)")
+        assert "CAS lost" not in repr(report)
+        assert list(target.glob("machines/*/seq-*/*")), "the shards landed before the swap"
 
 
 # ── 3. output parsing (the two formats this transport depends on) ─────────────────────

@@ -100,6 +100,14 @@ class _SizeMismatch(ValueError):
         )
 
 
+class _NotPlainVectors(ValueError):
+    """A collection whose vectors are named, or multivectors, found before anything was sent.
+
+    This app writes and searches one plain unnamed vector per point, and makes a collection only
+    that way. So one of another shape was made by something else: this app can't write or search
+    it, and it has no one size to hold vectors to. Its text says what was found."""
+
+
 class QdrantStoreError(RuntimeError):
     """A Qdrant call that failed, said as what is wrong and what to do. Its text is that
     sentence and then the client's own words — the text core logs when this arm cannot answer —
@@ -138,6 +146,9 @@ class QdrantVectorStore(VectorStoreProvider):
         self._timeout = max(1, int(timeout_secs or 10))
         self._api_key = (api_key or "").strip()
         self._client = None
+        #: The collection's vector size as this process last read it, or made it at. Against a
+        #: server it is trusted while the vectors written and searched fit it (``_size_for``).
+        self._size: int | None = None
 
     # ── client ───────────────────────────────────────────────────────────────────────
 
@@ -166,9 +177,10 @@ class QdrantVectorStore(VectorStoreProvider):
             )
         return self._client
 
-    def _ensure_collection(self, dim: int) -> int | None:
+    def _ensure_collection(self, dim: int, widths: set[int]) -> int:
         """Create the collection at *dim* if it is not there yet, and return the vector size it
-        holds: *dim* for a new one, what an existing one was made with otherwise.
+        holds: *dim* for a new one, what an existing one was made with otherwise (see
+        :meth:`_size_for`, for vectors of *widths*).
 
         The dimension comes from the vectors being written rather than from configuration:
         asking the user for it would be asking them to restate a property of the embedding
@@ -179,21 +191,45 @@ class QdrantVectorStore(VectorStoreProvider):
 
         client = self._connect()
         if client.collection_exists(self._collection):
-            return self._collection_size(client)
+            return self._size_for(client, widths)
         client.create_collection(
             collection_name=self._collection,
             vectors_config=VectorParams(size=dim, distance=Distance[_DISTANCE.upper()]),
         )
+        self._size = dim
         logger.info("created Qdrant collection %r at dimension %d", self._collection, dim)
         return dim
 
-    def _collection_size(self, client) -> int | None:
-        """The vector size the existing collection was made with — read each time, since the
-        collection can be dropped and made again at another size — or None when it holds
-        named vectors, which this app never makes, and so has no one size to hold vectors to."""
+    def _size_for(self, client, widths: set[int]) -> int:
+        """The existing collection's vector size, for vectors of *widths*.
+
+        Against a server, what this process last read, or made the collection at, while every
+        one of those vectors fits it: reading it before every write and search cost each call
+        one more request. The first call reads it, and so does any call with a vector that
+        doesn't fit, since the collection may have been dropped and made again at that vector's
+        size since. A size gone stale otherwise is caught by the server, which refuses a vector
+        of another size in words (``Vector dimension error``) said as that, and the failed call
+        forgets it (:meth:`_failed`), so the next one reads it afresh.
+
+        A local folder's engine runs in this process, where a read costs no request, and it
+        answers a vector of a stale size with an error of its own naming no size. So there the
+        size is read every time.
+        """
+        if self._path or self._size is None or widths != {self._size}:
+            self._size = self._collection_size(client)
+        return self._size
+
+    def _collection_size(self, client) -> int:
+        """The vector size the existing collection was made with, read from the store. One of
+        named vectors or multivectors has no one size, and raises :class:`_NotPlainVectors`."""
         params = client.get_collection(self._collection).config.params.vectors
-        size = getattr(params, "size", None)
-        return int(size) if size else None
+        if isinstance(params, dict):
+            if not params:
+                raise _NotPlainVectors("it holds no dense vectors")
+            raise _NotPlainVectors(f"its vectors are named: {', '.join(sorted(params))}")
+        if getattr(params, "multivector_config", None) is not None:
+            raise _NotPlainVectors("its vectors are multivectors")
+        return int(params.size)
 
     # ── the seam's four methods ──────────────────────────────────────────────────────
 
@@ -206,7 +242,7 @@ class QdrantVectorStore(VectorStoreProvider):
             dim = len(records[0].vector)
             # The collection's own size, checked before anything is sent, so vectors of another
             # size are said as that — against a server and a local folder alike.
-            size = self._ensure_collection(dim) or dim
+            size = self._ensure_collection(dim, {len(r.vector) for r in records})
             points = [
                 PointStruct(
                     id=_point_id(r.chunk_id),
@@ -246,6 +282,7 @@ class QdrantVectorStore(VectorStoreProvider):
 
             client = self._connect()
             if not client.collection_exists(self._collection):
+                self._size = None  # gone: made again, it may be at another size
                 return 0
             client.delete(
                 collection_name=self._collection,
@@ -265,11 +302,12 @@ class QdrantVectorStore(VectorStoreProvider):
         try:
             client = self._connect()
             if not client.collection_exists(self._collection):
+                self._size = None  # gone: made again, it may be at another size
                 return []
             # Checked before searching: a server refuses a query vector of another size, but a
             # local folder's engine fails with an error of its own that names no size at all.
-            size = self._collection_size(client)
-            if size is not None and len(vector) != size:
+            size = self._size_for(client, {len(vector)})
+            if len(vector) != size:
                 raise _SizeMismatch(size, len(vector))
             res = client.query_points(
                 collection_name=self._collection,
@@ -312,17 +350,21 @@ class QdrantVectorStore(VectorStoreProvider):
                     detail=f"connected to {where}; collection not created yet "
                     "(it is created on the first document ingested)",
                 )
-            info = client.get_collection(self._collection)
             count = client.count(self._collection, exact=False).count
-            params = info.config.params.vectors
-            dim = getattr(params, "size", None)
+            try:
+                dim: int | None = self._collection_size(client)
+                detail = f"connected to {where}"
+            except _NotPlainVectors as shape:
+                # Reachable, and unusable as it is: say so here too, where the owner looks,
+                # rather than only in the failure of the first write or search.
+                dim, detail = None, sentence_with_detail(self._unreachable(shape), shape)
             return VectorStoreInfo(
                 backend="qdrant",
                 collection=self._collection,
-                dimension=int(dim) if dim else None,
+                dimension=dim,
                 count=int(count),
                 reachable=True,
-                detail=f"connected to {where}",
+                detail=detail,
             )
         except Exception as exc:  # noqa: BLE001 - describe must never raise
             # The message is rendered in the UI and written to logs, so it names the endpoint
@@ -336,7 +378,10 @@ class QdrantVectorStore(VectorStoreProvider):
 
     def _failed(self, exc: BaseException) -> QdrantStoreError:
         """What ``upsert``/``delete_item``/``query`` raise for a failed call: the same sentence
-        ``describe`` gives, with the client's words after it."""
+        ``describe`` gives, with the client's words after it. The collection's size is
+        forgotten, so the next call reads it afresh rather than trusting a size the store may
+        no longer hold (Qdrant's own "vector dimension error" is one way to learn that)."""
+        self._size = None
         return QdrantStoreError(sentence_with_detail(self._unreachable(exc), exc))
 
     def _unreachable(self, exc: BaseException) -> str:
@@ -359,6 +404,13 @@ class QdrantVectorStore(VectorStoreProvider):
                 f"The collection {self._collection} holds vectors of a different size than the "
                 f"embedding model in use now makes. Set Collection {_ON_CARD} to a new name, and "
                 "one is created at the new size when the next document is ingested."
+            )
+        if any(isinstance(c, _NotPlainVectors) for c in causes):
+            return (
+                f"The collection {self._collection} wasn't made by Qdrant Vector Store: its "
+                "vectors aren't the one plain unnamed vector per point this app writes and "
+                f"searches. Set Collection {_ON_CARD} to a new name, and one is created when the "
+                "next document is ingested."
             )
         if self._path:
             folder = f"Local folder (no server) {_ON_CARD}"

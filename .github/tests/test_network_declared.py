@@ -13,6 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / ".github" / "scripts" / "check_network_declared.py"
 
@@ -123,3 +125,72 @@ def test_a_known_app_that_stops_showing_its_signal_reds(tmp_path):
     assert "vacuity floor: bedrock-models was not seen with 'imports boto3'" in run.stdout, (
         run.stdout
     )
+
+
+def _red_for(tmp_path: Path, app: str, source: str) -> str:
+    """Seed the known apps plus *app*, which declares nothing and holds *source*, and return
+    the rail's output, which must be red."""
+    apps = _known()
+    apps[app] = ({}, {"provider.py": source})
+    run = _check(_seeded(tmp_path, apps))
+    assert run.returncode == 1, run.stdout
+    return run.stdout
+
+
+def test_an_undeclared_import_by_name_of_a_client_reds(tmp_path):
+    """An HTTP client imported by name at run time is the same reach as a static import."""
+    source = "import importlib\n\nhttpx = importlib.import_module('httpx')\n"
+    out = _red_for(tmp_path, "lazy-app", source)
+    assert (
+        "lazy-app: its code reaches the network (lazy-app/provider.py:3: imports httpx (an HTTP "
+        "client))"
+    ) in out, out
+
+
+def test_a_bare_run_imported_from_subprocess_reds(tmp_path):
+    """``run`` is ``subprocess.run`` once ``from subprocess import run`` bound it."""
+    source = "from subprocess import run\n\n\ndef send(host):\n    run(['ssh', host])\n"
+    out = _red_for(tmp_path, "bare-run-app", source)
+    assert (
+        "bare-run-app: its code reaches the network (bare-run-app/provider.py:5: starts ssh)"
+    ) in out, out
+
+
+@pytest.mark.parametrize(("source", "signal"), [
+    ("import subprocess as sp\n\n\ndef send(src, dst):\n    sp.run(['rsync', src, dst])\n",
+     "starts rsync"),
+    ("from subprocess import run as r\n\n\ndef push():\n    r(['git', 'push'])\n", "runs git push"),
+    ("from asyncio import create_subprocess_exec\n\n\nasync def diff():\n"
+     "    await create_subprocess_exec('gh', 'pr', 'diff')\n", "starts gh"),
+])
+def test_a_spawn_under_another_name_reds(tmp_path, source, signal):
+    """A spawn is what the file imported it as, not the last two parts of its name."""
+    out = _red_for(tmp_path, "alias-app", source)
+    assert f"alias-app: its code reaches the network (alias-app/provider.py:5: {signal})" in (
+        out
+    ), out
+
+
+def test_a_shell_command_line_that_reaches_another_machine_reds(tmp_path):
+    """A command line for a shell is read by its first word."""
+    source = "import os\n\n\ndef uptime(host):\n    os.system(f'ssh {host} uptime')\n"
+    out = _red_for(tmp_path, "shell-app", source)
+    assert "shell-app: its code reaches the network (shell-app/provider.py:5: starts ssh)" in (
+        out
+    ), out
+
+
+def test_a_module_named_at_run_time_reds_unless_the_app_declares_network(tmp_path):
+    """A module whose name is only known at run time could be anything, so an app that does not
+    declare network has its network use unknown. One that declares it is not made wrong."""
+    source = "import importlib\n\n\ndef load(name):\n    return importlib.import_module(name)\n"
+    apps = _known()
+    apps["plugin-app"] = ({}, {"provider.py": source})
+    apps["declared-app"] = ({"network": True}, {"provider.py": source})
+    run = _check(_seeded(tmp_path, apps))
+    assert run.returncode == 1, run.stdout
+    assert (
+        "plugin-app: plugin-app/provider.py:5 imports a module named only at run time, so "
+        "whether plugin-app reaches the network is unknown"
+    ) in run.stdout, run.stdout
+    assert "declared-app" not in run.stdout, run.stdout

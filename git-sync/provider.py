@@ -27,7 +27,9 @@ import errno
 import hashlib
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 from typing import Any
 
 from personalclaw.sdk.git import (
@@ -49,6 +51,10 @@ from personalclaw.sdk.sync import (
 
 # The single shared registry object every machine compare-and-swaps.
 _REGISTRY_KEY = "registry.json"
+
+#: What the sync layer puts at the top of a sync root: the registry, the encryption salt, and each
+#: machine's shards under ``machines/``. A working clone Git Sync made holds nothing else.
+_SYNC_ROOT = frozenset({_REGISTRY_KEY, "encryption-salt", "machines"})
 
 # ``list_remote`` skips any file whose basename starts with this — git-sync writes objects
 # in place and never leaves such files, but a stray one is never advertised as a real ref.
@@ -136,14 +142,43 @@ _CANT_STORE = (
     "unable to create temporary object directory",
 )
 _FUNNY_REF = ("funny ref",)
+# A branch the remote hides from pushes (``receive.hideRefs``), and a repository missing objects
+# its own branch needs — damaged, so it can't connect anything a push sends to what it holds.
+_HIDDEN = ("deny updating a hidden ref",)
+_DAMAGED = ("missing necessary objects",)
+# git keeps branch names as paths, so "sync" can't sit beside a "sync/main" the remote has.
+_CLASH = ("refname conflict", "exists; cannot create")
+# A ref the remote could not update is said on its own error line, "cannot lock ref '…': <cause>"
+# (the bracketed reason's words differ between git versions), so the cause decides what it was:
+# the ref store not writable, a lock file in the way, or the ref moved under this push.
+_REF_LOCK = "cannot lock ref"
+_REF_UNWRITABLE = ("permission denied", "read-only file system", "no space left on device")
+_REF_LOCK_TAKEN = "file exists"
+_REF_NOT_UPDATED = ("failed to update ref",)
 # What the remote says when the branch's ref lock is taken — another push landing at that moment,
 # or a lock file an interrupted one left behind: retried, like a lost race.
-_LOCKED = ("cannot lock ref", "failed to lock")
-# What ``git push`` prints (untranslated) when the remote has commits this clone doesn't: a lost
-# race, which a catch-up and another push recover from.
-_RACE = ("fetch first", "non-fast-forward")
+_LOCKED = ("failed to lock",)
+# What ``git push`` prints (untranslated) when the remote has commits this clone doesn't, or when
+# another push moved the branch between the remote advertising it and updating it: a lost race,
+# which a catch-up and another push recover from.
+_RACE = (
+    "fetch first",
+    "non-fast-forward",
+    "but expected",
+    "incorrect old value provided",
+    "reference already exists",
+    "reference does not exist",
+)
 #: The refusals above that no retry changes, by the name ``_refusal`` gives each.
-_FINAL = ("rules", "checked-out", "shallow", "cant-store", "funny-ref")
+_FINAL = (
+    "rules", "checked-out", "shallow", "hidden", "damaged", "cant-store", "clash", "funny-ref",
+)
+#: git's words for a branch the remote has that another branch's name nests with, naming it.
+_CLASHING = re.compile(r"'refs/heads/([^']+)' exists; cannot create 'refs/heads/")
+#: git's words for a lock file it found in its way, naming the file.
+_LOCK_FILE = re.compile(r"unable to create '([^']+?\.lock)': file exists", re.IGNORECASE)
+#: The keys in a working clone's own configuration that decide where a fetch or push goes.
+_WHERE_KEYS = r"^(remote\.origin\.(url|pushurl)|url\..*\.(insteadof|pushinsteadof))$"
 #: What git never allows in a ref name (``git check-ref-format``): a control character, space,
 #: or one of ``~ ^ : ? * [ \``.
 _REF_FORBIDDEN = re.compile(r"[\x00-\x20\x7f~^:?*\[\\]")
@@ -253,12 +288,25 @@ def _git_unrunnable(failure: BaseException) -> bool:
     return isinstance(failure, (FileNotFoundError, PermissionError)) and failure.filename == "git"
 
 
+def _as_failure(cp: subprocess.CompletedProcess) -> subprocess.CalledProcessError:
+    """``cp``, a git run that failed, as the error a checked run raises."""
+    return subprocess.CalledProcessError(
+        cp.returncode, cp.args, output=cp.stdout, stderr=cp.stderr
+    )
+
+
 #: Said when git itself could not be started.
 _NO_GIT = (
     "Git Sync runs the git command, and PersonalClaw couldn't start it on this machine: it "
     "isn't installed, isn't on the PATH PersonalClaw runs with, or isn't executable. Install "
     "git where PersonalClaw can run it."
 )
+
+
+class GitSyncFailed(RuntimeError):
+    """A step Git Sync can't go on from, said as what is wrong and what to do: its text is that
+    sentence. Raised for a working clone Git Sync won't sync through, and by a registry swap for
+    a failure that is no lost race, which ``False`` would say it was."""
 
 
 class GitSyncProvider(SyncTransportProvider):
@@ -379,6 +427,10 @@ class GitSyncProvider(SyncTransportProvider):
         other, or a file changed on both sides by something other than this transport (a commit
         made by hand in the clone, a rewritten remote). Then the replay is undone, the clone
         keeps its commits for whoever resolves it, and the caller is told what to do.
+
+        A lock file an interrupted git left in the clone is neither: it stops every fetch, and
+        every replay's last step, until it goes. That raises, as the failed git run, so the
+        caller says which file it is.
         """
         if self._rebasing():
             # A replay an earlier run was stopped in the middle of (killed, or timed out):
@@ -388,6 +440,8 @@ class GitSyncProvider(SyncTransportProvider):
             "fetch", "origin", f"+refs/heads/{self._branch}:{self._upstream}", check=False
         )
         if fetched.returncode != 0:
+            if self._stale_lock(_words(fetched)):
+                raise _as_failure(fetched)
             return ""
         if self._rev("HEAD") is None:
             # Cloned while the remote was still empty, so the branch has no commits here yet:
@@ -420,6 +474,8 @@ class GitSyncProvider(SyncTransportProvider):
                     self._git(*_IDENTITY, "commit", "-C", "REBASE_HEAD")
                     replay = self._git(*_IDENTITY, "rebase", "--continue", check=False)
             else:
+                if replay.returncode != 0 and self._stale_lock(_words(replay)):
+                    raise _as_failure(replay)
                 return ""
             self._git("rebase", "--abort", check=False)
         except BaseException:
@@ -427,6 +483,9 @@ class GitSyncProvider(SyncTransportProvider):
                 if self._rebasing():
                     self._git("rebase", "--abort", check=False)
             raise
+        if not real and self._stale_lock(_words(replay)):
+            # Nothing to settle by hand: the replay's last step couldn't write the branch.
+            raise _as_failure(replay)
         return self._replay_conflict(real, replay)
 
     def _unmerged(self) -> list[tuple[str, str]]:
@@ -512,12 +571,75 @@ class GitSyncProvider(SyncTransportProvider):
             with contextlib.suppress(OSError):
                 os.remove(self._resolve(_REGISTRY_KEY))
 
+    def _follows_setting(self) -> bool:
+        """Whether every fetch and push the working clone makes goes to Git remote URL: its
+        ``origin`` is that URL, with no push URL, second URL or url rewrite of its own sending one
+        anywhere else. They live in the clone's ``.git/config``, which the owner changing Git
+        remote URL never touched, and which anything that can write the clone can change."""
+        cp = self._git(
+            "config", "--local", "--includes", "--null", "--get-regexp", _WHERE_KEYS, check=False
+        )
+        said = [entry.partition("\n") for entry in (cp.stdout or "").split("\0") if entry]
+        return [(key.lower(), value) for key, _, value in said] == [
+            ("remote.origin.url", self._repo_url)
+        ]
+
+    def _made_by_git_sync(self) -> bool:
+        """Whether the working clone holds nothing but what Git Sync puts there: every commit in
+        it made under the transport's own identity (a clone of an empty remote has none), and no
+        change git hasn't committed outside the sync layout. A folder of the owner's own that
+        Local working clone was pointed at has commits or files of theirs."""
+        log = self._git("log", "--all", "--format=%ae%n%ce", check=False)
+        if log.returncode != 0 or set((log.stdout or "").split()) - {_COMMIT_EMAIL}:
+            return False
+        status = self._git(
+            "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", check=False
+        )
+        if status.returncode != 0:
+            return False
+        return all(
+            entry[3:].split("/", 1)[0] in _SYNC_ROOT
+            for entry in (status.stdout or "").split("\0")
+            if len(entry) > 3
+        )
+
+    def _replace_clone(self) -> None:
+        """Swap a working clone that doesn't point at Git remote URL for a fresh clone of it.
+
+        The fresh clone is made in a new folder beside the old one, and takes its place only once
+        it has succeeded. A remote that can't be cloned leaves the old clone where it was — still
+        not pointing at the setting, so neither fetched from nor pushed to — and says why, as any
+        clone does. The old clone is removed only when it holds nothing but what Git Sync put
+        there: every cycle re-exports this machine's whole state, so none of it is needed. One
+        holding anything else raises :class:`GitSyncFailed`, and nothing is touched."""
+        if not self._made_by_git_sync():
+            raise GitSyncFailed(self._not_replaced())
+        clone = os.path.abspath(self._clone)
+        parent, name = os.path.split(clone)
+        fresh = tempfile.mkdtemp(prefix=f".{name}-", dir=parent)
+        try:
+            self._run(["clone", self._repo_url, fresh])
+            retired = f"{fresh}-replaced"
+            os.rename(clone, retired)
+        except BaseException:
+            shutil.rmtree(fresh, ignore_errors=True)
+            raise
+        try:
+            os.rename(fresh, clone)
+        except BaseException:
+            os.rename(retired, clone)
+            shutil.rmtree(fresh, ignore_errors=True)
+            raise
+        shutil.rmtree(retired, ignore_errors=True)
+
     def _ensure_clone(self) -> None:
-        """Make ``<clone>`` a checkout of the remote on the configured branch. Idempotent.
+        """Make ``<clone>`` a checkout of Git remote URL on the configured branch. Idempotent.
 
         A brand-new empty remote is not an error — it is the first machine: ``git clone``
         of an empty remote succeeds (with a warning) leaving an unborn branch, which we
-        adopt with ``checkout -B`` so the first push publishes it.
+        adopt with ``checkout -B`` so the first push publishes it. A clone that doesn't point at
+        Git remote URL — the setting changed since it was made, or its own settings send pushes
+        elsewhere — is replaced by a fresh clone of it first (:meth:`_replace_clone`).
         """
         git_dir = os.path.join(self._clone, ".git")
         if not os.path.isdir(git_dir):
@@ -526,6 +648,8 @@ class GitSyncProvider(SyncTransportProvider):
             # check=True: a real clone failure (bad URL / no auth) raises and the caller
             # converts it. An empty remote still returns 0 here.
             self._run(["clone", self._repo_url, self._clone])
+        elif not self._follows_setting():
+            self._replace_clone()
         # On a populated remote the branch (or a remote-tracking DWIM of it) checks out; on
         # an empty/new remote it does not exist yet, so create it locally for the first push.
         if self._git("checkout", self._branch, check=False).returncode != 0:
@@ -535,31 +659,44 @@ class GitSyncProvider(SyncTransportProvider):
     def _refusal(cp: subprocess.CompletedProcess) -> str:
         """What kind of "no" a failed ``git push`` got, else ``""``. Final ones first — the
         remote's rules (a hook, branch protection), a checked-out branch, a shallow clone, a
-        repository that can't store the push, a branch name it won't take — since a push turned
-        away for any of them is no race, however its words read. Then the retried ones: the
-        branch's ref lock taken (``"locked"``), and the remote having commits this clone doesn't
-        (``"race"``)."""
+        branch it hides, a repository missing its own objects, one that can't store the push, a
+        branch name clashing with one it has, a name it won't take — since a push turned away for
+        any of them is no race, however its words read. Then the retried ones: the branch's ref
+        lock taken (``"locked"``), the remote having commits this clone doesn't or the branch
+        moving under this push (``"race"``), and a branch it couldn't update for a reason of its
+        own (``"ref-update"``)."""
         low = f"{cp.stderr or ''}\n{cp.stdout or ''}".lower()
-        for kind, needles in (
-            ("rules", _RULES),
-            ("checked-out", _CHECKED_OUT),
-            ("shallow", _SHALLOW),
-            ("cant-store", _CANT_STORE),
-            ("funny-ref", _FUNNY_REF),
-            ("locked", _LOCKED),
-            ("race", _RACE),
+        ref_lock = _REF_LOCK in low
+        unwritable = ref_lock and any(needle in low for needle in _REF_UNWRITABLE)
+        for kind, found in (
+            ("rules", any(needle in low for needle in _RULES)),
+            ("checked-out", any(needle in low for needle in _CHECKED_OUT)),
+            ("shallow", any(needle in low for needle in _SHALLOW)),
+            ("hidden", any(needle in low for needle in _HIDDEN)),
+            ("damaged", any(needle in low for needle in _DAMAGED)),
+            ("cant-store", unwritable or any(needle in low for needle in _CANT_STORE)),
+            ("clash", any(needle in low for needle in _CLASH)),
+            ("funny-ref", any(needle in low for needle in _FUNNY_REF)),
+            (
+                "locked",
+                (ref_lock and _REF_LOCK_TAKEN in low)
+                or any(needle in low for needle in _LOCKED),
+            ),
+            ("race", any(needle in low for needle in _RACE)),
+            ("ref-update", any(needle in low for needle in _REF_NOT_UPDATED)),
         ):
-            if any(needle in low for needle in needles):
+            if found:
                 return kind
         return ""
 
     @classmethod
     def _push_outcome(cls, cp: subprocess.CompletedProcess) -> str:
         """Classify a failed ``git push`` for the outbox. A refusal no retry changes — the
-        remote's rules, a checked-out branch, a shallow clone, a repository that can't store the
-        push, a branch name it won't take — is ``permanent``, like a bad URL or denied auth. A
-        race still lost after every catch-up, a ref lock still taken, the network, or another
-        refusal the remote may lift is ``transient``: the cycle tries again."""
+        remote's rules, a checked-out branch, a shallow clone, a hidden branch, a damaged
+        repository, one that can't store the push, a clashing or unaccepted branch name — is
+        ``permanent``, like a bad URL or denied auth. A race still lost after every catch-up, a
+        ref lock still taken, the network, or another refusal the remote may lift is
+        ``transient``: the cycle tries again."""
         refusal = cls._refusal(cp)
         if refusal in _FINAL or transport_refusal(_words(cp)):
             # A remote PersonalClaw's git does not reach (a local path) is refused the same way
@@ -602,11 +739,32 @@ class GitSyncProvider(SyncTransportProvider):
                 "from a shallow clone. If nothing there needs keeping, delete that folder, and "
                 "Git Sync clones the remote in full on its next run."
             )
+        elif refusal == "hidden":
+            sentence = (
+                f"Git Sync couldn't push to the git remote: it hides branch '{branch}', and takes "
+                f"no push to a branch it hides. Set Branch {_ON_CARD} to one it doesn't hide, or "
+                "stop hiding this one there (git's receive.hideRefs or transfer.hideRefs setting)."
+            )
+        elif refusal == "damaged":
+            sentence = (
+                "Git Sync couldn't push to the git remote: its repository is missing objects its "
+                "own history needs, so no push to it can land. Run git fsck in that repository to "
+                "see what is missing and restore it from a backup, or set Git remote URL "
+                f"{_ON_CARD} to another repository."
+            )
         elif refusal == "cant-store":
             sentence = (
                 "Git Sync couldn't push to the git remote: the remote couldn't store what this "
                 "machine sent — the repository there isn't writable by the account this machine "
                 "pushes as, or the disk it is on is full. Fix that on the remote."
+            )
+        elif refusal == "clash":
+            other = _CLASHING.search(words)
+            has = f"a branch '{other.group(1)}'" if other else "a branch of another name"
+            sentence = (
+                f"Git Sync couldn't push to the git remote: it has {has}, and git can't keep "
+                f"branch '{branch}' beside it, since one name is a folder of the other. Set "
+                f"Branch {_ON_CARD} to another name."
             )
         elif refusal == "funny-ref":
             sentence = (
@@ -624,6 +782,12 @@ class GitSyncProvider(SyncTransportProvider):
             sentence = (
                 f"Git Sync couldn't push to the git remote: each of the {_PUSH_TRIES} times it "
                 "caught up with the remote and pushed, another push had reached it first."
+            )
+        elif refusal == "ref-update":
+            sentence = (
+                "Git Sync couldn't push to the git remote: it took what this machine sent but "
+                f"couldn't move branch '{branch}' to it. If it keeps happening, check that "
+                "repository on the remote."
             )
         elif trouble:
             sentence = f"Git Sync couldn't push to the git remote: {trouble}"
@@ -648,6 +812,38 @@ class GitSyncProvider(SyncTransportProvider):
         """What a full disk under the working clone says."""
         return (
             f"The disk holding Git Sync's working clone at {self._clone} is full. Free some space."
+        )
+
+    def _stale_lock(self, words: str) -> str:
+        """The lock file inside the working clone that git's ``words`` say is in its way, as a
+        path relative to the clone (``.git/index.lock``); ``""`` when they name none there — a
+        lock on the remote is the remote's."""
+        clone = os.path.realpath(self._clone)
+        for match in _LOCK_FILE.finditer(words):
+            path = os.path.realpath(match.group(1))
+            if path.startswith(clone + os.sep):
+                return os.path.relpath(path, clone)
+        return ""
+
+    def _lock_left(self, lock: str) -> str:
+        """What a lock file left in the working clone says: which file, in which folder, and to
+        remove it if no git is running there."""
+        return (
+            f"Git Sync couldn't update its working clone at {self._clone}: another git process is "
+            f"using it, or an interrupted one left {lock} behind. Wait for it to finish, or, if no "
+            "git is running there, remove that file."
+        )
+
+    def _not_replaced(self) -> str:
+        """What a working clone that doesn't point at Git remote URL, and holds something Git Sync
+        didn't make, says."""
+        return (
+            f"The working clone at {self._clone} doesn't point at Git remote URL — it was cloned "
+            "from another remote, or its own settings send pushes elsewhere — and it holds commits "
+            "or files Git Sync didn't make, so Git Sync leaves it as it is and syncs through "
+            f"neither remote. Set Local working clone {_ON_CARD} to a new folder, or delete that "
+            "one if nothing in it needs keeping, and Git Sync clones Git remote URL there on its "
+            "next run."
         )
 
     def _cycle_stopped(self, failure: BaseException) -> str:
@@ -703,12 +899,10 @@ class GitSyncProvider(SyncTransportProvider):
                     f"Git Sync couldn't clone the git remote into {self._clone}. Check Git remote "
                     f"URL {_ON_CARD}, and that git on this machine can reach it."
                 )
+            elif self._stale_lock(words):
+                sentence = self._lock_left(self._stale_lock(words))
             elif "index.lock" in low:
-                sentence = (
-                    f"Git Sync couldn't update its working clone at {self._clone}: another git "
-                    "process is using it, or an interrupted one left .git/index.lock behind. Wait "
-                    "for it to finish, or remove that file."
-                )
+                sentence = self._lock_left(".git/index.lock")
             else:
                 sentence = (
                     f"Git Sync couldn't update its working clone at {self._clone}: git {step} "
@@ -823,6 +1017,10 @@ class GitSyncProvider(SyncTransportProvider):
                 outcome=outcome,
                 detail=self._push_refused(push_cp, outcome),
             )
+        except GitSyncFailed as e:
+            # A working clone it won't sync through: retrying changes nothing until the owner
+            # picks another folder.
+            return PushResult(pushed=pushed, skipped=skipped, outcome="permanent", detail=str(e))
         except (subprocess.SubprocessError, OSError) as e:
             # Clone/pull/commit blew up mid-cycle — retryable.
             return PushResult(
@@ -831,12 +1029,13 @@ class GitSyncProvider(SyncTransportProvider):
 
     def list_remote(self, prefix: str = "") -> list[RemoteRef]:
         # A missing or unclonable remote is an empty remote, not an error — the clone may
-        # not exist yet on a fresh machine.
+        # not exist yet on a fresh machine. So is a working clone Git Sync won't sync through;
+        # the push that follows says why.
         if self._idle or self._refused:
             return []
         try:
             self._ensure_clone()
-        except (subprocess.SubprocessError, OSError):
+        except (subprocess.SubprocessError, OSError, GitSyncFailed):
             return []
         self._refresh()  # best-effort; internally safe
         if not os.path.isdir(self._clone):
@@ -871,8 +1070,11 @@ class GitSyncProvider(SyncTransportProvider):
         if self._idle or self._refused:
             return []
         # The clone is already current from list_remote's catch-up; refresh best-effort if it
-        # exists, but never establish it here.
+        # exists, but never establish it here. A clone that doesn't point at Git remote URL is
+        # another remote's: nothing in it is served, and it is never fetched from.
         if os.path.isdir(os.path.join(self._clone, ".git")):
+            if not self._follows_setting():
+                return []
             self._refresh()
         out: list[SyncObject] = []
         for ref in refs:
@@ -886,10 +1088,15 @@ class GitSyncProvider(SyncTransportProvider):
         return out
 
     def cas_registry(self, expected_sha: str | None, data: bytes) -> bool:
+        """Compare-and-swap ``registry.json`` through the remote's own push rejection. A working
+        clone it won't sync through, and a lock file an interrupted git left in the clone, raise
+        :class:`GitSyncFailed` saying so: ``False`` would say the swap lost a race, and the cycle
+        would re-read and swap again until it gave up."""
         if self._idle or self._refused:
             return False
         before: str | None = None
         wrote = committed = False
+        failure: BaseException | None = None
         try:
             self._ensure_clone()
             self._catch_up()
@@ -921,8 +1128,8 @@ class GitSyncProvider(SyncTransportProvider):
             # us the push is rejected and we report the lost race for the caller to retry.
             if self._git("push", "origin", self._branch, check=False).returncode == 0:
                 return True
-        except (subprocess.SubprocessError, OSError):
-            pass
+        except (subprocess.SubprocessError, OSError) as e:
+            failure = e
         # The write never reached the remote, so it mustn't stay in the clone either: the
         # caller's re-read would find these bytes instead of the remote's, and a later push
         # would carry them onto whatever registry the remote has by then — a write with no
@@ -932,6 +1139,8 @@ class GitSyncProvider(SyncTransportProvider):
                 self._undo_commit(before)
             elif wrote:
                 self._restore_registry()
+        if failure is not None and self._stale_lock(_words(failure)):
+            raise GitSyncFailed(self._cycle_stopped(failure)) from failure
         return False
 
     def test(self) -> ConnectionResult:
@@ -940,6 +1149,16 @@ class GitSyncProvider(SyncTransportProvider):
         if self._refused:
             return ConnectionResult(ok=False, detail=self._refused)
         try:
+            # A working clone every sync would refuse is said here too, read without changing
+            # it: a green probe beside a sync that can't run says nothing true.
+            clone_kept = (
+                bool(self._clone)
+                and os.path.isdir(os.path.join(self._clone, ".git"))
+                and not self._follows_setting()
+                and not self._made_by_git_sync()
+            )
+            if clone_kept:
+                return ConnectionResult(ok=False, detail=self._not_replaced())
             # ``ls-remote`` against the URL confirms both reachability and auth without the
             # side effect of writing a clone during a read-only probe.
             cp = self._run(["ls-remote", self._repo_url], check=False)

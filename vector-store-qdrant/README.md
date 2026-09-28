@@ -72,10 +72,15 @@ Use a **fresh collection name**. This app owns the points it writes and deletes 
 collection holding other data risks deleting that data. The collection is created on first use
 at the dimension of whatever embedding model you have bound; changing embedding models means
 using a new collection name (vectors from two models are not comparable). The collection's size
-is read before every write and search, so vectors of another size are never sent: the ingest or
-search says the collection was made for another size and to set a new name, against a server
-and a local folder alike. In a batch that mixes sizes, the vectors that fit the collection are
-still written.
+is checked before every write and search, so vectors of another size are never sent: the ingest
+or search says the collection was made for another size and to set a new name, against a server
+and a local folder alike. A server's collection size is read once and trusted while the vectors
+fit it, so a write or search costs no extra request; a collection made again at another size
+under the same name is refused by the server in words said the same way, and read again on the
+next call. A local folder's is read every time. In a batch that mixes sizes, the vectors that fit
+the collection are still written. A collection with named vectors or multivectors, which this
+app never makes, is said as that before anything is written or searched, with the same next step:
+set a new name.
 
 ## What is proven, and what is not
 

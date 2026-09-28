@@ -94,14 +94,16 @@ and never rewritten), but `registry.json` is rewritten every cycle, so registry 
 **There is no compare-and-swap.** rsync has a create-only primitive (`--ignore-existing`,
 whose `--itemize-changes` output reports whether the file was really created) but nothing
 conditional for an overwrite. So the registry swap is *verify → write → read back*, and it
-reports failure whenever it cannot prove its own bytes landed.
+reports a lost race whenever the registry it finds isn't the one it expected — before its
+write, or after it, when it should be its own.
 
 That bias is deliberate. Core's CAS loop re-pulls, re-merges peers' entries and retries when
-a swap reports failure, so a false failure costs one extra round trip — while a false success
-would silently discard another machine's registration. A residual race remains: two machines
-swapping the registry in the same instant can lose one update, which the loser re-applies on
-its next cycle. If you need a genuinely atomic registry swap, use `s3-sync`, which has
-conditional writes.
+a swap reports a lost race, so a false one costs one extra round trip — while a false success
+would silently discard another machine's registration. An rsync run that fails during the swap
+is no race: it stops the sync with that as its error, since no re-pull would fix it. A residual
+race remains: two machines swapping the registry in the same instant can lose one update,
+which the loser re-applies on its next cycle. If you need a genuinely atomic registry swap, use
+`s3-sync`, which has conditional writes.
 
 ## Performance
 
@@ -125,8 +127,10 @@ A failed sync or connection test says what went wrong and what to do — the hos
 trusted yet, the host turned down the ssh login, the sync root path doesn't exist there, rsync
 isn't installed on one end, a run went past **Command timeout**, this machine's **Local working
 directory** can't be written — with rsync's, ssh's or the filesystem's own words after it. A
-pull whose rsync run fails stops the sync with that as its error, rather than reading as a
-target with nothing on it. Files that vanish from the target while a pull copies — another
+listing, a pull or a registry swap whose rsync run fails stops the sync with that as its error,
+rather than reading as a target with nothing on it or a swap another machine won. The one
+exception is a **Sync root path** that doesn't exist yet: it lists as empty, so the first
+machine to sync creates it. Files that vanish from the target while a pull copies — another
 machine rewriting the registry — are not a failure: what arrived is used.
 
 | Symptom | Cause |

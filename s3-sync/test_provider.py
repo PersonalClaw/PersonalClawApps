@@ -11,7 +11,7 @@ Three things are proved here that a mocked-out test could not:
 2. **Every byte really travels through ``sdk.net.fetch`` under the derived pinned policy.**
    The round-trip tests drive a real loopback HTTP store through the real egress guard, and
    a source-level test asserts the module imports no HTTP client of its own.
-3. **The failure modes are the safe ones.** A truncated body is dropped rather than merged,
+3. **The failure modes are the safe ones.** A truncated body is refused rather than merged,
    a registry CAS refuses rather than clobbers, and a canary secret never reaches a log,
    a ``repr``, or an exception string.
 """
@@ -39,6 +39,7 @@ from provider import (
 )
 import provider as provider_mod
 
+from personalclaw.sdk.net import sentence_with_detail
 from personalclaw.sdk.sync import RemoteRef, SyncObject
 
 # ── the credentials used for every signing vector ────────────────────────────────────
@@ -391,8 +392,10 @@ class _StubS3(http.server.BaseHTTPRequestHandler):
         # Keep the exact bytes that crossed the wire, so an adversarial scan can look at
         # what LEFT the machine rather than at what the store chose to keep.
         self.server.wire_bodies.append((key, data))  # type: ignore[attr-defined]
-        if self.server.put_answer is not None:  # type: ignore[attr-defined]
-            return self._send(*self.server.put_answer)  # type: ignore[attr-defined]
+        answers = self.server.answers  # type: ignore[attr-defined]
+        answer = answers.get(("PUT", key)) or self.server.put_answer  # type: ignore[attr-defined]
+        if answer is not None:
+            return self._send(*answer)
         exists = key in self.store
         if self.headers.get("If-None-Match") == "*" and exists:
             return self._send(412, b"<Error><Code>PreconditionFailed</Code></Error>")
@@ -412,6 +415,8 @@ class _StubS3(http.server.BaseHTTPRequestHandler):
             if self.server.list_answer is not None:  # type: ignore[attr-defined]
                 return self._send(*self.server.list_answer)  # type: ignore[attr-defined]
             return self._list(q)
+        if ("GET", key) in self.server.answers:  # type: ignore[attr-defined]
+            return self._send(*self.server.answers[("GET", key)])  # type: ignore[attr-defined]
         if key not in self.store:
             return self._send(404, b"<Error><Code>NoSuchKey</Code></Error>")
         data = self.store[key]
@@ -455,6 +460,8 @@ class _StubServer(http.server.ThreadingHTTPServer):
         self.put_answer: tuple[int, bytes] | None = None
         #: The same for every bucket listing — the connection test's request.
         self.list_answer: tuple[int, bytes] | None = None
+        #: ``(method, key) → (status, body)``: one object's GET or PUT answered so instead.
+        self.answers: dict[tuple[str, str], tuple[int, bytes]] = {}
 
     @property
     def endpoint(self) -> str:
@@ -580,12 +587,24 @@ class TestInsertOnly:
         assert sent.get("if-none-match") == "*"
 
 
+def _tiny_cap(monkeypatch, max_bytes: int = 64) -> None:
+    """Shrink the download cap of the policy every request runs under to ``max_bytes``."""
+    real = provider_mod.sync_egress_policy
+
+    def tiny(endpoint):
+        return real(endpoint).with_overrides(max_bytes=max_bytes)
+
+    monkeypatch.setattr(provider_mod, "sync_egress_policy", tiny)
+
+
 class TestIntegrity:
-    def test_a_truncated_object_is_dropped_not_returned(self, live, stub, monkeypatch):
+    def test_a_truncated_object_is_refused_not_returned(self, live, stub, monkeypatch):
         """``fetch`` caps the body and REPORTS the cap rather than raising. Returning a
-        prefix of a shard would be silent corruption the merge would apply as data."""
+        prefix of a shard would be silent corruption the merge would apply as data — and
+        dropping it, as this did, read as a shard the store no longer had."""
+        key = "machines/A/seq-0001/memory/memory.db"
         payload = b"x" * 4096
-        assert live.push([SyncObject(key="big", data=payload)]).pushed == 1
+        assert live.push([SyncObject(key=key, data=payload)]).pushed == 1
         refs = live.list_remote()
         assert len(refs) == 1  # vacuity floor
 
@@ -593,19 +612,58 @@ class TestIntegrity:
         assert live.pull(refs)[0].data == payload
 
         # Now shrink the cap below the object so fetch truncates.
-        real = provider_mod.sync_egress_policy
+        _tiny_cap(monkeypatch)
+        with pytest.raises(RuntimeError) as caught:
+            live.pull(refs)
 
-        def tiny(endpoint):
-            return real(endpoint).with_overrides(max_bytes=64)
+        assert str(caught.value) == (
+            f"The object personalclaw/{key} in bucket mybucket is larger than 64 bytes, the most "
+            "PersonalClaw downloads from a sync store, so S3 Sync can't read it: a machine's "
+            "synced data has grown past that. To keep syncing it, use a transport without that "
+            "limit, such as Rsync Sync. Details: HTTP 200, Content-Length 4096"
+        )
 
-        monkeypatch.setattr(provider_mod, "sync_egress_policy", tiny)
-        out = live.pull(refs)
-        assert out == [], "a truncated shard was returned as if it were data"
+    def test_a_truncated_registry_says_something_else_put_it_there(self, live, stub, monkeypatch):
+        """S3 Sync's own registry and salt are small, so one past the cap isn't its own."""
+        stub.store["personalclaw/registry.json"] = b"{" + b" " * 4096 + b"}"
+        _tiny_cap(monkeypatch)
+
+        with pytest.raises(RuntimeError) as caught:
+            live.pull([RemoteRef(key="registry.json")])
+
+        assert str(caught.value) == (
+            "The object personalclaw/registry.json in bucket mybucket is larger than 64 bytes, "
+            "the most PersonalClaw downloads from a sync store, so S3 Sync can't read it, and S3 "
+            "Sync never writes one that size, so something else put it there. Move it out of "
+            "personalclaw/ in bucket mybucket. Details: HTTP 200, Content-Length 4098"
+        )
+
+    def test_the_cap_is_named_the_way_a_limit_reads(self):
+        assert provider_mod._size(200_000_000) == "200 MB"
+        assert provider_mod._size(1_500_000) == "1.5 MB"
+        assert provider_mod._size(4096) == "4,096 bytes"
 
     def test_a_missing_ref_is_dropped_not_raised(self, live):
         live.push([SyncObject(key="present", data=b"v")])
         out = live.pull([RemoteRef(key="present"), RemoteRef(key="vanished")])
         assert [o.key for o in out] == ["present"]
+
+    def test_a_ref_whose_bucket_is_gone_raises_rather_than_dropping(self, live, stub):
+        """A 404 is an object the store no longer has — unless S3's code says the bucket is gone,
+        which drops no ref: every one would read as absent."""
+        stub.answers[("GET", "personalclaw/present")] = (
+            404,
+            _s3_error("NoSuchBucket", "The specified bucket does not exist"),
+        )
+
+        with pytest.raises(RuntimeError) as caught:
+            live.pull([RemoteRef(key="present")])
+
+        assert str(caught.value) == (
+            f"There is no bucket named mybucket at {live._endpoint}. Create it, or set Bucket "
+            f"{ON_CARD} to one that exists. Details: HTTP 404 NoSuchBucket — The specified bucket "
+            "does not exist"
+        )
 
 
 class TestCasRegistry:
@@ -635,7 +693,8 @@ class TestCasRegistry:
         assert live.cas_registry(hashlib.sha256(b"{}").hexdigest(), b"{}") is False
 
     def test_a_store_that_returns_no_etag_refuses_rather_than_clobbers(self, live, stub):
-        """Without an ETag the write cannot be made conditional, so it must not be made.
+        """Without an ETag the write cannot be made conditional, so it must not be made — and
+        it is said, rather than read as a race lost to another machine, which no re-pull wins.
 
         Added after a falsification showed the ``if not etag`` guard was unreachable in the
         suite — the stub always sent an ETag, so deleting the guard stayed green. An
@@ -646,7 +705,16 @@ class TestCasRegistry:
         stub.suppress_etag = True
         puts_before = len([r for r in stub.requests if r[0] == "PUT"])
 
-        assert live.cas_registry(hashlib.sha256(first).hexdigest(), b'{"machines":{"B":1}}') is False
+        with pytest.raises(RuntimeError) as caught:
+            live.cas_registry(hashlib.sha256(first).hexdigest(), b'{"machines":{"B":1}}')
+
+        assert str(caught.value).startswith(
+            f"The store at {live._endpoint} sent personalclaw/registry.json back without an "
+            "ETag, so S3 Sync can't make its registry write conditional — and it never writes "
+            "the registry unconditionally, which could discard another machine's registration. "
+            "If a proxy sits between this machine and the store, let it pass the ETag header "
+            "through; otherwise use a store that sends one. Details: HTTP 200 with headers "
+        ), caught.value
         assert stub.store["personalclaw/registry.json"] == first, "clobbered with no ETag"
         # Assert the DECISION, not the outcome: no write may even be ATTEMPTED. Asserting
         # only the final bytes let the stub's own 412 stand in for our guard, so removing
@@ -660,14 +728,97 @@ class TestCasRegistry:
         self, live, stub
     ):
         """The safety choice that matters most: an unconditional registry PUT would
-        silently discard a peer's registration, so an unsupported condition is a lost
-        race, never a fallback."""
+        silently discard a peer's registration, so an unsupported condition is refused,
+        never a fallback — and said, rather than read as a race lost to another machine."""
         stub.store["personalclaw/registry.json"] = b'{"machines":{"A":1}}'
         stub.conditional_unsupported = True
         sha = hashlib.sha256(b'{"machines":{"A":1}}').hexdigest()
-        assert live.cas_registry(sha, b'{"machines":{"B":1}}') is False
+
+        for expected, header in ((sha, "If-Match"), (None, "If-None-Match")):
+            with pytest.raises(RuntimeError) as caught:
+                live.cas_registry(expected, b'{"machines":{"B":1}}')
+            assert str(caught.value) == (
+                f"The store at {live._endpoint} doesn't support conditional writes ({header}), "
+                "which S3 Sync relies on to never overwrite an object. Use a store, or a version "
+                "of it, that supports them. Details: HTTP 501 NotImplemented"
+            )
         assert stub.store["personalclaw/registry.json"] == b'{"machines":{"A":1}}'
-        assert live.cas_registry(None, b"{}") is False
+
+    @pytest.mark.parametrize("expected", [None, "sha"], ids=["create", "swap"])
+    def test_a_registry_write_the_store_refuses_raises_rather_than_losing_the_race(
+        self, live, stub, expected
+    ):
+        """Only a failed condition (a 412) is a race. A refusal for anything else read as one:
+        core re-pulled and swapped four more times, then reported the swap lost to another
+        machine."""
+        stub.store["personalclaw/registry.json"] = b"{}"
+        stub.answers[("PUT", "personalclaw/registry.json")] = (
+            403,
+            _s3_error("AccessDenied", "Access Denied"),
+        )
+        sha = hashlib.sha256(b"{}").hexdigest() if expected else None
+
+        with pytest.raises(RuntimeError) as caught:
+            live.cas_registry(sha, b'{"machines":{"B":1}}')
+
+        assert str(caught.value) == (
+            f"The store at {live._endpoint} refused S3 Sync's write to bucket mybucket. Check "
+            f"Access key ID and Secret access key {ON_CARD}, and that the key's policy lets it "
+            "write objects to that bucket. Details: HTTP 403 AccessDenied — Access Denied"
+        )
+        assert stub.store["personalclaw/registry.json"] == b"{}"
+
+    def test_a_registry_write_still_in_progress_elsewhere_raises_and_says_it_retries(
+        self, live, stub
+    ):
+        """A 409 is another conditional write to the registry still landing — not the 412 of
+        a condition that failed — so it is said, with the retry, rather than counted a race."""
+        stub.answers[("PUT", "personalclaw/registry.json")] = (409, b"")
+
+        with pytest.raises(RuntimeError) as caught:
+            live.cas_registry(None, b"{}")
+
+        assert str(caught.value) == (
+            f"The store at {live._endpoint} was still busy with another conditional write to the "
+            f"same object when S3 Sync's write arrived, so it turned this one away. {RETRIES} "
+            "Details: HTTP 409"
+        )
+
+    def test_a_registry_read_the_store_refuses_raises_rather_than_losing_the_race(
+        self, live, stub
+    ):
+        stub.store["personalclaw/registry.json"] = b"{}"
+        stub.answers[("GET", "personalclaw/registry.json")] = (
+            403,
+            _s3_error("AccessDenied", "Access Denied"),
+        )
+        puts_before = len([r for r in stub.requests if r[0] == "PUT"])
+
+        with pytest.raises(RuntimeError) as caught:
+            live.cas_registry(hashlib.sha256(b"{}").hexdigest(), b'{"machines":{"B":1}}')
+
+        assert str(caught.value) == (
+            f"The store at {live._endpoint} refused S3 Sync's read of personalclaw/registry.json "
+            f"in bucket mybucket. Check Access key ID and Secret access key {ON_CARD}, and that "
+            "the key's policy lets it read objects in that bucket. Details: HTTP 403 AccessDenied "
+            "— Access Denied"
+        )
+        assert len([r for r in stub.requests if r[0] == "PUT"]) == puts_before
+
+    def test_a_truncated_registry_read_raises_rather_than_losing_the_race(
+        self, live, stub, monkeypatch
+    ):
+        registry = b"{" + b" " * 4096 + b"}"
+        stub.store["personalclaw/registry.json"] = registry
+        _tiny_cap(monkeypatch)
+
+        with pytest.raises(RuntimeError) as caught:
+            live.cas_registry(hashlib.sha256(registry).hexdigest(), b"{}")
+
+        assert str(caught.value).startswith(
+            "The object personalclaw/registry.json in bucket mybucket is larger than 64 bytes"
+        ), caught.value
+        assert stub.store["personalclaw/registry.json"] == registry
 
     def test_etag_is_read_case_insensitively(self, live, stub):
         """REGRESSION. ``aiohttp`` normalises the header to ``Etag``, not the ``ETag`` the
@@ -808,6 +959,17 @@ def _s3_error(code: str, message: str, **named: str) -> bytes:
     ).encode()
 
 
+def _signature_refused(endpoint: str) -> str:
+    """What SignatureDoesNotMatch says, for any request. It named only the secret access key,
+    and some S3-compatible stores answer a signature made for the wrong region the same way."""
+    return (
+        f"The store at {endpoint} didn't accept S3 Sync's request signature: the secret access "
+        "key doesn't belong to the access key ID, or — on some S3-compatible stores — Region "
+        f"({REGION}) isn't the one the store is set up for. Check Secret access key {ON_CARD}; "
+        "if it is right, set Region there to the store's region."
+    )
+
+
 #: What each store refusal of a write says (given the store's address), and its verdict.
 #: Each used to reach the user as "PUT <key> failed (HTTP <status>)" — a status, and neither
 #: what the store said nor which setting to change.
@@ -825,9 +987,7 @@ _STORE_REFUSALS = [
         403,
         _s3_error("SignatureDoesNotMatch", "The request signature we calculated does not match "
                   "the signature you provided. Check your key and signing method."),
-        lambda e: f"The store at {e} didn't accept S3 Sync's request signature, which usually "
-        "means the secret access key doesn't belong to the access key ID. Check Secret access "
-        f"key {ON_CARD}.",
+        _signature_refused,
         "permanent",
         "SignatureDoesNotMatch — The request signature we calculated does not match the signature "
         "you provided. Check your key and signing method.",
@@ -972,9 +1132,7 @@ _PROBE_REFUSALS = [
         403,
         _s3_error("SignatureDoesNotMatch", "The request signature we calculated does not match "
                   "the signature you provided."),
-        lambda e: f"The store at {e} didn't accept S3 Sync's request signature, which usually "
-        "means the secret access key doesn't belong to the access key ID. Check Secret access "
-        f"key {ON_CARD}.",
+        _signature_refused,
         "SignatureDoesNotMatch — The request signature we calculated does not match the "
         "signature you provided.",
     ),
@@ -1062,6 +1220,131 @@ _PROBE_REFUSALS = [
     ),
 ]
 
+#: What each store refusal of a read says, for the object personalclaw/registry.json, and the
+#: store's words. Each used to drop the object as one the store no longer had.
+_READ_REFUSALS = [
+    (
+        403,
+        _s3_error("AccessDenied", "Access Denied"),
+        lambda e: f"The store at {e} refused S3 Sync's read of personalclaw/registry.json in "
+        f"bucket mybucket. Check Access key ID and Secret access key {ON_CARD}, and that the "
+        "key's policy lets it read objects in that bucket.",
+        "AccessDenied — Access Denied",
+    ),
+    (
+        403,
+        _s3_error("SignatureDoesNotMatch", "The request signature we calculated does not match "
+                  "the signature you provided."),
+        _signature_refused,
+        "SignatureDoesNotMatch — The request signature we calculated does not match the "
+        "signature you provided.",
+    ),
+    (
+        404,
+        _s3_error("NoSuchBucket", "The specified bucket does not exist"),
+        lambda e: f"There is no bucket named mybucket at {e}. Create it, or set Bucket {ON_CARD} "
+        "to one that exists.",
+        "NoSuchBucket — The specified bucket does not exist",
+    ),
+    (
+        301,
+        _s3_error("PermanentRedirect", "The bucket you are attempting to access must be addressed "
+                  "using the specified endpoint.", Endpoint="mybucket.s3.eu-west-1.example.com"),
+        lambda e: f"The store at {e} redirected S3 Sync's read — usually because bucket mybucket "
+        "is in another region, reached through a different endpoint. Set Endpoint URL "
+        f"{ON_CARD} to the endpoint the store's answer names, and Region to match.",
+        "PermanentRedirect (Endpoint: mybucket.s3.eu-west-1.example.com) — The bucket you are "
+        "attempting to access must be addressed using the specified endpoint.",
+    ),
+    (
+        503,
+        _s3_error("SlowDown", "Please reduce your request rate."),
+        lambda e: f"The store at {e} was too busy to take S3 Sync's read — it is limiting how "
+        "fast it takes requests. If it keeps happening, check the store's load and any request "
+        f"limits on the bucket. {RETRIES}",
+        "SlowDown — Please reduce your request rate.",
+    ),
+    (
+        500,
+        _s3_error("InternalError", "We encountered an internal error. Please try again."),
+        lambda e: f"The store at {e} failed while handling S3 Sync's read. That trouble is the "
+        f"store's own; if it keeps happening, check the store. {RETRIES}",
+        "InternalError — We encountered an internal error. Please try again.",
+    ),
+]
+
+
+#: What each request that raised instead of answering says, and the push's verdict for it.
+_RAISED = [
+    (
+        # DNS failing, or this machine offline, reads exactly like this — and it was
+        # ``permanent``, so the outbox gave the push up.
+        _blocked("unresolvable", "host 's3.example.com' is not resolvable"),
+        "s3.example.com, the host in Endpoint URL, can't be found from this machine. "
+        f"Check Endpoint URL {ON_CARD}, and that this machine is online.",
+        "transient",
+    ),
+    (
+        _blocked(
+            "metadata",
+            "host 's3.example.com' resolves to a cloud metadata / link-local address",
+        ),
+        "s3.example.com, the host in Endpoint URL, points at a cloud metadata or "
+        "link-local address, which PersonalClaw never lets anything reach. Check "
+        f"Endpoint URL {ON_CARD}, and that host's DNS record.",
+        "permanent",
+    ),
+    (
+        _blocked(
+            "not_listed",
+            "host 'mybucket.s3.example.com' is not on the 'sync' egress allow-list "
+            "(1 host(s) allowed)",
+        ),
+        f"The store at {STORE} sent S3 Sync on to a different host, and a sync "
+        "transport only reaches the host in its Endpoint URL. Set Endpoint URL "
+        f"{ON_CARD} to the address the store redirects to.",
+        "permanent",
+    ),
+    (
+        _blocked("", "too many redirects (> 3)"),
+        "PersonalClaw's network egress rules stopped a request S3 Sync made to "
+        f"{STORE}, or to where the store redirected it. Check that Endpoint URL "
+        f"{ON_CARD} is the store's own address, and Network egress in Settings → Security.",
+        "permanent",
+    ),
+    (
+        # The same trouble found by the HTTP client's own lookup rather than the guard's.
+        _Unreachable(socket.gaierror(8, "nodename nor servname provided, or not known")),
+        "s3.example.com, the host in Endpoint URL, can't be found from this machine. "
+        f"Check Endpoint URL {ON_CARD}, and that this machine is online.",
+        "transient",
+    ),
+    (
+        TimeoutError(),
+        f"The store at {STORE} didn't answer in time. Check that it is reachable from "
+        f"this machine, and that Endpoint URL {ON_CARD} is right.",
+        "transient",
+    ),
+    (
+        _CertificateRefused(
+            ssl.SSLCertVerificationError(
+                1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
+            )
+        ),
+        f"S3 Sync couldn't make a secure connection to {STORE}: the TLS handshake "
+        "failed, or this machine doesn't trust the store's certificate. Check that "
+        f"Endpoint URL {ON_CARD} is right, and that the store's certificate is valid for "
+        "that host.",
+        "transient",
+    ),
+    (
+        OSError("connection reset"),
+        f"S3 Sync's request to the store at {STORE} didn't complete. Check that the "
+        f"store is running and reachable from this machine, and the settings {ON_CARD}.",
+        "transient",
+    ),
+]
+
 
 class TestWhatAFailureSays:
     def _provider(self, endpoint: str = STORE) -> S3SyncProvider:
@@ -1069,78 +1352,7 @@ class TestWhatAFailureSays:
             endpoint, "mybucket", region=REGION, access_key_id=AK, secret_access_key=SK
         )
 
-    @pytest.mark.parametrize(
-        ("exc", "says", "outcome"),
-        [
-            (
-                # DNS failing, or this machine offline, reads exactly like this — and it was
-                # ``permanent``, so the outbox gave the push up.
-                _blocked("unresolvable", "host 's3.example.com' is not resolvable"),
-                "s3.example.com, the host in Endpoint URL, can't be found from this machine. "
-                f"Check Endpoint URL {ON_CARD}, and that this machine is online.",
-                "transient",
-            ),
-            (
-                _blocked(
-                    "metadata",
-                    "host 's3.example.com' resolves to a cloud metadata / link-local address",
-                ),
-                "s3.example.com, the host in Endpoint URL, points at a cloud metadata or "
-                "link-local address, which PersonalClaw never lets anything reach. Check "
-                f"Endpoint URL {ON_CARD}, and that host's DNS record.",
-                "permanent",
-            ),
-            (
-                _blocked(
-                    "not_listed",
-                    "host 'mybucket.s3.example.com' is not on the 'sync' egress allow-list "
-                    "(1 host(s) allowed)",
-                ),
-                f"The store at {STORE} sent S3 Sync on to a different host, and a sync "
-                "transport only reaches the host in its Endpoint URL. Set Endpoint URL "
-                f"{ON_CARD} to the address the store redirects to.",
-                "permanent",
-            ),
-            (
-                _blocked("", "too many redirects (> 3)"),
-                "PersonalClaw's network egress rules stopped a request S3 Sync made to "
-                f"{STORE}, or to where the store redirected it. Check that Endpoint URL "
-                f"{ON_CARD} is the store's own address, and Network egress in Settings → Security.",
-                "permanent",
-            ),
-            (
-                # The same trouble found by the HTTP client's own lookup rather than the guard's.
-                _Unreachable(socket.gaierror(8, "nodename nor servname provided, or not known")),
-                "s3.example.com, the host in Endpoint URL, can't be found from this machine. "
-                f"Check Endpoint URL {ON_CARD}, and that this machine is online.",
-                "transient",
-            ),
-            (
-                TimeoutError(),
-                f"The store at {STORE} didn't answer in time. Check that it is reachable from "
-                f"this machine, and that Endpoint URL {ON_CARD} is right.",
-                "transient",
-            ),
-            (
-                _CertificateRefused(
-                    ssl.SSLCertVerificationError(
-                        1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
-                    )
-                ),
-                f"S3 Sync couldn't make a secure connection to {STORE}: the TLS handshake "
-                "failed, or this machine doesn't trust the store's certificate. Check that "
-                f"Endpoint URL {ON_CARD} is right, and that the store's certificate is valid for "
-                "that host.",
-                "transient",
-            ),
-            (
-                OSError("connection reset"),
-                f"S3 Sync's request to the store at {STORE} didn't complete. Check that the "
-                f"store is running and reachable from this machine, and the settings {ON_CARD}.",
-                "transient",
-            ),
-        ],
-    )
+    @pytest.mark.parametrize(("exc", "says", "outcome"), _RAISED)
     def test_a_request_that_raises_says_why_and_what_to_do(self, monkeypatch, exc, says, outcome):
         monkeypatch.setattr(provider_mod.S3SyncProvider, "_request", _raising(exc))
         p = self._provider()
@@ -1217,6 +1429,104 @@ class TestWhatAFailureSays:
 
         assert res.ok is False
         assert res.detail == f"{says(stub.endpoint)} Details: HTTP {status} {words}"
+
+    @pytest.mark.parametrize(("exc", "says", "outcome"), _RAISED)
+    def test_a_listing_a_read_or_a_swap_whose_request_raises_says_the_same(
+        self, monkeypatch, exc, says, outcome
+    ):
+        """Each answered as if the store had nothing to say: a listing as an empty bucket, a
+        read as an object the store no longer had, a registry swap as one another machine won.
+        Now each raises what a push says, and that the cycle retries when a push would be."""
+        monkeypatch.setattr(provider_mod.S3SyncProvider, "_request", _raising(exc))
+        p = self._provider()
+        retries = f" {RETRIES}" if outcome == "transient" else ""
+        words = " ".join(str(exc).split())
+        details = f" Details: {words}" if words else ""
+
+        for call in (
+            p.list_remote,
+            lambda: p.pull([RemoteRef(key="registry.json")]),
+            lambda: p.cas_registry(None, b"{}"),
+            lambda: p.cas_registry(hashlib.sha256(b"{}").hexdigest(), b"{}"),
+        ):
+            with pytest.raises(RuntimeError) as caught:
+                call()
+            assert str(caught.value) == f"{says}{retries}{details}"
+            assert caught.value.__cause__ is exc
+
+    @pytest.mark.parametrize(
+        ("status", "body", "says", "words"),
+        _READ_REFUSALS,
+        ids=["access-denied", "wrong-secret", "no-such-bucket", "redirect", "slow-down",
+             "internal-error"],
+    )
+    def test_a_read_the_store_refuses_says_why_and_what_to_do(
+        self, stub, live, status, body, says, words
+    ):
+        """Driven through the real guard and HTTP client, against a store that answers the read
+        of the registry with the refusal."""
+        stub.answers[("GET", "personalclaw/registry.json")] = (status, body)
+
+        with pytest.raises(RuntimeError) as caught:
+            live.pull([RemoteRef(key="registry.json")])
+
+        assert str(caught.value) == f"{says(stub.endpoint)} Details: HTTP {status} {words}"
+
+    @pytest.mark.parametrize(
+        ("status", "body", "says", "words"),
+        _PROBE_REFUSALS,
+        ids=[
+            "unknown-key-id", "wrong-secret", "access-denied", "clock-skew", "wrong-region",
+            "no-such-bucket", "not-found-page", "redirect", "slow-down", "internal-error",
+            "no-list-v2", "method-not-allowed",
+        ],
+    )
+    def test_a_listing_the_store_refuses_says_what_the_connection_test_does(
+        self, stub, live, status, body, says, words
+    ):
+        """The connection test IS a listing, so every listing says what the test does — and, as
+        a push would, that the cycle retries a refusal the store may lift by itself."""
+        stub.list_answer = (status, body)
+
+        with pytest.raises(RuntimeError) as caught:
+            live.list_remote()
+
+        retries = f" {RETRIES}" if status in (500, 503) else ""
+        assert str(caught.value) == (
+            f"{says(stub.endpoint)}{retries} Details: HTTP {status} {words}"
+        )
+
+    def test_a_listing_is_empty_only_when_the_bucket_has_nothing_in_it(self, stub, live):
+        """A fresh bucket lists as empty. An answer that isn't an S3 listing did too, and one
+        that said it went on without saying where listed only what came before the cut."""
+        assert live.list_remote() == []
+        not_a_listing = (
+            f"The store at {stub.endpoint} answered S3 Sync's listing of bucket mybucket with "
+            f"something that isn't an S3 listing. Check that Endpoint URL {ON_CARD} is the "
+            "address of the store's S3 API. Details: HTTP 200"
+        )
+        cut_short = (
+            b'<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+            b"<IsTruncated>true</IsTruncated><Contents><Key>personalclaw/a</Key><Size>1</Size>"
+            b"</Contents></ListBucketResult>"
+        )
+
+        for body, says in (
+            (b"<html><body>Welcome to the proxy</body></html>",
+             f"{not_a_listing} Welcome to the proxy"),
+            (b"not a listing at all", f"{not_a_listing} not a listing at all"),
+            (
+                cut_short,
+                f"The store at {stub.endpoint} said its listing of bucket mybucket goes on, but "
+                "not where it continues, so S3 Sync can't read the rest. Use a store, or a "
+                "version of it, that supports ListObjectsV2. Details: HTTP 200, IsTruncated true "
+                "with no NextContinuationToken",
+            ),
+        ):
+            stub.list_answer = (200, body)
+            with pytest.raises(RuntimeError) as caught:
+                live.list_remote()
+            assert str(caught.value) == says
 
     def test_a_store_that_is_not_running_says_so_and_that_it_retries(self):
         """Driven through the real guard and HTTP client, at a loopback port nothing listens
@@ -1318,7 +1628,16 @@ class TestCredentials:
         with caplog.at_level(logging.DEBUG):
             surfaces.append(p.push([SyncObject(key="k", data=b"v")]).detail)
             surfaces.append(p.test().detail)
-            surfaces.append(str(p.cas_registry(None, b"{}")))
+            # A listing, a read and the registry swap raise what failed, so their text is a
+            # surface too.
+            for read in (
+                p.list_remote,
+                lambda: p.pull([RemoteRef(key="k")]),
+                lambda: p.cas_registry(None, b"{}"),
+            ):
+                with pytest.raises(RuntimeError) as caught:
+                    read()
+                surfaces.append(str(caught.value))
         surfaces.extend(r.getMessage() for r in caplog.records)
         # VACUITY FLOOR: if every surface were empty the assertion below is meaningless.
         assert any(s for s in surfaces), "no surface was captured — the scan proved nothing"
@@ -1625,6 +1944,53 @@ class TestCriterion8EncryptedStore:
         assert "never encrypted" not in " ".join(
             p.read_text(errors="replace") for p in home_b.rglob("*.json") if p.is_file()
         )
+
+
+class TestTheSyncCycleSaysWhatFailed:
+    """Driven through core's real sync cycle, over real HTTP through the real guard, with
+    encryption on as it is by default. A registry read the store refused dropped the registry,
+    and a swap it refused read as a race: the cycle published as the first machine, then
+    reported "registry CAS lost after 5 attempts" — with no error, and ok."""
+
+    def test_a_registry_read_the_store_refuses(self, isolated_home, stub, live, monkeypatch):
+        stub.store["personalclaw/registry.json"] = b"{}"
+        stub.answers[("GET", "personalclaw/registry.json")] = (
+            403,
+            _s3_error("AccessDenied", "Access Denied"),
+        )
+
+        report = _run_cycle(live, isolated_home, monkeypatch, encrypt="on")
+
+        assert report.ok is False
+        assert report.error == "pull: " + sentence_with_detail(
+            f"The store at {stub.endpoint} refused S3 Sync's read of personalclaw/registry.json "
+            f"in bucket mybucket. Check Access key ID and Secret access key {ON_CARD}, and that "
+            "the key's policy lets it read objects in that bucket.",
+            "HTTP 403 AccessDenied — Access Denied",
+        )
+        assert "CAS lost" not in repr(report)
+        assert report.pushed is None, "the cycle pushed on after a read it couldn't make"
+
+    def test_a_store_without_conditional_writes(self, isolated_home, stub, live, monkeypatch):
+        _seed_task(isolated_home, "task-a", "a row")
+        stub.answers[("PUT", "personalclaw/registry.json")] = (
+            501,
+            _s3_error("NotImplemented", "A header you provided implies functionality that is not "
+                      "implemented"),
+        )
+
+        report = _run_cycle(live, isolated_home, monkeypatch, encrypt="on")
+
+        assert report.ok is False
+        assert report.error == "push: " + sentence_with_detail(
+            f"The store at {stub.endpoint} doesn't support conditional writes (If-None-Match), "
+            "which S3 Sync relies on to never overwrite an object. Use a store, or a version of "
+            "it, that supports them.",
+            "HTTP 501 NotImplemented — A header you provided implies functionality that is not "
+            "implemented",
+        )
+        assert "CAS lost" not in repr(report)
+        assert "personalclaw/registry.json" not in stub.store
 
 
 def test_no_secret_material_in_the_module_source():
