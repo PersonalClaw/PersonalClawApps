@@ -2533,15 +2533,17 @@ async def handle_message(
                 status_ctrl.resume_stall_watchdog()
                 if ended != _OUTCOME_APPROVED:
                     # The thread says why the call did not run, streamed or not: an expired
-                    # prompt is gone by now, and nobody pressed anything to know it ended.
+                    # prompt is gone by now, and nobody pressed anything to know it ended. The
+                    # line is part of the reply, which the turn's final text replaces the live
+                    # stream with, so the reply keeps saying it once the turn has ended.
+                    unrun = f"\n{_UNRUN_LINES[ended]}"
+                    accumulated += unrun
                     if use_slack_stream:
                         if _active_task_id:
                             assert stream_ts is not None
                             await _append_task(_active_task_id, _active_task_title, "error")
                             _active_task_id = ""
-                        await _append_stream(f"\n{_UNRUN_LINES[ended]}")
-                    else:
-                        accumulated += f"\n{_UNRUN_LINES[ended]}"
+                        await _append_stream(unrun)
                     break
 
             elif event.kind == EVENT_COMPLETE:

@@ -232,3 +232,53 @@ async def test_a_press_after_the_prompt_expired_is_told_so_and_changes_nothing(m
     told = [a[1]["text"] for a in slack.actions if a[0] == "ephemeral"]
     assert told == [f"{EXPIRED_LINE}. This press changes nothing."]
     assert provider.approved == [], "a press after the end approved the call"
+
+
+def _final_reply(slack: MockSlackClient) -> str:
+    """What the turn's reply says once the turn has ended: the last text its own message was
+    given, streamed or edited. What the live stream showed on the way is not what stays."""
+    started = [a[1]["ts"] for a in slack.actions if a[0] == "start_stream"]
+    posted = [a[1]["ts"] for a in slack.actions if a[0] == "post" and a[1]["text"] == H._THINKING]
+    (reply_ts,) = started or posted[:1]
+    given = [
+        a[1]["text"]
+        for a in slack.actions
+        if a[0] in ("stop_stream", "update") and a[1]["ts"] == reply_ts and a[1].get("text")
+    ]
+    assert given, "the reply was never finished"
+    return given[-1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streamed", [False, True], ids=["edited", "streamed"])
+@pytest.mark.parametrize(
+    ("press", "line"),
+    [(None, EXPIRED_LINE), ("reject_tool", "Tool use rejected")],
+    ids=["nobody-answered", "rejected"],
+)
+async def test_the_reply_keeps_why_the_call_did_not_run(monkeypatch, streamed, press, line):
+    """🔴 Red before, streamed: the line went to the live stream alone, and the reply's final text
+    replaced it with "No response.", so the thread never said the call did not run."""
+    _window(monkeypatch, 60.0 if press else 0.2)
+    slack = MockSlackClient()
+    slack._stream_enabled = streamed
+    provider = _AsksOnce()
+
+    async def answer() -> None:
+        if press is None:
+            return
+        for _ in range(300):
+            prompts = _prompts(slack)
+            if prompts and H._pending_approvals:
+                await H.handle_interaction(DM, prompts[-1], press, user_id=OWNER)
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError("the prompt was never posted")
+
+    with patch("slack_runtime.handler.sel"):
+        await asyncio.gather(_turn(slack, provider), answer())
+
+    reply = _final_reply(slack)
+    assert line in reply, reply
+    assert "No response" not in reply
+    assert provider.approved == [], "the call ran"
