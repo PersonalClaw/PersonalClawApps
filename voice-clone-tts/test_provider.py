@@ -133,6 +133,89 @@ class TestEnginePath:
         assert await create_provider().is_available() is True
 
 
+# ── weights, and what the engine fetches by itself, stay in the home ───────────────────────
+
+
+def _fake_hub(monkeypatch) -> list[dict]:
+    """``huggingface_hub`` as far as a weights download reaches it: ``snapshot_download``
+    records what it was handed and makes the folder it was told to fill."""
+    import sys
+    import types
+
+    calls: list[dict] = []
+
+    def snapshot_download(*, repo_id, local_dir, **kwargs):
+        calls.append({"repo_id": repo_id, "local_dir": local_dir, **kwargs})
+        Path(local_dir).mkdir(parents=True, exist_ok=True)
+        return local_dir
+
+    hub = types.ModuleType("huggingface_hub")
+    hub.snapshot_download = snapshot_download
+    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_a_weights_download_goes_to_the_home_and_never_reads_the_cli_token(monkeypatch):
+    """With no token PersonalClaw resolves, the fetch is told to use none (``False``). It used to
+    pass no token at all, and then huggingface_hub looks for one itself: its lookup opens
+    ``huggingface-cli login``'s token file, outside the home, without asking the owner."""
+    from personalclaw.sdk.util import config_dir
+
+    monkeypatch.setattr(prov, "resolve_token", lambda: "")
+    calls = _fake_hub(monkeypatch)
+
+    assert await create_provider().download_voice("omnivoice-zeroshot") is True
+
+    [call] = calls
+    assert call["repo_id"] == "k2-fsa/OmniVoice" and call["token"] is False
+    assert Path(call["local_dir"]).resolve().is_relative_to(config_dir().resolve())
+
+
+@pytest.mark.asyncio
+async def test_a_weights_download_uses_the_token_personalclaw_resolves(monkeypatch):
+    monkeypatch.setattr(prov, "resolve_token", lambda: "hf_from_the_cascade")
+    calls = _fake_hub(monkeypatch)
+    assert await create_provider().download_voice("omnivoice-zeroshot") is True
+    assert [c["token"] for c in calls] == ["hf_from_the_cascade"]
+
+
+def test_the_engine_process_uses_a_hugging_face_folder_in_the_home(monkeypatch):
+    """The engine fetches a part it needs from the hub by itself (OmniVoice's audio tokenizer,
+    when the weights folder lacks one), and no ``token=`` reaches that fetch. Its process is
+    started with a Hugging Face folder in the home, so that fetch finds no token file outside
+    the home and writes nothing there. It used to inherit the folder other tools share."""
+    from personalclaw.sdk import sidecar as sdk_sidecar
+    from personalclaw.sdk.util import config_dir
+
+    made: list[dict] = []
+
+    class _Runner:
+        def __init__(self, **kwargs):
+            made.append(kwargs)
+
+    monkeypatch.setattr(sdk_sidecar, "SidecarRunner", _Runner)
+    monkeypatch.setattr(sdk_sidecar, "register_runner", lambda runner: None)
+
+    prov._make_runner()
+
+    [kwargs] = made
+    assert kwargs["app"] == "voice-clone-tts"
+    hf_home = Path(kwargs["env_extra"]["HF_HOME"]).resolve()
+    assert hf_home.is_relative_to(config_dir().resolve())
+
+
+def test_the_engine_folder_is_not_refused_by_the_child_environment_floor(monkeypatch):
+    """A child's environment is an allowlist with the starter's own values on top, and the floor
+    refuses credential-shaped names among those. ``HF_HOME`` is not one, so the engine's process
+    gets the folder set here, over whatever the gateway's own environment holds."""
+    from personalclaw.sdk.util import child_process_env
+
+    monkeypatch.setenv("HF_HOME", "/elsewhere/huggingface")
+    env = child_process_env(extra=prov._engine_env())
+    assert env["HF_HOME"] == prov._engine_env()["HF_HOME"] != "/elsewhere/huggingface"
+
+
 def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
     """A synthesis names its voice (the text-to-speech binding's model). One that names none is
     refused with the SDK's sentence before the engine loads, and can_synthesize says it cannot

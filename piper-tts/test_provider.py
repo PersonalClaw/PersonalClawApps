@@ -315,6 +315,61 @@ class TestPiperProvider:
         assert await PiperTtsProvider().synthesize("hi", voice="") is None
 
 
+# ── voice downloads: into the home, and never with huggingface_hub's own token lookup ──────
+
+
+def _fake_hub(monkeypatch) -> list[dict]:
+    """``huggingface_hub`` as far as a voice download reaches it: ``hf_hub_download`` records
+    what it was handed and writes the file where it was told to."""
+    import types
+    from pathlib import Path
+
+    calls: list[dict] = []
+
+    def hf_hub_download(*, repo_id, filename, local_dir, **kwargs):
+        calls.append({"repo_id": repo_id, "filename": filename, "local_dir": local_dir, **kwargs})
+        target = Path(local_dir) / filename
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"voice")
+        return str(target)
+
+    hub = types.ModuleType("huggingface_hub")
+    hub.hf_hub_download = hf_hub_download
+    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_a_voice_download_goes_to_the_home_and_never_reads_the_cli_token(monkeypatch):
+    """With no token PersonalClaw resolves, each fetch is told to use none (``False``). It used
+    to pass no token at all, and then huggingface_hub looks for one itself: its lookup opens
+    ``huggingface-cli login``'s token file, outside the home, without asking the owner."""
+    from pathlib import Path
+
+    from personalclaw.sdk.util import config_dir
+
+    monkeypatch.setattr(prov, "resolve_token", lambda: "")
+    calls = _fake_hub(monkeypatch)
+
+    assert await PiperTtsProvider().download_voice("en_US-lessac-medium") is True
+
+    assert [c["filename"].rsplit("/", 1)[-1] for c in calls] == [
+        "en_US-lessac-medium.onnx",
+        "en_US-lessac-medium.onnx.json",
+    ]
+    assert [c["token"] for c in calls] == [False, False]
+    home = config_dir().resolve()
+    assert all(Path(c["local_dir"]).resolve().is_relative_to(home) for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_a_voice_download_uses_the_token_personalclaw_resolves(monkeypatch):
+    monkeypatch.setattr(prov, "resolve_token", lambda: "hf_from_the_cascade")
+    calls = _fake_hub(monkeypatch)
+    assert await PiperTtsProvider().download_voice("en_US-lessac-medium") is True
+    assert [c["token"] for c in calls] == ["hf_from_the_cascade"] * 2
+
+
 def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
     """A synthesis names its voice (the text-to-speech binding's model). One that names none is
     refused with the SDK's sentence, and can_synthesize says it cannot speak for it. It used to

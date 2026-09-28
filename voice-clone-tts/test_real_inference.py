@@ -273,7 +273,7 @@ class TestResumableDownload:
         monkeypatch.setenv("PERSONALCLAW_HOME", str(tmp_path))
         attempts: list[str] = []
 
-        def fake_snapshot_download(*, repo_id, local_dir):
+        def fake_snapshot_download(*, repo_id, local_dir, token):
             target = Path(local_dir)
             target.mkdir(parents=True, exist_ok=True)
             attempts.append(repo_id)

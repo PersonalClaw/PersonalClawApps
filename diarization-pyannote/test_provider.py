@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 import provider as P
@@ -103,6 +105,114 @@ async def test_diarize_unwraps_pyannote_4x_output(tmp_path, monkeypatch):
     assert turns is not None and len(turns) == 2
     assert {t.speaker for t in turns} == {"SPEAKER_00", "SPEAKER_01"}
     assert turns[0].start == 0.0 and turns[1].end == 11.0
+
+
+# ── the pipeline lives in the home, not in the Hugging Face folder other tools share ──────
+
+
+def _shared_hub(tmp_path, monkeypatch) -> Path:
+    """The machine-wide Hugging Face folder's model cache: where huggingface_hub looks when it is
+    not told where to. The library reads that default once, at import, so it is set there too."""
+    from huggingface_hub import constants
+
+    shared = tmp_path / "hf" / "hub"
+    monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
+    monkeypatch.setattr(constants, "HF_HUB_CACHE", str(shared))
+    return shared
+
+
+def _seed_pipeline(cache: Path) -> None:
+    """What a finished download of the pipeline leaves in a Hugging Face cache folder."""
+    repo = cache / ("models--" + P._MODEL.replace("/", "--"))
+    (repo / "refs").mkdir(parents=True)
+    (repo / "refs" / "main").write_text("0" * 40)
+    snapshot = repo / "snapshots" / ("0" * 40)
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.yaml").write_text("pipeline: {}\n")
+
+
+def _files(root: Path) -> list[str]:
+    return sorted(p.relative_to(root).as_posix() for p in root.rglob("*")) if root.exists() else []
+
+
+@pytest.mark.asyncio
+async def test_a_pipeline_only_in_the_shared_folder_is_not_read(tmp_path, monkeypatch):
+    """The folder other tools share is outside the home, and this app used to read it to say
+    whether the pipeline was downloaded. It reads the home only now: a pipeline that is only
+    there reads as not downloaded, and downloads once more, into the home."""
+    shared = _shared_hub(tmp_path, monkeypatch)
+    _seed_pipeline(shared)
+    p = P.create_provider({"hf_token": "hf_test"})
+    assert p._cached() is False
+    assert (await p.list_models())[0].downloaded is False
+
+    _seed_pipeline(P._models_dir())
+    assert p._cached() is True, "the home's copy counts"
+    assert (await p.list_models())[0].downloaded is True
+
+
+@pytest.mark.asyncio
+async def test_the_pipeline_downloads_into_the_home(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    from personalclaw.sdk.util import config_dir
+
+    calls: list[dict] = []
+
+    def snapshot_download(repo_id, **kwargs):
+        calls.append({"repo_id": repo_id, **kwargs})
+
+    hub = types.ModuleType("huggingface_hub")
+    hub.snapshot_download = snapshot_download
+    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+
+    p = P.create_provider({"hf_token": "hf_test"})
+    assert await p.download_model(P._MODEL) is True
+    assert calls == [{"repo_id": P._MODEL, "token": "hf_test", "cache_dir": p.cache_dir()}]
+    assert Path(p.cache_dir()).resolve().is_relative_to(config_dir().resolve())
+
+
+@pytest.mark.asyncio
+async def test_the_pipeline_and_the_models_it_pulls_in_load_from_the_home(tmp_path, monkeypatch):
+    """pyannote.audio fetches the models the pipeline names when it loads, into the folder the
+    pipeline is loaded with. That folder is the home's."""
+    import sys
+    import types
+    from types import SimpleNamespace
+
+    loads: list[dict] = []
+
+    class _PipelineFactory:
+        @staticmethod
+        def from_pretrained(model, **kwargs):
+            loads.append({"model": model, **kwargs})
+            return lambda audio_path, **kw: SimpleNamespace(itertracks=lambda **_: iter(()))
+
+    fake_mod = types.ModuleType("pyannote.audio")
+    fake_mod.Pipeline = _PipelineFactory
+    monkeypatch.setitem(sys.modules, "pyannote.audio", fake_mod)
+
+    f = tmp_path / "a.wav"
+    f.write_bytes(b"\x00" * 32)
+    p = P.create_provider({"hf_token": "hf_test"})
+    assert await p.diarize(str(f), model=P._MODEL) == []
+    assert loads == [{"model": P._MODEL, "token": "hf_test", "cache_dir": p.cache_dir()}]
+
+
+@pytest.mark.asyncio
+async def test_delete_removes_the_home_copy_and_never_the_shared_one(tmp_path, monkeypatch):
+    shared = _shared_hub(tmp_path, monkeypatch)
+    _seed_pipeline(shared)
+    before = _files(shared)
+    p = P.create_provider({"hf_token": "hf_test"})
+    assert await p.delete_model(P._MODEL) is False, "nothing in the home to delete"
+
+    _seed_pipeline(P._models_dir())
+    assert await p.delete_model(P._MODEL) is True
+    assert not P._models_dir().exists()
+    assert p._cached() is False
+    assert _files(shared) == before
 
 
 def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():

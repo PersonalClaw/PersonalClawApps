@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
 from personalclaw.sdk.credentials import resolve_token
@@ -21,10 +22,21 @@ from personalclaw.sdk.diarization import (
     ensure_ffmpeg_in_path,
 )
 from personalclaw.sdk.model import ProviderResolutionError, require_model
+from personalclaw.sdk.util import config_dir
 
 logger = logging.getLogger(__name__)
 
 _MODEL = "pyannote/speaker-diarization-3.1"
+
+
+def _models_dir() -> Path:
+    """Where the pipeline, and the models it pulls in, are downloaded to and read from: the
+    PersonalClaw home (``config_dir()``), so an isolated home is actually isolated.
+
+    Earlier releases used the Hugging Face folder other tools share. It is outside the home, so
+    it is neither read nor written any more: an install that has the pipeline only there
+    downloads it once more, into the home."""
+    return config_dir() / "models" / "diarization-pyannote"
 
 
 def create_provider(config: dict[str, Any] | None = None) -> "PyannoteDiarizationProvider":
@@ -77,6 +89,11 @@ class PyannoteDiarizationProvider(DiarizationProvider, LocalModelProvider):
         ok, _ = availability()
         return ok
 
+    def cache_dir(self) -> str:
+        """Where downloaded weights land — the core download UI reads this for byte
+        progress, and core's delete sweeps it."""
+        return str(_models_dir())
+
     async def list_models(self) -> list[DiarizationModel]:
         has_token = bool(self._hf_token())
         return [DiarizationModel(
@@ -91,7 +108,7 @@ class PyannoteDiarizationProvider(DiarizationProvider, LocalModelProvider):
     def _cached(self) -> bool:
         try:
             from huggingface_hub import try_to_load_from_cache
-            hit = try_to_load_from_cache(_MODEL, "config.yaml")
+            hit = try_to_load_from_cache(_MODEL, "config.yaml", cache_dir=str(_models_dir()))
             return isinstance(hit, str)
         except Exception:
             return False
@@ -104,7 +121,7 @@ class PyannoteDiarizationProvider(DiarizationProvider, LocalModelProvider):
         def _run() -> bool:
             try:
                 from huggingface_hub import snapshot_download
-                snapshot_download(_MODEL, token=token)
+                snapshot_download(_MODEL, token=token, cache_dir=str(_models_dir()))
                 return True
             except Exception:
                 return False
@@ -112,7 +129,15 @@ class PyannoteDiarizationProvider(DiarizationProvider, LocalModelProvider):
         return await asyncio.get_running_loop().run_in_executor(None, _run)
 
     async def delete_model(self, model_name: str) -> bool:
-        return False  # HF cache managed by huggingface_hub; no app-owned dir to prune
+        """Remove the pipeline and the models it pulled in from the home. Nothing outside the
+        home is deleted."""
+        import shutil
+
+        root = _models_dir()
+        if not root.is_dir():
+            return False
+        shutil.rmtree(root, ignore_errors=True)
+        return True
 
     async def diarize(self, audio_path: str, *, model: str = "", num_speakers: int | None = None,
                       min_speakers: int | None = None, max_speakers: int | None = None):
@@ -136,10 +161,13 @@ class PyannoteDiarizationProvider(DiarizationProvider, LocalModelProvider):
                 # try the current name, fall back for older installs. (Passing the wrong
                 # kwarg raises TypeError → the whole diarize silently returned None → 0
                 # turns; that was invisible until we logged the exception below.)
+                cache = str(_models_dir())
                 try:
-                    pipeline = Pipeline.from_pretrained(_MODEL, token=token)
+                    pipeline = Pipeline.from_pretrained(_MODEL, token=token, cache_dir=cache)
                 except TypeError:
-                    pipeline = Pipeline.from_pretrained(_MODEL, use_auth_token=token)
+                    pipeline = Pipeline.from_pretrained(
+                        _MODEL, use_auth_token=token, cache_dir=cache
+                    )
                 if pipeline is None:
                     logger.warning("pyannote from_pretrained returned None — accept the "
                                    "%s license on HuggingFace with this token.", _MODEL)

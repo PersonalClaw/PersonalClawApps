@@ -125,6 +125,90 @@ def test_delete_removes_both_layouts(tmp_path, monkeypatch):
     assert prov.is_model_downloaded("all-MiniLM-L6-v2") is False
 
 
+# ── downloads: into the home, and never with the Hugging Face libraries' own token lookup ──
+
+
+def _fake_sentence_transformers(monkeypatch) -> list[dict]:
+    """``sentence_transformers`` as far as a fetch reaches it: each model records what it was
+    built with, and saving one writes a config where it was told to."""
+    import sys
+    import types
+    from pathlib import Path
+
+    built: list[dict] = []
+
+    class SentenceTransformerModelCardData:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class SentenceTransformer:
+        def __init__(self, name_or_path, **kwargs):
+            built.append({"name_or_path": name_or_path, **kwargs})
+
+        def save(self, path):
+            Path(path).mkdir(parents=True, exist_ok=True)
+            (Path(path) / "config.json").write_text("{}")
+
+    module = types.ModuleType("sentence_transformers")
+    module.SentenceTransformer = SentenceTransformer
+    module.SentenceTransformerModelCardData = SentenceTransformerModelCardData
+    monkeypatch.setitem(sys.modules, "sentence_transformers", module)
+    monkeypatch.setattr(prov, "_pin_torch_single_thread", lambda: None)
+    monkeypatch.setattr(prov, "_loaded_model", None)
+    monkeypatch.setattr(prov, "_loaded_model_name", None)
+    return built
+
+
+def test_a_download_goes_to_the_home_and_never_reads_the_cli_token(monkeypatch):
+    """With no token PersonalClaw resolves, the fetch is told to use none (``False``). It used to
+    pass no token at all, and then the libraries look for one themselves: their lookup opens
+    ``huggingface-cli login``'s token file, outside the home, without asking the owner.
+
+    The model card is the lookup no ``token=`` reaches — it asks the hub about the base model as
+    the model loads and again as it is saved — so it is told to stay local."""
+    from pathlib import Path
+
+    from personalclaw.sdk.util import config_dir
+
+    monkeypatch.setattr(prov, "resolve_token", lambda: "")
+    built = _fake_sentence_transformers(monkeypatch)
+
+    saved = prov.download_model("all-MiniLM-L6-v2")
+
+    [fetch] = built
+    assert fetch["name_or_path"] == "sentence-transformers/all-MiniLM-L6-v2"
+    assert fetch["token"] is False
+    assert fetch["model_card_data"].kwargs == {"local_files_only": True}
+    home = config_dir().resolve()
+    assert Path(fetch["cache_folder"]).resolve().is_relative_to(home)
+    assert saved.resolve().is_relative_to(home)
+    assert prov.is_model_downloaded("all-MiniLM-L6-v2")
+
+
+def test_a_first_use_fetch_uses_the_token_personalclaw_resolves(monkeypatch):
+    monkeypatch.setattr(prov, "resolve_token", lambda: "hf_from_the_cascade")
+    built = _fake_sentence_transformers(monkeypatch)
+
+    prov.load_model("bge-small-en-v1.5")
+
+    [fetch] = built
+    assert fetch["name_or_path"] == "BAAI/bge-small-en-v1.5"
+    assert fetch["token"] == "hf_from_the_cascade"
+    assert fetch["model_card_data"].kwargs == {"local_files_only": True}
+
+
+def test_a_saved_model_loads_from_disk_and_never_asks_the_hub(monkeypatch):
+    monkeypatch.setattr(prov, "resolve_token", lambda: "")
+    built = _fake_sentence_transformers(monkeypatch)
+    saved = prov._models_dir() / "all-MiniLM-L6-v2"
+    saved.mkdir(parents=True)
+    (saved / "config.json").write_text("{}")
+
+    prov.load_model("all-MiniLM-L6-v2")
+
+    assert built == [{"name_or_path": str(saved), "local_files_only": True}]
+
+
 def test_an_embedding_that_names_no_model_is_refused_and_loads_nothing(monkeypatch):
     """Like chat, an embedding call names its model (the Embedding binding). Both calls used to
     load all-MiniLM-L6-v2 when handed none."""

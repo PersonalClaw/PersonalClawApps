@@ -41,7 +41,9 @@ Updating the app keeps this environment, so the engine stays installed. If an up
 engine the manifest declares, the card offers **Install engine** again, and pip brings the same
 environment up to it. **Remove engine** on the card deletes the environment, and removing the app
 deletes it too. The weights stay either way, because they live in `models/tts-clone/` under your
-PersonalClaw home.
+PersonalClaw home. What the engine fetches from Hugging Face by itself (its audio tokenizer, when
+the weights lack one) goes in `models/tts-clone/.huggingface`, never in the Hugging Face folder
+other tools share, and the engine reads no Hugging Face sign-in from outside the home.
 
 With no engine installed the app degrades quietly: `is_available()` is `False` and
 `synthesize()` returns `None` (it never raises), so the manifest and contract tests run

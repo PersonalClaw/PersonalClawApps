@@ -126,41 +126,9 @@ def test_kiro_factory_returns_none(monkeypatch, tmp_path):
 # ── persona discovery ────────────────────────────────────────────────────────
 
 
-def _stub_discovery_client(monkeypatch, session_new: dict):
-    """Stub AcpConnection spawn + handshake so discover_agents reads `session_new`
-    without launching a real process. Post-P9#7 discover_agents probes on a throwaway
-    AcpConnection (spawn → initialize → new_session → last_session_new_snapshot) — the
-    old AcpClient._spawn seam was removed in the cutover. Mirrors the public bundle
-    suite's stub in test_acp_bundles.py."""
-    from unittest.mock import AsyncMock, MagicMock
-
-    from personalclaw.acp import session as session_mod
-    from personalclaw.llm import acp_agent as acp_mod
-
-    fake_conn = MagicMock()
-    fake_conn.initialize = AsyncMock(return_value={})
-    fake_conn.new_session = AsyncMock(return_value=MagicMock())
-    fake_conn.last_session_new_snapshot = session_new
-    fake_conn.close = AsyncMock()
-
-    async def fake_spawn(**kwargs):  # AcpConnection.spawn(...) classmethod
-        return fake_conn
-
-    monkeypatch.setattr(session_mod.AcpConnection, "spawn", staticmethod(fake_spawn))
-    import shutil as _shutil
-    monkeypatch.setattr(_shutil, "which", lambda c: "/usr/bin/" + str(c))
-    from personalclaw.agents.provider import ReadinessStatus
-
-    async def fake_probe(cls, options):
-        return ReadinessStatus(ready=True, state="ready")
-
-    monkeypatch.setattr(acp_mod.AcpAgentProvider, "probe_readiness", classmethod(fake_probe))
-    return acp_mod
-
-
-@pytest.mark.asyncio
-async def test_discover_agents_kiro_personas(monkeypatch, tmp_path):
-    """kiro discovery → one DiscoveredAgent per availableMode, provider_agent set,
+def test_kiro_personas_come_from_the_session_its_test_opened():
+    """kiro's personas are read from the ``session/new`` snapshot its Test recorded, without
+    starting anything: one DiscoveredAgent per availableMode, provider_agent set, and the
     runtime's models attached to each."""
     from personalclaw.llm.acp_agent import AcpAgentProvider
 
@@ -171,11 +139,9 @@ async def test_discover_agents_kiro_personas(monkeypatch, tmp_path):
         ]},
         "models": {"availableModels": [{"modelId": "auto"}, {"modelId": "glm-5"}]},
     }
-    _stub_discovery_client(monkeypatch, snew)
-    fake = _fake_on_path(monkeypatch, tmp_path, "kiro-cli")
-    agents = await AcpAgentProvider.discover_agents({
-        "command": [str(fake), "acp"], "dialect": "default", "runtime_id": "acp:kiro-cli",
-    })
+    agents = AcpAgentProvider.agents_from_snapshot(
+        {"dialect": "default", "runtime_id": "acp:kiro-cli"}, snew
+    )
     assert [a.id for a in agents] == ["acp:kiro-cli/coder", "acp:kiro-cli/planner"]
     assert agents[0].name == "coder"
     assert agents[0].provider_agent == "coder"

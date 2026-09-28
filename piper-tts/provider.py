@@ -25,9 +25,10 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from personalclaw.sdk.credentials import resolve_token
 from personalclaw.sdk.model import ProviderResolutionError, require_model
 from personalclaw.sdk.tts import LocalTtsProvider, TtsVoice
-from personalclaw.sdk.util import app_packages_env, child_process_env, sandbox_wrap_argv
+from personalclaw.sdk.util import app_packages_env, child_process_env, config_dir, sandbox_wrap_argv
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +46,23 @@ PIPER_VOICES = [
 
 
 def _voices_dir() -> Path:
-    home = os.environ.get("PERSONALCLAW_HOME", str(Path.home() / ".personalclaw"))
-    d = Path(home) / "models" / "tts"
+    """Where voices are downloaded to: the PersonalClaw home (``config_dir()``), so an isolated
+    home is actually isolated."""
+    d = config_dir() / "models" / "tts"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def _hub_token() -> str | bool:
+    """How a voice download authenticates: the token PersonalClaw resolves, or none at all.
+
+    ``False`` rather than ``None``: with ``None`` huggingface_hub looks for a token itself — the
+    environment, then ``huggingface-cli login``'s token file in the Hugging Face folder other
+    tools share. That file is outside the home, and PersonalClaw reads it only when the owner
+    allows that folder (Settings → Security → Outside PersonalClaw's home); the library's own
+    lookup reads it without asking.
+    """
+    return resolve_token() or False
 
 
 def _is_voice_downloaded(voice_name: str) -> bool:
@@ -238,11 +252,14 @@ class PiperTtsProvider(LocalTtsProvider):
                 lang_short = locale.split("_")[0]
                 repo_id = "rhasspy/piper-voices"
                 subdir = f"{lang_short}/{locale}/{voice}/{quality}"
+                token = _hub_token()
                 try:
                     hf_hub_download(repo_id=repo_id, filename=f"{subdir}/{voice_name}.onnx",
-                                    local_dir=str(voice_dir), local_dir_use_symlinks=False)
+                                    local_dir=str(voice_dir), local_dir_use_symlinks=False,
+                                    token=token)
                     hf_hub_download(repo_id=repo_id, filename=f"{subdir}/{voice_name}.onnx.json",
-                                    local_dir=str(voice_dir), local_dir_use_symlinks=False)
+                                    local_dir=str(voice_dir), local_dir_use_symlinks=False,
+                                    token=token)
                     return True
                 except Exception as e:
                     logger.warning("Failed to download piper voice %s: %s", voice_name, e)

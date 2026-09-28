@@ -34,6 +34,12 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 Requires a HuggingFace token and acceptance of the pyannote model license on huggingface.co before the model can be downloaded.
 
+The pipeline, and the models it pulls in when it first runs, download into the PersonalClaw home
+(`models/diarization-pyannote`), and **Delete** in **Settings → Models** removes them from there.
+Earlier releases kept them in the Hugging Face folder other tools share (`$HF_HOME`, or
+`~/.cache/huggingface`). That folder is not read any more, so a pipeline that is only there
+downloads once more, into the home.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

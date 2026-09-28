@@ -41,8 +41,10 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from personalclaw.sdk.credentials import resolve_token
 from personalclaw.sdk.model import ProviderResolutionError, require_model
 from personalclaw.sdk.tts import LocalTtsProvider, TtsVoice
+from personalclaw.sdk.util import config_dir
 
 logger = logging.getLogger(__name__)
 
@@ -61,11 +63,34 @@ def _catalog_path() -> Path:
 
 
 def _weights_dir() -> Path:
-    """Where the cloning engine's downloaded weights live (per-user, outside the bundle)."""
-    home = os.environ.get("PERSONALCLAW_HOME", str(Path.home() / ".personalclaw"))
-    d = Path(home) / "models" / "tts-clone"
+    """Where the cloning engine's downloaded weights live: the PersonalClaw home
+    (``config_dir()``), so an isolated home is actually isolated."""
+    d = config_dir() / "models" / "tts-clone"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def _hub_token() -> str | bool:
+    """How a weights download authenticates: the token PersonalClaw resolves, or none at all.
+
+    ``False`` rather than ``None``: with ``None`` huggingface_hub looks for a token itself — the
+    environment, then ``huggingface-cli login``'s token file in the Hugging Face folder other
+    tools share. That file is outside the home, and PersonalClaw reads it only when the owner
+    allows that folder (Settings → Security → Outside PersonalClaw's home); the library's own
+    lookup reads it without asking.
+    """
+    return resolve_token() or False
+
+
+def _engine_env() -> dict[str, str]:
+    """What the engine's own process is told about Hugging Face: use a folder in the home.
+
+    The engine fetches a part it needs from the hub by itself when the weights folder lacks it
+    (OmniVoice's audio tokenizer), and no ``token=`` reaches that fetch. Left alone it would read
+    the token file in the Hugging Face folder other tools share and download into that folder,
+    both outside the home. Pointed here, it finds no token file and writes only in the home.
+    """
+    return {"HF_HOME": str(_weights_dir() / ".huggingface")}
 
 
 def _engine_venv() -> Path | None:
@@ -145,7 +170,7 @@ def _make_runner() -> Any:
             "upgrade PersonalClaw to run cloning synthesis"
         )
         return None
-    runner = SidecarRunner(app="voice-clone-tts", worker=_worker_path())
+    runner = SidecarRunner(app="voice-clone-tts", worker=_worker_path(), env_extra=_engine_env())
     register_runner(runner)
     return runner
 
@@ -244,7 +269,7 @@ class VoiceCloneTtsProvider(LocalTtsProvider):
             return False
         target = _weights_dir() / voice_name
         try:
-            snapshot_download(repo_id=source, local_dir=str(target))
+            snapshot_download(repo_id=source, local_dir=str(target), token=_hub_token())
         except Exception:  # noqa: BLE001 — partial files stay for the resume; never crashes the app
             logger.exception(
                 "voice-clone-tts: download interrupted for %r — partial files kept, "

@@ -23,9 +23,11 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
+from personalclaw.sdk.credentials import resolve_token
 from personalclaw.sdk.embedding import EmbeddingModel, EmbeddingProvider
 from personalclaw.sdk.local_model import LocalModelProvider
 from personalclaw.sdk.model import ProviderResolutionError, require_model
+from personalclaw.sdk.util import config_dir
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +78,39 @@ _loaded_model_name: str | None = None
 # ── Local model cache + lifecycle (the substrate that carried torch; now app-local) ──
 
 def _models_dir() -> Path:
-    home = os.environ.get("PERSONALCLAW_HOME", str(Path.home() / ".personalclaw"))
-    return Path(home) / "models"
+    """Where models are downloaded to: the PersonalClaw home (``config_dir()``), so an isolated
+    home is actually isolated."""
+    return config_dir() / "models"
+
+
+def _hub_token() -> str | bool:
+    """How a model download authenticates: the token PersonalClaw resolves, or none at all.
+
+    ``False`` rather than ``None``: with ``None`` the Hugging Face libraries look for a token
+    themselves — the environment, then ``huggingface-cli login``'s token file in the Hugging Face
+    folder other tools share. That file is outside the home, and PersonalClaw reads it only when
+    the owner allows that folder (Settings → Security → Outside PersonalClaw's home); the
+    libraries' own lookup reads it without asking.
+    """
+    return resolve_token() or False
+
+
+def _fetch(model_name: str, cache_dir: Path) -> object:
+    """A ``SentenceTransformer`` for *model_name*, downloaded into *cache_dir* if it is not there.
+
+    The token covers the download. The model card needs its own switch: left to itself it asks
+    the hub about the base model — once as the model loads, again when it is saved — through a
+    lookup no ``token=`` reaches, so it would read the token file anyway. Its ``local_files_only``
+    stops those two questions and nothing else; the files still download.
+    """
+    from sentence_transformers import SentenceTransformer, SentenceTransformerModelCardData
+
+    return SentenceTransformer(
+        _repo_of(model_name),
+        cache_folder=str(cache_dir),
+        token=_hub_token(),
+        model_card_data=SentenceTransformerModelCardData(local_files_only=True),
+    )
 
 
 def _hf_cache_dir(model_name: str) -> Path:
@@ -109,13 +142,11 @@ def download_model(model_name: str) -> Path:
     """Download a sentence-transformers model to the local cache. Returns its path."""
     if model_name not in AVAILABLE_MODELS:
         raise ValueError(f"Unknown model '{model_name}'. Available: {list(AVAILABLE_MODELS.keys())}")
-    from sentence_transformers import SentenceTransformer
-
     cache_dir = _models_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
     model_path = cache_dir / model_name.replace("/", "_")
     logger.info("Downloading embedding model '%s' (repo %s) to %s", model_name, _repo_of(model_name), model_path)
-    model = SentenceTransformer(_repo_of(model_name), cache_folder=str(cache_dir))
+    model = _fetch(model_name, cache_dir)
     model.save(str(model_path))
     logger.info("Model '%s' downloaded successfully", model_name)
     return model_path
@@ -131,11 +162,12 @@ def load_model(model_name: str) -> object:
 
     model_path = _models_dir() / model_name.replace("/", "_")
     if model_path.exists() and any(model_path.iterdir()):
-        _loaded_model = SentenceTransformer(str(model_path))
+        # On disk already: load it from disk, and never ask the hub about it.
+        _loaded_model = SentenceTransformer(str(model_path), local_files_only=True)
     else:
         cache_dir = _models_dir()
         cache_dir.mkdir(parents=True, exist_ok=True)
-        _loaded_model = SentenceTransformer(_repo_of(model_name), cache_folder=str(cache_dir))
+        _loaded_model = _fetch(model_name, cache_dir)
         _loaded_model.save(str(model_path))
     _loaded_model_name = model_name
     return _loaded_model
