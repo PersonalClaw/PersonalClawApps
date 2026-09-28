@@ -1,4 +1,4 @@
-"""The `web` tool provider — general web primitives over the Search entity."""
+"""The `web` tool provider — general web primitives over the bound search provider."""
 
 import json
 import logging
@@ -33,7 +33,7 @@ _NO_PROVIDER_HINT = (
 
 
 class WebToolProvider(ToolProvider):
-    """Native web tools that consume the Search entity: ``web_search`` (over the bound
+    """The web tools the agent searches and reads pages with: ``web_search`` (over the bound
     search provider), ``web_fetch`` (SSRF-guarded fetch + extraction), and
     ``web_extract`` (structured extraction)."""
 
@@ -43,7 +43,7 @@ class WebToolProvider(ToolProvider):
 
     @property
     def display_name(self) -> str:
-        return "PersonalClaw Web"
+        return "Web Tools"
 
     async def list_tools(self) -> list[ToolDefinition]:
         return [
