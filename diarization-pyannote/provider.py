@@ -143,11 +143,20 @@ class PyannoteDiarizationProvider(DiarizationProvider, LocalModelProvider):
                       min_speakers: int | None = None, max_speakers: int | None = None):
         # Like every media call, a diarization names its model (the diarization binding in
         # Settings → Models), and one that names none is refused before the pipeline is fetched.
-        # It used to fetch and run this app's one pipeline in its place.
+        # It used to fetch and run this app's one pipeline in its place. A model this app does
+        # not have is refused the same way, before the token is asked for: running its own
+        # pipeline instead answered for a model nobody chose, and a missing token is not the
+        # reason such a call cannot run.
         try:
             require_model(model)
         except ProviderResolutionError as exc:
             logger.warning("diarization-pyannote refused: %s", exc)
+            return None
+        if model != _MODEL:
+            logger.warning(
+                "diarization-pyannote refused: it has one model, %s, and this call named %r. "
+                "Choose %s for Diarization in Settings → Models.", _MODEL, model, _MODEL,
+            )
             return None
         ensure_ffmpeg_in_path()
         token = self._hf_token()

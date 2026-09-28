@@ -57,6 +57,7 @@ from personalclaw.sdk.model import (
     require_model,
 )
 from personalclaw.sdk.net import sentence_with_detail
+from personalclaw.sdk.tts import TtsProvider
 from personalclaw.sdk.video import (
     VideoGenError,
     VideoGenModel,
@@ -727,11 +728,15 @@ def _download_failed(status: int, text: str, *, key: str) -> str:
 # ── TTS Provider ─────────────────────────────────────────────────────────────
 
 
-class GeminiTTSProvider:
+class GeminiTTSProvider(TtsProvider):
     """Text-to-speech via the Gemini native generateContent API.
 
     Uses ``responseModalities: ["AUDIO"]`` with prebuilt voice config.
     Returns raw L16 audio (24 kHz, mono) decoded from base64 inline data.
+
+    A call is checked in the order that says why it cannot go: the model it names first, then
+    the key it would be sent with. A call that names no model is refused whatever the key, so
+    reporting a missing key first sent the user to fix the one thing that was not the reason.
     """
 
     def __init__(self, *, api_key: str = "", name: str = "google") -> None:
@@ -753,8 +758,13 @@ class GeminiTTSProvider:
     def _key(self) -> str:
         return self._api_key or os.environ.get("GEMINI_API_KEY", "")
 
-    def is_available(self) -> bool:
+    async def is_available(self) -> bool:
         return bool(self._key())
+
+    async def can_synthesize(self, voice: str = "") -> bool:
+        """Whether a call naming *voice* (the bound model) would be sent now: it names a model,
+        and there is a key to send it with."""
+        return bool(str(voice or "").strip()) and bool(self._key())
 
     async def synthesize(
         self,
@@ -773,11 +783,6 @@ class GeminiTTSProvider:
         import base64
         import tempfile
 
-        key = self._key()
-        if not key:
-            logger.warning("GeminiTTS: no API key available.")
-            return None
-
         # ``voice`` carries the bound TTS model id, which may arrive as either a
         # bare id or the fully-qualified ``models/…`` name (split_ref keeps the
         # prefix). Strip it so the URL isn't doubled (``models/models/…`` → 404).
@@ -787,6 +792,11 @@ class GeminiTTSProvider:
             model = require_model(voice).removeprefix("models/")
         except ProviderResolutionError as exc:
             logger.warning("GeminiTTS refused: %s", exc)
+            return None
+
+        key = self._key()
+        if not key:
+            logger.warning("GeminiTTS: no API key available.")
             return None
         url = f"{_NATIVE_BASE}models/{model}:generateContent?key={key}"
 

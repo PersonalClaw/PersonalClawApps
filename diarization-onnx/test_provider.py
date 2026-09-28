@@ -57,6 +57,28 @@ async def test_diarize_none_without_model(monkeypatch, tmp_path):
     assert await P.create_provider({}).diarize(str(f), model=P._MODEL) is None
 
 
+@pytest.mark.asyncio
+async def test_a_model_this_app_does_not_have_is_refused_before_anything_runs(
+    monkeypatch, tmp_path, caplog
+):
+    """A call naming another model is refused, saying which model this app has, and nothing
+    runs: the app used to run its one model in place of the one the call named."""
+    import logging
+
+    ran: list[str] = []
+    monkeypatch.setattr(P, "ensure_ffmpeg_in_path", lambda: ran.append("ffmpeg"))
+    monkeypatch.setattr(P, "_downloaded", lambda: ran.append("weights") or False)
+    f = tmp_path / "a.wav"; f.write_bytes(b"\x00" * 32)
+    with caplog.at_level(logging.WARNING):
+        result = await P.create_provider({}).diarize(str(f), model="fake-other-diarizer")
+    assert result is None
+    assert ran == []
+    assert "fake-other-diarizer" in caplog.text and P._MODEL in caplog.text
+    # The control: its own model gets past the same point.
+    await P.create_provider({}).diarize(str(f), model=P._MODEL)
+    assert ran[0] == "ffmpeg"
+
+
 def test_cache_dir_exposed():
     assert P.create_provider({}).cache_dir()  # for download byte-progress
 

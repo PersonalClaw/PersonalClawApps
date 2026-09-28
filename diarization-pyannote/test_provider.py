@@ -68,6 +68,40 @@ async def test_diarize_none_without_token(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_model_this_app_does_not_have_is_refused_before_the_pipeline(
+    monkeypatch, tmp_path, caplog
+):
+    """A call naming another model is refused, saying which model this app has, before the
+    token is read or a pipeline fetched: the app used to fetch and run its own one instead."""
+    import logging
+    import sys
+    import types
+
+    fetched: list[str] = []
+
+    class _PipelineFactory:
+        @staticmethod
+        def from_pretrained(model, **kwargs):
+            fetched.append(model)
+            return None
+
+    fake_mod = types.ModuleType("pyannote.audio")
+    fake_mod.Pipeline = _PipelineFactory
+    monkeypatch.setitem(sys.modules, "pyannote.audio", fake_mod)
+    monkeypatch.setattr(P, "ensure_ffmpeg_in_path", lambda: None)
+
+    f = tmp_path / "a.wav"; f.write_bytes(b"\x00" * 32)
+    provider = P.create_provider({"hf_token": "fake-hf-token"})
+    with caplog.at_level(logging.WARNING):
+        assert await provider.diarize(str(f), model="fake/other-diarizer") is None
+    assert fetched == []
+    assert "fake/other-diarizer" in caplog.text and P._MODEL in caplog.text
+    # The control: its own model is fetched.
+    assert await provider.diarize(str(f), model=P._MODEL) is None
+    assert fetched == [P._MODEL]
+
+
+@pytest.mark.asyncio
 async def test_diarize_unwraps_pyannote_4x_output(tmp_path, monkeypatch):
     """pyannote.audio 4.x returns a DiarizeOutput whose .speaker_diarization is the
     Annotation (with itertracks); 3.x returned that Annotation directly. The provider

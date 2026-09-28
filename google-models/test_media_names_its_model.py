@@ -63,6 +63,28 @@ def test_speech_that_names_no_model_is_refused(asked):
     assert asked == []
 
 
+def test_speech_says_it_named_no_model_before_it_says_it_has_no_key(asked, monkeypatch, caplog):
+    """A call that names no model is refused whatever the key, so that is its reason. With the
+    key checked first, an install missing both was told only about the key."""
+    import logging
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with caplog.at_level(logging.WARNING):
+        assert asyncio.run(prov.GeminiTTSProvider(api_key="").synthesize("hello")) is None
+    assert NO_MODEL in caplog.text
+    assert "no API key" not in caplog.text
+    assert asked == []
+
+
+def test_can_synthesize_answers_what_synthesize_would_do(monkeypatch):
+    """Core asks this before it synthesizes, so it names the same two conditions a call needs."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    keyed, keyless = prov.GeminiTTSProvider(api_key="k"), prov.GeminiTTSProvider(api_key="")
+    assert asyncio.run(keyed.can_synthesize("gemini-fake-tts")) is True
+    assert asyncio.run(keyed.can_synthesize("")) is False
+    assert asyncio.run(keyless.can_synthesize("gemini-fake-tts")) is False
+
+
 def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
     """The image, video and text-to-speech adapters an instance registers each refuse a call
     that names no model, with the SDK's sentence, before anything is sent. Gemini image editing
