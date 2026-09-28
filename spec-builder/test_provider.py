@@ -18,6 +18,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,9 @@ from specs import (
     slugify,
 )
 from workflow_spec import DEF_TAGS, NotReady, compile_spec, def_name
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the repo root: apps_testkit
+from apps_testkit.git_too_old import REFUSAL_START, put_old_git_on_path  # noqa: E402
 
 HERE = Path(__file__).parent
 needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
@@ -792,6 +796,44 @@ def test_missing_git_is_a_legible_failure(tmp_path: Path, monkeypatch: pytest.Mo
         store.read_source("src/router.py")
 
 
+def test_a_git_too_old_to_run_is_a_legible_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PersonalClaw's git refuses a git older than 2.12, which ignores some of the settings that
+    keep the source repository's own configuration from running a program: the store says so
+    where it says a missing git, with the version it needs and the one it found."""
+    ran = put_old_git_on_path(tmp_path, monkeypatch)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    store = SpecStore(tmp_path / "specs", source_repo=str(repo))
+
+    with pytest.raises(GitError) as caught:
+        store.read_source("src/router.py")
+
+    assert str(caught.value).startswith(REFUSAL_START), str(caught.value)
+    assert not ran.exists(), "a refused git never ran"
+
+
+@pytest.mark.asyncio
+async def test_seed_with_a_git_too_old_to_run_says_so_with_its_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    put_old_git_on_path(tmp_path, monkeypatch)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    prov = create_provider({"source_repo": str(repo)})
+    prov._store_impl = SpecStore(tmp_path / "specs", source_repo=str(repo))
+    await prov.invoke("spec_open", {"title": "One", "spec_id": "one"})
+
+    result = await prov.invoke("spec_seed", {"spec": "one", "path": "src/router.py"})
+
+    assert not result.success
+    assert result.error.startswith(REFUSAL_START), result.error
+    assert result.recovery_hints == [
+        "Install git 2.12 or newer — spec_seed reads the file through `git show`."
+    ]
+
+
 def test_a_hung_git_is_a_timeout_not_a_stall(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1268,6 +1310,17 @@ def test_doctor_warns_when_git_is_missing(tmp_path: Path, monkeypatch: pytest.Mo
     seeding = next(line for line in app_cli.doctor() if line.label == "seeding")
     assert seeding.status == "warn"
     assert "spec_seed" in seeding.detail
+
+
+def test_doctor_warns_when_git_is_too_old_to_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    put_old_git_on_path(tmp_path, monkeypatch)
+    seeding = next(line for line in app_cli.doctor() if line.label == "seeding")
+    assert seeding.status == "warn"
+    assert seeding.detail.startswith(REFUSAL_START), seeding.detail
+    assert seeding.detail.endswith("Until then spec_seed is unavailable.")
 
 
 def test_setup_names_the_seam_the_user_has_to_set(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -23,6 +23,7 @@ import logging
 import shutil
 from typing import Any
 
+from personalclaw.sdk.git import GitTooOld
 from personalclaw.sdk.security import fence_untrusted
 from personalclaw.sdk.tool import RiskLevel, ToolDefinition, ToolProvider, ToolResult
 
@@ -266,8 +267,12 @@ class NotesProvider(ToolProvider):
                 recovery_hints=["Call note_list to see what is in the notebook."],
             )
         except GitError as exc:
-            hints = ["Install git — the notebook is a git repository."] if str(exc) == GIT_MISSING \
-                else ["Check the notebook path in Settings, and that it is a git worktree."]
+            if str(exc) == GIT_MISSING:
+                hints = ["Install git — the notebook is a git repository."]
+            elif isinstance(exc.__cause__, GitTooOld):
+                hints = ["Install git 2.12 or newer — the notebook is a git repository."]
+            else:
+                hints = ["Check the notebook path in Settings, and that it is a git worktree."]
             return ToolResult(success=False, error=str(exc), recovery_hints=hints)
         except OSError as exc:
             # A notebook on a full disk, a read-only mount, a path the gateway user cannot

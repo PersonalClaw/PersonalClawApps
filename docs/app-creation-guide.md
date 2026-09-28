@@ -390,7 +390,11 @@ it runs from:
   `remote=talks_to_remote(args)`: the child allowlist, plus the owner's SSH agent for a command
   that talks to a remote. A command that talks to a remote signs in with the owner's own ssh
   command and credential helpers; a remote at a local path is refused. The same rail holds every
-  spawn of a `git` argv to `git_argv`.
+  spawn of a `git` argv to `git_argv`. A git older than 2.12 ignores some of those settings, so
+  `git_argv` raises `GitTooOld` for one, an `OSError` whose message names the version needed, the
+  one found and what to do: catch it where you catch a missing git, and show its message. In a
+  doctor or setup step, `git_problem()` is that message before anything runs (`""` when git can
+  run).
 
 `sidecarDependencies` is the engine of a provider declared `execution: "sidecar"`, and a
 manifest that lists it without one is refused. Nothing installs it with the app. The owner

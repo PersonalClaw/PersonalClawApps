@@ -30,6 +30,7 @@ import subprocess
 from typing import Any
 
 from personalclaw.sdk.git import (
+    GitTooOld,
     git_argv,
     git_env,
     remote_refusal,
@@ -557,6 +558,10 @@ class GitSyncProvider(SyncTransportProvider):
     def _cycle_stopped(self, failure: BaseException) -> str:
         """What a push cycle that git or the working clone stopped part-way says. Every such
         failure is a ``transient`` outcome the cycle retries, so each says so."""
+        if isinstance(failure, GitTooOld):
+            # PersonalClaw's git will not run a git this old, and says what it needs, what it
+            # found and what to do: that is the whole sentence.
+            return f"{failure} {_RETRIES}"
         words = _words(failure)
         low = words.lower()
         if _git_unrunnable(failure):
@@ -645,6 +650,8 @@ class GitSyncProvider(SyncTransportProvider):
     @staticmethod
     def _probe_stopped(failure: BaseException) -> str:
         """What a ``git ls-remote`` probe that could not run to completion says."""
+        if isinstance(failure, GitTooOld):
+            return str(failure)
         if _git_unrunnable(failure):
             sentence = _NO_GIT
         elif isinstance(failure, subprocess.TimeoutExpired):

@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,9 @@ from notebook import (
     parse_revision,
 )
 from provider import NotesProvider, create_provider
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the repo root: apps_testkit
+from apps_testkit.git_too_old import REFUSAL_START, put_old_git_on_path  # noqa: E402
 
 HERE = Path(__file__).parent
 needs_git = pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
@@ -472,6 +476,22 @@ def test_missing_git_is_reported_as_such(book: Notebook, monkeypatch: pytest.Mon
     assert str(caught.value) == GIT_MISSING
 
 
+def test_a_git_too_old_to_run_is_named_and_never_run(
+    book: Notebook, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PersonalClaw's git refuses a git older than 2.12, which ignores some of the settings that
+    keep the notebook's own configuration from running a program. The notebook says so where it
+    says a missing git: the version it needs, the one it found and what to do."""
+    ran = put_old_git_on_path(tmp_path, monkeypatch)
+
+    with pytest.raises(GitError) as caught:
+        book.write("tempo", "x")
+
+    assert str(caught.value).startswith(REFUSAL_START), str(caught.value)
+    assert "Install a newer git" in str(caught.value)
+    assert not ran.exists(), "a refused git never ran"
+
+
 def test_a_hung_git_becomes_an_error_not_a_wait(
     book: Notebook, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -669,6 +689,19 @@ async def test_missing_git_is_surfaced_with_a_hint(
 
 
 @pytest.mark.asyncio
+async def test_a_git_too_old_to_run_is_surfaced_with_its_hint(
+    provider: NotesProvider, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    put_old_git_on_path(tmp_path, monkeypatch)
+    result = await provider.invoke("note_write", {"ref": "tempo", "content": "x"})
+    assert result.success is False
+    assert result.error.startswith(REFUSAL_START), result.error
+    assert result.recovery_hints == [
+        "Install git 2.12 or newer — the notebook is a git repository."
+    ]
+
+
+@pytest.mark.asyncio
 async def test_an_unwritable_notebook_is_a_legible_error(tmp_path: Path) -> None:
     blocker = tmp_path / "not-a-folder"
     blocker.write_text("i am a file\n")
@@ -700,6 +733,28 @@ def test_doctor_fails_without_git(monkeypatch: pytest.MonkeyPatch) -> None:
     lines = app_cli.doctor()
     assert lines[0].status == "fail"
     assert "install git" in lines[0].detail.lower()
+
+
+def test_doctor_fails_with_a_git_too_old_to_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every notebook tool would fail with the same words, so the doctor fails with them."""
+    put_old_git_on_path(tmp_path, monkeypatch)
+    lines = app_cli.doctor()
+    assert [line.status for line in lines] == ["fail"]
+    assert lines[0].detail.startswith(REFUSAL_START), lines[0].detail
+
+
+def test_setup_names_a_git_too_old_to_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    put_old_git_on_path(tmp_path, monkeypatch)
+    said: list[str] = []
+
+    class Ctx:
+        def print(self, text: str) -> None:
+            said.append(text)
+
+    app_cli.setup(Ctx())
+    assert len(said) == 1 and said[0].startswith(f"Notes: {REFUSAL_START}"), said
 
 
 def test_setup_says_where_the_notebook_lives() -> None:

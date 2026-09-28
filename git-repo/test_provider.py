@@ -37,6 +37,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -53,6 +54,9 @@ from provider import (
 from personalclaw.knowledge.retrieval import HybridRetriever
 from personalclaw.knowledge.source_engine import SourceEngine
 from personalclaw.knowledge.store import KnowledgeStore
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the repo root: apps_testkit
+from apps_testkit.git_too_old import REFUSAL_START, put_old_git_on_path  # noqa: E402
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
 
@@ -170,6 +174,23 @@ async def test_source_and_doc_both_ingested_and_searchable(store, repo):
 
 
 # ── clause 2: a re-poll after one new commit adds EXACTLY ONE item (cursor-aware) ──
+
+
+@pytest.mark.asyncio
+async def test_a_poll_with_a_git_too_old_to_run_says_so_whole(repo, tmp_path, monkeypatch):
+    """PersonalClaw's git refuses a git older than 2.12, which ignores some of the settings that
+    keep the clone's own configuration from running a program. The poll's error is that refusal
+    whole, with what to do in it, not a failure's text cut to fit, and the cursor is kept."""
+    ran = put_old_git_on_path(tmp_path, monkeypatch)
+    provider = create_provider({"repo": str(repo)})
+
+    result = await provider.poll("src-1", '{"commit": "abc123"}')
+
+    assert result.error.startswith(REFUSAL_START), result.error
+    assert result.error.endswith("from running a program."), "said whole, not cut"
+    assert result.cursor == '{"commit": "abc123"}'
+    assert result.items == []
+    assert not ran.exists(), "a refused git never ran"
 
 
 @pytest.mark.asyncio

@@ -20,12 +20,17 @@ import hashlib
 import os
 import shutil
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
 import provider as git_sync
 from provider import GitSyncProvider, create_provider
 from personalclaw.sdk.sync import RemoteRef, SyncObject
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the repo root: apps_testkit
+from apps_testkit.git_too_old import REFUSAL_START, put_old_git_on_path  # noqa: E402
 
 # git is available in this environment; skip cleanly only if it somehow is not.
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
@@ -776,6 +781,27 @@ def test_probe_says_when_git_itself_cannot_start(monkeypatch):
         "isn't installed, isn't on the PATH PersonalClaw runs with, or isn't executable. Install "
         "git where PersonalClaw can run it. Details: [Errno 2] No such file or directory: 'git'"
     )
+
+
+def test_a_git_too_old_to_run_is_named_by_the_probe_and_by_a_push(tmp_path, monkeypatch):
+    """PersonalClaw's git refuses a git older than 2.12, which ignores some of the settings that
+    keep the working clone's own configuration from running a program. Its refusal says what it
+    needs, what it found and what to do, so that is the whole message, and a push adds only that
+    it retries."""
+    ran = put_old_git_on_path(tmp_path, monkeypatch)
+    transport = GitSyncProvider(
+        repo_url="ssh://git@git.example.com/owner/state.git", local_clone=str(tmp_path / "c")
+    )
+
+    probed = transport.test()
+    pushed = transport.push([SyncObject("k", b"v")])
+
+    assert probed.ok is False
+    assert probed.detail.startswith(REFUSAL_START), probed.detail
+    assert "Details:" not in probed.detail
+    assert pushed.outcome == "transient"
+    assert pushed.detail.startswith(REFUSAL_START) and pushed.detail.endswith(RETRIES)
+    assert not ran.exists(), "a refused git never ran"
 
 
 def test_a_push_that_cannot_clone_names_the_trouble_and_that_it_retries(

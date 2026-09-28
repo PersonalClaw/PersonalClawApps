@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from personalclaw.sdk.cli import DoctorLine, SetupContext
+from personalclaw.sdk.git import git_problem
 from personalclaw.sdk.util import app_data_dir
 
 APP_NAME = "spec-builder"
@@ -62,7 +63,12 @@ def setup(ctx: SetupContext) -> None:
             "to seed a spec from the code it is about. Without it every other tool still "
             "works; only spec_seed is unavailable."
         )
-    if not _git_version():
+    version = _git_version()
+    too_old = git_problem() if version else ""
+    if too_old:
+        # A git older than PersonalClaw's git runs: spec_seed would fail with these words.
+        ctx.print(f"{too_old} Until then spec_seed is unavailable.")
+    elif not version:
         ctx.print("Install git (https://git-scm.com) if you want spec_seed.")
 
 
@@ -102,9 +108,15 @@ def doctor() -> list[DoctorLine]:
                 DoctorLine("ready", "info", "none have all four required sections filled in")
             )
     version = _git_version()
+    too_old = git_problem() if version is not None else ""
     if version is None:
         lines.append(
             DoctorLine("seeding", "warn", "`git` is not runnable — spec_seed is unavailable")
+        )
+    elif too_old:
+        # A git older than PersonalClaw's git runs: spec_seed would fail with these words.
+        lines.append(
+            DoctorLine("seeding", "warn", f"{too_old} Until then spec_seed is unavailable.")
         )
     else:
         lines.append(DoctorLine("seeding", "ok", f"{version} — spec_seed can read a revision"))

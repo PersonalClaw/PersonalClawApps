@@ -11,9 +11,9 @@ the artifact you review; the definition is what executes.
 
 From the App Store, add the `apps/` directory as a **local source**, then install
 **Spec Builder** — the install runs through the security scanner and lifecycle exactly like
-any other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).) `git` on `PATH` is
-needed only for `spec_seed` — `personalclaw doctor` reports it as a **warning**, not a failure,
-because writing and compiling specs works without it.
+any other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).) git 2.12 or newer on `PATH`
+(PersonalClaw will not run an older one) is needed only for `spec_seed` — `personalclaw doctor`
+reports it as a **warning**, not a failure, because writing and compiling specs works without it.
 
 ## The eight tools
 

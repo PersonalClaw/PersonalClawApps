@@ -14,6 +14,7 @@ import shutil
 import subprocess
 
 from personalclaw.sdk.cli import DoctorLine, SetupContext
+from personalclaw.sdk.git import git_problem
 
 
 def _git_version() -> str | None:
@@ -35,7 +36,13 @@ def _git_version() -> str | None:
 
 def setup(ctx: SetupContext) -> None:
     """No credential to collect — just tell the user what has to be true, and where."""
-    if _git_version():
+    version = _git_version()
+    too_old = git_problem() if version else ""
+    if too_old:
+        # A git older than PersonalClaw's git runs: every notebook tool would fail with these
+        # words.
+        ctx.print(f"Notes: {too_old}")
+    elif version:
         ctx.print(
             "Notes: `git` found. Your notebook lives in this app's data dir by default "
             "(Settings → Providers → Notes → Configure to point it somewhere else, e.g. "
@@ -58,6 +65,11 @@ def doctor() -> list[DoctorLine]:
             status="fail",
             detail="`git` is not runnable — install git; the notebook is a git repository",
         )]
+    too_old = git_problem()
+    if too_old:
+        # A git older than PersonalClaw's git runs: every notebook tool would fail with these
+        # words, so this is the same failure as no git at all.
+        return [DoctorLine(label="git", status="fail", detail=too_old)]
     return [DoctorLine(
         label="git",
         status="ok",

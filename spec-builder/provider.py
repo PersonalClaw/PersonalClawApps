@@ -25,6 +25,7 @@ import logging
 import shutil
 from typing import Any
 
+from personalclaw.sdk.git import GitTooOld
 from personalclaw.sdk.security import fence_untrusted
 from personalclaw.sdk.tool import RiskLevel, ToolDefinition, ToolProvider, ToolResult
 
@@ -341,14 +342,15 @@ class SpecBuilderProvider(ToolProvider):
                 recovery_hints=["Call spec_list to see what specs exist."],
             )
         except GitError as exc:
-            hints = (
-                ["Install git — spec_seed reads the file through `git show`."]
-                if str(exc) == GIT_MISSING
-                else [
+            if str(exc) == GIT_MISSING:
+                hints = ["Install git — spec_seed reads the file through `git show`."]
+            elif isinstance(exc.__cause__, GitTooOld):
+                hints = ["Install git 2.12 or newer — spec_seed reads the file through `git show`."]
+            else:
+                hints = [
                     "Check the source repository in Settings, and that the path exists at "
                     "that revision.",
                 ]
-            )
             return ToolResult(success=False, error=str(exc), recovery_hints=hints)
         except OSError as exc:
             # A store on a full disk, a read-only mount, a path the gateway user cannot

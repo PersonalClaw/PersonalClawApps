@@ -64,7 +64,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 from urllib.parse import quote, urlparse
 
-from personalclaw.sdk.git import git_argv, git_env
+from personalclaw.sdk.git import GitTooOld, git_argv, git_env
 from personalclaw.sdk.knowledge import (
     KnowledgeItem,
     KnowledgeSource,
@@ -397,6 +397,10 @@ class GitRepoSourceProvider(KnowledgeSourceProvider):
             if _is_remote(cfg.repo):
                 return await self._poll_remote(cfg, cursor, policy)
             return self._poll_local(cfg, cursor)
+        except GitTooOld as exc:
+            # PersonalClaw's git will not run a git this old, and its message says what it
+            # needs, what it found and what to do: said whole, not cut like a failure's text.
+            return SourcePollResult(cursor=cursor, error=str(exc))
         except Exception as exc:  # noqa: BLE001 — a poll must never raise to the engine
             logger.warning("git-repo poll of %s failed", source_id, exc_info=True)
             return SourcePollResult(cursor=cursor, error=f"poll failed: {str(exc)[:180]}")

@@ -44,7 +44,9 @@ internals, so core can evolve without breaking it.
 Anything that can write the clone can write its `.git`, so its git runs with the settings that
 stop a repository's own configuration (a hook, a file-system monitor, an ssh command) from
 running a program, and with PersonalClaw's child environment rather than the gateway's, which
-holds every secret saved in PersonalClaw (`personalclaw.sdk.git`).
+holds every secret saved in PersonalClaw (`personalclaw.sdk.git`). A git older than 2.12
+ignores some of those settings, so a local clone needs git 2.12 or newer: with an older one, a
+poll fails with the version it needs and the one it found.
 
 ## Install & use
 

@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from personalclaw.sdk.git import git_argv, git_env
+from personalclaw.sdk.git import GitTooOld, git_argv, git_env
 from personalclaw.sdk.util import app_data_dir, atomic_write
 
 APP_NAME = "spec-builder"
@@ -589,6 +589,9 @@ class SpecStore:
                 check=False,
                 env=git_env(),
             )
+        except GitTooOld as exc:
+            # A git older than PersonalClaw's git runs: the message names both versions.
+            raise GitError(str(exc)) from exc
         except FileNotFoundError as exc:
             raise GitError(GIT_MISSING) from exc
         except subprocess.TimeoutExpired as exc:

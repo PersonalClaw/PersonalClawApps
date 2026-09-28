@@ -27,8 +27,8 @@ breaking it:
 
 The transport moves bytes only. The merge, the machine-seq registry contents, and the
 outbox retry loop all live above it in the core durability layer. It shells out to `git`
-via `subprocess`; the durability **service** invokes it — never an agent — so it adds no
-new agent command surface.
+(2.12 or newer: PersonalClaw will not run an older one) via `subprocess`; the durability
+**service** invokes it — never an agent — so it adds no new agent command surface.
 
 ## Install
 

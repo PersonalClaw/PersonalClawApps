@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from personalclaw.sdk.git import git_argv, git_env
+from personalclaw.sdk.git import GitTooOld, git_argv, git_env
 from personalclaw.sdk.util import app_data_dir, atomic_write
 
 APP_NAME = "notes"
@@ -221,17 +221,20 @@ class Notebook:
         a credential prompt (`git_env`): there is no remote here (syncing a notebook is
         `git-sync`'s job, not this app's), but a user-pointed notebook_path may sit in a repo
         that has one."""
-        argv = git_argv([
-            "-C", str(self._root),
-            "-c", f"user.name={COMMIT_NAME}",
-            "-c", f"user.email={COMMIT_EMAIL}",
-            *args,
-        ])
         try:
+            argv = git_argv([
+                "-C", str(self._root),
+                "-c", f"user.name={COMMIT_NAME}",
+                "-c", f"user.email={COMMIT_EMAIL}",
+                *args,
+            ])
             proc = subprocess.run(  # noqa: S603 — fixed argv, no shell, validated pathspecs
                 argv, capture_output=True, text=True, timeout=self._timeout,
                 check=False, env=git_env(),
             )
+        except GitTooOld as exc:
+            # A git older than PersonalClaw's git runs: the message names both versions.
+            raise GitError(str(exc)) from exc
         except FileNotFoundError as exc:
             raise GitError(GIT_MISSING) from exc
         except subprocess.TimeoutExpired as exc:
