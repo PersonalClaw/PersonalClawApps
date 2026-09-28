@@ -124,6 +124,9 @@ jobs:
       - name: Every test runs against a scratch PersonalClaw home
         # conftest.py gives every test its own; pytest.ini makes pytest load it however it starts.
         run: python -m pytest .github/tests/test_scratch_home.py -q
+      - name: No test reaches a real local model server
+        # conftest.py refuses a connection to a local model server's port unless the test serves it.
+        run: python -m pytest .github/tests/test_local_model_ports_are_refused.py -q
       - name: The publication-hygiene rail reds on a planted defect
         # Drives the rail's own script against seeded repos: one control per rule and field.
         run: python -m pytest .github/tests/test_publication_hygiene.py -q

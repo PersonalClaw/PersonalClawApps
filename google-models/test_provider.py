@@ -9,10 +9,13 @@ against a fake HTTP session.
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import base64
 import json
 import sys
 import types
+import wave
 from pathlib import Path
 
 import pytest
@@ -302,6 +305,39 @@ def test_every_native_call_sends_the_key_in_its_header_and_no_url_carries_it(no_
         assert headers["x-goog-api-key"] == _KEY
         assert follows_redirects is False
 
+
+
+def test_speech_sends_its_key_in_the_header_and_its_url_carries_none(tmp_path, monkeypatch):
+    """Speech was the one native call still putting the key in its URL (``?key=…``), which an
+    HTTP library's error, a proxy's log and a server's access log each record."""
+    pcm = base64.b64encode(b"\x01\x00" * 240).decode()
+    part = {"inlineData": {"mimeType": "audio/L16;codec=pcm;rate=24000", "data": pcm}}
+    sent = _fake_gemini(monkeypatch, (200, {"candidates": [{"content": {"parts": [part]}}]}))
+    out = tmp_path / "speech.wav"
+
+    tts = prov.GeminiTTSProvider(api_key=_KEY)
+    spoken = asyncio.run(tts.synthesize("hello", voice="gemini-tts-test", output_path=str(out)))
+
+    assert spoken == str(out)
+    with wave.open(str(out)) as audio:
+        assert audio.getnframes() == 240
+    [(method, url, headers, follows_redirects)] = sent
+    assert (method, url) == ("POST", f"{prov._NATIVE_BASE}models/gemini-tts-test:generateContent")
+    assert _KEY not in url
+    assert headers["x-goog-api-key"] == _KEY
+    assert follows_redirects is False
+
+
+def test_no_string_in_the_adapter_puts_the_key_in_a_url():
+    """The census behind the calls above: no string the module builds says ``key=``, the query
+    parameter every native call used to carry. A keyword argument is code, not a string."""
+    tree = ast.parse(Path(prov.__file__).read_text(encoding="utf-8"))
+    carrying = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and "key=" in node.value
+    ]
+    assert carrying == [], f"a string that puts the key in a URL, at line(s) {carrying}"
 
 def test_no_log_line_carries_the_key(no_waiting, monkeypatch, caplog):
     """A failed discovery and a dropped poll are logged with their traceback, and an HTTP

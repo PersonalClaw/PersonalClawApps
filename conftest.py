@@ -22,6 +22,13 @@ is ``personalclaw.sdk.testing.keychain_off``, because this file imports core onl
 ``personalclaw.sdk``, like the apps it tests. A core without that switch stops the run rather
 than letting it reach the real keychain.
 
+So is every local model server on the machine. A connection to one's default port
+(:data:`LOCAL_MODEL_PORTS`) is refused before it is made, unless this process is itself listening
+there (a test's own fake), and the test that asked fails by name: a test that reached the host's
+Ollama, vLLM or ComfyUI loaded a model on it, and what it proved depended on what that machine had
+installed. The guard is ``personalclaw.sdk.testing.refuse_ports``, core's own suite's; a core
+without it stops the run too. What it cannot see: a connection a child process makes.
+
 ``pytest.ini`` beside this file makes pytest load it however it is started, including by core's
 quality verifier, which runs each bundle with the bundle as its working directory.
 """
@@ -40,6 +47,11 @@ _patch = pytest.MonkeyPatch()
 _base: list[Path] = []
 _restore: list[Callable[[], None]] = []
 _serial = itertools.count()
+_refused_ports: list = []
+
+#: The default ports of the local model servers the apps speak to: Ollama (11434), vLLM (8000)
+#: and ComfyUI (8188).
+LOCAL_MODEL_PORTS = frozenset({11434, 8000, 8188})
 
 
 def pytest_configure(config):
@@ -47,12 +59,32 @@ def pytest_configure(config):
     _base.append(base)
     _patch.setenv("PERSONALCLAW_HOME", str(base / "collect"))
     try:
-        from personalclaw.sdk.testing import keychain_off
+        from personalclaw.sdk.testing import keychain_off, refuse_ports
     except ModuleNotFoundError as missing:
         if missing.name != "personalclaw":
-            raise  # a core without the switch: this run would reach the real keychain
+            raise  # a core without the switches: this run would reach the real keychain
         return  # a bare environment without core: nothing reads a keychain
     _restore.append(keychain_off())
+    guard = refuse_ports(LOCAL_MODEL_PORTS, what="a local model server's port")
+    _refused_ports.append(guard)
+    _restore.append(guard.undo)
+
+
+@pytest.fixture(autouse=True)
+def _no_test_reaches_a_real_local_model_server():
+    """Fail the test that tried to connect to a local model server's port. The connection itself
+    was refused before it was made (``refuse_ports``)."""
+    yield
+    for guard in _refused_ports:
+        refused = guard.take()
+        if refused:
+            pytest.fail(
+                "this test tried to reach a real local model server, and was refused: "
+                + "; ".join(refused)
+                + ". Fake the endpoint: a server the test starts on a port of its own, or a "
+                "mocked transport (conftest.py).",
+                pytrace=False,
+            )
 
 
 @pytest.fixture(autouse=True)

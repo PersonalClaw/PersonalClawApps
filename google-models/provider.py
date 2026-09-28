@@ -21,7 +21,7 @@ Base URLs:
   - OpenAI-compat: https://generativelanguage.googleapis.com/v1beta/openai/
   - Native Gemini: https://generativelanguage.googleapis.com/v1beta/
 
-Auth: OpenAI-compat uses ``Authorization: Bearer {key}``; the native image, video and
+Auth: OpenAI-compat uses ``Authorization: Bearer {key}``; the native image, video, speech and
 model-list calls send the key in the ``x-goog-api-key`` header, the form Gemini documents,
 so no URL they ask for carries it. An HTTP library's error, a traceback and a log line can
 each quote a URL.
@@ -798,7 +798,9 @@ class GeminiTTSProvider(TtsProvider):
         if not key:
             logger.warning("GeminiTTS: no API key available.")
             return None
-        url = f"{_NATIVE_BASE}models/{model}:generateContent?key={key}"
+        # The key rides the header Gemini documents, never the URL: a URL is what an HTTP error,
+        # a proxy's log and a server's access log each record.
+        url = f"{_NATIVE_BASE}models/{model}:generateContent"
 
         body = {
             "contents": [{"parts": [{"text": text}]}],
@@ -818,7 +820,10 @@ class GeminiTTSProvider(TtsProvider):
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(
-                    url, headers={"Content-Type": "application/json"}, json=body,
+                    url,
+                    headers={**_key_header(key), "Content-Type": "application/json"},
+                    json=body,
+                    allow_redirects=False,
                 ) as resp:
                     text_resp = await resp.text()
                     if resp.status != 200:
