@@ -171,7 +171,8 @@ async def test_pair_from_the_inbox_makes_their_next_mail_a_conversation(mailbox)
     await _arrives(transport, imap)
     [row] = state._inbox_store.items.values()
 
-    status, body = await _post(state, f"/api/inbox/{row.id}/pair")
+    # Letting someone talk to your agent asks your consent first, as the dashboard's Pair does.
+    status, body = await _post(state, f"/api/inbox/{row.id}/pair", {"confirm": True})
 
     assert status == 200 and body == {"ok": True, "paired": True}, body
     assert is_allowed_sender("email", PAT) is True

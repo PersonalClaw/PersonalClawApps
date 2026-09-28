@@ -189,6 +189,27 @@ class EmailTransport(ChannelTransportProvider):
             owner_pairing=True, speaks_as_owner=True,
         )
 
+    def validate_target(self, target: str) -> str:
+        """Whether email can send to ``target``: one address, ``someone@example.com``.
+
+        An address is the only thing this channel sends to (``EmailDelivery.open_dm`` answers
+        ``""`` for anything else), so it claims nothing else. Core asks every chat channel set up
+        whether an id sent without naming its channel is one of its own, and the default check
+        takes any id at all, which made every chat or channel id look like it might be email's.
+        """
+        value = str(target or "").strip()
+        local, at, domain = value.partition("@")
+        if (
+            at
+            and local
+            and domain
+            and "@" not in domain
+            and len(value) <= 254
+            and not any(ch.isspace() or ch in ',;<>"' or ord(ch) < 32 for ch in value)
+        ):
+            return ""
+        return "An email address is what email sends to, like someone@example.com."
+
     def owner_pairing_hint(self) -> str:
         """How the owner sends the pairing code here: a mail to the mailbox, not a DM to a bot."""
         address = self._settings().mailbox_address or "the mailbox this channel reads"
