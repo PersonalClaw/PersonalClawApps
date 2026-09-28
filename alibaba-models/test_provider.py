@@ -221,6 +221,105 @@ def test_error_detail_handles_json_and_garbage() -> None:
     assert len(prov._error_detail("x" * 500)) == 200
 
 
+# The next step for an image request refused as invalid or answered "not found".
+_CHOOSE_ANOTHER = (
+    "Choose another model in Settings → Models or change the size or options you asked for; if "
+    "no model works, check Endpoint on this Alibaba Model Studio instance in Settings → "
+    "Providers (under Advanced)."
+)
+
+
+@pytest.mark.parametrize(("status", "sentence"), [
+    (401, "Alibaba Model Studio refused the API key for the image request (HTTP 401). Check API "
+          "Key on this Alibaba Model Studio instance in Settings → Providers (or "
+          "ALIBABA_API_KEY), that it may use this model, and that Endpoint (under Advanced) is "
+          "in the key's region: a key works only in its own region."),
+    (400, "Alibaba Model Studio refused the image request as invalid (HTTP 400). "
+          + _CHOOSE_ANOTHER),
+    (404, "Alibaba Model Studio answered the image request with HTTP 404 (not found). "
+          + _CHOOSE_ANOTHER),
+    (429, "Alibaba Model Studio's rate limit or quota stopped the image request (HTTP 429). "
+          "Wait a minute and try again."),
+    (500, "Alibaba Model Studio failed on its side (image request, HTTP 500). Try again in a "
+          "few minutes."),
+    (418, "Alibaba Model Studio's image request failed (HTTP 418). " + _CHOOSE_ANOTHER),
+])
+def test_a_failed_image_request_says_what_to_do_then_model_studios_words(
+    monkeypatch: pytest.MonkeyPatch, status: int, sentence: str,
+) -> None:
+    """These read "failed (HTTP n):" and Model Studio's words, with no next step."""
+    from personalclaw.sdk.image import ImageGenError
+
+    _fake_aiohttp(monkeypatch, status, {"error": {"message": "upstream detail"}})
+    with pytest.raises(ImageGenError) as ei:
+        _run(prov.AlibabaImageProvider(api_key="ak").generate("a fox", model="qwen-image-2.0"))
+    assert str(ei.value) == f"{sentence} Details: upstream detail"
+
+
+def _aiohttp_that_answers(monkeypatch: pytest.MonkeyPatch, answer: Any) -> None:
+    """Like ``_fake_aiohttp``, but ``answer`` is a ``(status, body text)`` pair sent as it is,
+    or an exception the request raises the way the HTTP library would."""
+
+    class _Resp:
+        def __init__(self) -> None:
+            self.status = 0 if isinstance(answer, BaseException) else answer[0]
+
+        async def text(self) -> str:
+            return answer[1]
+
+        async def __aenter__(self) -> "_Resp":
+            if isinstance(answer, BaseException):
+                raise answer
+            return self
+
+        async def __aexit__(self, *exc: Any) -> None:
+            return None
+
+    class _Session:
+        def __init__(self, *, timeout: Any = None) -> None:
+            pass
+
+        def post(self, url: str, *, headers: dict, json: dict) -> _Resp:
+            return _Resp()
+
+        async def __aenter__(self) -> "_Session":
+            return self
+
+        async def __aexit__(self, *exc: Any) -> None:
+            return None
+
+    fake = types.ModuleType("aiohttp")
+    fake.ClientSession = _Session  # type: ignore[attr-defined]
+    fake.ClientTimeout = lambda total=None: None  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "aiohttp", fake)
+
+
+@pytest.mark.parametrize(("answer", "sentence"), [
+    (ConnectionRefusedError(111, "Connect call failed"),
+     "The connection to Alibaba Model Studio failed during the image request. Check this "
+     "computer's internet connection and Endpoint on this Alibaba Model Studio instance in "
+     "Settings → Providers (under Advanced), then try again. Details: [Errno 111] Connect call "
+     "failed"),
+    ((200, "<html>gateway page</html>"),
+     "Alibaba Model Studio's answer to the image request could not be read. Try again in a "
+     "moment; if it keeps happening, check Endpoint on this Alibaba Model Studio instance in "
+     "Settings → Providers (under Advanced). Details: Expecting value: line 1 column 1 (char 0)"),
+    (RuntimeError("server disconnected"),
+     "The image request to Alibaba Model Studio failed unexpectedly. Try again in a moment. "
+     "Details: server disconnected"),
+])
+def test_an_image_request_without_a_usable_answer_says_what_to_do(
+    monkeypatch: pytest.MonkeyPatch, answer: Any, sentence: str,
+) -> None:
+    # These read "request failed:" and the error's words, with no next step.
+    from personalclaw.sdk.image import ImageGenError
+
+    _aiohttp_that_answers(monkeypatch, answer)
+    with pytest.raises(ImageGenError) as ei:
+        _run(prov.AlibabaImageProvider(api_key="ak").generate("a fox", model="qwen-image-2.0"))
+    assert str(ei.value) == sentence
+
+
 def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
     """An image call names its model (the image binding in Settings → Models). One that names
     none is refused with the SDK's sentence before anything is sent. Its edit is not built

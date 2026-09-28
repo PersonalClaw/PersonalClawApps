@@ -117,11 +117,15 @@ review on the host is enough.
 
 ## Troubleshooting
 
+A failed sync or connection test says what went wrong and what to do — the host key isn't
+trusted yet, the host turned down the ssh login, the sync root path doesn't exist there, rsync
+isn't installed on one end — with rsync's and ssh's own words after it.
+
 | Symptom | Cause |
 |---|---|
 | Times out on every cycle | With `BatchMode=yes` set, a timeout means the host is unreachable or the key is not accepted — **not** that it asked for a password. Try the same `ssh` by hand. |
 | `Host key verification failed` | Expected on first contact. Connect once by hand to record the key; the app will not accept an unknown key for you. |
-| `cannot run rsync` | rsync is not on this machine's `PATH`. |
+| PersonalClaw couldn't start rsync on this machine | rsync is not installed here, or is not on the `PATH` PersonalClaw runs with. |
 | Misconfigured, with a character complaint | The host or path contains something that rsync could read as an option or a daemon spec. Use a plain hostname and a plain absolute path. |
 | Sync stalls, registry never updates | Two machines racing the registry, or a target whose clock is far from this machine's. Check `durability.sync_interval_secs` and the host's time. |
 

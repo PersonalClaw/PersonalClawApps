@@ -225,6 +225,56 @@ def test_test_connection_ok_path_probes_key_then_counts_models(monkeypatch):
     assert any("/key" in u for u in seen) and any("/models" in u for u in seen)
 
 
+def test_test_connection_answered_not_found_points_at_base_url(monkeypatch):
+    """A key check answered with neither 200 nor a key refusal is about where it was sent. It
+    read "failed (HTTP 404):" and OpenRouter's words, with no next step."""
+    _patch_fetch_by_route(monkeypatch, {
+        "/key": _FakeFetchResponse(404, {"error": {"message": "Not Found", "code": 404}}),
+    })
+    result = _run(prov.create_catalog(
+        {"api_key": "k", "endpoint": "https://proxy.example/v1"}).test_connection())
+    assert result.ok is False
+    assert result.detail == (
+        "OpenRouter answered the key check request with HTTP 404 (not found). Check Base URL on "
+        "this OpenRouter instance in Settings → Providers (under Advanced); left empty, it uses "
+        "https://openrouter.ai/api/v1. Details: Not Found"
+    )
+
+
+def _unreachable():
+    from personalclaw.sdk.net import EgressBlocked, GuardDecision
+
+    return EgressBlocked(GuardDecision(
+        allow=False, host="proxy.invalid", reason="host 'proxy.invalid' is not resolvable",
+        category="unresolvable",
+    ))
+
+
+@pytest.mark.parametrize(("error", "detail"), [
+    (ConnectionResetError(54, "Connection reset by peer"),
+     "The connection to OpenRouter failed during the key check. Check this computer's internet "
+     "connection and try again; if Base URL is set on this OpenRouter instance in Settings → "
+     "Providers (under Advanced), check it too. Details: [Errno 54] Connection reset by peer"),
+    (_unreachable(),
+     "OpenRouter key check was not sent: proxy.invalid could not be found. Check this "
+     "computer's internet connection and try again; if Base URL is set on this OpenRouter "
+     "instance in Settings → Providers (under Advanced), check it too. Details: host "
+     "'proxy.invalid' is not resolvable"),
+])
+def test_test_connection_that_gets_no_answer_says_what_to_check(monkeypatch, error, detail):
+    # This read "Could not reach OpenRouter:" and the error's words, with no next step.
+    async def _fake_fetch(url, *, policy=None, method="GET", headers=None, data=None, **kw):
+        raise error
+
+    for target in ("personalclaw.net.client.fetch", "personalclaw.sdk.net.fetch",
+                   "personalclaw.net.fetch", "provider.fetch"):
+        monkeypatch.setattr(target, _fake_fetch, raising=False)
+    result = _run(prov.create_catalog(
+        {"api_key": "k", "endpoint": "https://proxy.invalid/v1"}).test_connection())
+    assert result.ok is False
+    assert result.detail == detail
+
+
 def test_catalog_replaces_the_stock_branded_catalog():
     # register_branded_app registers its own BrandedCatalog under this type; the
     # module re-registers afterwards (last-wins) so the filtered one is what the

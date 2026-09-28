@@ -85,7 +85,8 @@ def _fake_fetch(monkeypatch, responses):
     """Serve a queued list of responses; record every (method, url, body, headers).
 
     The last queued response repeats, so a poll loop can be driven to a terminal
-    state without enumerating each identical hop.
+    state without enumerating each identical hop. A queued exception is raised in
+    place of a response, the way core's guarded fetch fails a call.
     """
     calls: list[dict] = []
     queue = list(responses)
@@ -98,7 +99,10 @@ def _fake_fetch(monkeypatch, responses):
             "body": json.loads(data.decode()) if data else None,
             "policy": policy,
         })
-        return queue.pop(0) if len(queue) > 1 else queue[0]
+        served = queue.pop(0) if len(queue) > 1 else queue[0]
+        if isinstance(served, BaseException):
+            raise served
+        return served
 
     for target in ("personalclaw.net.client.fetch", "personalclaw.sdk.net.fetch",
                    "personalclaw.net.fetch", "provider.fetch"):
@@ -630,6 +634,128 @@ def test_image_generate_ignores_cookie_auth_message(monkeypatch):
     assert "cookie" not in str(exc.value)
 
 
+# The next step for a generation OpenRouter refused as invalid or answered "not found".
+_CHOOSE_ANOTHER = (
+    "Choose another model in Settings → Models or change the options you asked for; if no model "
+    "works, check Base URL on this OpenRouter instance in Settings → Providers (under Advanced)."
+)
+
+
+@pytest.mark.parametrize(("status", "sentence"), [
+    (400, "OpenRouter refused the image generation request as invalid (HTTP 400). "
+          + _CHOOSE_ANOTHER),
+    (404, "OpenRouter answered the image generation request with HTTP 404 (not found). "
+          + _CHOOSE_ANOTHER),
+    (500, "OpenRouter failed on its side (image generation, HTTP 500). Try again in a few "
+          "minutes."),
+    (503, "OpenRouter failed on its side (image generation, HTTP 503). Try again in a few "
+          "minutes."),
+    (418, "OpenRouter image generation failed (HTTP 418). " + _CHOOSE_ANOTHER),
+])
+def test_a_status_without_a_sentence_of_its_own_says_what_to_do_then_openrouters_words(
+    monkeypatch, status, sentence,
+):
+    """These reached the user as "failed (HTTP n):" and OpenRouter's words, with no next step.
+    Each class now says what to do, and OpenRouter's words follow as the detail."""
+    _fake_fetch(monkeypatch, [
+        _FakeResponse(200, _image_models_payload()),
+        _FakeResponse(status, {"error": {"message": "upstream detail", "code": status}}),
+    ])
+    with pytest.raises(ImageGenError) as ei:
+        _run(_image_provider().generate("x", model="google/gemini-3-pro-image"))
+    assert str(ei.value) == f"{sentence} Details: upstream detail"
+
+
+def test_a_refused_pixel_size_lists_the_accepted_sizes_before_openrouters_words(monkeypatch):
+    # The list is the next step, so it is part of the sentence. OpenRouter's own text, which
+    # names only the tier it computed, follows as the detail.
+    _fake_fetch(monkeypatch, [
+        _FakeResponse(200, _image_models_payload()),
+        _FakeResponse(400, {"error": {
+            "message": "Image size 2K is not supported for this model", "code": 400}}),
+    ])
+    with pytest.raises(ImageGenError) as ei:
+        _run(_image_provider().generate(
+            "x", model="google/gemini-3-pro-image", size="4096x4096"))
+    assert str(ei.value) == (
+        "OpenRouter refused the image generation request as invalid (HTTP 400). This model "
+        "accepts these sizes: 1K, 2K, 4K, 1:1, 16:9, 9:16 (or a smaller pixel size). "
+        f"{_CHOOSE_ANOTHER} Details: Image size 2K is not supported for this model"
+    )
+
+
+def test_a_pixel_size_request_that_fails_for_another_reason_lists_no_sizes(monkeypatch):
+    """Only a request refused as invalid can be about its size. The list used to follow every
+    failure of a request that asked for a pixel size, so running out of credits read as a size
+    problem."""
+    _fake_fetch(monkeypatch, [
+        _FakeResponse(200, _image_models_payload()),
+        _FakeResponse(402, {"error": {"message": "Insufficient credits", "code": 402}}),
+    ])
+    with pytest.raises(ImageGenError) as ei:
+        _run(_image_provider().generate(
+            "x", model="google/gemini-3-pro-image", size="1024x1024"))
+    assert str(ei.value) == (
+        "OpenRouter reports insufficient credits (image generation) — top up at "
+        "openrouter.ai/credits."
+    )
+
+
+@pytest.mark.parametrize(("category", "host", "reason", "sentence"), [
+    ("unresolvable", "proxy.invalid", "host 'proxy.invalid' is not resolvable",
+     "OpenRouter image generation was not sent: proxy.invalid could not be found. Check this "
+     "computer's internet connection and try again; if Base URL is set on this OpenRouter "
+     "instance in Settings → Providers (under Advanced), check it too."),
+    ("deny_list", "proxy.example", "host 'proxy.example' is on the egress deny list",
+     "OpenRouter image generation was not sent: proxy.example is blocked by the Denied hosts "
+     "list in Settings → Security → Network egress. Remove it from that list, or check Base URL "
+     "on this OpenRouter instance in Settings → Providers (under Advanced)."),
+    ("private", "proxy.example",
+     "host 'proxy.example' resolves to a non-public address (10.0.0.4, private)",
+     "OpenRouter image generation was not sent: proxy.example is on a private network, which "
+     "PersonalClaw does not reach unless you allow it. If that server is yours, add "
+     "proxy.example to Allowed hosts in Settings → Security → Network egress; otherwise check "
+     "Base URL on this OpenRouter instance in Settings → Providers (under Advanced)."),
+    ("malformed", "", "scheme 'ftp' not allowed (only ['http', 'https'])",
+     "OpenRouter image generation was not sent: PersonalClaw's egress guard refused the "
+     "address it would have reached. Check Base URL on this OpenRouter instance in Settings → "
+     "Providers (under Advanced)."),
+])
+def test_an_egress_refusal_names_the_setting_that_decides_it(
+    monkeypatch, category, host, reason, sentence,
+):
+    """The guard's reason names its rule, not a setting, and it used to follow "was blocked by
+    the egress guard:" alone. Which setting to change depends on what the guard refused."""
+    from personalclaw.sdk.net import EgressBlocked, GuardDecision
+
+    _fake_fetch(monkeypatch, [EgressBlocked(GuardDecision(
+        allow=False, host=host, reason=reason, category=category,
+    ))])
+    with pytest.raises(ImageGenError) as ei:
+        _run(_image_provider().generate("x", model="google/gemini-3-pro-image"))
+    assert str(ei.value) == f"{sentence} Details: {reason}"
+
+
+@pytest.mark.parametrize(("error", "sentence"), [
+    (ConnectionRefusedError(61, "Connection refused"),
+     "The connection to OpenRouter failed during the image generation. Check this computer's "
+     "internet connection and try again; if Base URL is set on this OpenRouter instance in "
+     "Settings → Providers (under Advanced), check it too. Details: [Errno 61] Connection "
+     "refused"),
+    (asyncio.TimeoutError(), "OpenRouter image generation timed out. Try again in a moment."),
+    (RuntimeError("stream closed mid-body"),
+     "OpenRouter image generation failed unexpectedly. Try again in a moment. Details: stream "
+     "closed mid-body"),
+])
+def test_a_call_that_gets_no_answer_says_what_to_do_then_the_error(monkeypatch, error, sentence):
+    """A call that got no answer reached the user as "request failed:" and the error's words,
+    or, timed out, with no next step."""
+    _fake_fetch(monkeypatch, [error])
+    with pytest.raises(ImageGenError) as ei:
+        _run(_image_provider().generate("x", model="google/gemini-3-pro-image"))
+    assert str(ei.value) == sentence
+
+
 def test_image_generate_honors_retry_after_once(monkeypatch, _no_sleep):
     _fake_fetch(monkeypatch, [
         _FakeResponse(200, _image_models_payload()),
@@ -729,6 +855,21 @@ def test_image_edit_reports_unreadable_source(monkeypatch, tmp_path):
             "x", source_image=str(tmp_path / "missing.png"),
             model="google/gemini-3-pro-image",
         ))
+
+
+def test_an_unreadable_source_image_says_what_to_check_then_why(monkeypatch, tmp_path):
+    # The OS's words used to be the whole message; they follow the next step now.
+    _fake_fetch(monkeypatch, [_FakeResponse(200, _image_models_payload())])
+    with pytest.raises(ImageGenError) as ei:
+        _run(_image_provider().edit(
+            "x", source_image=str(tmp_path / "missing.png"),
+            model="google/gemini-3-pro-image",
+        ))
+    assert str(ei.value).startswith(
+        "Could not read source image, so the edit was not sent to OpenRouter. Check that the "
+        "image file still exists and can be read, then try the edit again. Details: [Errno 2] "
+        "No such file or directory"
+    )
 
 
 def test_module_uses_guarded_fetch_not_raw_aiohttp():
@@ -870,6 +1011,27 @@ def test_video_generate_handles_each_terminal_bad_status(
     ])
     with pytest.raises(VideoGenError, match=needle):
         _run(_video_provider().generate("waves", model="google/veo-3.1-fast"))
+
+
+@pytest.mark.parametrize(("job", "detail"), [
+    ({"id": "job-1", "status": "failed", "error": "content policy"}, " Details: content policy"),
+    ({"id": "job-1", "status": "failed"}, ""),
+])
+def test_a_failed_video_job_says_what_to_try_then_openrouters_reason(
+    monkeypatch, _no_sleep, job, detail,
+):
+    # The job's reason used to be the whole message after "failed:", with no next step.
+    _fake_fetch(monkeypatch, [
+        _FakeResponse(200, _video_models_payload()),
+        _FakeResponse(202, {"id": "job-1", "status": "pending"}),
+        _FakeResponse(200, job),
+    ])
+    with pytest.raises(VideoGenError) as ei:
+        _run(_video_provider().generate("waves", model="google/veo-3.1-fast"))
+    assert str(ei.value) == (
+        "OpenRouter's video job failed, so no video was made. Try again; if it fails again, "
+        "change the prompt or choose another model in Settings → Models." + detail
+    )
 
 
 def test_video_generate_treats_unknown_status_as_pending(monkeypatch, _no_sleep):
@@ -1124,6 +1286,32 @@ def test_video_download_uses_a_policy_that_wont_truncate(monkeypatch, _no_sleep)
     _run(_video_provider().generate("x", model="google/veo-3.1-fast"))
     policy = calls[-1]["policy"]
     assert policy.max_bytes >= 256_000_000  # a 4K/15s clip dwarfs CONNECTOR's 10MB
+
+
+@pytest.mark.parametrize(("download", "sentence"), [
+    (_FakeResponse(404, {"error": {"message": "Content not found", "code": 404}}),
+     "OpenRouter answered the video download request with HTTP 404 (not found). Generate the "
+     "video again. Details: Content not found"),
+    (ConnectionResetError(54, "Connection reset by peer"),
+     "The connection to OpenRouter failed during the video download. Check this computer's "
+     "internet connection and try again; if Base URL is set on this OpenRouter instance in "
+     "Settings → Providers (under Advanced), check it too. Details: [Errno 54] Connection reset "
+     "by peer"),
+])
+def test_a_download_that_fails_says_what_to_do_then_why(
+    monkeypatch, _no_sleep, download, sentence,
+):
+    """Both reached the user as "video download failed" and the words alone. The job had
+    finished, so "not found" is not about the model: only making the video again gets one."""
+    _fake_fetch(monkeypatch, [
+        _FakeResponse(200, _video_models_payload()),
+        _FakeResponse(202, {"id": "job-1", "status": "pending"}),
+        _FakeResponse(200, {"id": "job-1", "status": "completed"}),
+        download,
+    ])
+    with pytest.raises(VideoGenError) as ei:
+        _run(_video_provider().generate("waves", model="google/veo-3.1-fast"))
+    assert str(ei.value) == sentence
 
 
 def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():

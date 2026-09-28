@@ -35,9 +35,13 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
+import ssl
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from urllib.parse import urlsplit, urlunsplit
 
+from personalclaw.sdk.net import sentence_with_detail
 from personalclaw.sdk.vector_store import (
     VectorHit,
     VectorRecord,
@@ -49,6 +53,10 @@ logger = logging.getLogger("vector_store_qdrant")
 
 #: The environment variable an empty ``api_key`` setting falls back to.
 API_KEY_NAME = "QDRANT_API_KEY"
+
+#: Where this app's own settings (Qdrant URL, Collection, Qdrant API Key, the local folder, the
+#: timeout) are set.
+_ON_CARD = "on the Qdrant Vector Store card in Settings → Providers"
 
 #: Qdrant's own name for cosine distance. Cosine and not dot/euclid because core's
 #: `_VECTOR_MIN_SIMILARITY` floor is calibrated on cosine similarity, and Qdrant returns a
@@ -68,6 +76,26 @@ def _point_id(chunk_id: str) -> str:
         return str(uuid.UUID(hex=chunk_id))
     except (ValueError, AttributeError, TypeError):
         return str(uuid.uuid5(uuid.NAMESPACE_URL, f"personalclaw-chunk:{chunk_id}"))
+
+
+def _shown(url: str) -> str:
+    """``url`` as a sentence may show it: without the ``user:password@`` it may carry."""
+    parts = urlsplit(url)
+    if "@" not in parts.netloc:
+        return url
+    return urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[1]))
+
+
+def _causes(exc: BaseException) -> Iterator[BaseException]:
+    """``exc`` and what it wraps, nearest first: the client's own ``source`` wrapper, then
+    ``__cause__`` / ``__context__`` — which is where the socket's own error sits."""
+    seen: set[int] = set()
+    node: BaseException | None = exc
+    while node is not None and id(node) not in seen:
+        seen.add(id(node))
+        yield node
+        source = getattr(node, "source", None)
+        node = source if isinstance(source, BaseException) else (node.__cause__ or node.__context__)
 
 
 class QdrantVectorStore(VectorStoreProvider):
@@ -261,8 +289,75 @@ class QdrantVectorStore(VectorStoreProvider):
                 backend="qdrant",
                 collection=self._collection,
                 reachable=False,
-                detail=f"cannot reach {where}: {type(exc).__name__}: {exc}",
+                detail=sentence_with_detail(self._unreachable(exc), exc),
             )
+
+    def _unreachable(self, exc: BaseException) -> str:
+        """What a failed connect or call means, and what to do — the client's own words
+        ("[Errno 61] Connection refused", "Unexpected Response: 401 …") say neither."""
+        causes = list(_causes(exc))
+        if isinstance(exc, ImportError):
+            return (
+                "Qdrant Vector Store couldn't load qdrant-client, the Python package it talks to "
+                "Qdrant through. Reinstall Qdrant Vector Store from the Store — that package "
+                "ships with this app, not with PersonalClaw itself."
+            )
+        if self._path:
+            folder = f"Local folder (no server) {_ON_CARD}"
+            if "already accessed by another instance" in str(exc):
+                return (
+                    f"The local folder {self._path} is already open in another Qdrant client, "
+                    "and only one may use it at a time. Close whatever else has it open, or set "
+                    f"{folder} to another folder."
+                )
+            if any(isinstance(c, PermissionError) for c in causes):
+                return (
+                    f"Qdrant Vector Store isn't allowed to use the local folder {self._path}. Fix "
+                    f"that folder's permissions, or set {folder} to one PersonalClaw can write to."
+                )
+            return (
+                f"Qdrant Vector Store couldn't open its local folder {self._path}. Check that "
+                f"folder, or set {folder} to another one."
+            )
+        url = _shown(self._url)
+        status = getattr(exc, "status_code", None)
+        if status in (401, 403):
+            return (
+                f"The Qdrant at {url} refused Qdrant Vector Store's request (HTTP {status}): the "
+                f"API key it sent is missing or wrong. Set Qdrant API Key {_ON_CARD} to that "
+                "server's key."
+            )
+        if isinstance(status, int):
+            return (
+                f"The Qdrant at {url} answered with an error (HTTP {status}). Check Qdrant URL "
+                f"and Collection {_ON_CARD}, and that the server is healthy."
+            )
+        if any(isinstance(c, ConnectionRefusedError) for c in causes):
+            return (
+                f"Nothing is accepting connections at {url}. Check that Qdrant is running there, "
+                f"and that Qdrant URL {_ON_CARD} has the right host and port."
+            )
+        if any(isinstance(c, socket.gaierror) for c in causes):
+            return (
+                f"The host in Qdrant URL, {urlsplit(url).hostname or url}, can't be found from "
+                f"this machine. Check Qdrant URL {_ON_CARD}."
+            )
+        if any(isinstance(c, TimeoutError) or "Timeout" in type(c).__name__ for c in causes):
+            return (
+                f"The Qdrant at {url} didn't answer within {self._timeout} seconds. Check that it "
+                f"is reachable from this machine, or raise Timeout (seconds) {_ON_CARD}."
+            )
+        if any(isinstance(c, ssl.SSLError) for c in causes):
+            return (
+                f"Qdrant Vector Store couldn't make a secure connection to {url}: the TLS "
+                "handshake failed, or this machine doesn't trust the server's certificate. Check "
+                f"that Qdrant URL {_ON_CARD} is right, and that the server's certificate is "
+                "valid for that host."
+            )
+        return (
+            f"Qdrant Vector Store couldn't talk to the Qdrant at {url}. Check that Qdrant is "
+            f"running there, and Qdrant URL {_ON_CARD}."
+        )
 
 
 def create_provider(config: dict | None = None) -> QdrantVectorStore:

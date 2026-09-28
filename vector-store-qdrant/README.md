@@ -55,6 +55,13 @@ environment variable. No key is fine and normal for a local Qdrant.
 The app reads its settings when it is enabled, and saving them rebuilds it from what you saved,
 so a changed key or URL takes effect as soon as you save it.
 
+### When it can't reach Qdrant
+
+`personalclaw doctor` reports the chunk index as unreachable, with what went wrong and which
+setting to change — nothing accepting connections at the Qdrant URL, an API key the server
+refused, a local folder another Qdrant client already has open, the `qdrant-client` package
+missing — followed by the client's own error.
+
 ### Collections
 
 Use a **fresh collection name**. This app owns the points it writes and deletes them by an

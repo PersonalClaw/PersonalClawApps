@@ -11,14 +11,18 @@ as a self-contained directory:
 
 - `app.json` — the manifest (identity, provider/backend/UI declarations, permissions).
 - `provider.py` — the implementation, exposed via `create_provider`.
-- `test_catalog.py`, `test_provider.py`, `test_stream_timeout.py` — the app's own tests.
+- `test_access_and_credentials.py`, `test_catalog.py`, `test_media_names_its_model.py`,
+  `test_media_says_why.py`, `test_provider.py`, `test_stream_timeout.py` — the app's own tests.
 - `test_wire.py` — proves a call's per-call temperature and output budget reach the request, against
   a recording endpoint.
 
 It imports only the PersonalClaw **SDK** (never core internals), so core can evolve
 without breaking it:
 
-- `personalclaw.sdk.model`
+- `personalclaw.sdk.model` — chat, the model catalog, and the media scanners
+- `personalclaw.sdk.embedding`, `personalclaw.sdk.image`, `personalclaw.sdk.video`,
+  `personalclaw.sdk.stt` — the media adapters
+- `personalclaw.sdk.net` — a failure's sentence with the AWS SDK's own words after it
 
 ## Install
 
@@ -58,6 +62,8 @@ to be worth caching, so short turns may report no reads at all — that is norma
 Uses your ambient AWS credential chain (environment variables, `~/.aws` profile, SSO). PersonalClaw stores no AWS key for this provider — configure the region/profile in the provider settings.
 
 When that chain can't sign in — no credentials found, a profile that isn't in your AWS config, a `credential_process` command that fails, an SSO sign-in that has expired, a region name that isn't one, no connection to AWS — the chat, the connection test and the Models page say which it is and what to do (sign in with your AWS tool, fix the profile or region, or choose another profile), with the AWS SDK's own message after that.
+
+Speech-to-text, embeddings, images and video say the same, and name what else stops them: no S3 Bucket (speech-to-text and video need one), a bucket that doesn't exist, an IAM action the identity lacks, or a Transcribe or Nova Reel job that failed, with its reason and the next step. A Nova Reel job that runs past ten minutes may still finish, so the message names the S3 folder its video will land in. When speech-to-text is unavailable, the composer's microphone says why; when an embedding model can't embed, a re-index refused on it does.
 
 ## License
 

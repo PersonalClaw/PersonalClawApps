@@ -38,6 +38,19 @@ from personalclaw.sdk.sync import RemoteRef, SyncObject
 HAVE_RSYNC = shutil.which("rsync") is not None
 needs_rsync = pytest.mark.skipif(not HAVE_RSYNC, reason="rsync binary not available")
 
+#: Where a failure's sentence sends the user to fix a setting, and what a retried one adds.
+ON_CARD = "on the Rsync Sync card in Settings → Providers"
+RETRIES = "Sync tries again on its next run."
+
+
+def _answering(code: int, stderr: str):
+    """A ``subprocess.run`` stand-in: rsync ran, printed ``stderr`` and exited ``code``."""
+
+    def _run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, code, stdout="", stderr=stderr)
+
+    return _run
+
 
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path, monkeypatch):
@@ -491,12 +504,17 @@ class TestConnection:
         assert r.extra.get("local") is True
 
     def test_test_reports_a_missing_root(self, tmp_path):
-        p = RsyncSyncProvider(
-            path=str(tmp_path / "does-not-exist"), staging_dir=str(tmp_path / "s")
-        )
+        """rsync's "change_dir … failed: No such file or directory" used to follow a bare
+        "unreachable"; now the probe says the folder isn't there and what to do."""
+        root = tmp_path / "does-not-exist"
+        p = RsyncSyncProvider(path=str(root), staging_dir=str(tmp_path / "s"))
         r = p.test()
         assert r.ok is False
-        assert "unreachable" in r.detail
+        assert r.detail.startswith(
+            f"The sync root path {root} doesn't exist on this machine. Create that folder or "
+            f"reconnect the drive it lives on, or set Sync root path {ON_CARD} to one that "
+            "exists. Details: "
+        ), r.detail
 
 
 class TestFailureHandling:
@@ -515,15 +533,23 @@ class TestFailureHandling:
         assert p.cas_registry(None, b"{}") is False
         assert p.test().ok is False
 
-    def test_a_missing_rsync_binary_is_permanent(self, tmp_path, monkeypatch):
-        def missing(*a, **k):
-            raise FileNotFoundError("no rsync")
-
-        monkeypatch.setattr(provider_mod.subprocess, "run", missing)
-        p = create_provider({"path": str(tmp_path / "t"), "staging_dir": str(tmp_path / "s")})
+    def test_a_missing_rsync_binary_is_permanent(self, tmp_path):
+        """Driven through a real exec of a binary that cannot exist. "cannot run rsync:
+        [Errno 2] No such file or directory: '…'" used to be the whole message."""
+        p = RsyncSyncProvider(
+            path=str(tmp_path / "t"),
+            staging_dir=str(tmp_path / "s"),
+            rsync_bin="/nonexistent/pc-fixture-rsync",
+        )
         res = p.push([SyncObject(key="k", data=b"v")])
         assert res.outcome == "permanent"
-        assert "cannot run rsync" in res.detail
+        assert res.detail == (
+            "Rsync Sync runs the rsync command, and PersonalClaw couldn't start it on this "
+            "machine: it isn't installed, isn't on the PATH PersonalClaw runs with, or isn't "
+            "executable. Install rsync where PersonalClaw can run it. Details: [Errno 2] No such "
+            "file or directory: '/nonexistent/pc-fixture-rsync'"
+        )
+        assert p.test().detail == res.detail
 
     @pytest.mark.parametrize(
         "code,expected",
@@ -534,16 +560,168 @@ class TestFailureHandling:
         assert provider_mod._outcome_for_rsync(code) == expected
 
     def test_a_failed_push_reports_the_rsync_error_line(self, tmp_path, monkeypatch):
-        def failing(argv, **k):
-            return subprocess.CompletedProcess(
-                argv, 23, stdout="", stderr="rsync: link_stat failed: No such file\n"
-            )
-
-        monkeypatch.setattr(provider_mod.subprocess, "run", failing)
-        p = create_provider({"path": str(tmp_path / "t"), "staging_dir": str(tmp_path / "s")})
+        """An error this transport has no words of its own for still says where to look, and
+        keeps rsync's line after it — "rsync exit 23: <that line>" used to be the message."""
+        monkeypatch.setattr(
+            provider_mod.subprocess,
+            "run",
+            _answering(23, "rsync: link_stat failed: No such file\n"),
+        )
+        root = tmp_path / "t"
+        p = create_provider({"path": str(root), "staging_dir": str(tmp_path / "s")})
         res = p.push([SyncObject(key="k", data=b"v")])
         assert res.outcome == "transient"
-        assert "link_stat failed" in res.detail
+        assert res.detail == (
+            f"rsync couldn't sync with the sync root path {root} (rsync exit 23). Check Sync root "
+            f"path {ON_CARD}. {RETRIES} Details: rsync: link_stat failed: No such file"
+        )
+
+
+# ── what a failure says ─────────────────────────────────────────────────────────────
+#
+# Each failure below used to arrive as "rsync exit <code>: <rsync's first line>" — or, from the
+# probe, "<target> unreachable (rsync exit <code>): …" — which names neither what is wrong nor
+# what to do. The ssh leg is proved on ssh's and rsync's own words, since no live host exists
+# in a test; each sample is the text they print for that trouble.
+
+REMOTE = {
+    "host": "backup@nas.example.com",
+    "path": "/srv/sync",
+    "port": 2222,
+    "ssh_key": "/keys/id_sync",
+}
+SSH = "ssh -p 2222 -i /keys/id_sync backup@nas.example.com"
+
+_REFUSALS = [
+    (
+        255,
+        "Host key verification failed.\r\nrsync: connection unexpectedly closed (0 bytes "
+        "received so far) [sender]\n",
+        f"SSH on this machine doesn't trust nas.example.com's host key yet. Run {SSH} once from "
+        "a terminal here to accept it.",
+    ),
+    (
+        255,
+        "@@@@@@@@@@@@@@@@\n@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @\n"
+        "@@@@@@@@@@@@@@@@\nHost key verification failed.\r\n",
+        "SSH refused nas.example.com because its host key has changed since this machine last "
+        "trusted it. Only if you know why it changed, remove its old key from this machine's "
+        f"known_hosts file, then run {SSH} once from a terminal here to accept the new one.",
+    ),
+    (
+        255,
+        "backup@nas.example.com: Permission denied (publickey,password).\r\nrsync: connection "
+        "unexpectedly closed (0 bytes received so far) [sender]\n",
+        f"nas.example.com turned down this machine's SSH login. Check that {SSH} logs in from a "
+        "terminal here without asking for anything, or set SSH identity file "
+        f"{ON_CARD} to a key nas.example.com accepts.",
+    ),
+    (
+        255,
+        "ssh: Could not resolve hostname nas.example.com: nodename nor servname provided, or "
+        "not known\r\nrsync: connection unexpectedly closed (0 bytes received so far) [sender]\n",
+        "nas.example.com couldn't be reached from this machine. Check that it is online, and that "
+        f"SSH host and SSH port {ON_CARD} are right.",
+    ),
+    (
+        127,
+        "bash: rsync: command not found\nrsync: connection unexpectedly closed (0 bytes received "
+        "so far) [sender]\nrsync error: remote command not found (code 127)\n",
+        "nas.example.com couldn't run rsync — it isn't installed there, or isn't on the PATH its "
+        "SSH logins get. Install rsync on nas.example.com.",
+    ),
+    (
+        2,
+        "protocol version mismatch -- is your shell clean?\n(see the rsync manpage for an "
+        "explanation)\nrsync error: protocol incompatibility (code 2)\n",
+        "Something on nas.example.com prints text when rsync logs in over SSH — a login message, "
+        "or output from a shell startup file — and it garbles rsync's connection. Stop that "
+        "output for non-interactive logins on nas.example.com.",
+    ),
+    (
+        11,
+        'rsync: [Receiver] mkdir "/srv/sync" failed: No such file or directory (2)\nrsync error: '
+        "error in file IO (code 11)\n",
+        "The sync root path /srv/sync doesn't exist on nas.example.com. Create that folder there, "
+        f"or set Sync root path {ON_CARD} to one that exists.",
+    ),
+    (
+        23,
+        # rsync's own "Permission denied (13)" — a folder refusing a write, not a login refused.
+        'rsync: [Receiver] mkstemp "/srv/sync/.k.Xy12Ab" failed: Permission denied (13)\n'
+        "rsync error: some files/attrs were not transferred (code 23)\n",
+        "The sync root path /srv/sync on nas.example.com doesn't let this machine's SSH login "
+        f"read or write it. Fix that folder's permissions, or set Sync root path {ON_CARD} to "
+        "one this machine's SSH login can write to.",
+    ),
+    (
+        11,
+        'rsync: [Receiver] write failed on "/srv/sync/k": No space left on device (28)\n'
+        "rsync error: error in file IO (code 11)\n",
+        "The disk holding the sync root path /srv/sync on nas.example.com is full. Free some "
+        "space on it.",
+    ),
+    (
+        12,
+        "rsync: an error this transport has no words of its own for\n",
+        f"rsync couldn't sync with nas.example.com (rsync exit 12). Check SSH host and Sync root "
+        f"path {ON_CARD}, and that rsync is installed on both machines.",
+    ),
+]
+
+
+class TestWhatAFailureSays:
+    @pytest.mark.parametrize(("code", "stderr", "says"), _REFUSALS)
+    def test_a_push_the_host_refuses_says_why_and_what_to_do(
+        self, tmp_path, monkeypatch, code, stderr, says
+    ):
+        monkeypatch.setattr(provider_mod.subprocess, "run", _answering(code, stderr))
+        p = create_provider({**REMOTE, "staging_dir": str(tmp_path)})
+
+        res = p.push([SyncObject(key="k", data=b"v")])
+
+        # The words change; the verdict the outbox acts on does not.
+        assert res.outcome == provider_mod._outcome_for_rsync(code)
+        retries = f" {RETRIES}" if res.outcome == "transient" else ""
+        assert res.detail == f"{says}{retries} Details: {' '.join(stderr.split())}"
+
+    @pytest.mark.parametrize(("code", "stderr", "says"), _REFUSALS)
+    def test_a_probe_the_host_refuses_says_the_same(
+        self, tmp_path, monkeypatch, code, stderr, says
+    ):
+        monkeypatch.setattr(provider_mod.subprocess, "run", _answering(code, stderr))
+        p = create_provider({**REMOTE, "staging_dir": str(tmp_path)})
+
+        res = p.test()
+
+        assert res.ok is False
+        assert res.detail == f"{says} Details: {' '.join(stderr.split())}"
+
+    def test_a_retried_refusal_says_so_and_a_permanent_one_does_not(self, tmp_path, monkeypatch):
+        """The retry sentence follows the outcome: only a ``transient`` push is tried again."""
+        p = create_provider({**REMOTE, "staging_dir": str(tmp_path)})
+        monkeypatch.setattr(
+            provider_mod.subprocess, "run", _answering(12, "rsync: connection reset\n")
+        )
+        assert RETRIES in p.push([SyncObject(key="k", data=b"v")]).detail
+        monkeypatch.setattr(provider_mod.subprocess, "run", _answering(2, "rsync: bad option\n"))
+        permanent = p.push([SyncObject(key="k", data=b"v")])
+        assert permanent.outcome == "permanent"
+        assert RETRIES not in permanent.detail
+
+    def test_a_local_folder_that_refuses_names_personalclaw(self, tmp_path, monkeypatch):
+        root = tmp_path / "t"
+        stderr = f'rsync: [Receiver] mkstemp "{root}/.k.Xy12Ab" failed: Permission denied (13)\n'
+        monkeypatch.setattr(provider_mod.subprocess, "run", _answering(23, stderr))
+        p = create_provider({"path": str(root), "staging_dir": str(tmp_path / "s")})
+
+        res = p.push([SyncObject(key="k", data=b"v")])
+
+        assert res.detail.startswith(
+            f"The sync root path {root} on this machine doesn't let PersonalClaw read or write "
+            f"it. Fix that folder's permissions, or set Sync root path {ON_CARD} to one "
+            f"PersonalClaw can write to. {RETRIES} Details: "
+        ), res.detail
 
 
 # ── 3. output parsing (the two formats this transport depends on) ─────────────────────

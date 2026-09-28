@@ -38,12 +38,15 @@ import asyncio
 import hashlib
 import hmac
 import os
+import socket
+import ssl
 import threading
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote, urlparse
 
+from personalclaw.sdk.net import sentence_with_detail
 from personalclaw.sdk.sync import (
     ConnectionResult,
     PushResult,
@@ -56,6 +59,11 @@ from personalclaw.sdk.sync import (
 #: The single shared registry object every machine compare-and-swaps. Matches dir-sync and
 #: git-sync; core's ``ROUTING_KEYS`` names it as a plaintext routing key.
 _REGISTRY_KEY = "registry.json"
+
+#: Where this transport's own settings (Endpoint URL, Bucket, Region, the access keys) are set.
+_ON_CARD = "on the S3 Sync card in Settings → Providers"
+#: Said after a failure the sync cycle retries (a ``transient`` outcome).
+_RETRIES = "Sync tries again on its next run."
 
 #: SigV4 constants. ``s3`` is the signing service name; the algorithm label is fixed.
 _ALGORITHM = "AWS4-HMAC-SHA256"
@@ -294,6 +302,84 @@ class S3SyncProvider(SyncTransportProvider):
         headers = self._signed_headers(method, url, query, payload, extra_headers)
         return _run(fetch(full_url, policy=policy, method=method, headers=headers, data=payload))
 
+    def _request_failed(self, exc: BaseException) -> str:
+        """What a request that raised instead of answering means, and what to do — the
+        exception's own words ("Cannot connect to host …", a guard's reason) say neither.
+
+        The sentence alone: the caller says whether the cycle retries, and adds those words.
+        Classified on the standard-library cause an HTTP client error wraps (``os_error``,
+        ``certificate_error``), since this module imports no HTTP client of its own."""
+        from personalclaw.sdk.net import EgressBlocked
+
+        from personalclaw.sdk.sync import SyncEndpointRefused  # noqa: PLC0415
+
+        endpoint = self._endpoint
+        host = urlparse(endpoint).hostname or endpoint
+        not_found = (
+            f"{host}, the host in Endpoint URL, can't be found from this machine. Check Endpoint "
+            f"URL {_ON_CARD}, and that this machine is online."
+        )
+        if isinstance(exc, SyncEndpointRefused):
+            return (
+                f"PersonalClaw won't use {endpoint} as a sync endpoint. Set Endpoint URL "
+                f"{_ON_CARD} to your store's http:// or https:// address — or, if its host is "
+                "under Denied hosts in Settings → Security, take it off that list."
+            )
+        if isinstance(exc, EgressBlocked):
+            category = getattr(getattr(exc, "decision", None), "category", "")
+            if category == "unresolvable":
+                return not_found
+            if category in ("metadata", "link_local"):
+                return (
+                    f"{host}, the host in Endpoint URL, points at a cloud metadata or link-local "
+                    "address, which PersonalClaw never lets anything reach. Check Endpoint URL "
+                    f"{_ON_CARD}, and that host's DNS record."
+                )
+            if category == "not_listed":
+                return (
+                    f"The store at {endpoint} sent S3 Sync on to a different host, and a sync "
+                    "transport only reaches the host in its Endpoint URL. Set Endpoint URL "
+                    f"{_ON_CARD} to the address the store redirects to."
+                )
+            return (
+                "PersonalClaw's network egress rules stopped a request S3 Sync made to "
+                f"{endpoint}, or to where the store redirected it. Check that Endpoint URL "
+                f"{_ON_CARD} is the store's own address, and Network egress in Settings → "
+                "Security."
+            )
+        if type(exc).__name__ == "LiveWriteDisabled":
+            # Core's live-writes refusal is not published through the SDK, so it is known by
+            # its name here; its own words (which name the variable) follow as the detail.
+            return (
+                "PersonalClaw is running with live writes turned off "
+                "(PERSONALCLAW_DISABLE_LIVE_WRITES is set), so S3 Sync may not write to the "
+                "store. Unset it and restart PersonalClaw to sync."
+            )
+        cause = getattr(exc, "os_error", None) or getattr(exc, "certificate_error", None) or exc
+        if isinstance(cause, ConnectionRefusedError):
+            return (
+                f"The store at {endpoint} refused the connection. Check that it is running, and "
+                f"that Endpoint URL {_ON_CARD} has the right host and port."
+            )
+        if isinstance(cause, TimeoutError):
+            return (
+                f"The store at {endpoint} didn't answer in time. Check that it is reachable from "
+                f"this machine, and that Endpoint URL {_ON_CARD} is right."
+            )
+        if isinstance(cause, socket.gaierror):
+            return not_found
+        if isinstance(cause, ssl.SSLError):
+            return (
+                f"S3 Sync couldn't make a secure connection to {endpoint}: the TLS handshake "
+                "failed, or this machine doesn't trust the store's certificate. Check that "
+                f"Endpoint URL {_ON_CARD} is right, and that the store's certificate is valid "
+                "for that host."
+            )
+        return (
+            f"S3 Sync's request to the store at {endpoint} didn't complete. Check that the store "
+            f"is running and reachable from this machine, and the settings {_ON_CARD}."
+        )
+
     # ── SyncTransportProvider contract ───────────────────────────────────────────────
 
     def push(self, objects: list[SyncObject]) -> PushResult:
@@ -314,11 +400,15 @@ class S3SyncProvider(SyncTransportProvider):
                     extra_headers={"if-none-match": "*"},
                 )
             except Exception as e:  # noqa: BLE001 — every failure becomes a typed outcome
+                outcome = _outcome_for(e)
+                sentence = self._request_failed(e)
+                if outcome == "transient":
+                    sentence = f"{sentence} {_RETRIES}"
                 return PushResult(
                     pushed=pushed,
                     skipped=skipped,
-                    outcome=_outcome_for(e),
-                    detail=f"{type(e).__name__}: {e}",
+                    outcome=outcome,
+                    detail=sentence_with_detail(sentence, e),
                 )
             if resp.status in (412, 409):
                 # Already present — insert-only means this is a no-op, not a failure.
@@ -468,7 +558,9 @@ class S3SyncProvider(SyncTransportProvider):
                 query={"list-type": "2", "max-keys": "0", "prefix": self._prefix},
             )
         except Exception as e:  # noqa: BLE001 — a probe never raises
-            return ConnectionResult(ok=False, detail=f"{type(e).__name__}: {e}")
+            return ConnectionResult(
+                ok=False, detail=sentence_with_detail(self._request_failed(e), e)
+            )
         if 200 <= resp.status < 300:
             where = f"{self._bucket}/{self._prefix}" if self._prefix else self._bucket
             return ConnectionResult(

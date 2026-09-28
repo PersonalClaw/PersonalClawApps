@@ -54,7 +54,13 @@ from personalclaw.sdk.model import (
     register_branded_app,
     require_model,
 )
-from personalclaw.sdk.net import CONNECTOR, EgressBlocked, egress_policy_for, fetch
+from personalclaw.sdk.net import (
+    CONNECTOR,
+    EgressBlocked,
+    egress_policy_for,
+    fetch,
+    sentence_with_detail,
+)
 from personalclaw.sdk.video import (
     VideoGenError,
     VideoGenModel,
@@ -110,6 +116,32 @@ _ATTRIBUTION_VALUE = "PersonalClaw"
 # own actionable message rather than being silently snapped to a size the caller
 # did not ask for.
 _PIXEL_SIZE_RE = re.compile(r"^\s*(\d{2,5})\s*[xX*]\s*(\d{2,5})\s*$")
+
+# Where an instance is configured. Base URL sits under the form's Advanced disclosure, so a step
+# that names it says so.
+_ON_INSTANCE = "on this OpenRouter instance in Settings → Providers"
+_BASE_URL_STEP = f"check Base URL {_ON_INSTANCE} (under Advanced)"
+# Where the hosts PersonalClaw may reach are listed ("Allowed hosts", "Denied hosts").
+_EGRESS_SETTINGS = "Settings → Security → Network egress"
+
+# What to change when OpenRouter refuses a call as invalid or answers it "not found", which turns
+# on the call. A generation's model and options are the user's to change; a key check sends
+# nothing they chose except where it goes; a download fetches a job that already finished, so
+# only making the video again gets one.
+_REQUEST_STEP = (
+    "Choose another model in Settings → Models or change the options you asked for; if no model "
+    f"works, {_BASE_URL_STEP}."
+)
+_KEY_CHECK_STEP = f"Check Base URL {_ON_INSTANCE} (under Advanced); left empty, it uses {_BASE}."
+_DOWNLOAD_STEP = "Generate the video again."
+
+# The non-public places an owner can vouch for by adding the host to Allowed hosts. A cloud
+# metadata or link-local address is never reachable, allowed or not.
+_OWNER_ALLOWABLE_PLACES = {
+    "loopback": "this computer",
+    "unspecified": "this computer",
+    "private": "a private network",
+}
 
 
 # ── Chat provider (branded, OpenAI-compatible) ────────────────────────────────
@@ -234,11 +266,13 @@ class OpenRouterCatalog(ModelCatalog):
                 headers=_headers(self._api_key),
             )
         except Exception as e:  # noqa: BLE001 — unreachable endpoint / blocked egress
-            return ConnectionResult(ok=False, detail=f"Could not reach OpenRouter: {e}")
+            return ConnectionResult(ok=False, detail=_unanswered_message(e, what="key check"))
         if resp.status != 200:
             return ConnectionResult(
                 ok=False,
-                detail=_status_message(resp.status, resp.text, what="key check"),
+                detail=_status_message(
+                    resp.status, resp.text, what="key check", step=_KEY_CHECK_STEP,
+                ),
             )
         # The key is real. A model count is still worth reporting, but discovery
         # failing now means the endpoint/filter is off, not that the key is bad.
@@ -342,13 +376,20 @@ def _error_detail(text: str) -> str:
         return text[:200]
 
 
-def _status_message(status: int, text: str, *, what: str) -> str:
+def _status_message(
+    status: int, text: str, *, what: str, step: str = _REQUEST_STEP, hint: str = "",
+) -> str:
     """Map an OpenRouter HTTP status to a message a user can act on.
 
     Keyed on the STATUS CODE only, never the body. Verified live: an
     unauthenticated ``POST /api/v1/images`` returns the actively misleading
     ``{"error":{"message":"No cookie auth credentials found","code":401}}`` — a
     body-matching implementation would tell the user to check their cookies.
+
+    A status with no sentence of its own is named by its class, and OpenRouter's words follow
+    as the detail. ``step`` is what to change when the call is refused as invalid or answered
+    "not found", which depends on the call; ``hint`` adds what an invalid request could have
+    asked for instead.
     """
     if status in (401, 403):
         return (
@@ -371,7 +412,71 @@ def _status_message(status: int, text: str, *, what: str) -> str:
         )
     if status in (524, 529):
         return f"OpenRouter timed out or is overloaded ({what}); retry shortly."
-    return f"OpenRouter {what} failed (HTTP {status}): {_error_detail(text)}"
+    if status == 400:
+        sentence = f"OpenRouter refused the {what} request as invalid (HTTP 400).{hint} {step}"
+    elif status == 404:
+        sentence = f"OpenRouter answered the {what} request with HTTP 404 (not found). {step}"
+    elif 500 <= status < 600:
+        sentence = (
+            f"OpenRouter failed on its side ({what}, HTTP {status}). Try again in a few minutes."
+        )
+    else:
+        sentence = f"OpenRouter {what} failed (HTTP {status}). {step}"
+    return sentence_with_detail(sentence, _error_detail(text))
+
+
+def _blocked_message(error: EgressBlocked, *, what: str) -> str:
+    """The sentence for an OpenRouter call the egress guard stopped before it was sent.
+
+    The guard's reason names its rule, not a setting, and which setting to change depends on
+    what it refused: a host that could not be found (this computer is offline, or Base URL
+    names no real host), a host on the Denied hosts list, a host on this computer or a private
+    network (which Allowed hosts can vouch for), or an address that is never reachable.
+    """
+    decision = error.decision
+    host = decision.host or "its host"
+    place = _OWNER_ALLOWABLE_PLACES.get(decision.category, "")
+    if decision.category == "unresolvable":
+        sentence = (
+            f"OpenRouter {what} was not sent: {host} could not be found. Check this computer's "
+            f"internet connection and try again; if Base URL is set {_ON_INSTANCE} (under "
+            "Advanced), check it too."
+        )
+    elif decision.category == "deny_list":
+        sentence = (
+            f"OpenRouter {what} was not sent: {host} is blocked by the Denied hosts list in "
+            f"{_EGRESS_SETTINGS}. Remove it from that list, or {_BASE_URL_STEP}."
+        )
+    elif place:
+        sentence = (
+            f"OpenRouter {what} was not sent: {host} is on {place}, which PersonalClaw does not "
+            f"reach unless you allow it. If that server is yours, add {host} to Allowed hosts in "
+            f"{_EGRESS_SETTINGS}; otherwise {_BASE_URL_STEP}."
+        )
+    else:
+        sentence = (
+            f"OpenRouter {what} was not sent: PersonalClaw's egress guard refused the address it "
+            f"would have reached. Check Base URL {_ON_INSTANCE} (under Advanced)."
+        )
+    return sentence_with_detail(sentence, error)
+
+
+def _unanswered_message(error: Exception, *, what: str) -> str:
+    """The sentence for an OpenRouter call that got no answer: refused by the egress guard,
+    timed out, unable to connect, or failed some other way."""
+    if isinstance(error, EgressBlocked):
+        return _blocked_message(error, what=what)
+    if isinstance(error, asyncio.TimeoutError):
+        sentence = f"OpenRouter {what} timed out. Try again in a moment."
+    elif isinstance(error, OSError):
+        sentence = (
+            f"The connection to OpenRouter failed during the {what}. Check this computer's "
+            f"internet connection and try again; if Base URL is set {_ON_INSTANCE} (under "
+            "Advanced), check it too."
+        )
+    else:
+        sentence = f"OpenRouter {what} failed unexpectedly. Try again in a moment."
+    return sentence_with_detail(sentence, error)
 
 
 def _retry_after_seconds(headers: dict[str, str]) -> float:
@@ -402,12 +507,14 @@ async def _request_json(
     what: str = "request",
     ok_statuses: tuple[int, ...] = (200,),
     allow_retry: bool = True,
+    hint: str = "",
 ) -> dict[str, Any]:
     """One guarded JSON call, with the status→message mapping + a single 429 retry.
 
     Retries EXACTLY once on 429, honoring ``Retry-After``. A second 429 raises: an
     unbounded backoff chain inside a chat turn is worse for the user than a clear
-    "rate-limited, try again" — they can see it and decide.
+    "rate-limited, try again" — they can see it and decide. ``hint`` goes into the
+    sentence for a request refused as invalid (see ``_status_message``).
     """
     data = json.dumps(body).encode() if body is not None else None
     attempt = 0
@@ -420,14 +527,10 @@ async def _request_json(
                 headers=_headers(key),
                 data=data,
             )
-        except EgressBlocked as e:
-            raise error_cls(f"OpenRouter {what} was blocked by the egress guard: {e}") from e
         except error_cls:
             raise
-        except asyncio.TimeoutError as e:
-            raise error_cls(f"OpenRouter {what} timed out.") from e
         except Exception as e:  # noqa: BLE001 — surface any transport failure as typed
-            raise error_cls(f"OpenRouter {what} request failed: {e}") from e
+            raise error_cls(_unanswered_message(e, what=what)) from e
 
         if resp.status in ok_statuses:
             try:
@@ -440,7 +543,7 @@ async def _request_json(
             await asyncio.sleep(_retry_after_seconds(resp.headers))
             continue
 
-        raise error_cls(_status_message(resp.status, resp.text, what=what))
+        raise error_cls(_status_message(resp.status, resp.text, what=what, hint=hint))
 
 
 # ── Dynamic model discovery (TTL-cached, per key) ─────────────────────────────
@@ -692,29 +795,25 @@ class OpenRouterImageProvider(ImageGenProvider):
         The route is ``/images`` — never the undocumented ``/images/generations``
         alias (which exists but carries no stability contract).
 
-        A rejected pixel ``size`` is re-raised with the sizes this model DOES accept
-        appended. Upstream's own text names only the tier it computed ("Image size 2K
-        is not supported for this model"), which the caller cannot act on: it never
-        asked for "2K", it asked for a WxH, and the tier mapping is not a published
-        rule. Listing the model's real enum turns a dead end into a next step.
+        A request refused as invalid (HTTP 400) that asked for a pixel ``size`` also names
+        the sizes this model DOES accept. Upstream's own text names only the tier it
+        computed ("Image size 2K is not supported for this model"), which the caller cannot
+        act on: it never asked for "2K", it asked for a WxH, and the tier mapping is not a
+        published rule. Listing the model's real enum turns a dead end into a next step. No
+        other failure carries the list: a 402 or a 429 has nothing to do with geometry.
         """
-        try:
-            data = await _request_json(
-                f"{self._base()}/images",
-                key=key,
-                method="POST",
-                body=body,
-                # A long call returning a large base64 body: CONNECTOR's 20s/10MB would
-                # both time out and silently truncate.
-                policy=_long_policy(timeout_s=_IMAGE_TIMEOUT_S, max_bytes=64_000_000),
-                error_cls=ImageGenError,
-                what="image generation",
-            )
-        except ImageGenError as e:
-            hint = self._size_hint(body, descriptor or {})
-            if not hint:
-                raise
-            raise ImageGenError(f"{e}{hint}") from e
+        data = await _request_json(
+            f"{self._base()}/images",
+            key=key,
+            method="POST",
+            body=body,
+            # A long call returning a large base64 body: CONNECTOR's 20s/10MB would
+            # both time out and silently truncate.
+            policy=_long_policy(timeout_s=_IMAGE_TIMEOUT_S, max_bytes=64_000_000),
+            error_cls=ImageGenError,
+            what="image generation",
+            hint=self._size_hint(body, descriptor or {}),
+        )
         results: list[ImageResult] = []
         for item in data.get("data", []) or []:
             if not isinstance(item, dict):
@@ -774,7 +873,11 @@ class OpenRouterImageProvider(ImageGenProvider):
             with open(source_image, "rb") as fh:
                 raw = fh.read()
         except OSError as e:
-            raise ImageGenError(f"Could not read source image: {e}") from e
+            raise ImageGenError(sentence_with_detail(
+                "Could not read source image, so the edit was not sent to OpenRouter. Check "
+                "that the image file still exists and can be read, then try the edit again.",
+                e,
+            )) from e
         mime = mimetypes.guess_type(source_image)[0] or "image/png"
         data_uri = f"data:{mime};base64,{base64.b64encode(raw).decode()}"
 
@@ -1021,11 +1124,12 @@ class OpenRouterVideoProvider(VideoGenProvider):
             if status == _VIDEO_DONE:
                 return doc
             if status == "failed":
-                detail = _truncate(doc.get("error") or doc.get("failure_reason") or "", 200)
-                raise VideoGenError(
-                    f"OpenRouter video job failed: {detail}" if detail
-                    else "OpenRouter video job failed."
-                )
+                raise VideoGenError(sentence_with_detail(
+                    "OpenRouter's video job failed, so no video was made. Try again; if it "
+                    "fails again, change the prompt or choose another model in Settings → "
+                    "Models.",
+                    str(doc.get("error") or doc.get("failure_reason") or ""),
+                ))
             if status == "cancelled":
                 raise VideoGenError("OpenRouter video job was cancelled.")
             if status == "expired":
@@ -1056,14 +1160,14 @@ class OpenRouterVideoProvider(VideoGenProvider):
                 method="GET",
                 headers=_headers(key),
             )
-        except EgressBlocked as e:
-            raise VideoGenError(f"OpenRouter video download was blocked: {e}") from e
-        except Exception as e:  # noqa: BLE001
-            raise VideoGenError(f"OpenRouter video download failed: {e}") from e
+        except Exception as e:  # noqa: BLE001 — surface any transport failure as typed
+            raise VideoGenError(_unanswered_message(e, what="video download")) from e
 
         if resp.status != 200:
             raise VideoGenError(
-                _status_message(resp.status, resp.text, what="video download")
+                _status_message(
+                    resp.status, resp.text, what="video download", step=_DOWNLOAD_STEP,
+                )
             )
         if resp.truncated:
             # ``_read_capped`` truncates SILENTLY, so without this check a clip over

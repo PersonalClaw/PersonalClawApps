@@ -16,11 +16,13 @@ than a hand-rolled lock. The service (never an agent) invokes ``git`` via ``subp
 no subprocess error is ever allowed to raise out of a contract method.
 """
 
+import errno
 import hashlib
 import os
 import subprocess
 from typing import Any
 
+from personalclaw.sdk.net import sentence_with_detail
 from personalclaw.sdk.sync import (
     ConnectionResult,
     PushResult,
@@ -45,6 +47,132 @@ _GIT_TIMEOUT = 120
 # contributor's.
 _COMMIT_NAME = "PersonalClaw Sync"
 _COMMIT_EMAIL = "sync@personalclaw.local"
+
+# ── What a failure says ──────────────────────────────────────────────────────────────
+#
+# git's own words ("fatal: Could not read from remote repository.", a Python
+# ``CalledProcessError`` naming the argv) say neither what is wrong in the user's setup nor
+# what to do. Each failure below is said as that, and git's words follow as the detail.
+
+#: Where this transport's own settings (Git remote URL, Local working clone, Branch) are set.
+_ON_CARD = "on the Git Sync card in Settings → Providers"
+#: Said after a failure the sync cycle retries (a ``transient`` outcome).
+_RETRIES = "Sync tries again on its next run."
+
+# What git — and the ssh it runs — prints for each kind of trouble with the remote, matched
+# lower-cased, in the order ``_remote_trouble`` checks them. The credential needles are ssh's
+# and https's own refusals: a bare "permission denied" is also how a LOCAL folder refuses a
+# write, which is the working clone's trouble, not the remote's (``_CLONE_DENIED``).
+_HOST_KEY_CHANGED = ("remote host identification has changed",)
+_HOST_KEY = ("host key verification failed",)
+_CREDENTIALS = (
+    "permission denied (",
+    "permission denied, please try again",
+    "authentication failed",
+    "could not read username",
+    "could not read password",
+    "invalid username or password",
+    "access denied",
+    "error: 401",
+    "error: 403",
+)
+_UNREACHABLE = (
+    "could not resolve host",
+    "connection timed out",
+    "connection refused",
+    "network is unreachable",
+    "no route to host",
+    "failed to connect",
+    "operation timed out",
+)
+_NO_GIT_THERE = (
+    "upload-pack: command not found",
+    "receive-pack: command not found",
+    "upload-pack: not found",
+    "receive-pack: not found",
+)
+_NO_REPOSITORY = (
+    "repository not found",
+    "does not appear to be a git repository",
+    "does not exist",
+    "not found",
+)
+_RULES = ("hook declined", "protected branch", "not allowed to push")
+# What git prints when the working clone's own folder refuses it.
+_CLONE_DENIED = ("permission denied", "insufficient permission", "read-only file system")
+
+
+def _words(failure: object) -> str:
+    """What git itself said about a failure — its stderr, else its stdout, else the exception's
+    own text — kept as the detail after the sentence."""
+    for stream in (getattr(failure, "stderr", None), getattr(failure, "stdout", None)):
+        if isinstance(stream, bytes):
+            stream = stream.decode("utf-8", "replace")
+        if isinstance(stream, str) and stream.strip():
+            return stream.strip()
+    return "" if isinstance(failure, subprocess.CompletedProcess) else str(failure)
+
+
+def _subcommand(cmd: object) -> str:
+    """The git subcommand a failed run was (``clone``, ``add``), past ``-C``/``-c`` and their
+    values."""
+    args = [str(a) for a in cmd] if isinstance(cmd, (list, tuple)) else []
+    rest = args[1:] if args[:1] == ["git"] else args
+    while len(rest) >= 2 and rest[0] in ("-C", "-c"):
+        rest = rest[2:]
+    return rest[0] if rest else "git"
+
+
+def _remote_trouble(words: str) -> str:
+    """What git's words say went wrong with the remote, and what to do — "" when they name
+    none of the kinds of trouble this knows."""
+    low = words.lower()
+    if any(needle in low for needle in _HOST_KEY_CHANGED):
+        return (
+            "the remote's SSH host key has changed since this machine last trusted it, so SSH "
+            "refused to connect. Only if you know why it changed, remove its old key from this "
+            "machine's known_hosts file, then connect to that host once from a terminal here."
+        )
+    if any(needle in low for needle in _HOST_KEY):
+        return (
+            "SSH on this machine doesn't trust the remote's host key yet. Connect to that host "
+            "once from a terminal here to accept its key."
+        )
+    if any(needle in low for needle in _CREDENTIALS):
+        return (
+            "the remote didn't accept this machine's credentials, or git had none to give it. "
+            "Check that git on this machine can reach it — its SSH key, or a credential helper "
+            "for an https URL."
+        )
+    if any(needle in low for needle in _UNREACHABLE):
+        return (
+            "the remote couldn't be reached from this machine. Check that it is online and that "
+            f"Git remote URL {_ON_CARD} names the right host."
+        )
+    if any(needle in low for needle in _NO_GIT_THERE):
+        return (
+            "the remote host couldn't run git — it isn't installed there, or isn't on the PATH "
+            "its SSH logins get. Install git on that host."
+        )
+    if any(needle in low for needle in _NO_REPOSITORY):
+        return (
+            "no repository at that address is visible to this machine — it doesn't exist, or "
+            f"this machine's credentials can't see it. Check Git remote URL {_ON_CARD}."
+        )
+    return ""
+
+
+def _git_unrunnable(failure: BaseException) -> bool:
+    """Whether ``failure`` is this machine not being able to start the git executable at all."""
+    return isinstance(failure, (FileNotFoundError, PermissionError)) and failure.filename == "git"
+
+
+#: Said when git itself could not be started.
+_NO_GIT = (
+    "Git Sync runs the git command, and PersonalClaw couldn't start it on this machine: it "
+    "isn't installed, isn't on the PATH PersonalClaw runs with, or isn't executable. Install "
+    "git where PersonalClaw can run it."
+)
 
 
 class GitSyncProvider(SyncTransportProvider):
@@ -145,12 +273,147 @@ class GitSyncProvider(SyncTransportProvider):
             return "transient"
         return "permanent"
 
+    def _push_refused(self, cp: subprocess.CompletedProcess, outcome: str) -> str:
+        """What a ``git push`` the remote did not take says. The words follow what git said;
+        a ``transient`` outcome (which the cycle retries) adds that it will try again."""
+        words = _words(cp)
+        low = words.lower()
+        trouble = _remote_trouble(words)
+        if any(needle in low for needle in _RULES):
+            sentence = (
+                "Git Sync couldn't push to the git remote: its rules don't let this machine push "
+                f"to branch '{self._branch}'. Allow that on the remote, or set Branch "
+                f"{_ON_CARD} to one that does."
+            )
+        elif "fetch first" in low or "non-fast-forward" in low:
+            sentence = (
+                "Git Sync's push was turned away because the git remote has commits this "
+                "machine hasn't pulled — another machine pushed first."
+            )
+        elif trouble:
+            sentence = f"Git Sync couldn't push to the git remote: {trouble}"
+        else:
+            sentence = (
+                "Git Sync couldn't push to the git remote. Check Git remote URL and Branch "
+                f"{_ON_CARD}, and that the remote accepts pushes from this machine."
+            )
+        if outcome == "transient":
+            sentence = f"{sentence} {_RETRIES}"
+        return sentence_with_detail(sentence, words)
+
+    def _clone_unwritable(self) -> str:
+        """What the working clone's folder refusing a write says."""
+        return (
+            f"Git Sync isn't allowed to write to its working clone at {self._clone}. Fix that "
+            f"folder's permissions, or set Local working clone {_ON_CARD} to a folder "
+            "PersonalClaw can write to."
+        )
+
+    def _clone_disk_full(self) -> str:
+        """What a full disk under the working clone says."""
+        return (
+            f"The disk holding Git Sync's working clone at {self._clone} is full. Free some space."
+        )
+
+    def _cycle_stopped(self, failure: BaseException) -> str:
+        """What a push cycle that git or the working clone stopped part-way says. Every such
+        failure is a ``transient`` outcome the cycle retries, so each says so."""
+        words = _words(failure)
+        low = words.lower()
+        if _git_unrunnable(failure):
+            sentence = _NO_GIT
+        elif isinstance(failure, subprocess.TimeoutExpired):
+            step = _subcommand(failure.cmd)
+            if step in ("clone", "push"):
+                sentence = (
+                    f"git {step} didn't finish within {_GIT_TIMEOUT} seconds, so this sync "
+                    "stopped. If it keeps timing out, check that the git remote is reachable from "
+                    "this machine, and that git reaches it without stopping to ask for anything."
+                )
+            else:
+                sentence = (
+                    f"git {step} didn't finish within {_GIT_TIMEOUT} seconds in the working clone "
+                    f"at {self._clone}, so this sync stopped. If it keeps happening, run git "
+                    f"{step} there from a terminal to see what it waits for."
+                )
+        elif isinstance(failure, subprocess.CalledProcessError):
+            step = _subcommand(failure.cmd)
+            trouble = _remote_trouble(words) if step == "clone" else ""
+            # A clone's "Permission denied" can be the REMOTE's (a local-path remote this
+            # machine can't read), so for a clone only one naming the clone's own path is its.
+            denied = any(needle in low for needle in _CLONE_DENIED) and (
+                step != "clone" or self._clone in words
+            )
+            if trouble:
+                sentence = f"Git Sync couldn't clone the git remote into {self._clone}: {trouble}"
+            elif denied:
+                sentence = self._clone_unwritable()
+            elif "no space left on device" in low:
+                sentence = self._clone_disk_full()
+            elif step == "clone" and "already exists and is not an empty directory" in low:
+                sentence = (
+                    f"Git Sync couldn't clone the git remote into {self._clone}: that folder "
+                    f"already has other files in it. Set Local working clone {_ON_CARD} to an "
+                    "empty or new folder."
+                )
+            elif step == "clone":
+                sentence = (
+                    f"Git Sync couldn't clone the git remote into {self._clone}. Check Git remote "
+                    f"URL {_ON_CARD}, and that git on this machine can reach it."
+                )
+            elif "index.lock" in low:
+                sentence = (
+                    f"Git Sync couldn't update its working clone at {self._clone}: another git "
+                    "process is using it, or an interrupted one left .git/index.lock behind. Wait "
+                    "for it to finish, or remove that file."
+                )
+            else:
+                sentence = (
+                    f"Git Sync couldn't update its working clone at {self._clone}: git {step} "
+                    "failed there. Check that folder, and any git settings on this machine that "
+                    "apply to it."
+                )
+        elif isinstance(failure, PermissionError):
+            sentence = self._clone_unwritable()
+        elif isinstance(failure, OSError) and failure.errno == errno.ENOSPC:
+            sentence = self._clone_disk_full()
+        else:
+            sentence = (
+                f"Git Sync couldn't use its working clone at {self._clone}. Check that folder."
+            )
+        return sentence_with_detail(f"{sentence} {_RETRIES}", words)
+
     @staticmethod
-    def _snippet(cp: subprocess.CompletedProcess) -> str:
-        """A short, single-line human detail from a git result's stderr (or stdout)."""
-        text = (cp.stderr or cp.stdout or "").strip()
-        line = text.splitlines()[0] if text else "git command failed"
-        return line[:200]
+    def _unreadable(words: str) -> str:
+        """What a ``git ls-remote`` probe that git answered with an error says."""
+        trouble = _remote_trouble(words)
+        sentence = (
+            f"Git Sync couldn't read the git remote: {trouble}"
+            if trouble
+            else (
+                f"Git Sync couldn't read the git remote. Check Git remote URL {_ON_CARD}, "
+                "and that git on this machine can reach it."
+            )
+        )
+        return sentence_with_detail(sentence, words)
+
+    @staticmethod
+    def _probe_stopped(failure: BaseException) -> str:
+        """What a ``git ls-remote`` probe that could not run to completion says."""
+        if _git_unrunnable(failure):
+            sentence = _NO_GIT
+        elif isinstance(failure, subprocess.TimeoutExpired):
+            sentence = (
+                f"Checking the git remote didn't finish within {_GIT_TIMEOUT} seconds. Check that "
+                f"it is reachable from this machine, that Git remote URL {_ON_CARD} is right, "
+                "and that git reaches it without stopping to ask for anything."
+            )
+        else:
+            sentence = (
+                "Git Sync couldn't run git to check the git remote. Check that git works in a "
+                "terminal on this machine."
+            )
+        return sentence_with_detail(sentence, _words(failure))
 
     # ── SyncTransportProvider contract ───────────────────────────────────────────────
 
@@ -181,17 +444,18 @@ class GitSyncProvider(SyncTransportProvider):
             self._commit(f"sync: {pushed} objects")
             push_cp = self._git("push", "origin", self._branch, check=False)
             if push_cp.returncode != 0:
+                outcome = self._push_outcome(push_cp)
                 return PushResult(
                     pushed=pushed,
                     skipped=skipped,
-                    outcome=self._push_outcome(push_cp),
-                    detail=self._snippet(push_cp),
+                    outcome=outcome,
+                    detail=self._push_refused(push_cp, outcome),
                 )
             return PushResult(pushed=pushed, skipped=skipped, outcome="delivered")
         except (subprocess.SubprocessError, OSError) as e:
             # Clone/pull/commit blew up mid-cycle — retryable.
             return PushResult(
-                pushed=pushed, skipped=skipped, outcome="transient", detail=str(e)
+                pushed=pushed, skipped=skipped, outcome="transient", detail=self._cycle_stopped(e)
             )
 
     def list_remote(self, prefix: str = "") -> list[RemoteRef]:
@@ -290,9 +554,9 @@ class GitSyncProvider(SyncTransportProvider):
             cp = self._run(["ls-remote", self._repo_url], check=False)
             if cp.returncode == 0:
                 return ConnectionResult(ok=True, detail=f"git remote reachable: {self._repo_url}")
-            return ConnectionResult(ok=False, detail=self._snippet(cp))
+            return ConnectionResult(ok=False, detail=self._unreadable(_words(cp)))
         except (subprocess.SubprocessError, OSError) as e:
-            return ConnectionResult(ok=False, detail=str(e))
+            return ConnectionResult(ok=False, detail=self._probe_stopped(e))
 
 
 def create_provider(config: dict[str, Any] | None = None) -> GitSyncProvider:

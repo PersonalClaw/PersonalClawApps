@@ -619,3 +619,41 @@ def test_the_store_installs_it_without_a_scanner_warning(tmp_path):
     from personalclaw.supply_chain import default_scanner
 
     design_rails.assert_scans_clean(Path(__file__).parent, default_scanner, tmp_path)
+
+
+# ── speech-to-text and embeddings say it too ──
+
+#: What an adapter says when it is asked why it is unavailable, before any call has failed: the
+#: credential chain answered "none" rather than raising, so there is no SDK error to add.
+NO_CREDENTIALS_FOUND = NO_CREDENTIALS.split(" Details: ", 1)[0]
+
+
+def test_speech_to_text_with_no_credentials_says_what_to_do(aws, tmp_path, monkeypatch):
+    """🔴 Red on main: unavailable was False with nothing saying why, and a transcription
+    came back ``None``, which core read as audio with no speech in it."""
+    import provider
+    from personalclaw.sdk.stt import SttError
+
+    monkeypatch.setattr(provider, "_cred_cache", {})
+    clip = tmp_path / "recording.webm"
+    clip.write_bytes(b"\x1aE\xdf\xa3")
+    adapter = provider.BedrockSTTProvider(region="us-east-1", name="my-bedrock", s3_bucket="clips")
+
+    assert asyncio.run(adapter.unavailable_reason()) == NO_CREDENTIALS_FOUND
+    with pytest.raises(SttError) as failed:
+        asyncio.run(adapter.transcribe(str(clip), model=provider.TRANSCRIBE_MODEL))
+
+    assert str(failed.value) == NO_CREDENTIALS
+    assert isinstance(failed.value.__cause__, aws_errors.NoCredentialsError)
+
+
+def test_embeddings_with_no_credentials_say_what_to_do(aws, monkeypatch):
+    """🔴 Red on main: ``None`` and a DEBUG line, and nothing for a refused re-index to say."""
+    import provider
+
+    monkeypatch.setattr(provider, "_cred_cache", {})
+    adapter = provider.BedrockEmbeddingProvider(region="us-east-1", name="my-bedrock")
+
+    assert asyncio.run(adapter.unavailable_reason()) == NO_CREDENTIALS_FOUND
+    assert asyncio.run(adapter.embed("a heron", model="amazon.titan-embed-text-v2:0")) is None
+    assert asyncio.run(adapter.unavailable_reason()) == NO_CREDENTIALS, "the call's own failure"

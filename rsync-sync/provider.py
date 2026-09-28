@@ -43,6 +43,7 @@ import subprocess  # noqa: S404 — argv-only, shell=False; see the module docst
 import tempfile
 from typing import Any
 
+from personalclaw.sdk.net import sentence_with_detail
 from personalclaw.sdk.sync import (
     ConnectionResult,
     PushResult,
@@ -53,6 +54,40 @@ from personalclaw.sdk.sync import (
 
 #: The single shared registry object every machine compare-and-swaps.
 _REGISTRY_KEY = "registry.json"
+
+# ── What a failure says ──────────────────────────────────────────────────────────────
+#
+# rsync's and ssh's own words ("rsync error: unexplained error (code 255)", a Python
+# ``FileNotFoundError`` naming the binary) say neither what is wrong in the user's setup nor
+# what to do. Each failure is said as that, and their words follow as the detail.
+
+#: Where this transport's own settings (SSH host, Sync root path, SSH port, SSH identity file)
+#: are set.
+_ON_CARD = "on the Rsync Sync card in Settings → Providers"
+#: Said after a failure the sync cycle retries (a ``transient`` outcome).
+_RETRIES = "Sync tries again on its next run."
+
+# What ssh prints for each kind of trouble reaching the host, matched lower-cased in the order
+# ``RsyncSyncProvider._refused`` checks them. The login refusal names ssh's auth methods, because
+# rsync's own "Permission denied (13)" — a folder refusing a write — also opens with the same
+# two words.
+_HOST_KEY_CHANGED = ("remote host identification has changed",)
+_HOST_KEY = ("host key verification failed",)
+_SHELL_NOT_CLEAN = ("is your shell clean",)
+_NO_RSYNC_THERE = ("rsync: command not found", "rsync: not found", "remote command not found")
+_UNREACHABLE = (
+    "could not resolve hostname",
+    "connection refused",
+    "connection timed out",
+    "operation timed out",
+    "no route to host",
+    "network is unreachable",
+)
+_LOGIN_REFUSED = re.compile(
+    r"permission denied \((?:publickey|password|keyboard-interactive|gssapi|hostbased)"
+    r"|permission denied, please try again"
+    r"|too many authentication failures"
+)
 
 #: Hostnames (and the optional ``user@``) may contain only these characters. Deliberately
 #: strict: anything outside this set is either meaningless to ssh or a way to smuggle an
@@ -211,6 +246,114 @@ class RsyncSyncProvider(SyncTransportProvider):
             check=False,
         )
 
+    # ── what a failure says ──────────────────────────────────────────────────────────
+
+    def _ssh_command(self) -> str:
+        """The ssh command that reaches the host the way rsync's remote shell does, to run by
+        hand."""
+        parts = ["ssh"]
+        if self._port and self._port != 22:
+            parts += ["-p", str(int(self._port))]
+        if self._ssh_key:
+            parts += ["-i", self._ssh_key]
+        return " ".join([*parts, self._host])
+
+    def _cannot_start(self, failure: OSError) -> str:
+        """What rsync not starting on this machine at all says."""
+        if (
+            isinstance(failure, (FileNotFoundError, PermissionError))
+            and failure.filename == self._rsync
+        ):
+            sentence = (
+                "Rsync Sync runs the rsync command, and PersonalClaw couldn't start it on this "
+                "machine: it isn't installed, isn't on the PATH PersonalClaw runs with, or isn't "
+                "executable. Install rsync where PersonalClaw can run it."
+            )
+        else:
+            sentence = (
+                "Rsync Sync couldn't start rsync on this machine. Check that rsync runs from a "
+                "terminal here."
+            )
+        return sentence_with_detail(sentence, failure)
+
+    def _refused(self, proc: subprocess.CompletedProcess) -> str:
+        """What a run that rsync, or the ssh under it, ended with an error means, and what to do.
+        The sentence alone: the caller says whether the cycle retries, and adds rsync's words."""
+        low = f"{proc.stderr or ''}\n{proc.stdout or ''}".lower()
+        host = self._host.rsplit("@", 1)[-1]
+        if self._host:
+            if any(needle in low for needle in _HOST_KEY_CHANGED):
+                return (
+                    f"SSH refused {host} because its host key has changed since this machine last "
+                    "trusted it. Only if you know why it changed, remove its old key from this "
+                    f"machine's known_hosts file, then run {self._ssh_command()} once from a "
+                    "terminal here to accept the new one."
+                )
+            if any(needle in low for needle in _HOST_KEY):
+                return (
+                    f"SSH on this machine doesn't trust {host}'s host key yet. Run "
+                    f"{self._ssh_command()} once from a terminal here to accept it."
+                )
+            if any(needle in low for needle in _SHELL_NOT_CLEAN):
+                return (
+                    f"Something on {host} prints text when rsync logs in over SSH — a login "
+                    "message, or output from a shell startup file — and it garbles rsync's "
+                    f"connection. Stop that output for non-interactive logins on {host}."
+                )
+            if any(needle in low for needle in _NO_RSYNC_THERE):
+                return (
+                    f"{host} couldn't run rsync — it isn't installed there, or isn't on the PATH "
+                    f"its SSH logins get. Install rsync on {host}."
+                )
+            if any(needle in low for needle in _UNREACHABLE):
+                return (
+                    f"{host} couldn't be reached from this machine. Check that it is online, and "
+                    f"that SSH host and SSH port {_ON_CARD} are right."
+                )
+            if _LOGIN_REFUSED.search(low):
+                return (
+                    f"{host} turned down this machine's SSH login. Check that "
+                    f"{self._ssh_command()} logs in from a terminal here without asking for "
+                    f"anything, or set SSH identity file {_ON_CARD} to a key {host} accepts."
+                )
+        where = f"on {host}" if self._host else "on this machine"
+        if "no such file or directory" in low:
+            create = (
+                "Create that folder there"
+                if self._host
+                else "Create that folder or reconnect the drive it lives on"
+            )
+            return (
+                f"The sync root path {self._path} doesn't exist {where}. {create}, or set Sync "
+                f"root path {_ON_CARD} to one that exists."
+            )
+        if "read-only file system" in low:
+            return (
+                f"The sync root path {self._path} {where} is on a read-only disk or mount. Make "
+                f"it writable, or set Sync root path {_ON_CARD} to a writable folder."
+            )
+        if "no space left on device" in low:
+            return (
+                f"The disk holding the sync root path {self._path} {where} is full. Free some "
+                "space on it."
+            )
+        if "permission denied" in low:
+            who = "this machine's SSH login" if self._host else "PersonalClaw"
+            return (
+                f"The sync root path {self._path} {where} doesn't let {who} read or write it. "
+                f"Fix that folder's permissions, or set Sync root path {_ON_CARD} to one {who} "
+                "can write to."
+            )
+        if self._host:
+            return (
+                f"rsync couldn't sync with {host} (rsync exit {proc.returncode}). Check SSH host "
+                f"and Sync root path {_ON_CARD}, and that rsync is installed on both machines."
+            )
+        return (
+            f"rsync couldn't sync with the sync root path {self._path} (rsync exit "
+            f"{proc.returncode}). Check Sync root path {_ON_CARD}."
+        )
+
     # ── SyncTransportProvider contract ───────────────────────────────────────────────
 
     def push(self, objects: list[SyncObject]) -> PushResult:
@@ -246,11 +389,14 @@ class RsyncSyncProvider(SyncTransportProvider):
                     outcome="transient", detail=f"rsync timed out after {self._timeout}s"
                 )
             except OSError as e:
-                return PushResult(outcome="permanent", detail=f"cannot run rsync: {e}")
+                return PushResult(outcome="permanent", detail=self._cannot_start(e))
             if proc.returncode != 0:
+                outcome = _outcome_for_rsync(proc.returncode)
+                sentence = self._refused(proc)
+                if outcome == "transient":
+                    sentence = f"{sentence} {_RETRIES}"
                 return PushResult(
-                    outcome=_outcome_for_rsync(proc.returncode),
-                    detail=f"rsync exit {proc.returncode}: {_first_error(proc)}",
+                    outcome=outcome, detail=sentence_with_detail(sentence, _words(proc))
                 )
             transferred = _transferred_paths(proc.stdout)
             pushed = sum(1 for o in objects if o.key in transferred)
@@ -426,7 +572,7 @@ class RsyncSyncProvider(SyncTransportProvider):
                 ),
             )
         except OSError as e:
-            return ConnectionResult(ok=False, detail=f"cannot run rsync: {e}")
+            return ConnectionResult(ok=False, detail=self._cannot_start(e))
         where = self._target(trailing_slash=False)
         if proc.returncode == 0:
             return ConnectionResult(
@@ -435,7 +581,7 @@ class RsyncSyncProvider(SyncTransportProvider):
                 extra={"host": self._host, "path": self._path, "local": not self._host},
             )
         return ConnectionResult(
-            ok=False, detail=f"{where} unreachable (rsync exit {proc.returncode}): {_first_error(proc)}"
+            ok=False, detail=sentence_with_detail(self._refused(proc), _words(proc))
         )
 
 
@@ -506,13 +652,10 @@ def _parse_listing(stdout: str) -> list[tuple[str, int, str]]:
     return rows
 
 
-def _first_error(proc: subprocess.CompletedProcess) -> str:
-    """The most useful single line of a failed rsync's output, for a human-readable detail."""
-    for stream in (proc.stderr or "", proc.stdout or ""):
-        for line in stream.splitlines():
-            if line.strip():
-                return line.strip()[:300]
-    return "no output"
+def _words(proc: subprocess.CompletedProcess) -> str:
+    """What rsync, and the ssh under it, said about a failed run — its stderr, else its stdout —
+    kept as the detail after the sentence."""
+    return (proc.stderr or "").strip() or (proc.stdout or "").strip()
 
 
 def _outcome_for_rsync(code: int) -> str:

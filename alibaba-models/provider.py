@@ -42,11 +42,23 @@ from personalclaw.sdk.model import (
     register_branded_app,
     require_model,
 )
+from personalclaw.sdk.net import sentence_with_detail
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_ENDPOINT = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 _IMAGE_TIMEOUT_S = 120.0
+
+# Where an instance is configured. Endpoint sits under the form's Advanced disclosure, so a step
+# that names it says so.
+_ON_INSTANCE = "on this Alibaba Model Studio instance in Settings → Providers"
+_ENDPOINT_STEP = f"check Endpoint {_ON_INSTANCE} (under Advanced)"
+# What to change when Model Studio refuses an image request as invalid or answers it "not found":
+# the model or options asked for, or the regional endpoint, which may not serve that model.
+_REQUEST_STEP = (
+    "Choose another model in Settings → Models or change the size or options you asked for; if "
+    f"no model works, {_ENDPOINT_STEP}."
+)
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -243,17 +255,14 @@ class AlibabaImageProvider(ImageGenProvider):
                 async with session.post(url, headers=headers, json=body) as resp:
                     text = await resp.text()
                     if resp.status != 200:
-                        raise ImageGenError(
-                            f"Alibaba image generation failed (HTTP {resp.status}): "
-                            f"{_error_detail(text)}"
-                        )
+                        raise ImageGenError(_status_message(resp.status, text))
                     data = json.loads(text)
         except ImageGenError:
             raise
         except asyncio.TimeoutError as e:
             raise ImageGenError("Alibaba image generation timed out.") from e
         except Exception as e:
-            raise ImageGenError(f"Alibaba image generation request failed: {e}") from e
+            raise ImageGenError(_unanswered_message(e)) from e
 
         results: list[ImageResult] = []
         for item in data.get("data", []):
@@ -289,6 +298,69 @@ def _error_detail(text: str) -> str:
         return str(json.loads(text).get("error", {}).get("message", ""))[:200]
     except Exception:
         return text[:200]
+
+
+def _status_message(status: int, text: str) -> str:
+    """What an image request's HTTP failure means and what to do, then Model Studio's words.
+
+    Keyed on the status class. A key refusal names the Endpoint too, because a Model Studio key
+    works only in the region it was made in, and the wrong regional endpoint refuses a key that is
+    right.
+    """
+    if status in (401, 403):
+        sentence = (
+            f"Alibaba Model Studio refused the API key for the image request (HTTP {status}). "
+            f"Check API Key {_ON_INSTANCE} (or ALIBABA_API_KEY), that it may use this model, and "
+            "that Endpoint (under Advanced) is in the key's region: a key works only in its own "
+            "region."
+        )
+    elif status == 400:
+        sentence = (
+            f"Alibaba Model Studio refused the image request as invalid (HTTP 400). {_REQUEST_STEP}"
+        )
+    elif status == 404:
+        sentence = (
+            "Alibaba Model Studio answered the image request with HTTP 404 (not found). "
+            f"{_REQUEST_STEP}"
+        )
+    elif status == 429:
+        sentence = (
+            "Alibaba Model Studio's rate limit or quota stopped the image request (HTTP 429). "
+            "Wait a minute and try again."
+        )
+    elif 500 <= status < 600:
+        sentence = (
+            f"Alibaba Model Studio failed on its side (image request, HTTP {status}). Try again "
+            "in a few minutes."
+        )
+    else:
+        sentence = f"Alibaba Model Studio's image request failed (HTTP {status}). {_REQUEST_STEP}"
+    return sentence_with_detail(sentence, _error_detail(text))
+
+
+def _unanswered_message(error: Exception) -> str:
+    """The sentence for an image request that got no usable answer: unable to connect, answered
+    with something that is not JSON, or failed some other way.
+
+    Told apart by builtin types: the HTTP library raises an ``OSError`` for a connection it could
+    not make, and it is imported only where the request is made.
+    """
+    if isinstance(error, (json.JSONDecodeError, UnicodeDecodeError)):
+        sentence = (
+            "Alibaba Model Studio's answer to the image request could not be read. Try again in "
+            f"a moment; if it keeps happening, {_ENDPOINT_STEP}."
+        )
+    elif isinstance(error, OSError):
+        sentence = (
+            "The connection to Alibaba Model Studio failed during the image request. Check this "
+            f"computer's internet connection and Endpoint {_ON_INSTANCE} (under Advanced), then "
+            "try again."
+        )
+    else:
+        sentence = (
+            "The image request to Alibaba Model Studio failed unexpectedly. Try again in a moment."
+        )
+    return sentence_with_detail(sentence, error)
 
 
 # ── Chat factory (multiInstance manifest entry point) ─────────────────────────

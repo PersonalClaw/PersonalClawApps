@@ -19,6 +19,7 @@ import subprocess
 
 import pytest
 
+import provider as git_sync
 from provider import GitSyncProvider, create_provider
 from personalclaw.sdk.sync import RemoteRef, SyncObject
 
@@ -311,7 +312,7 @@ def test_probe_not_ok_on_bad_url(tmp_path):
         repo_url=str(tmp_path / "does-not-exist.git"), local_clone=str(tmp_path / "c")
     ).test()
     assert res.ok is False
-    assert res.detail  # a human snippet from git's stderr
+    assert res.detail  # what went wrong, then git's own words
 
 
 # ── factory + config ─────────────────────────────────────────────────────────────────
@@ -339,3 +340,299 @@ def test_create_provider_defaults(tmp_path, monkeypatch):
     assert p._branch == "main"
     assert p._clone == str(tmp_path / ".personalclaw" / "sync" / "git-sync")
     assert p.test().ok is False
+
+
+# ── what a failure says ──────────────────────────────────────────────────────────────
+#
+# Each case below used to hand back git's own words, or a Python ``CalledProcessError``
+# naming the argv, as the whole message. Now it says what is wrong and what to do, and git's
+# words follow as the detail.
+
+ON_CARD = "on the Git Sync card in Settings → Providers"
+RETRIES = "Sync tries again on its next run."
+CREDENTIALS = (
+    "the remote didn't accept this machine's credentials, or git had none to give it. Check "
+    "that git on this machine can reach it — its SSH key, or a credential helper for an https "
+    "URL."
+)
+
+
+@pytest.fixture
+def c_locale(monkeypatch):
+    """git's messages in English, the words its classification reads."""
+    monkeypatch.setenv("LC_ALL", "C")
+
+
+def _refusing(stderr: str):
+    """A ``_run`` stand-in: git ran and answered with ``stderr`` and exit status 128."""
+
+    def _run(self, args, check=True):
+        return subprocess.CompletedProcess(["git", *args], 128, stdout="", stderr=stderr)
+
+    return _run
+
+
+def test_probe_names_a_missing_repository_and_where_to_fix_it(tmp_path, c_locale):
+    """git's first stderr line, "fatal: '…' does not appear to be a git repository", used to be
+    the whole message."""
+    res = GitSyncProvider(
+        repo_url=str(tmp_path / "does-not-exist.git"), local_clone=str(tmp_path / "c")
+    ).test()
+
+    assert res.ok is False
+    assert res.detail.startswith(
+        "Git Sync couldn't read the git remote: no repository at that address is visible to "
+        "this machine — it doesn't exist, or this machine's credentials can't see it. Check Git "
+        f"remote URL {ON_CARD}. Details: "
+    ), res.detail
+    assert "does not appear to be a git repository" in res.detail
+
+
+@pytest.mark.parametrize(
+    ("stderr", "trouble"),
+    [
+        (
+            "git@git.example.com: Permission denied (publickey).\n"
+            "fatal: Could not read from remote repository.",
+            CREDENTIALS,
+        ),
+        (
+            "fatal: could not read Username for 'https://git.example.com': terminal prompts "
+            "disabled",
+            CREDENTIALS,
+        ),
+        (
+            "Host key verification failed.\nfatal: Could not read from remote repository.",
+            "SSH on this machine doesn't trust the remote's host key yet. Connect to that host "
+            "once from a terminal here to accept its key.",
+        ),
+        (
+            "@@@@@@@@@@@@@@@@\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n"
+            "@@@@@@@@@@@@@@@@\nHost key verification failed.",
+            "the remote's SSH host key has changed since this machine last trusted it, so SSH "
+            "refused to connect. Only if you know why it changed, remove its old key from this "
+            "machine's known_hosts file, then connect to that host once from a terminal here.",
+        ),
+        (
+            "ssh: Could not resolve hostname git.example.com: nodename nor servname provided, "
+            "or not known\nfatal: Could not read from remote repository.",
+            "the remote couldn't be reached from this machine. Check that it is online and that "
+            f"Git remote URL {ON_CARD} names the right host.",
+        ),
+        (
+            "bash: git-upload-pack: command not found\n"
+            "fatal: Could not read from remote repository.",
+            "the remote host couldn't run git — it isn't installed there, or isn't on the PATH "
+            "its SSH logins get. Install git on that host.",
+        ),
+    ],
+)
+def test_probe_says_what_the_remote_refused_and_what_to_do(monkeypatch, stderr, trouble):
+    """git's first stderr line used to be the whole message — "…Permission denied (publickey)."
+    named nothing to fix, and a host key never seen read the same as one that had changed."""
+    monkeypatch.setattr(GitSyncProvider, "_run", _refusing(stderr))
+
+    res = GitSyncProvider(repo_url="git@git.example.com:owner/state.git").test()
+
+    assert res.ok is False
+    assert res.detail == (
+        f"Git Sync couldn't read the git remote: {trouble} Details: {' '.join(stderr.split())}"
+    )
+
+
+def test_probe_says_when_git_itself_cannot_start(monkeypatch):
+    """"[Errno 2] No such file or directory: 'git'" used to be the whole message."""
+
+    def _no_git(self, args, check=True):
+        raise FileNotFoundError(2, "No such file or directory", "git")
+
+    monkeypatch.setattr(GitSyncProvider, "_run", _no_git)
+
+    res = GitSyncProvider(repo_url="https://git.example.com/owner/state.git").test()
+
+    assert res.detail == (
+        "Git Sync runs the git command, and PersonalClaw couldn't start it on this machine: it "
+        "isn't installed, isn't on the PATH PersonalClaw runs with, or isn't executable. Install "
+        "git where PersonalClaw can run it. Details: [Errno 2] No such file or directory: 'git'"
+    )
+
+
+def test_a_push_that_cannot_clone_names_the_trouble_and_that_it_retries(tmp_path, c_locale):
+    """"Command '['git', 'clone', …]' returned non-zero exit status 128." used to be the whole
+    message."""
+    clone = tmp_path / "c"
+    res = GitSyncProvider(
+        repo_url=str(tmp_path / "does-not-exist.git"), local_clone=str(clone)
+    ).push([SyncObject("k", b"v")])
+
+    assert res.outcome == "transient"
+    assert res.detail.startswith(
+        f"Git Sync couldn't clone the git remote into {clone}: no repository at that address is "
+        "visible to this machine — it doesn't exist, or this machine's credentials can't see it. "
+        f"Check Git remote URL {ON_CARD}. {RETRIES} Details: "
+    ), res.detail
+
+
+def test_a_push_into_a_folder_with_other_files_says_to_pick_an_empty_one(remote, tmp_path, c_locale):
+    """A Local working clone pointed at a folder that already holds files. git's "destination
+    path … already exists" arrived as "Command '[…]' returned non-zero exit status 128."."""
+    clone = tmp_path / "c"
+    clone.mkdir()
+    (clone / "notes.txt").write_text("a file that is not a git checkout", encoding="utf-8")
+
+    r = _provider(remote, tmp_path, name="c").push([SyncObject("k", b"v")])
+
+    assert r.outcome == "transient"
+    assert r.detail.startswith(
+        f"Git Sync couldn't clone the git remote into {clone}: that folder already has other "
+        f"files in it. Set Local working clone {ON_CARD} to an empty or new folder. {RETRIES} "
+        "Details: "
+    ), r.detail
+
+
+def test_a_clone_its_folder_refuses_says_where_and_what_to_set(tmp_path, monkeypatch):
+    """git answering a clone with its folder's "Permission denied" — the working clone's
+    trouble, not the remote's. It arrived as "Command '[…]' returned non-zero exit status 128."."""
+    clone = tmp_path / "c"
+    stderr = f"fatal: could not create work tree dir '{clone}': Permission denied\n"
+
+    def _clone_denied(self, args, check=True):
+        raise subprocess.CalledProcessError(128, ["git", *args], output="", stderr=stderr)
+
+    monkeypatch.setattr(GitSyncProvider, "_run", _clone_denied)
+
+    r = GitSyncProvider(
+        repo_url="https://git.example.com/owner/state.git", local_clone=str(clone)
+    ).push([SyncObject("k", b"v")])
+
+    assert r.outcome == "transient"
+    assert r.detail.startswith(
+        f"Git Sync isn't allowed to write to its working clone at {clone}. Fix that folder's "
+        f"permissions, or set Local working clone {ON_CARD} to a folder PersonalClaw can write "
+        f"to. {RETRIES} Details: fatal: could not create work tree dir "
+    ), r.detail
+
+
+def test_a_push_turned_away_by_a_moved_remote_says_so_and_that_it_retries(remote, tmp_path, c_locale):
+    """The first line of git's stderr ("To …/remote.git") used to be the whole message."""
+    a = _provider(remote, tmp_path, name="a")
+    a.push([SyncObject("base", b"0")])
+    b = _provider(remote, tmp_path, name="b")
+    b.list_remote()
+    _git(str(tmp_path / "b"), "commit", "--allow-empty", "-m", "b-local")
+    a.push([SyncObject("moved", b"1")])
+
+    r = b.push([SyncObject("bnew", b"2")])
+
+    assert r.outcome == "transient"
+    assert r.detail.startswith(
+        "Git Sync's push was turned away because the git remote has commits this machine "
+        f"hasn't pulled — another machine pushed first. {RETRIES} Details: "
+    ), r.detail
+
+
+def test_a_push_the_remote_rules_refuse_names_the_branch(remote, tmp_path, c_locale):
+    """A remote whose own hook declines the push. The hook's first stderr line used to be the
+    whole message, and nothing said it wasn't a race: git's "[remote rejected]" reads as one."""
+    hook = os.path.join(remote, "hooks", "pre-receive")
+    with open(hook, "w", encoding="utf-8") as fh:
+        fh.write("#!/bin/sh\necho 'pushes to this branch are not accepted' >&2\nexit 1\n")
+    os.chmod(hook, 0o755)
+    # A machine-wide core.hooksPath (a system gitconfig can set one) would run its hooks in
+    # place of the remote's own, and the push would land; the remote names its own directory.
+    subprocess.run(["git", "-C", remote, "config", "core.hooksPath", os.path.join(remote, "hooks")],
+                   check=True, capture_output=True, text=True)
+
+    r = _provider(remote, tmp_path).push([SyncObject("k", b"v")])
+
+    assert r.detail.startswith(
+        "Git Sync couldn't push to the git remote: its rules don't let this machine push to "
+        f"branch 'main'. Allow that on the remote, or set Branch {ON_CARD} to one that does."
+    ), r.detail
+    assert "Details: " in r.detail
+
+
+def test_a_push_that_times_out_names_the_step_and_that_it_retries(tmp_path, monkeypatch):
+    """"Command '[…]' timed out after 120 seconds" used to be the whole message."""
+
+    def _slow(self, args, check=True):
+        raise subprocess.TimeoutExpired(["git", *args], git_sync._GIT_TIMEOUT)
+
+    monkeypatch.setattr(GitSyncProvider, "_run", _slow)
+
+    r = GitSyncProvider(
+        repo_url="https://git.example.com/owner/state.git", local_clone=str(tmp_path / "c")
+    ).push([SyncObject("k", b"v")])
+
+    assert r.outcome == "transient"
+    assert r.detail.startswith(
+        "git clone didn't finish within 120 seconds, so this sync stopped. If it keeps timing "
+        "out, check that the git remote is reachable from this machine, and that git reaches it "
+        f"without stopping to ask for anything. {RETRIES} Details: "
+    ), r.detail
+
+
+def test_a_local_git_step_that_hangs_says_where_to_look(remote, tmp_path, monkeypatch):
+    """A step that never reaches the remote — here the commit — says where it hung rather than
+    pointing at the remote."""
+    real_run = GitSyncProvider._run
+
+    def _commit_hangs(self, args, check=True):
+        if "commit" in args:
+            raise subprocess.TimeoutExpired(["git", *args], git_sync._GIT_TIMEOUT)
+        return real_run(self, args, check=check)
+
+    monkeypatch.setattr(GitSyncProvider, "_run", _commit_hangs)
+    clone = tmp_path / "clone"
+
+    r = _provider(remote, tmp_path).push([SyncObject("k", b"v")])
+
+    assert r.outcome == "transient"
+    assert r.detail.startswith(
+        f"git commit didn't finish within 120 seconds in the working clone at {clone}, so this "
+        "sync stopped. If it keeps happening, run git commit there from a terminal to see what it "
+        f"waits for. {RETRIES} Details: "
+    ), r.detail
+
+
+def test_a_git_step_this_machines_git_settings_break_says_to_check_them(
+    remote, tmp_path, monkeypatch, c_locale
+):
+    """git set, on this machine, to sign every commit with a program that isn't there. The
+    commit's failure used to arrive as "Command '[…]' returned non-zero exit status 128."."""
+    for i, (key, value) in enumerate(
+        [("commit.gpgsign", "true"), ("gpg.program", "/nonexistent/pc-fixture-gpg")]
+    ):
+        monkeypatch.setenv(f"GIT_CONFIG_KEY_{i}", key)
+        monkeypatch.setenv(f"GIT_CONFIG_VALUE_{i}", value)
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+    clone = tmp_path / "clone"
+
+    r = _provider(remote, tmp_path).push([SyncObject("k", b"v")])
+
+    assert r.outcome == "transient"
+    assert r.detail.startswith(
+        f"Git Sync couldn't update its working clone at {clone}: git commit failed there. Check "
+        f"that folder, and any git settings on this machine that apply to it. {RETRIES} Details: "
+    ), r.detail
+
+
+def test_a_push_that_cannot_write_its_clone_says_where_and_what_to_set(tmp_path, monkeypatch):
+    """"[Errno 13] Permission denied: '…'" used to be the whole message."""
+    clone = tmp_path / "locked" / "c"
+
+    def _denied(path, *args, **kwargs):
+        raise PermissionError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr(git_sync.os, "makedirs", _denied)
+
+    r = GitSyncProvider(
+        repo_url="https://git.example.com/owner/state.git", local_clone=str(clone)
+    ).push([SyncObject("k", b"v")])
+
+    assert r.outcome == "transient"
+    assert r.detail.startswith(
+        f"Git Sync isn't allowed to write to its working clone at {clone}. Fix that folder's "
+        f"permissions, or set Local working clone {ON_CARD} to a folder PersonalClaw can write "
+        f"to. {RETRIES} Details: "
+    ), r.detail

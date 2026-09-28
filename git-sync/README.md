@@ -71,8 +71,12 @@ clone of an empty repo succeeds and the first push publishes the branch.
   remote moved under us the push is rejected and the caller re-pulls and retries. No
   hand-rolled lock.
 - **Transient vs permanent.** A push rejected because the remote moved is reported
-  `transient` (retry). A bad URL or denied auth is `permanent` (retry will not fix it). A
-  clean run is `delivered`.
+  `transient` (retry). A push the remote refuses for a bad URL or denied auth is `permanent`
+  (retry will not fix it), while a failure before the push — the first clone, a step in the
+  working clone — is `transient`. A clean run is `delivered`. Every failure says what went
+  wrong and what to do — the remote didn't accept this machine's credentials, no repository
+  is visible at that URL, the working clone can't be written, git isn't installed — with
+  git's own message after it.
 - **Deterministic committer.** The transport's automated commits use a fixed identity
   (`PersonalClaw Sync <sync@personalclaw.local>`) set via `git -c` flags, so a sync commit
   never depends on — or pollutes — ambient git config and names no real person.

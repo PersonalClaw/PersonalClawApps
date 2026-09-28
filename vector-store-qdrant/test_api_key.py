@@ -270,6 +270,24 @@ def test_the_fake_refuses_a_call_without_the_right_key(home, qdrant, saved, stat
     assert "wrong-key" not in info.detail
 
 
+@pytest.mark.parametrize(
+    ("saved", "status"), [({}, 401), ({"api_key": "wrong-key"}, 403)], ids=["none", "wrong"]
+)
+def test_a_refused_key_says_which_setting_to_fix(home, qdrant, saved, status):
+    """"cannot reach <url>: UnexpectedResponse: …" used to be the message — for a server that
+    had answered, and without naming the setting that fixes it."""
+    _configure_save({"url": qdrant.url, "collection": "kb", **saved})
+
+    info = _built_on_enable().describe()
+
+    assert info.detail.startswith(
+        f"The Qdrant at {qdrant.url} refused Qdrant Vector Store's request (HTTP {status}): the "
+        "API key it sent is missing or wrong. Set Qdrant API Key on the Qdrant Vector Store card "
+        "in Settings → Providers to that server's key. Details: "
+    ), info.detail
+    assert "wrong-key" not in info.detail
+
+
 def test_the_key_stays_out_of_the_settings_file_and_uninstall_removes_it(home, qdrant):
     _configure_save({"url": qdrant.url, "collection": "kb", "api_key": KEY})
 

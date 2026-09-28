@@ -128,11 +128,15 @@ to configure.
 
 ## Troubleshooting
 
+A request that fails before the store answers says what went wrong and what to do — the store
+refused the connection or didn't answer, its host can't be found, its certificate isn't
+trusted, PersonalClaw won't use that endpoint — with the underlying error's own words after it.
+
 | Symptom | Cause |
 |---|---|
 | `access denied (HTTP 403)` | Wrong key, a bucket policy that does not grant the four actions, or a **region mismatch** — SigV4 binds the signature to the region, so a wrong region reads as an auth failure. |
 | `bucket ... not found` | Typo in the bucket, or an endpoint in a different region than the bucket. |
-| Egress refusal in the logs | The endpoint host does not match the pin, or it is on your `security.egress` deny list. Redirects off the pinned host are refused by design. |
+| "PersonalClaw's network egress rules stopped a request", or "won't use … as a sync endpoint" | The endpoint is not an `http://` or `https://` address with a host, its host is on your `security.egress` deny list (Denied hosts, under Settings → Security → Network egress), or the store redirected off the pinned host — refused by design. |
 | Sync stalls with no error | Registry CAS is losing every race — usually a store without conditional-write support. |
 | `HTTP 501` on push | Same cause: the store rejected the conditional header. |
 

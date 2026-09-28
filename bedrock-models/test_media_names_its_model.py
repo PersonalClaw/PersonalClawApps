@@ -46,11 +46,13 @@ class _Client:
 
     def start_async_invoke(self, **kwargs: Any) -> dict[str, Any]:
         self._sent.append((self._service, "start_async_invoke", kwargs))
+        self._folder = kwargs["outputDataConfig"]["s3OutputDataConfig"]["s3Uri"] + "/job"
         return {"invocationArn": "arn:aws:bedrock:us-east-1:000000000000:async-invoke/job"}
 
     def get_async_invoke(self, **kwargs: Any) -> dict[str, Any]:
         self._sent.append((self._service, "get_async_invoke", kwargs))
-        return {"status": "Completed"}
+        # Bedrock writes each job into a folder of its own, and its status names it.
+        return {"status": "Completed", "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": self._folder}}}
 
     def download_file(self, bucket: str, key: str, path: str) -> None:
         self._sent.append((self._service, "download_file", {"Bucket": bucket, "Key": key}))

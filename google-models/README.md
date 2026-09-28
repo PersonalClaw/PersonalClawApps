@@ -19,6 +19,8 @@ It imports only the PersonalClaw **SDK** (never core internals), so core can evo
 without breaking it:
 
 - `personalclaw.sdk.model`
+- `personalclaw.sdk.image`
+- `personalclaw.sdk.video`
 - `personalclaw.sdk.net`
 
 ## Install

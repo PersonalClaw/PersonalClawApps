@@ -22,6 +22,9 @@ from __future__ import annotations
 
 import importlib.util
 import math
+import socket
+import ssl
+import sys
 
 import pytest
 from provider import (
@@ -260,7 +263,168 @@ def test_describe_never_raises_and_never_leaks_the_key(tmp_path):
     info = p.describe()
     assert info.reachable is False
     assert "super-secret-value" not in info.detail
-    assert "cannot reach" in info.detail
+    assert "Details: " in info.detail  # the client's own words, after what to do
+
+
+# ── what an unreachable store says ───────────────────────────────────────────────────
+#
+# describe() used to report every failure as "cannot reach <where>: <ExceptionClass>: <text>" —
+# "cannot reach" for a server that had answered with a 401, and a Python class name the user
+# can do nothing with. Each case now says what is wrong and what to do; the client's words
+# follow as the detail.
+
+ON_CARD = "on the Qdrant Vector Store card in Settings → Providers"
+URL = "http://qdrant.example.com:6333"
+
+
+def _raising(exc: BaseException):
+    """A ``_connect`` stand-in: building the client, or its first call, raised ``exc``."""
+
+    def _connect(self):
+        raise exc
+
+    return _connect
+
+
+class _Wrapped(Exception):
+    """Shaped like the client's connection error, which carries the socket's own error as
+    ``source`` rather than being it."""
+
+    def __init__(self, source: BaseException) -> None:
+        super().__init__(str(source))
+        self.source = source
+
+
+class _Answered(Exception):
+    """Shaped like the client's error for a server that answered with an HTTP error."""
+
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"Unexpected Response: {status_code}")
+        self.status_code = status_code
+
+
+def _closed_port() -> int:
+    """A loopback port nothing is listening on."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.mark.parametrize(
+    ("exc", "says"),
+    [
+        (
+            _Wrapped(ConnectionRefusedError(61, "Connection refused")),
+            f"Nothing is accepting connections at {URL}. Check that Qdrant is running there, and "
+            f"that Qdrant URL {ON_CARD} has the right host and port.",
+        ),
+        (
+            _Wrapped(socket.gaierror(8, "nodename nor servname provided, or not known")),
+            "The host in Qdrant URL, qdrant.example.com, can't be found from this machine. Check "
+            f"Qdrant URL {ON_CARD}.",
+        ),
+        (
+            _Wrapped(TimeoutError("timed out")),
+            f"The Qdrant at {URL} didn't answer within 7 seconds. Check that it is reachable from "
+            f"this machine, or raise Timeout (seconds) {ON_CARD}.",
+        ),
+        (
+            _Wrapped(
+                ssl.SSLCertVerificationError(
+                    1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
+                )
+            ),
+            f"Qdrant Vector Store couldn't make a secure connection to {URL}: the TLS handshake "
+            "failed, or this machine doesn't trust the server's certificate. Check that Qdrant "
+            f"URL {ON_CARD} is right, and that the server's certificate is valid for that host.",
+        ),
+        (
+            _Answered(401),
+            f"The Qdrant at {URL} refused Qdrant Vector Store's request (HTTP 401): the API key "
+            f"it sent is missing or wrong. Set Qdrant API Key {ON_CARD} to that server's key.",
+        ),
+        (
+            _Answered(404),
+            f"The Qdrant at {URL} answered with an error (HTTP 404). Check Qdrant URL and "
+            f"Collection {ON_CARD}, and that the server is healthy.",
+        ),
+        (
+            RuntimeError("the client gave up"),
+            f"Qdrant Vector Store couldn't talk to the Qdrant at {URL}. Check that Qdrant is "
+            f"running there, and Qdrant URL {ON_CARD}.",
+        ),
+    ],
+)
+def test_describe_says_what_went_wrong_reaching_the_server(monkeypatch, exc, says):
+    monkeypatch.setattr(QdrantVectorStore, "_connect", _raising(exc))
+
+    info = create_provider({"url": URL, "collection": "c", "timeout_secs": 7}).describe()
+
+    assert info.reachable is False
+    assert info.detail == f"{says} Details: {exc}"
+
+
+@needs_qdrant
+def test_describe_says_when_nothing_answers_at_the_url():
+    """Driven through the real client, at a loopback port nothing listens on."""
+    url = f"http://127.0.0.1:{_closed_port()}"
+
+    info = create_provider({"url": url, "collection": "c", "timeout_secs": 1}).describe()
+
+    assert info.reachable is False
+    assert info.detail.startswith(
+        f"Nothing is accepting connections at {url}. Check that Qdrant is running there, and "
+        f"that Qdrant URL {ON_CARD} has the right host and port. Details: "
+    ), info.detail
+
+
+def test_describe_says_when_the_client_library_is_missing(monkeypatch):
+    """The dependency this app declares, absent: "cannot reach …: ModuleNotFoundError: …" used
+    to say the server was unreachable when nothing had been tried."""
+    monkeypatch.setitem(sys.modules, "qdrant_client", None)
+
+    info = create_provider({"url": URL, "collection": "c"}).describe()
+
+    assert info.reachable is False
+    assert info.detail.startswith(
+        "Qdrant Vector Store couldn't load qdrant-client, the Python package it talks to Qdrant "
+        "through. Reinstall Qdrant Vector Store from the Store — that package ships with this "
+        "app, not with PersonalClaw itself. Details: "
+    ), info.detail
+
+
+def test_describe_says_when_the_local_folder_is_taken(tmp_path, monkeypatch):
+    folder = tmp_path / "q"
+    monkeypatch.setattr(
+        QdrantVectorStore,
+        "_connect",
+        _raising(
+            RuntimeError(
+                f"Storage folder {folder} is already accessed by another instance of Qdrant "
+                "client. If you require concurrent access, use Qdrant server instead."
+            )
+        ),
+    )
+
+    info = create_provider({"path": str(folder), "collection": "c"}).describe()
+
+    assert info.detail.startswith(
+        f"The local folder {folder} is already open in another Qdrant client, and only one may "
+        "use it at a time. Close whatever else has it open, or set Local folder (no server) "
+        f"{ON_CARD} to another folder. Details: "
+    ), info.detail
+
+
+def test_a_url_s_credentials_never_reach_the_sentence(monkeypatch):
+    monkeypatch.setattr(
+        QdrantVectorStore, "_connect", _raising(_Wrapped(ConnectionRefusedError(61, "refused")))
+    )
+    url = "http://reader:not-a-real-password@qdrant.example.com:6333"
+
+    info = create_provider({"url": url, "collection": "c"}).describe()
+
+    assert "not-a-real-password" not in info.detail
+    assert info.detail.startswith(f"Nothing is accepting connections at {URL}."), info.detail
 
 
 # ── clause 3: config round-trip ──────────────────────────────────────────────────────

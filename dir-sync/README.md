@@ -65,6 +65,10 @@ convergence criterion (two machines sharing one folder reach the same merged sta
   people sync through), compares the current registry hash under the lock, writes only on a
   match, and always releases the lock. A held lock is reported as a lost race, and the
   caller re-pulls and retries.
+- **A refused write is retried, and says why.** When the folder refuses a push, the next
+  sync run tries again, and the failure says what to do — the folder isn't there (a drive
+  unplugged, a sync mount that dropped), it's read-only, its disk is full, or PersonalClaw
+  may not write to it — with the operating system's own words after it.
 
 ## Security posture
 

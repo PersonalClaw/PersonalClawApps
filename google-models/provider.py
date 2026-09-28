@@ -50,6 +50,7 @@ from personalclaw.sdk.model import (
     register_branded_app,
     require_model,
 )
+from personalclaw.sdk.net import sentence_with_detail
 from personalclaw.sdk.video import (
     VideoGenError,
     VideoGenModel,
@@ -58,6 +59,13 @@ from personalclaw.sdk.video import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Where an instance's key is set, and the variable read when that field is empty. The media calls
+# go to Gemini's own addresses, never the instance's Base URL, so no sentence points there.
+_KEY_SETTING = (
+    "Google Gemini API Key on this Google Gemini instance in Settings → Providers "
+    "(or GEMINI_API_KEY)"
+)
 
 
 def _named(model: str, error: type[Exception]) -> str:
@@ -263,8 +271,7 @@ class GeminiImageProvider(ImageGenProvider):
                     text = await resp.text()
                     if resp.status != 200:
                         raise ImageGenError(
-                            f"Imagen generation failed (HTTP {resp.status}): "
-                            f"{_error_detail(text)}"
+                            _status_message(resp.status, text, what="Imagen", key=key)
                         )
                     data = json.loads(text)
         except ImageGenError:
@@ -272,7 +279,7 @@ class GeminiImageProvider(ImageGenProvider):
         except asyncio.TimeoutError as e:
             raise ImageGenError("Imagen generation timed out.") from e
         except Exception as e:
-            raise ImageGenError(f"Imagen generation request failed: {e}") from e
+            raise ImageGenError(_unanswered_message(e, what="Imagen", key=key)) from e
 
         results: list[ImageResult] = []
         for item in data.get("data", []):
@@ -309,8 +316,7 @@ class GeminiImageProvider(ImageGenProvider):
                     text = await resp.text()
                     if resp.status != 200:
                         raise ImageGenError(
-                            f"Gemini image generation failed (HTTP {resp.status}): "
-                            f"{_error_detail(text)}"
+                            _status_message(resp.status, text, what="image", key=key)
                         )
                     data = json.loads(text)
         except ImageGenError:
@@ -318,7 +324,7 @@ class GeminiImageProvider(ImageGenProvider):
         except asyncio.TimeoutError as e:
             raise ImageGenError("Gemini image generation timed out.") from e
         except Exception as e:
-            raise ImageGenError(f"Gemini image generation request failed: {e}") from e
+            raise ImageGenError(_unanswered_message(e, what="image", key=key)) from e
 
         results: list[ImageResult] = []
         for cand in data.get("candidates", []):
@@ -438,13 +444,13 @@ class GeminiVideoProvider(VideoGenProvider):
                     text = await resp.text()
                     if resp.status != 200:
                         raise VideoGenError(
-                            f"Veo submit failed (HTTP {resp.status}): {_error_detail(text)}"
+                            _status_message(resp.status, text, what="Veo video", key=key)
                         )
                     data = json.loads(text)
         except VideoGenError:
             raise
         except Exception as e:
-            raise VideoGenError(f"Veo submit request failed: {e}") from e
+            raise VideoGenError(_unanswered_message(e, what="Veo video", key=key)) from e
 
         op_name = str(data.get("name", ""))
         if not op_name:
@@ -477,7 +483,12 @@ class GeminiVideoProvider(VideoGenProvider):
 
         err = data.get("error")
         if err:
-            raise VideoGenError(f"Veo generation failed: {err.get('message', err)}")
+            reason = err.get("message", err) if isinstance(err, dict) else err
+            raise VideoGenError(sentence_with_detail(
+                "Veo's video job failed, so no video was made. Try again; if it fails again, "
+                "change the prompt or choose another model in Settings → Models.",
+                _scrubbed(str(reason), key),
+            ))
 
         results: list[VideoResult] = []
         response = data.get("response", {})
@@ -680,6 +691,72 @@ def _error_detail(text: str) -> str:
         return str(json.loads(text).get("error", {}).get("message", ""))[:200]
     except Exception:
         return text[:200]
+
+
+def _scrubbed(words: str, key: str) -> str:
+    """``words`` without the API key. The native calls carry it in the URL (``?key=…``), and an
+    HTTP library's error can quote the URL it was asked for."""
+    return words.replace(key, "[REDACTED: credential]") if key else words
+
+
+def _status_message(status: int, text: str, *, what: str, key: str) -> str:
+    """What a Gemini media call's HTTP failure means and what to do, then Gemini's own words.
+
+    Keyed on the status class. A 400 has two causes the status cannot tell apart: Gemini answers
+    an API key it does not recognize with 400, the same as a request it cannot accept, so that
+    sentence names both.
+    """
+    if status == 400:
+        sentence = (
+            f"Gemini refused the {what} request as invalid (HTTP 400). It answers an API key it "
+            f"does not recognize this way too, so check {_KEY_SETTING}; if the key is right, "
+            "choose another model in Settings → Models or change what you asked for."
+        )
+    elif status in (401, 403):
+        sentence = (
+            f"Gemini refused the API key for the {what} request (HTTP {status}). Check "
+            f"{_KEY_SETTING}, and that the key's Google Cloud project may use this model."
+        )
+    elif status == 404:
+        sentence = (
+            f"Gemini has no such model for the {what} request (HTTP 404). Choose another model "
+            "in Settings → Models."
+        )
+    elif status == 429:
+        sentence = (
+            f"Gemini's quota or rate limit stopped the {what} request (HTTP 429). Wait a minute "
+            "and try again, or check the quota of the key's Google Cloud project."
+        )
+    elif 500 <= status < 600:
+        sentence = (
+            f"Gemini failed on its side ({what} request, HTTP {status}). Try again in a few "
+            "minutes."
+        )
+    else:
+        sentence = (
+            f"Gemini's {what} request failed (HTTP {status}). Try again; if it fails the same "
+            "way, choose another model in Settings → Models."
+        )
+    return sentence_with_detail(sentence, _scrubbed(_error_detail(text), key))
+
+
+def _unanswered_message(error: Exception, *, what: str, key: str) -> str:
+    """The sentence for a Gemini media call that got no usable answer: timed out, unable to
+    connect, answered with something that is not JSON, or failed some other way."""
+    if isinstance(error, asyncio.TimeoutError):
+        sentence = f"The {what} request to Gemini timed out. Try again in a moment."
+    elif isinstance(error, (json.JSONDecodeError, UnicodeDecodeError)):
+        sentence = (
+            f"Gemini's answer to the {what} request could not be read. Try again in a moment."
+        )
+    elif isinstance(error, OSError):
+        sentence = (
+            f"The connection to Gemini failed during the {what} request. Check this computer's "
+            "internet connection, then try again."
+        )
+    else:
+        sentence = f"The {what} request to Gemini failed unexpectedly. Try again in a moment."
+    return sentence_with_detail(sentence, _scrubbed(str(error), key))
 
 
 # ── Chat factory (multiInstance manifest entry point) ─────────────────────────

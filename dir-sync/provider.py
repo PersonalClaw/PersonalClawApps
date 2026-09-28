@@ -12,11 +12,13 @@ freely after a CAS race. A synced folder has no cross-process atomic compare-and
 is atomic on POSIX and on the network filesystems people sync through).
 """
 
+import errno
 import hashlib
 import os
 import tempfile
 from typing import Any
 
+from personalclaw.sdk.net import sentence_with_detail
 from personalclaw.sdk.sync import (
     ConnectionResult,
     PushResult,
@@ -24,6 +26,11 @@ from personalclaw.sdk.sync import (
     SyncObject,
     SyncTransportProvider,
 )
+
+#: Where this transport's own setting (Sync folder) is set.
+_ON_CARD = "on the Folder Sync card in Settings → Providers"
+#: Said after a failure the sync cycle retries (a ``transient`` outcome).
+_RETRIES = "Sync tries again on its next run."
 
 # Prefix for the in-place temp files our atomic writes create. ``list_remote`` skips any
 # file whose basename starts with this so a half-written object is never advertised.
@@ -49,6 +56,42 @@ class DirSyncProvider(SyncTransportProvider):
         self._root = os.path.expandvars(os.path.expanduser(root)) if root else ""
 
     # ── internal helpers ─────────────────────────────────────────────────────────────
+
+    def _folder_trouble(self, failure: OSError) -> str:
+        """What an ``OSError`` from the sync folder means, and what to do about it — the OS's
+        own words ("[Errno 13] Permission denied: '…'") say neither.
+
+        Whether the folder is still there is asked of the folder, not read off the error: an
+        unplugged drive's mount point is gone, so recreating it under a root-owned parent (as
+        macOS's ``/Volumes`` is) fails with "Permission denied", not "No such file"."""
+        if failure.errno == errno.ENOSPC:
+            return f"The disk holding the sync folder at {self._root} is full. Free some space."
+        if failure.errno == errno.EROFS:
+            return (
+                f"The sync folder at {self._root} is on a read-only disk or mount. Make it "
+                f"writable, or set Sync folder {_ON_CARD} to a writable folder."
+            )
+        if os.path.exists(self._root) and not os.path.isdir(self._root):
+            return (
+                f"The sync folder at {self._root} is a file, not a folder. Set Sync folder "
+                f"{_ON_CARD} to a folder."
+            )
+        if not os.path.isdir(self._root):
+            return (
+                f"The sync folder at {self._root} isn't there, and Folder Sync couldn't create "
+                "it. If it lives on a drive or a sync mount, reconnect that; otherwise set Sync "
+                f"folder {_ON_CARD} to a folder that is there."
+            )
+        if isinstance(failure, PermissionError):
+            return (
+                f"Folder Sync isn't allowed to write to the sync folder at {self._root}. Fix that "
+                f"folder's permissions, or set Sync folder {_ON_CARD} to one PersonalClaw can "
+                "write to."
+            )
+        return (
+            f"Folder Sync couldn't write to the sync folder at {self._root}. Check that folder, "
+            f"or set Sync folder {_ON_CARD} to another folder."
+        )
 
     def _resolve(self, key: str) -> str:
         """Map a remote-relative posix key to an absolute path under the root."""
@@ -94,7 +137,10 @@ class DirSyncProvider(SyncTransportProvider):
         except OSError as e:
             # Root vanished mid-cycle, a permission blip, a full disk — all retryable.
             return PushResult(
-                pushed=pushed, skipped=skipped, outcome="transient", detail=str(e)
+                pushed=pushed,
+                skipped=skipped,
+                outcome="transient",
+                detail=sentence_with_detail(f"{self._folder_trouble(e)} {_RETRIES}", e),
             )
         return PushResult(pushed=pushed, skipped=skipped, outcome="delivered")
 
@@ -199,7 +245,9 @@ class DirSyncProvider(SyncTransportProvider):
             os.makedirs(self._root, exist_ok=True)
             return ConnectionResult(ok=True, detail=f"sync folder created at {self._root}")
         except OSError as e:
-            return ConnectionResult(ok=False, detail=f"sync folder unreachable: {e}")
+            return ConnectionResult(
+                ok=False, detail=sentence_with_detail(self._folder_trouble(e), e)
+            )
 
 
 def create_provider(config: dict[str, Any] | None = None) -> DirSyncProvider:

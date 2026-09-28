@@ -23,6 +23,8 @@ import json
 import logging
 import os
 import pathlib
+import socket
+import ssl
 import threading
 import urllib.parse
 from typing import Any
@@ -718,6 +720,193 @@ class TestConnection:
         monkeypatch.setattr(provider_mod.S3SyncProvider, "_request", boom)
         r = live.test()
         assert r.ok is False and "connection reset" in r.detail
+
+
+# ── what a failure says ──────────────────────────────────────────────────────────────
+#
+# A request that raised used to reach the user as "<exception class>: <its text>" — a
+# connection error's socket address, a guard's reason — which names neither what is wrong nor
+# what to do. Each case below says that, and the exception's own words follow as the detail.
+
+ON_CARD = "on the S3 Sync card in Settings → Providers"
+RETRIES = "Sync tries again on its next run."
+#: The store these cases name. Every request to it is faked or refused before it leaves.
+STORE = "https://s3.example.com"
+
+
+def _raising(exc: BaseException):
+    """A ``_request`` stand-in: the request raised ``exc`` instead of answering."""
+
+    def _request(self, *args, **kwargs):
+        raise exc
+
+    return _request
+
+
+def _blocked(category: str, reason: str):
+    """The guard's refusal, as ``fetch`` raises it, for a refusal of ``category``."""
+    from personalclaw.sdk.net import EgressBlocked, GuardDecision
+
+    return EgressBlocked(
+        GuardDecision(
+            allow=False,
+            url=f"{STORE}/mybucket/k",
+            host="s3.example.com",
+            reason=reason,
+            risk_level="caution",
+            category=category,
+        )
+    )
+
+
+class _CertificateRefused(Exception):
+    """Shaped like the HTTP client's certificate error, whose ssl failure rides along as
+    ``certificate_error`` rather than being the exception itself."""
+
+    def __init__(self, cause: ssl.SSLError) -> None:
+        super().__init__(f"Cannot connect to host s3.example.com:443 [{cause}]")
+        self.certificate_error = cause
+
+
+def _closed_port() -> int:
+    """A loopback port nothing is listening on."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+class TestWhatAFailureSays:
+    def _provider(self, endpoint: str = STORE) -> S3SyncProvider:
+        return S3SyncProvider(
+            endpoint, "mybucket", region=REGION, access_key_id=AK, secret_access_key=SK
+        )
+
+    @pytest.mark.parametrize(
+        ("exc", "says", "outcome"),
+        [
+            (
+                _blocked("unresolvable", "host 's3.example.com' is not resolvable"),
+                "s3.example.com, the host in Endpoint URL, can't be found from this machine. "
+                f"Check Endpoint URL {ON_CARD}, and that this machine is online.",
+                "permanent",
+            ),
+            (
+                _blocked(
+                    "metadata",
+                    "host 's3.example.com' resolves to a cloud metadata / link-local address",
+                ),
+                "s3.example.com, the host in Endpoint URL, points at a cloud metadata or "
+                "link-local address, which PersonalClaw never lets anything reach. Check "
+                f"Endpoint URL {ON_CARD}, and that host's DNS record.",
+                "permanent",
+            ),
+            (
+                _blocked(
+                    "not_listed",
+                    "host 'mybucket.s3.example.com' is not on the 'sync' egress allow-list "
+                    "(1 host(s) allowed)",
+                ),
+                f"The store at {STORE} sent S3 Sync on to a different host, and a sync "
+                "transport only reaches the host in its Endpoint URL. Set Endpoint URL "
+                f"{ON_CARD} to the address the store redirects to.",
+                "permanent",
+            ),
+            (
+                _blocked("", "too many redirects (> 3)"),
+                "PersonalClaw's network egress rules stopped a request S3 Sync made to "
+                f"{STORE}, or to where the store redirected it. Check that Endpoint URL "
+                f"{ON_CARD} is the store's own address, and Network egress in Settings → Security.",
+                "permanent",
+            ),
+            (
+                TimeoutError(),
+                f"The store at {STORE} didn't answer in time. Check that it is reachable from "
+                f"this machine, and that Endpoint URL {ON_CARD} is right.",
+                "transient",
+            ),
+            (
+                _CertificateRefused(
+                    ssl.SSLCertVerificationError(
+                        1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
+                    )
+                ),
+                f"S3 Sync couldn't make a secure connection to {STORE}: the TLS handshake "
+                "failed, or this machine doesn't trust the store's certificate. Check that "
+                f"Endpoint URL {ON_CARD} is right, and that the store's certificate is valid for "
+                "that host.",
+                "transient",
+            ),
+            (
+                OSError("connection reset"),
+                f"S3 Sync's request to the store at {STORE} didn't complete. Check that the "
+                f"store is running and reachable from this machine, and the settings {ON_CARD}.",
+                "transient",
+            ),
+        ],
+    )
+    def test_a_request_that_raises_says_why_and_what_to_do(self, monkeypatch, exc, says, outcome):
+        monkeypatch.setattr(provider_mod.S3SyncProvider, "_request", _raising(exc))
+        p = self._provider()
+
+        res = p.push([SyncObject(key="k", data=b"v")])
+        probe = p.test()
+
+        # The words change; the verdict the outbox acts on does not.
+        assert res.outcome == outcome == provider_mod._outcome_for(exc)
+        retries = f" {RETRIES}" if outcome == "transient" else ""
+        words = " ".join(str(exc).split())
+        details = f" Details: {words}" if words else ""
+        assert res.detail == f"{says}{retries}{details}"
+        assert probe.ok is False
+        assert probe.detail == f"{says}{details}"
+
+    def test_a_store_that_is_not_running_says_so_and_that_it_retries(self):
+        """Driven through the real guard and HTTP client, at a loopback port nothing listens
+        on. "ClientConnectorError: Cannot connect to host …" used to be the whole message."""
+        endpoint = f"http://127.0.0.1:{_closed_port()}"
+
+        res = self._provider(endpoint).push([SyncObject(key="k", data=b"v")])
+
+        assert res.outcome == "transient"
+        assert res.detail.startswith(
+            f"The store at {endpoint} refused the connection. Check that it is running, and "
+            f"that Endpoint URL {ON_CARD} has the right host and port. {RETRIES} Details: "
+        ), res.detail
+
+    def test_an_endpoint_personalclaw_refuses_says_what_to_set(self):
+        """Driven through the real policy derivation, which refuses before anything is sent.
+        "SyncEndpointRefused: sync endpoint scheme 'ftp' is not one of …" used to be the
+        whole message."""
+        endpoint = "ftp://files.example.com"
+        p = self._provider(endpoint)
+
+        res = p.push([SyncObject(key="k", data=b"v")])
+
+        assert res.outcome == "permanent"
+        says = (
+            f"PersonalClaw won't use {endpoint} as a sync endpoint. Set Endpoint URL {ON_CARD} to "
+            "your store's http:// or https:// address — or, if its host is under Denied hosts in "
+            "Settings → Security, take it off that list. Details: sync endpoint scheme 'ftp'"
+        )
+        assert res.detail.startswith(says), res.detail
+        assert p.test().detail.startswith(says)
+
+    def test_live_writes_turned_off_names_the_switch(self, monkeypatch):
+        """Driven through the real fetch with PersonalClaw's live-writes switch set, which
+        refuses a write before any connection is made. "LiveWriteDisabled: live write refused
+        (…)" used to be the whole message."""
+        monkeypatch.setenv("PERSONALCLAW_DISABLE_LIVE_WRITES", "1")
+        endpoint = "https://s3.example.com"
+
+        res = self._provider(endpoint).push([SyncObject(key="k", data=b"v")])
+
+        assert res.outcome == "transient"
+        assert res.detail.startswith(
+            "PersonalClaw is running with live writes turned off "
+            "(PERSONALCLAW_DISABLE_LIVE_WRITES is set), so S3 Sync may not write to the store. "
+            f"Unset it and restart PersonalClaw to sync. {RETRIES} Details: live write refused "
+            f"(PUT {endpoint}/mybucket/k)"
+        ), res.detail
 
 
 # ── 4. credentials and configuration ─────────────────────────────────────────────────

@@ -8,9 +8,13 @@ and the reachability probe.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 
+import pytest
+
+import provider as dir_sync
 from provider import DirSyncProvider, create_provider
 from personalclaw.sdk.sync import RemoteRef, SyncObject
 
@@ -253,3 +257,102 @@ def test_create_provider_empty_config_constructs():
     p = create_provider(None)
     assert p._root == ""
     assert p.test().ok is False
+
+
+# ── what a failure says ──────────────────────────────────────────────────────────────
+#
+# The OS's own words ("[Errno 13] Permission denied: '…'") used to be the whole message. Now
+# the failure says what is wrong with the sync folder and what to do; those words follow as
+# the detail.
+
+ON_CARD = "on the Folder Sync card in Settings → Providers"
+RETRIES = "Sync tries again on its next run."
+NOT_THERE = (
+    "The sync folder at {root} isn't there, and Folder Sync couldn't create it. If it lives on a "
+    f"drive or a sync mount, reconnect that; otherwise set Sync folder {ON_CARD} to a folder "
+    "that is there."
+)
+
+
+def _failing_write(error: OSError):
+    def _write(self, target, data):
+        raise error
+
+    return _write
+
+
+@pytest.mark.parametrize(
+    ("error", "says"),
+    [
+        (
+            PermissionError(13, "Permission denied", "/sync/folder/k"),
+            "Folder Sync isn't allowed to write to the sync folder at {root}. Fix that folder's "
+            f"permissions, or set Sync folder {ON_CARD} to one PersonalClaw can write to.",
+        ),
+        (
+            OSError(errno.ENOSPC, "No space left on device"),
+            "The disk holding the sync folder at {root} is full. Free some space.",
+        ),
+        (
+            OSError(errno.EROFS, "Read-only file system"),
+            "The sync folder at {root} is on a read-only disk or mount. Make it writable, or set "
+            f"Sync folder {ON_CARD} to a writable folder.",
+        ),
+        (
+            OSError(errno.EIO, "Input/output error"),
+            "Folder Sync couldn't write to the sync folder at {root}. Check that folder, or set "
+            f"Sync folder {ON_CARD} to another folder.",
+        ),
+    ],
+)
+def test_a_push_the_folder_refuses_says_why_and_that_it_retries(tmp_path, monkeypatch, error, says):
+    """The OS's own line used to be the whole message."""
+    monkeypatch.setattr(DirSyncProvider, "_atomic_write", _failing_write(error))
+
+    r = DirSyncProvider(str(tmp_path)).push([SyncObject("k", b"v")])
+
+    assert r.outcome == "transient"
+    assert r.detail == f"{says.format(root=tmp_path)} {RETRIES} Details: {error}"
+
+
+def test_a_push_to_a_folder_that_is_gone_says_to_reconnect_it(tmp_path, monkeypatch):
+    """An unplugged drive: recreating its mount point is refused, so the error reads
+    "Permission denied" — and that line used to be the whole message."""
+    root = tmp_path / "unplugged" / "sync"
+    error = PermissionError(13, "Permission denied", "/unplugged")
+    monkeypatch.setattr(DirSyncProvider, "_atomic_write", _failing_write(error))
+
+    r = DirSyncProvider(str(root)).push([SyncObject("k", b"v")])
+
+    assert r.outcome == "transient"
+    assert r.detail == f"{NOT_THERE.format(root=root)} {RETRIES} Details: {error}"
+
+
+def test_a_push_to_a_path_that_is_a_file_says_so(tmp_path):
+    """"[Errno 17] File exists: '…'" used to be the whole message."""
+    root = tmp_path / "sync"
+    root.write_text("not a folder", encoding="utf-8")
+
+    r = DirSyncProvider(str(root)).push([SyncObject("k", b"v")])
+
+    assert r.outcome == "transient"
+    assert r.detail.startswith(
+        f"The sync folder at {root} is a file, not a folder. Set Sync folder {ON_CARD} to a "
+        f"folder. {RETRIES} Details: "
+    ), r.detail
+
+
+def test_a_probe_that_cannot_create_the_folder_says_why(tmp_path, monkeypatch):
+    """"sync folder unreachable: [Errno 13] Permission denied: '…'" used to be the message."""
+    root = tmp_path / "new" / "sync"
+    error = PermissionError(13, "Permission denied", "/new")
+
+    def _denied(path, *args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(dir_sync.os, "makedirs", _denied)
+
+    res = DirSyncProvider(str(root)).test()
+
+    assert res.ok is False
+    assert res.detail == f"{NOT_THERE.format(root=root)} Details: {error}"

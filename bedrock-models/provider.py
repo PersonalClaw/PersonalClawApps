@@ -51,6 +51,7 @@ from personalclaw.sdk.model import (
     per_call_temperature,
     require_model,
 )
+from personalclaw.sdk.net import sentence_with_detail
 
 #: Named, not ``__name__``: core loads this module under a private name, and a log reaches the
 #: gateway log only under a root the manifest declares (``loggerRoots``). Under its module name
@@ -166,10 +167,6 @@ _ROLE_OPERATIONS = frozenset({"AssumeRole", "AssumeRoleWithWebIdentity", "Assume
 _ON_INSTANCE = "on this Amazon Bedrock instance in Settings → Providers"
 _SET_PROFILE = f"set AWS Profile {_ON_INSTANCE} (under Advanced)"
 
-#: The most of an SDK error's own words a sentence carries after "Details:" — short enough that
-#: the longest sentence below, with them, fits the 600 characters a connection result keeps.
-_DETAIL_CHARS = 200
-
 
 def _aws_error_code(error: Exception) -> str:
     """The AWS error code of a botocore ``ClientError`` (``AccessDeniedException``), else ""."""
@@ -220,22 +217,6 @@ def _from_credential_command(error: BaseException) -> bool:
     return False
 
 
-def _with_detail(sentence: str, error: BaseException) -> str:
-    """``sentence``, which says what is wrong and what to do, then the SDK's own words after it.
-
-    Those words are kept, not hidden, and can be anything a credential command printed, so
-    they are redacted BEFORE they are cut: a credential cut in half would slip past the
-    redactor."""
-    from personalclaw.sdk.channel import redact_credentials  # noqa: PLC0415 — failure path only
-
-    words, _ = redact_credentials(" ".join(str(error).split()))
-    if not words:
-        return sentence
-    if len(words) > _DETAIL_CHARS:
-        words = words[:_DETAIL_CHARS].rstrip() + "…"
-    return f"{sentence} Details: {words}"
-
-
 def _profile_in_use(profile: str | None) -> str:
     """The AWS profile boto3 signs in with: the instance's AWS Profile, else the one the
     environment names (botocore reads ``AWS_DEFAULT_PROFILE``, then ``AWS_PROFILE``). ""
@@ -244,6 +225,24 @@ def _profile_in_use(profile: str | None) -> str:
         profile
         or os.environ.get("AWS_DEFAULT_PROFILE", "")
         or os.environ.get("AWS_PROFILE", "")
+    )
+
+
+def _no_credentials(profile: str | None) -> str:
+    """What is said when the AWS credential chain found no credentials at all: none for the
+    profile boto3 signs in with, or none anywhere in the default chain when no profile is named."""
+    in_use = _profile_in_use(profile)
+    flag = f" --profile {in_use}" if in_use else ""
+    found = (
+        f"No AWS credentials were found for the AWS profile '{in_use}'."
+        if in_use
+        else "No AWS credentials were found: this Amazon Bedrock instance names no AWS "
+        "profile, and the default credential chain has none."
+    )
+    return (
+        f"{found} Sign in with your AWS tool (for example `aws sso login{flag}`, or "
+        f"`aws configure{flag}` to enter access keys), then try again, or {_SET_PROFILE} to a "
+        "profile that has credentials."
     )
 
 
@@ -271,17 +270,7 @@ def _aws_setup_problem(error: BaseException, *, region: str, profile: str | None
             f"again, or {_SET_PROFILE} to a different profile."
         )
     elif _botocore(error, "NoCredentialsError"):
-        found = (
-            f"No AWS credentials were found for {whose}."
-            if in_use
-            else "No AWS credentials were found: this Amazon Bedrock instance names no AWS "
-            "profile, and the default credential chain has none."
-        )
-        sentence = (
-            f"{found} Sign in with your AWS tool (for example `aws sso login{flag}`, or "
-            f"`aws configure{flag}` to enter access keys), then try again, or {_SET_PROFILE} to a "
-            "profile that has credentials."
-        )
+        sentence = _no_credentials(profile)
     elif _botocore(error, "PartialCredentialsError"):
         sentence = (
             "Only part of a set of AWS credentials was found, so Amazon Bedrock can't sign in "
@@ -338,7 +327,7 @@ def _aws_setup_problem(error: BaseException, *, region: str, profile: str | None
         )
     else:
         return None
-    return _with_detail(sentence, error)
+    return sentence_with_detail(sentence, error)
 
 
 def _friendly_bedrock_error(
@@ -1430,7 +1419,7 @@ def _discovery_failure(error: Exception, *, region: str, profile: str | None) ->
             f"No model list came back from Amazon Bedrock in {region}. Try again; if it keeps "
             "failing, check the gateway log."
         )
-    return ModelDiscoveryError(_with_detail(sentence, error))
+    return ModelDiscoveryError(sentence_with_detail(sentence, error))
 
 
 class BedrockCatalog(ModelCatalog):
@@ -1599,7 +1588,7 @@ from personalclaw.sdk.video import (
     VideoGenProvider,
     VideoResult,
 )
-from personalclaw.sdk.stt import SttProvider, TranscriptResult
+from personalclaw.sdk.stt import SttError, SttProvider, TranscriptResult
 
 
 def _resolve_region(config: dict | None) -> str:
@@ -1628,35 +1617,57 @@ def _resolve_profile(config: dict | None) -> str | None:
 # unavailable until a restart. A missing credential is asked about again soon, so recovery is
 # seen on the next use after it; a working one is re-checked less often, so an expired one is
 # noticed too.
+#
+# The answer is the REASON, not only the bit: a credential command that failed made every
+# media feature read as unavailable with nothing saying why, and the probe had the error in
+# its hand when it answered False.
 
 #: Seconds one answer stands: a credential that resolved, and one that did not.
 _CRED_OK_TTL = 300.0
 _CRED_MISSING_TTL = 30.0
-_cred_cache: dict[tuple[str, str], tuple[float, bool]] = {}
+#: (profile, region) → (when it was measured, why the chain cannot sign in — "" when it can).
+_cred_cache: dict[tuple[str, str], tuple[float, str]] = {}
 
 
-async def _creds_ok(region: str, profile: str | None) -> bool:
-    """Whether the AWS credential chain resolves for this profile — cached for a while
-    (``_CRED_OK_TTL`` / ``_CRED_MISSING_TTL``), and run off the event loop so it never blocks."""
+async def _creds_problem(region: str, profile: str | None) -> str:
+    """Why the AWS credential chain cannot sign in for this profile — the setup sentence the
+    chat says for the same failure (:func:`_aws_setup_problem`) — or ``""`` when it resolves.
+
+    Cached for a while (``_CRED_OK_TTL`` / ``_CRED_MISSING_TTL``), and run off the event loop so
+    it never blocks."""
     key = (profile or "", region or "")
     hit = _cred_cache.get(key)
     if hit is not None:
-        at, ok = hit
-        if _time.monotonic() - at < (_CRED_OK_TTL if ok else _CRED_MISSING_TTL):
-            return ok
+        at, problem = hit
+        if _time.monotonic() - at < (_CRED_MISSING_TTL if problem else _CRED_OK_TTL):
+            return problem
 
-    def _probe() -> bool:
+    def _probe() -> str:
         try:
             import boto3  # noqa: PLC0415
 
             session = boto3.Session(profile_name=profile) if profile else boto3.Session()
-            return session.get_credentials() is not None
-        except Exception:
-            return False
+            found = session.get_credentials()
+        except Exception as exc:  # noqa: BLE001 — every failure is said as its cause
+            problem = _aws_setup_problem(exc, region=region, profile=profile)
+            if problem is None:
+                problem = sentence_with_detail(
+                    "Amazon Bedrock couldn't check its AWS credentials. Try again; if it keeps "
+                    "failing, check the gateway log.",
+                    exc,
+                )
+                _warn_once("Checking the AWS credentials", problem, exc)
+            return problem
+        return "" if found is not None else _no_credentials(profile)
 
-    ok = await asyncio.to_thread(_probe)
-    _cred_cache[key] = (_time.monotonic(), ok)
-    return ok
+    problem = await asyncio.to_thread(_probe)
+    _cred_cache[key] = (_time.monotonic(), problem)
+    return problem
+
+
+async def _creds_ok(region: str, profile: str | None) -> bool:
+    """Whether the AWS credential chain resolves for this profile (:func:`_creds_problem`)."""
+    return not await _creds_problem(region, profile)
 
 
 # ── Bedrock media providers ──────────────────────────────────────────────────
@@ -1671,16 +1682,32 @@ async def _creds_ok(region: str, profile: str | None) -> bool:
 def _media_failure(
     what: str, error: Exception, model_id: str, *, region: str, profile: str | None
 ) -> str:
-    """The sentence a failed image or video generation reports: the chat's own sentence for the
-    same failure (:func:`_friendly_bedrock_error` — the AWS setup, model access, credentials AWS
-    turned down), else that ``what`` failed, what to do, and the SDK's words after it."""
+    """The sentence a failed image, video or embedding call reports: the chat's own sentence for
+    the same failure (:func:`_friendly_bedrock_error` — the AWS setup, model access, credentials
+    AWS turned down), else that ``what`` failed, what to do, and the SDK's words after it."""
     friendly = _friendly_bedrock_error(error, model_id, region=region, profile=profile)
     if friendly is not error:
         return str(friendly)
-    return _with_detail(
+    return sentence_with_detail(
         f"Bedrock {what} failed. Try again; if it keeps failing, check the gateway log.", error
     )
 
+
+def _needs_bucket(purpose: str) -> str:
+    """What a media feature that stages its files in S3 says when the instance names no bucket.
+    ``purpose`` is the sentence saying what the feature needs one for."""
+    return (
+        f"{purpose} Set S3 Bucket {_ON_INSTANCE} (under Advanced), or the "
+        "BEDROCK_VIDEO_S3_BUCKET environment variable, then try again."
+    )
+
+
+_VIDEO_NEEDS_BUCKET = (
+    "Bedrock video generation needs an S3 bucket for Nova Reel to write the video to."
+)
+_STT_NEEDS_BUCKET = (
+    "Speech-to-text with Amazon Transcribe needs an S3 bucket to upload each recording to."
+)
 
 #: When each failure was last logged at WARNING, by what failed and the sentence saying why. A
 #: failure repeats with every call that meets it (the Models page lists models on every read), so
@@ -1727,6 +1754,8 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
         self._region = region
         self._profile = profile
         self._name = name
+        #: The last embedding's failure — when, and the sentence saying why — until one succeeds.
+        self._last_failure: tuple[float, str] | None = None
 
     @property
     def name(self) -> str:
@@ -1739,6 +1768,19 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
     @property
     def display_name(self) -> str:
         return "Amazon Bedrock (embedding)"
+
+    async def unavailable_reason(self) -> str:
+        """Why an embedding did not come back: the last one's failure while it is recent (what
+        AWS answered for the model: no access to it, an action the policy lacks, credentials it
+        turned down), else why the AWS credential chain cannot sign in, else ``""``.
+
+        A recent failure stands as long as a missing credential's answer does
+        (``_CRED_MISSING_TTL``), so a re-index refused on it names the fix, and a fix is seen soon.
+        """
+        failed = self._last_failure
+        if failed is not None and _time.monotonic() - failed[0] < _CRED_MISSING_TTL:
+            return failed[1]
+        return await _creds_problem(self._region, self._profile)
 
     def _get_client(self):
         """Build a fresh bedrock-runtime client (lazy boto3 import)."""
@@ -1774,17 +1816,27 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
             return result.get("embedding")
 
     async def embed(self, text: str, model: str = "") -> list[float] | None:
-        """Embed a single text string with ``model``. ``None`` when it names none, or fails."""
+        """Embed a single text string with ``model``. ``None`` when it names none, or fails.
+
+        A failure is logged with the sentence that names its fix, and :meth:`unavailable_reason`
+        says it: the contract answers a failure with ``None`` and nothing else."""
         try:
             model_id = require_model(model)
         except ProviderResolutionError as exc:
             logger.warning("Bedrock embedding on %r refused: %s", self._name, exc)
             return None
         try:
-            return await asyncio.to_thread(self._invoke_embed_sync, text, model_id)
-        except Exception:
-            logger.debug("Bedrock embedding failed", exc_info=True)
+            vector = await asyncio.to_thread(self._invoke_embed_sync, text, model_id)
+        except Exception as exc:  # noqa: BLE001 — said, then answered with the contract's None
+            sentence = _media_failure(
+                "embedding", exc, model_id, region=self._region, profile=self._profile
+            )
+            self._last_failure = (_time.monotonic(), sentence)
+            _warn_once(f"Bedrock embedding on {self._name!r}", sentence, exc)
             return None
+        if vector:
+            self._last_failure = None
+        return vector
 
     async def embed_batch(self, texts: list[str], model: str = "") -> list[list[float]]:
         """Embed multiple texts (sequential calls — Bedrock has no native batch)."""
@@ -1939,6 +1991,87 @@ _VIDEO_POLL_INTERVAL = 10  # seconds
 # is billed) moments later. The ceiling tracks the slowest legitimate job.
 _VIDEO_POLL_TIMEOUT = 600  # seconds
 
+#: The file a finished Nova Reel job writes its video to, in the job's own folder.
+_VIDEO_FILE = "output.mp4"
+
+#: What to do about each way AWS documents a Nova Reel job failing, told by the words of its
+#: ``failureMessage``. Any other failure says :data:`_VIDEO_JOB_FAILED`, and its own words after.
+_VIDEO_FAILURES: tuple[tuple[str, str], ...] = (
+    (
+        "blocked by our content filters",
+        "Nova Reel's content filters blocked the video it made for this prompt. Reword the "
+        "prompt, then try again.",
+    ),
+    (
+        "capacity limit",
+        "Nova Reel has reached its capacity limit for now. Wait a few minutes, then try again.",
+    ),
+    (
+        "went wrong on the server side",
+        "Something went wrong on AWS's side while Nova Reel made this video. Try again in a few "
+        "minutes.",
+    ),
+    (
+        "has been aborted",
+        "The Nova Reel job for this video was stopped before it finished. Try again.",
+    ),
+)
+_VIDEO_JOB_FAILED = (
+    "Nova Reel couldn't generate this video. Fix what its reason names, then try again."
+)
+
+
+def _spoken_seconds(seconds: float) -> str:
+    """A wait as a sentence says it: "10 minutes", "1 minute", "45 seconds"."""
+    minutes, rest = divmod(int(seconds), 60)
+    if minutes and not rest:
+        return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    return f"{int(seconds)} seconds"
+
+
+def _video_job_failed(reason: str) -> str:
+    """What a Nova Reel job that ended ``Failed`` says: what happened, what to do, and the reason
+    Bedrock gave after it. A job AWS stops fails too, with "Request has been aborted."."""
+    low = reason.lower()
+    for words, sentence in _VIDEO_FAILURES:
+        if words in low:
+            return sentence_with_detail(sentence, reason)
+    if not reason.strip():
+        return "Nova Reel couldn't generate this video, and gave no reason. Try again."
+    return sentence_with_detail(_VIDEO_JOB_FAILED, reason)
+
+
+def _job_folder(status: dict[str, Any]) -> str:
+    """The S3 folder a Nova Reel job writes into, as its own status names it
+    (``outputDataConfig.s3OutputDataConfig.s3Uri``). Bedrock makes one for each job under the
+    prefix it was asked for, named for the job, so no path built here would find the video.
+    "" when the status names none."""
+    config = (status.get("outputDataConfig") or {}).get("s3OutputDataConfig") or {}
+    return str(config.get("s3Uri") or "").rstrip("/")
+
+
+def _video_download_failed(error: Exception, *, uri: str, folder: str) -> str:
+    """What a finished job's video that could not be downloaded says, and where to look for it."""
+    code = _aws_error_code(error)
+    if code in ("404", "NoSuchKey", "NotFound"):
+        sentence = (
+            f"Nova Reel said this video was finished, but there is no video at {uri}. Look in "
+            f"the job's folder, {folder}/, in the S3 console; if it isn't there, generate the "
+            "video again."
+        )
+    elif code in ("403", "AccessDenied", "Forbidden"):
+        sentence = (
+            f"Nova Reel finished this video, but the identity Bedrock signs in as may not read "
+            f"{uri} (s3:GetObject). Add that action to its IAM policy, or get the video from "
+            "there in the S3 console."
+        )
+    else:
+        sentence = (
+            f"Nova Reel finished this video, but it couldn't be downloaded from {uri}. Get it "
+            "from there, in the S3 console for example."
+        )
+    return sentence_with_detail(sentence, error)
+
 
 class BedrockVideoProvider(VideoGenProvider):
     """Video generation via Bedrock async invoke (Nova Reel).
@@ -1946,7 +2079,7 @@ class BedrockVideoProvider(VideoGenProvider):
     ``generate()`` performs the full submit → poll → download cycle:
     1. ``start_async_invoke`` submits the generation job
     2. ``get_async_invoke`` polls until ``status == 'Completed'``
-    3. Download the MP4 from the S3 output path
+    3. Download the MP4 from the job's own folder, which its status names
 
     Requires the instance's S3 Bucket (``video_s3_bucket``, which speech-to-text uses too) or the
     ``BEDROCK_VIDEO_S3_BUCKET`` env var.
@@ -2000,17 +2133,15 @@ class BedrockVideoProvider(VideoGenProvider):
     def _generate_sync(self, prompt: str, model_id: str, duration_seconds: float) -> str:
         """Blocking submit → poll → download. Returns local file path to the MP4."""
         if not self._s3_bucket:
-            raise VideoGenError(
-                "Bedrock video generation needs an S3 bucket for Nova Reel to write the video to. "
-                f"Set S3 Bucket {_ON_INSTANCE} (under Advanced), or the BEDROCK_VIDEO_S3_BUCKET "
-                "environment variable, then try again."
-            )
+            raise VideoGenError(_needs_bucket(_VIDEO_NEEDS_BUCKET))
 
         client = self._get_runtime_client()
         duration = max(6, min(int(duration_seconds), 6))  # Nova Reel supports 6s clips
 
-        s3_prefix = f"bedrock-video/{int(_time.time())}/"
-        s3_uri = f"s3://{self._s3_bucket}/{s3_prefix}"
+        # The prefix the job's own folder goes under: Bedrock names that folder for the job and
+        # says which in the job's status (:func:`_job_folder`), so the video's path is read from
+        # there, never built here.
+        s3_uri = f"s3://{self._s3_bucket}/bedrock-video/{int(_time.time())}"
 
         model_input = {
             "taskType": "TEXT_VIDEO",
@@ -2030,7 +2161,9 @@ class BedrockVideoProvider(VideoGenProvider):
         )
         invocation_arn = response["invocationArn"]
 
-        # Poll until completed or timeout
+        # Poll until completed or timeout. A job is InProgress, Completed or Failed (the service
+        # model's whole set); one AWS stops is Failed.
+        status_resp: dict[str, Any] = {}
         start = _time.monotonic()
         while (_time.monotonic() - start) < _VIDEO_POLL_TIMEOUT:
             _time.sleep(_VIDEO_POLL_INTERVAL)
@@ -2038,20 +2171,36 @@ class BedrockVideoProvider(VideoGenProvider):
             status = status_resp.get("status", "")
             if status == "Completed":
                 break
-            elif status in ("Failed", "Cancelled"):
-                failure = status_resp.get("failureMessage", "Unknown error")
-                raise VideoGenError(f"Bedrock video generation {status.lower()}: {failure}")
+            if status == "Failed":
+                raise VideoGenError(_video_job_failed(str(status_resp.get("failureMessage") or "")))
         else:
+            # The job runs on in AWS, and one that finishes writes its video and is billed, so
+            # the step is to look for it before asking for another.
+            folder = _job_folder(status_resp)
+            where = f"to {folder}/{_VIDEO_FILE}" if folder else f"into a folder under {s3_uri}/"
             raise VideoGenError(
-                f"Bedrock video generation timed out after {_VIDEO_POLL_TIMEOUT}s."
+                f"Nova Reel hadn't finished this video after {_spoken_seconds(_VIDEO_POLL_TIMEOUT)}"
+                ", so video generation stopped waiting for it. The job may still finish and write "
+                f"the video {where}: look there before you try again."
             )
+        return self._download(_job_folder(status_resp), requested=s3_uri)
 
-        # Download the output MP4 from S3
-        s3_client = self._get_s3_client()
-        # Nova Reel writes output.mp4 at the s3 prefix
-        s3_key = f"{s3_prefix}output.mp4"
+    def _download(self, folder: str, *, requested: str) -> str:
+        """Download the video a finished job wrote into ``folder`` — its own, as its status names
+        it — to a local file, and return that file's path."""
+        parts = urlsplit(folder)
+        if parts.scheme != "s3" or not parts.netloc:
+            raise VideoGenError(
+                "Nova Reel finished this video, but its status didn't say where it wrote it. Look "
+                f"for it in a folder under {requested}/ in the S3 console."
+            )
+        key = "/".join(part for part in (parts.path.strip("/"), _VIDEO_FILE) if part)
+        uri = f"s3://{parts.netloc}/{key}"
         local_path = os.path.join(tempfile.gettempdir(), f"bedrock_video_{int(_time.time())}.mp4")
-        s3_client.download_file(self._s3_bucket, s3_key, local_path)
+        try:
+            self._get_s3_client().download_file(parts.netloc, key, local_path)
+        except Exception as exc:  # noqa: BLE001 — the video was made; say where it is
+            raise VideoGenError(_video_download_failed(exc, uri=uri, folder=folder)) from exc
         return local_path
 
     async def generate(
@@ -2099,6 +2248,85 @@ class BedrockVideoProvider(VideoGenProvider):
 #: more than that the binding names it.
 TRANSCRIBE_MODEL = "amazon-transcribe"
 
+#: How often a Transcribe job is asked whether it has finished, and how many times before
+#: speech-to-text stops waiting (short clips, the composer's microphone, finish in 3-8 seconds).
+_STT_POLL_INTERVAL = 1.5
+_STT_POLL_TRIES = 40
+
+#: The IAM action each call speech-to-text makes needs, by the AWS operation that answered. A
+#: large recording is uploaded in parts, and every part needs PutObject's action.
+_STT_ACTIONS = {
+    "PutObject": "s3:PutObject",
+    "CreateMultipartUpload": "s3:PutObject",
+    "UploadPart": "s3:PutObject",
+    "CompleteMultipartUpload": "s3:PutObject",
+    "StartTranscriptionJob": "transcribe:StartTranscriptionJob",
+    "GetTranscriptionJob": "transcribe:GetTranscriptionJob",
+}
+#: The codes S3 answers, beside the ones Bedrock does, when it does not accept the credentials.
+_S3_REJECTED_CREDENTIAL_CODES = frozenset({"InvalidAccessKeyId", "InvalidToken"})
+
+
+def _stt_failure(error: Exception, *, bucket: str, region: str, profile: str | None) -> str:
+    """What a transcription that failed says: the AWS setup, when that is what failed (the
+    chat's sentence for it); a bucket that isn't there; the IAM action the identity lacks;
+    credentials AWS turned down — else that it failed, what to do, and the SDK's words after it.
+
+    Not :func:`_media_failure`: speech-to-text calls S3 and Amazon Transcribe, where a refusal is
+    about the bucket or Transcribe, never about access to a Bedrock model."""
+    setup = _aws_setup_problem(error, region=region, profile=profile)
+    if setup is not None:
+        return setup
+    code = _aws_error_code(error)
+    if code == "NoSuchBucket":
+        sentence = (
+            f"The S3 bucket '{bucket}' that speech-to-text uploads each recording to doesn't "
+            f"exist. Create it in {region}, or set S3 Bucket {_ON_INSTANCE} (under Advanced) to "
+            "one you have, then try again."
+        )
+    elif code in ("AccessDenied", "AccessDeniedException"):
+        named = _NOT_AUTHORIZED_RE.search(str(error))
+        action = named["action"] if named else _STT_ACTIONS.get(_aws_operation(error), "")
+        on = f" on the S3 bucket '{bucket}'" if action.startswith("s3:") else ""
+        sentence = (
+            f"Your AWS credentials aren't allowed to call {action}{on}, which speech-to-text "
+            "needs. Add that action to the IAM policy of the identity Bedrock signs in as, then "
+            "try again."
+            if action
+            else f"AWS refused a call speech-to-text makes ({code}). It needs s3:PutObject and "
+            f"s3:GetObject on the S3 bucket '{bucket}', and transcribe:StartTranscriptionJob and "
+            "transcribe:GetTranscriptionJob: add them to the IAM policy of the identity Bedrock "
+            "signs in as, then try again."
+        )
+    elif (
+        code in _REJECTED_CREDENTIAL_CODES
+        or code in _S3_REJECTED_CREDENTIAL_CODES
+        or "security token included in the request is" in str(error)
+    ):
+        sentence = (
+            "AWS turned down the credentials speech-to-text signed in with: they are invalid or "
+            "have expired. Sign in to AWS again (`aws sso login` for an SSO profile), then try "
+            "again."
+        )
+    else:
+        sentence = (
+            "Amazon Transcribe couldn't transcribe this audio. Try again; if it keeps failing, "
+            "check the gateway log."
+        )
+    return sentence_with_detail(sentence, error)
+
+
+def _transcribe_job_failed(reason: str) -> str:
+    """What a Transcribe job that ended FAILED says: that it failed, what to do, and the reason
+    Transcribe gave after it."""
+    if not reason.strip():
+        return "Amazon Transcribe couldn't transcribe this audio, and gave no reason. Try again."
+    return sentence_with_detail(
+        "Amazon Transcribe couldn't transcribe this audio. Fix what its reason names, then try "
+        "again.",
+        reason,
+    )
+
 
 class BedrockSTTProvider(SttProvider):
     """Speech-to-text via Amazon Transcribe (the real AWS transcription service).
@@ -2137,9 +2365,17 @@ class BedrockSTTProvider(SttProvider):
         """True if the AWS credential chain resolves AND an S3 bucket is set."""
         return bool(self._s3_bucket) and await _creds_ok(self._region, self._profile)
 
-    def _transcribe_sync(self, audio_path: str, model: str, language: str) -> str | None:
-        """Blocking: upload → start job → poll → fetch transcript. Via to_thread."""
-        import time as _time
+    async def unavailable_reason(self) -> str:
+        """Why speech-to-text is unavailable: no S3 bucket to upload each recording to, or why
+        the AWS credential chain cannot sign in (the chat's sentence for the same failure)."""
+        if not self._s3_bucket:
+            return _needs_bucket(_STT_NEEDS_BUCKET)
+        return await _creds_problem(self._region, self._profile)
+
+    def _transcribe_sync(self, audio_path: str, model: str, language: str) -> str:
+        """Blocking: upload → start job → poll → fetch transcript. Via to_thread.
+
+        A job Transcribe failed, or did not finish in time, raises ``SttError`` saying so."""
         import urllib.request
         import uuid
 
@@ -2174,8 +2410,8 @@ class BedrockSTTProvider(SttProvider):
             transcribe.start_transcription_job(**job_kwargs)
 
             # Poll for completion (short clips finish in 3-8s)
-            for _ in range(40):  # up to ~60s
-                _time.sleep(1.5)
+            for _ in range(_STT_POLL_TRIES):
+                _time.sleep(_STT_POLL_INTERVAL)
                 status = transcribe.get_transcription_job(
                     TranscriptionJobName=job_name
                 )
@@ -2185,11 +2421,13 @@ class BedrockSTTProvider(SttProvider):
                     result = json.loads(urllib.request.urlopen(uri, timeout=10).read())
                     return result["results"]["transcripts"][0]["transcript"]
                 elif st == "FAILED":
-                    reason = status["TranscriptionJob"].get("FailureReason", "unknown")
-                    logger.error("Amazon Transcribe job failed: %s", reason)
-                    return None
-            logger.error("Amazon Transcribe job timed out")
-            return None
+                    reason = str(status["TranscriptionJob"].get("FailureReason") or "")
+                    raise SttError(_transcribe_job_failed(reason))
+            waited = _spoken_seconds(_STT_POLL_INTERVAL * _STT_POLL_TRIES)
+            raise SttError(
+                f"Amazon Transcribe hadn't finished this audio after {waited}, so speech-to-text "
+                "stopped waiting for it. Try again; if it keeps happening, try a shorter recording."
+            )
         finally:
             # Cleanup: delete S3 object + transcription job
             try:
@@ -2202,17 +2440,30 @@ class BedrockSTTProvider(SttProvider):
                 pass
 
     async def transcribe(self, audio_path: str, model: str = "", language: str = "") -> str | None:
-        """Transcribe an audio file via Amazon Transcribe, for a call that names its model."""
+        """Transcribe an audio file via Amazon Transcribe, for a call that names its model.
+
+        Its text, empty when there was no speech. A transcription that could not run raises the
+        SDK's ``SttError`` with what failed and what to do — no bucket, the AWS sign-in, the
+        bucket or an IAM action, a job Transcribe failed or did not finish — so a failure is never
+        read as audio with no speech in it. A call that names no model is refused before anything
+        is sent, as every media call is (``None``, and the SDK's sentence logged)."""
         try:
             require_model(model)
         except ProviderResolutionError as exc:
             logger.error("Amazon Transcribe on %r refused: %s", self._name, exc)
             return None
+        if not self._s3_bucket:
+            raise SttError(_needs_bucket(_STT_NEEDS_BUCKET))
         try:
             return await asyncio.to_thread(self._transcribe_sync, audio_path, model, language)
-        except Exception:
-            logger.debug("Amazon Transcribe failed", exc_info=True)
-            return None
+        except SttError:
+            raise
+        except Exception as exc:
+            sentence = _stt_failure(
+                exc, bucket=self._s3_bucket, region=self._region, profile=self._profile
+            )
+            _warn_once(f"Amazon Transcribe on {self._name!r}", sentence, exc)
+            raise SttError(sentence) from exc
 
     async def transcribe_detailed(
         self,
@@ -2222,7 +2473,8 @@ class BedrockSTTProvider(SttProvider):
         language: str = "",
         bias_terms: list[str] | None = None,
     ) -> TranscriptResult | None:
-        """Detailed transcription (wraps flat transcribe — no segment support)."""
+        """Detailed transcription (wraps flat transcribe — no segment support). Fails as
+        :meth:`transcribe` does."""
         text = await self.transcribe(audio_path, model=model, language=language)
         return TranscriptResult(text=text) if text is not None else None
 
