@@ -6,8 +6,15 @@ secret saved in PersonalClaw (core exports them for its own children), plus what
 that started it had. So a child an app's provider starts with ``env`` left out inherits all of
 it. Core cannot build that environment for an in-process provider; the SDK gives the provider
 what to pass: ``personalclaw.sdk.util.child_process_env()`` (the child allowlist: PATH, the home,
-locale, proxy and certificate settings, and what the owner passed through by name) and
-``app_packages_env()`` (the same, with the app packages on PYTHONPATH).
+locale, proxy and certificate settings, and what the owner passed through by name),
+``app_packages_env()`` (the same, with the app packages on PYTHONPATH) and, for a git,
+``personalclaw.sdk.git.git_env()`` (the same, with the SSH agent for a command that talks to a
+remote).
+
+A git runs inside a repository an agent's shell can write, so a git an app starts also builds
+its argv with ``personalclaw.sdk.git.git_argv``: the settings that stop the repository's own
+configuration (a hook, a file-system monitor, an ssh command) from running a program. Every spawn
+whose argv starts with the word ``git`` is held to that, checked on the AST.
 
 So every spawn site in a bundle (``subprocess.run/Popen/call/check_output/check_call``,
 ``asyncio.create_subprocess_exec/shell``) is classified here, by ``bundle/file::qualname::callee``:
@@ -39,8 +46,8 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
-#: The SDK's answers for a child's environment (``personalclaw.sdk.util``).
-BUILDERS = frozenset({"child_process_env", "app_packages_env"})
+#: The SDK's answers for a child's environment (``sdk.util`` and ``sdk.git``).
+BUILDERS = frozenset({"child_process_env", "app_packages_env", "git_env"})
 
 SPAWNS = frozenset(
     {
@@ -64,6 +71,21 @@ BUILT = {
     "skills-sh/provider.py::SkillsShMarketplace._fetch_via_cli::subprocess.run": (
         "a clone of someone else's repository"
     ),
+    "git-sync/provider.py::GitSyncProvider._run::subprocess.run": (
+        "git in a working clone an agent's shell can write, to the owner's own sync remote"
+    ),
+    "git-repo/provider.py::GitRepoSourceProvider._git::subprocess.run": (
+        "read-only git plumbing in the owner's clone, which an agent's shell can write"
+    ),
+    "notes/notebook.py::Notebook._run::subprocess.run": (
+        "git in the notebook folder, which an agent's shell can write"
+    ),
+    "spec-builder/specs.py::SpecStore._git::subprocess.run": (
+        "read-only git in the owner's source repository, which an agent's shell can write"
+    ),
+    "rsync-sync/provider.py::RsyncSyncProvider._run::subprocess.run": (
+        "rsync over ssh to the owner's own host: the allowlist and the SSH agent socket only"
+    ),
 }
 
 OWN_ENVIRONMENT = {
@@ -73,21 +95,8 @@ OWN_ENVIRONMENT = {
     "issue-radar/provider.py::IssueRadarProvider._run_json::asyncio.create_subprocess_exec": (
         "the owner's `gh` / `glab`, a fixed validated argv; they sign in from the environment"
     ),
-    "git-sync/provider.py::GitSyncProvider._run::subprocess.run": (
-        "git to the owner's own sync remote, which signs in through the SSH agent"
-    ),
-    "rsync-sync/provider.py::RsyncSyncProvider._run::subprocess.run": (
-        "rsync over ssh to the owner's own host, which signs in through the SSH agent"
-    ),
     "ops/runbooks.py::run_action::subprocess.run": (
         "the operator's own runbook action, which reads their cloud and cluster sign-in"
-    ),
-    "git-repo/provider.py::GitRepoSourceProvider._git::subprocess.run": (
-        "local read-only git plumbing on the owner's clone; no network verb ever"
-    ),
-    "notes/notebook.py::Notebook._run::subprocess.run": "git in the owner's own notebook folder",
-    "spec-builder/specs.py::SpecStore._git::subprocess.run": (
-        "read-only git in the owner's own source repository"
     ),
     "lima-sandbox/provider.py::LimaSandboxProvider._run_limactl::subprocess.run": (
         "limactl controlling the owner's own VM, a fixed argv"
@@ -107,6 +116,14 @@ OWN_ENVIRONMENT = {
 PASS_THROUGH = {
     "lima-sandbox/provider.py::LimaSandboxHandle.exec::asyncio.create_subprocess_exec": (
         "the sandbox provider seam: core's spawn passes the env it built in **kwargs"
+    ),
+}
+
+#: Spawns of a literal ``["git", …]`` that need no ``git_argv``, and why.
+GIT_ARGV_EXEMPT = {
+    "notes/app_cli.py::_git_version::subprocess.run": "`git --version`: no repository is read",
+    "spec-builder/app_cli.py::_git_version::subprocess.run": (
+        "`git --version`: no repository is read"
     ),
 }
 
@@ -148,6 +165,38 @@ def env_source(call: ast.Call, func: ast.AST | None) -> str:
     return "own"
 
 
+def _argv_kind(node: ast.AST, bound: dict[str, str]) -> str:
+    """``neutral`` for an argv ``git_argv`` built, ``raw`` for one that starts with the word
+    ``git``, ``""`` for anything else. *bound* maps the names a function set to one of those."""
+    if isinstance(node, ast.Starred):
+        return _argv_kind(node.value, bound)
+    if isinstance(node, ast.Call) and _callee(node).split(".")[-1] == "git_argv":
+        return "neutral"
+    if isinstance(node, ast.Name):
+        return bound.get(node.id, "")
+    if isinstance(node, ast.BinOp):  # ["git", ...] + args
+        return _argv_kind(node.left, bound)
+    if isinstance(node, (ast.List, ast.Tuple)) and node.elts:
+        return _argv_kind(node.elts[0], bound)
+    if isinstance(node, ast.Constant) and node.value == "git":
+        return "raw"
+    return ""
+
+
+def argv_kind(call: ast.Call, func: ast.AST | None) -> str:
+    """How a spawn builds a git argv: ``neutral``, ``raw``, or ``""`` when it runs no git."""
+    if not call.args:
+        return ""
+    bound: dict[str, str] = {}
+    for node in ast.walk(func) if func is not None else ():
+        if isinstance(node, ast.Assign):
+            kind = _argv_kind(node.value, {})
+            for target in node.targets:
+                if kind and isinstance(target, ast.Name):
+                    bound[target.id] = kind
+    return _argv_kind(call.args[0], bound)
+
+
 def _is_bundle_code(path: pathlib.Path, bundle: pathlib.Path) -> bool:
     rel = path.relative_to(bundle)
     return not (
@@ -158,9 +207,10 @@ def _is_bundle_code(path: pathlib.Path, bundle: pathlib.Path) -> bool:
     )
 
 
-def census(root: pathlib.Path = ROOT) -> dict[str, list[tuple[int, str]]]:
-    """``bundle/file::qualname::callee`` → ``[(line, env source), …]`` for every spawn site."""
-    out: dict[str, list[tuple[int, str]]] = {}
+def census(root: pathlib.Path = ROOT) -> dict[str, list[tuple[int, str, str]]]:
+    """``bundle/file::qualname::callee`` → ``[(line, env source, git argv kind), …]`` for every
+    spawn site."""
+    out: dict[str, list[tuple[int, str, str]]] = {}
     for manifest in sorted(root.glob("*/app.json")):
         bundle = manifest.parent
         for path in sorted(bundle.rglob("*.py")):
@@ -197,7 +247,8 @@ def census(root: pathlib.Path = ROOT) -> dict[str, list[tuple[int, str]]]:
                     if tail in SPAWNS:
                         key = f"{rel}::{'.'.join(self.q) or '<module>'}::{tail}"
                         func = self.funcs[-1] if self.funcs else None
-                        out.setdefault(key, []).append((n.lineno, env_source(n, func)))
+                        spot = (n.lineno, env_source(n, func), argv_kind(n, func))
+                        out.setdefault(key, []).append(spot)
                     self.generic_visit(n)
 
             V().visit(tree)
@@ -221,7 +272,20 @@ def _resolver_problems() -> list[str]:
     calls = [n for n in ast.walk(func) if isinstance(n, ast.Call) and _callee(n) == "subprocess.run"]
     got = [env_source(c, func) for c in calls]
     want = ["own", "own", "built", "built", "own", "passthrough", "built"]
-    return [] if got == want else [f"the resolver read {got}, expected {want}"]
+    found = [] if got == want else [f"the resolver read {got}, expected {want}"]
+    src = (
+        "def g(args):\n"
+        "    subprocess.run(['git', '-C', repo, *args])\n"
+        "    subprocess.run(git_argv(['-C', repo, *args]))\n"
+        "    cmd = ['git', *args]\n"
+        "    subprocess.run(cmd)\n"
+        "    subprocess.run(['rsync', '-a'])\n"
+    )
+    func = ast.parse(src).body[0]
+    calls = [n for n in ast.walk(func) if isinstance(n, ast.Call) and _callee(n) == "subprocess.run"]
+    got = [argv_kind(c, func) for c in calls]
+    want = ["raw", "neutral", "raw", ""]
+    return found + ([] if got == want else [f"the git argv matcher read {got}, expected {want}"])
 
 
 def problems(root: pathlib.Path = ROOT) -> list[str]:
@@ -231,7 +295,7 @@ def problems(root: pathlib.Path = ROOT) -> list[str]:
     if len(sites) < len(classified):
         found.append(f"only {len(sites)} spawn sites found for {len(classified)} classified")
     for key in sorted(set(sites) - classified):
-        lines = ", ".join(str(line) for line, _ in sites[key])
+        lines = ", ".join(str(spot[0]) for spot in sites[key])
         found.append(
             f"{key} (line {lines}) is not classified: pass env=child_process_env() (or "
             "app_packages_env()) and add it to BUILT, or say in OWN_ENVIRONMENT why it keeps "
@@ -239,8 +303,17 @@ def problems(root: pathlib.Path = ROOT) -> list[str]:
         )
     for key in sorted(classified - set(sites)):
         found.append(f"{key} is classified but no longer exists; remove it")
+    raw_git = {key for key, spots in sites.items() if any(spot[2] == "raw" for spot in spots)}
+    for key in sorted(raw_git - set(GIT_ARGV_EXEMPT)):
+        found.append(
+            f"{key} builds its git argv by hand: use personalclaw.sdk.git.git_argv(args), so a "
+            "repository's own configuration cannot run a program, or say in GIT_ARGV_EXEMPT why "
+            "it reads no repository"
+        )
+    for key in sorted(set(GIT_ARGV_EXEMPT) - raw_git):
+        found.append(f"{key} is exempt from git_argv but runs no hand-built git now; remove it")
     for key, spots in sorted(sites.items()):
-        for line, source in spots:
+        for line, source, _kind in spots:
             where = f"{key.split('::')[0]}:{line}"
             if key in BUILT and source != "built":
                 found.append(f"{where} must pass env= from the SDK's child environment: {key}")

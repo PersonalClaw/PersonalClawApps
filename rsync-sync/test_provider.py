@@ -227,6 +227,27 @@ class TestCommandConstruction:
             assert kw.get("shell") is False, "shell=True was used"
             assert kw.get("timeout"), "an unbounded command could wedge the sync job"
 
+    def test_rsync_gets_the_ssh_agent_and_none_of_the_gateways_secrets(
+        self, tmp_path, monkeypatch
+    ):
+        """ssh signs in to the owner's host through their SSH agent, so rsync carries the agent's
+        socket. It carries nothing else of the gateway's, whose environment holds every secret
+        saved in PersonalClaw."""
+        monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/example-agent.sock")
+        monkeypatch.setenv("EXAMPLE_SERVICE_API_TOKEN", "example-secret-token-4d1e9c")
+        p = create_provider(
+            {"host": "nas.example.invalid", "path": "/srv/sync", "staging_dir": str(tmp_path)}
+        )
+        seen = self._capture(monkeypatch, p)
+        p.list_remote()
+        p.test()
+        assert seen, "no command was built — the test proved nothing"
+        for kw in p._captured_kwargs:  # type: ignore[attr-defined]
+            env = kw.get("env")
+            assert env is not None, "rsync inherited the gateway's whole environment"
+            assert env.get("SSH_AUTH_SOCK") == "/tmp/example-agent.sock", sorted(env)
+            assert "EXAMPLE_SERVICE_API_TOKEN" not in env
+
     def test_path_operands_come_after_the_end_of_options_separator(
         self, tmp_path, monkeypatch
     ):

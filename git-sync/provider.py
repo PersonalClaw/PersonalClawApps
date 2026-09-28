@@ -22,6 +22,13 @@ import os
 import subprocess
 from typing import Any
 
+from personalclaw.sdk.git import (
+    git_argv,
+    git_env,
+    remote_refusal,
+    talks_to_remote,
+    transport_refusal,
+)
 from personalclaw.sdk.net import sentence_with_detail
 from personalclaw.sdk.sync import (
     ConnectionResult,
@@ -118,8 +125,10 @@ def _subcommand(cmd: object) -> str:
     values."""
     args = [str(a) for a in cmd] if isinstance(cmd, (list, tuple)) else []
     rest = args[1:] if args[:1] == ["git"] else args
-    while len(rest) >= 2 and rest[0] in ("-C", "-c"):
-        rest = rest[2:]
+    # Past git's own leading options: `-C`/`-c` take the next argument, and the settings
+    # `git_argv` puts in front of the subcommand start with `--no-pager`.
+    while rest and rest[0].startswith("-"):
+        rest = rest[2:] if rest[0] in ("-C", "-c") else rest[1:]
     return rest[0] if rest else "git"
 
 
@@ -201,6 +210,13 @@ class GitSyncProvider(SyncTransportProvider):
         """No remote (or nowhere to clone it) → the transport is idle, not broken."""
         return not self._repo_url or not self._clone
 
+    @property
+    def _refused(self) -> str:
+        """Why the configured remote is refused (a local path, ``ext::``, ``git://``), and what to
+        use instead; ``""`` for an ssh or https remote. Said before git runs, so the owner reads
+        it beside the setting rather than as git's ``transport 'file' not allowed``."""
+        return remote_refusal(self._repo_url)
+
     def _resolve(self, key: str) -> str:
         """Map a remote-relative posix key to an absolute path inside the working clone."""
         # Split on "/" and rejoin with the OS separator so nested keys land in real
@@ -209,13 +225,21 @@ class GitSyncProvider(SyncTransportProvider):
 
     def _run(self, args: list[str], check: bool = True) -> subprocess.CompletedProcess:
         """Run ``git <args>`` with output captured and a hard timeout. Not scoped to the
-        clone — used for ``clone`` (the clone dir does not exist yet) and ``ls-remote``."""
+        clone — used for ``clone`` (the clone dir does not exist yet) and ``ls-remote``.
+
+        An agent's shell can write the working clone's ``.git`` as easily as its files, so git
+        runs with the settings that stop the repository's own configuration from running a
+        program (``git_argv``): its ssh command and credential helpers are the owner's own,
+        from their global configuration. The environment is the child allowlist, never the
+        gateway's secrets, with the SSH agent for a command that talks to the remote
+        (``git_env``)."""
         return subprocess.run(
-            ["git", *args],
+            git_argv(args),
             capture_output=True,
             text=True,
             timeout=_GIT_TIMEOUT,
             check=check,
+            env=git_env(remote=talks_to_remote(args)),
         )
 
     def _git(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -277,6 +301,11 @@ class GitSyncProvider(SyncTransportProvider):
         """What a ``git push`` the remote did not take says. The words follow what git said;
         a ``transient`` outcome (which the cycle retries) adds that it will try again."""
         words = _words(cp)
+        refused = transport_refusal(words)
+        if refused:
+            # The working clone's own remote is one PersonalClaw's git does not reach (a local
+            # path). Retrying cannot change that, and the outcome is permanent.
+            return sentence_with_detail(refused, words)
         low = words.lower()
         trouble = _remote_trouble(words)
         if any(needle in low for needle in _RULES):
@@ -336,11 +365,14 @@ class GitSyncProvider(SyncTransportProvider):
                     f"at {self._clone}, so this sync stopped. If it keeps happening, run git "
                     f"{step} there from a terminal to see what it waits for."
                 )
+        elif isinstance(failure, subprocess.CalledProcessError) and transport_refusal(words):
+            sentence = transport_refusal(words)
         elif isinstance(failure, subprocess.CalledProcessError):
             step = _subcommand(failure.cmd)
             trouble = _remote_trouble(words) if step == "clone" else ""
-            # A clone's "Permission denied" can be the REMOTE's (a local-path remote this
-            # machine can't read), so for a clone only one naming the clone's own path is its.
+            # A clone's "Permission denied" can be the REMOTE's (a path on the remote host this
+            # machine's login can't read), so for a clone only one naming the clone's own path
+            # is its.
             denied = any(needle in low for needle in _CLONE_DENIED) and (
                 step != "clone" or self._clone in words
             )
@@ -386,6 +418,9 @@ class GitSyncProvider(SyncTransportProvider):
     @staticmethod
     def _unreadable(words: str) -> str:
         """What a ``git ls-remote`` probe that git answered with an error says."""
+        refused = transport_refusal(words)
+        if refused:
+            return sentence_with_detail(refused, words)
         trouble = _remote_trouble(words)
         sentence = (
             f"Git Sync couldn't read the git remote: {trouble}"
@@ -420,6 +455,8 @@ class GitSyncProvider(SyncTransportProvider):
     def push(self, objects: list[SyncObject]) -> PushResult:
         if self._idle:
             return PushResult(outcome="transient", detail="no git remote configured")
+        if self._refused:
+            return PushResult(outcome="permanent", detail=self._refused)
         pushed = skipped = 0
         try:
             self._ensure_clone()
@@ -461,7 +498,7 @@ class GitSyncProvider(SyncTransportProvider):
     def list_remote(self, prefix: str = "") -> list[RemoteRef]:
         # A missing or unclonable remote is an empty remote, not an error — the clone may
         # not exist yet on a fresh machine.
-        if self._idle:
+        if self._idle or self._refused:
             return []
         try:
             self._ensure_clone()
@@ -497,7 +534,7 @@ class GitSyncProvider(SyncTransportProvider):
         return refs
 
     def pull(self, refs: list[RemoteRef]) -> list[SyncObject]:
-        if self._idle:
+        if self._idle or self._refused:
             return []
         # The clone is already current from list_remote's pull; refresh best-effort if it
         # exists, but never establish it here.
@@ -515,7 +552,7 @@ class GitSyncProvider(SyncTransportProvider):
         return out
 
     def cas_registry(self, expected_sha: str | None, data: bytes) -> bool:
-        if self._idle:
+        if self._idle or self._refused:
             return False
         try:
             self._ensure_clone()
@@ -548,6 +585,8 @@ class GitSyncProvider(SyncTransportProvider):
     def test(self) -> ConnectionResult:
         if not self._repo_url:
             return ConnectionResult(ok=False, detail="no git remote configured")
+        if self._refused:
+            return ConnectionResult(ok=False, detail=self._refused)
         try:
             # ``ls-remote`` against the URL confirms both reachability and auth without the
             # side effect of writing a clone during a read-only probe.

@@ -22,6 +22,7 @@ import subprocess
 import urllib.request
 from pathlib import Path
 
+from personalclaw.sdk.security import mask_child_output
 from personalclaw.sdk.skill import (
     SkillDetail,
     SkillEntry,
@@ -153,7 +154,8 @@ class SkillsShMarketplace(SkillsMarketplace):
                 env=child_process_env({"NO_COLOR": "1", "FORCE_COLOR": "0"}, installer="npm"),
             )
             if result.returncode != 0:
-                logger.warning("npx skills find failed: %s", result.stderr[:200])
+                # What npx printed, masked before it reaches the gateway log.
+                logger.warning("npx skills find failed: %s", mask_child_output(result.stderr))
                 return []
         except Exception as exc:
             logger.warning("npx skills find error: %s", exc)

@@ -51,6 +51,7 @@ from personalclaw.sdk.sync import (
     SyncObject,
     SyncTransportProvider,
 )
+from personalclaw.sdk.util import child_process_env
 
 #: The single shared registry object every machine compare-and-swaps.
 _REGISTRY_KEY = "registry.json"
@@ -236,7 +237,12 @@ class RsyncSyncProvider(SyncTransportProvider):
         return ["-e", " ".join(parts)]
 
     def _run(self, args: list[str]) -> subprocess.CompletedProcess:
-        """Run one rsync invocation. argv only, no shell, always bounded by a timeout."""
+        """Run one rsync invocation. argv only, no shell, always bounded by a timeout.
+
+        A provider runs inside the gateway, whose environment holds every secret saved in
+        PersonalClaw, and rsync starts ssh, which reads its environment too. So rsync gets the
+        child allowlist, plus the owner's SSH agent socket it signs in to their host through,
+        and nothing else of the gateway's."""
         return subprocess.run(  # noqa: S603 — argv list, shell=False, operands validated
             [self._rsync, *args],
             capture_output=True,
@@ -244,6 +250,7 @@ class RsyncSyncProvider(SyncTransportProvider):
             timeout=self._timeout,
             shell=False,
             check=False,
+            env=child_process_env(ssh_agent=True),
         )
 
     # ── what a failure says ──────────────────────────────────────────────────────────

@@ -11,6 +11,7 @@ Contract: personalclaw.sdk.tool:ToolProvider
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -711,6 +712,83 @@ def test_setup_says_where_the_notebook_lives() -> None:
     app_cli.setup(Ctx())
     assert said
     assert "git" in said[0]
+
+
+# ── What git runs in the notebook ────────────────────────────────────────────
+
+
+def _plant(tmp_path: Path, name: str) -> str:
+    """A program that records that it ran, then fails."""
+    script = tmp_path / f"plant-{name}.sh"
+    script.write_text(f'#!/bin/sh\necho {name} >> "{tmp_path / "ran"}"\nexit 1\n')
+    script.chmod(0o755)
+    return str(script)
+
+
+def _ran(tmp_path: Path) -> list[str]:
+    marker = tmp_path / "ran"
+    out = marker.read_text().split() if marker.exists() else []
+    marker.unlink(missing_ok=True)
+    return out
+
+
+@needs_git
+def test_a_hook_or_monitor_planted_in_the_notebook_does_not_run(
+    book: Notebook, tmp_path: Path
+) -> None:
+    """An agent's shell can write the notebook's `.git` as easily as its notes, and what git
+    runs there runs as the gateway. A hook or a file-system monitor planted there ran on the
+    next note written."""
+    book.write("tempo", "first")
+    root = str(book.root)
+    hook = book.root / ".git" / "hooks" / "pre-commit"
+    hook.write_text(Path(_plant(tmp_path, "hook")).read_text())
+    hook.chmod(0o755)
+    subprocess.run(
+        ["git", "-C", root, "config", "core.fsmonitor", _plant(tmp_path, "fsmonitor")],
+        check=True,
+    )
+    # The controls: plain git in the notebook runs both.
+    subprocess.run(["git", "-C", root, "status", "--porcelain"], capture_output=True)
+    # git can ask the monitor more than once in one status, so the control counts kinds.
+    ran = _ran(tmp_path)
+    assert set(ran) == {"fsmonitor"}, f"the planted monitor never ran: the test is vacuous {ran}"
+    subprocess.run(
+        ["git", "-C", root, "-c", "core.fsmonitor=false", "-c", "user.name=t",
+         "-c", "user.email=t@example.com", "commit", "--allow-empty", "-m", "x"],
+        capture_output=True,
+    )
+    ran = _ran(tmp_path)
+    assert set(ran) == {"hook"}, f"the planted hook never ran: the test is vacuous {ran}"
+
+    result = book.write("tempo", "second")
+
+    assert result["commit"] and not result["unchanged"], result
+    assert _ran(tmp_path) == [], "the notebook's git ran a program its repository names"
+
+
+@needs_git
+def test_the_notebooks_git_never_sees_the_gateways_secrets(
+    book: Notebook, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import notebook as notebook_mod
+
+    monkeypatch.setenv("EXAMPLE_SERVICE_API_TOKEN", "example-secret-token-4d1e9c")
+    seen: list[tuple[list[str], object]] = []
+    real = subprocess.run
+
+    def spy(argv, **kwargs):
+        seen.append((list(argv), kwargs.get("env")))
+        return real(argv, **kwargs)
+
+    monkeypatch.setattr(notebook_mod.subprocess, "run", spy)
+    book.write("tempo", "first")
+
+    assert seen, "writing a note ran no git: the test is vacuous"
+    for argv, env in seen:
+        assert isinstance(env, dict) and "EXAMPLE_SERVICE_API_TOKEN" not in env, argv
+        assert env.get("GIT_TERMINAL_PROMPT") == "0", argv
+        assert argv[0] == "git" and f"core.hooksPath={os.devnull}" in argv, argv
 
 
 # ── The manifest ─────────────────────────────────────────────────────────────

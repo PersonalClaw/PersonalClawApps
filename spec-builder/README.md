@@ -142,7 +142,9 @@ at the boundary, and never let untrusted text forge a log record) to each untrus
   because this app only ever reads one committed file.
 - **`git` itself** is invoked with a fixed argv list — never a shell string — with a hard timeout
   and `GIT_TERMINAL_PROMPT=0`, so seeding can never block on a credential prompt from a repo
-  that happens to have a remote. Every invocation is read-only (`show`, `rev-parse`).
+  that happens to have a remote. Every invocation is read-only (`show`, `rev-parse`), and runs
+  with the settings that stop the repository's own configuration from running a program and with
+  PersonalClaw's child environment rather than the gateway's (`personalclaw.sdk.git`).
 - **Spec content handed back to a model is fenced** with
   `personalclaw.sdk.security.fence_untrusted` — `spec_read`, `spec_seed`'s echo, and the
   `spec_list` table (its titles are the user's own text, and a seeded spec's title may have been
@@ -243,7 +245,7 @@ Stated plainly, because the difference matters.
 - 172 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
   `PERSONALCLAW_SKIP_APP_BACKENDS=1`).
 - `app.json` parses against core's own `AppManifest` and round-trips stably.
-- SDK-only imports (`personalclaw.sdk.{tool,security,util,cli,manifest}`) — clean under the
+- SDK-only imports (`personalclaw.sdk.{tool,security,util,cli,manifest,git}`) — clean under the
   repo's `boundary` AST lint.
 - The cross-app rails: `settings-schema-posture`, `prompt-cache-posture`,
   `live-writes-posture`, `quality-declarations`.

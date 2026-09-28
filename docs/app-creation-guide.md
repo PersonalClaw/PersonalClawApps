@@ -377,10 +377,20 @@ it runs from:
   environment.** Your provider runs inside the gateway, and the gateway's environment holds
   every secret saved in PersonalClaw. Give a child that runs a program or package someone else
   wrote `env=child_process_env()` (`personalclaw.sdk.util`: the child allowlist, your `extra`
-  over it, and `installer="npm"` or `"pip"` for an install), and a declared package run as
+  over it, `installer="npm"` or `"pip"` for an install, and `ssh_agent=True` for a program that
+  signs in over ssh with the owner's keys, which adds their SSH agent socket and nothing else),
+  and a declared package run as
   `python -m` `env=app_packages_env()`. `.github/scripts/check_child_process_env.py` holds every
   spawn in this repository to one of those, or to a stated reason (your own authenticated tool
   that signs in from the environment, a doctor step).
+- **A git your provider runs goes through `personalclaw.sdk.git`.** It usually runs in a
+  repository an agent's shell can write (the owner's clone, a notebook), and a hook, a
+  file-system monitor or an ssh command set in that repository's `.git` would otherwise run as
+  the gateway. Build the argv with `git_argv(args)` and pass `env=git_env(remote=...)`, with
+  `remote=talks_to_remote(args)`: the child allowlist, plus the owner's SSH agent for a command
+  that talks to a remote. A command that talks to a remote signs in with the owner's own ssh
+  command and credential helpers; a remote at a local path is refused. The same rail holds every
+  spawn of a `git` argv to `git_argv`.
 
 `sidecarDependencies` is the engine of a provider declared `execution: "sidecar"`, and a
 manifest that lists it without one is refused. Nothing installs it with the app. The owner

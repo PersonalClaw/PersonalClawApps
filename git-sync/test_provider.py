@@ -1,12 +1,15 @@
-"""Git-sync transport tests — real ``git`` against a local bare remote, no network.
+"""Git-sync transport tests — real ``git`` against a bare remote on this machine, no network.
 
-Every case points the provider at a ``git init --bare`` repo under ``tmp_path`` (git
-accepts a local path as a remote URL) and a fresh working clone, so the tests exercise
-the real subprocess path with no credentials and no network. Covers the insert-only push
-contract (verified by cloning the remote fresh), the empty-remote first-machine case,
-list_remote's .git exclusion + prefix filtering + temp-file exclusion, pull's
-drop-on-vanish, the registry compare-and-swap (present/absent/mismatch + round-trip), the
-push-rejection → transient classification, two-machine convergence at the transport level,
+Every case points the provider at a ``git init --bare`` repo under ``tmp_path`` and a fresh
+working clone, so the tests exercise the real subprocess path with no credentials and no
+network. The transport's git refuses a remote at a local path, so the remote is reached the way
+an owner reaches one: over ssh, with an ssh command of the owner's own (``core.sshCommand`` in a
+scratch ``HOME``), here a stand-in that runs the server's side of git on this machine.
+
+Covers the insert-only push contract (verified by cloning the remote fresh), the empty-remote
+first-machine case, list_remote's .git exclusion + prefix filtering + temp-file exclusion,
+pull's drop-on-vanish, the registry compare-and-swap (present/absent/mismatch + round-trip),
+the push-rejection → transient classification, two-machine convergence at the transport level,
 and the reachability probe.
 """
 
@@ -51,12 +54,38 @@ def _git(cwd: str, *args: str) -> subprocess.CompletedProcess:
 
 
 @pytest.fixture
-def remote(tmp_path):
-    """A bare git repo acting as the remote the user owns."""
+def ssh_url(tmp_path, monkeypatch):
+    """``ssh_url(path)``: an ``ssh://`` URL that reaches the repository at *path* on this machine.
+
+    The owner's ssh command, in a scratch ``HOME`` both the tests' git and the transport's read,
+    is a stand-in: it records the SSH agent socket and the planted secret it was handed, then
+    runs the git command a server would. It runs that command with an environment of its own,
+    as a login on the server gets one, so none of the client's git settings reach the server's
+    git: a hook the remote runs is the remote's."""
+    home = tmp_path / "home"
+    home.mkdir()
+    seen = tmp_path / "ssh-saw"
+    stand_in = home / "ssh-stand-in"
+    stand_in.write_text(
+        "#!/bin/sh\n"
+        '[ "$1" = "-G" ] && exit 1\n'
+        f'echo "agent=${{SSH_AUTH_SOCK:-none}} secret=${{EXAMPLE_SERVICE_API_TOKEN:-none}}" >> "{seen}"\n'
+        'exec env -i PATH="$PATH" HOME="$HOME" /bin/sh -c "$2"\n'
+    )
+    stand_in.chmod(0o755)
+    (home / ".gitconfig").write_text(f"[core]\n\tsshCommand = {stand_in}\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    return lambda path: f"ssh://example.invalid{os.path.realpath(path)}"
+
+
+@pytest.fixture
+def remote(tmp_path, ssh_url):
+    """A bare git repo acting as the remote the user owns, as the ssh URL that reaches it."""
     path = str(tmp_path / "remote.git")
     subprocess.run(["git", "init", "--bare", "-b", "main", path], check=True,
                    capture_output=True, text=True)
-    return path
+    return ssh_url(path)
 
 
 def _provider(remote_url: str, tmp_path, name: str = "clone") -> GitSyncProvider:
@@ -307,12 +336,94 @@ def test_probe_not_ok_on_empty_config():
     assert "no git remote" in res.detail
 
 
-def test_probe_not_ok_on_bad_url(tmp_path):
+def test_probe_not_ok_on_bad_url(tmp_path, ssh_url):
     res = GitSyncProvider(
-        repo_url=str(tmp_path / "does-not-exist.git"), local_clone=str(tmp_path / "c")
+        repo_url=ssh_url(tmp_path / "does-not-exist.git"), local_clone=str(tmp_path / "c")
     ).test()
     assert res.ok is False
     assert res.detail  # what went wrong, then git's own words
+
+
+@pytest.mark.parametrize("form", ["path", "file-url"])
+def test_a_remote_at_a_local_path_is_refused_with_the_reason_and_the_alternative(tmp_path, form):
+    """A local remote runs its upload and receive programs, and its own hooks, on this machine,
+    as the gateway. The transport refuses it before git runs and says why and what to use."""
+    path = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(path)], check=True,
+                   capture_output=True, text=True)
+    url = str(path) if form == "path" else f"file://{path}"
+    p = GitSyncProvider(repo_url=url, local_clone=str(tmp_path / "c"))
+
+    res = p.test()
+    assert res.ok is False
+    assert "local path" in res.detail and "ssh or https" in res.detail, res.detail
+    pushed = p.push([SyncObject("k", b"v")])
+    assert (pushed.outcome, pushed.detail) == ("permanent", res.detail)
+    assert p.list_remote() == [] and p.cas_registry(None, b"{}") is False
+    assert not (tmp_path / "c").exists(), "git ran for a refused remote"
+
+
+def test_a_refusal_git_reports_is_said_in_the_transports_words(remote, tmp_path):
+    """A clone whose remote was changed to a local path after it was made (the clone's own
+    `.git/config` is what git reads) is refused by git. The detail says why, and what to use
+    instead, in PersonalClaw's words first; git's own follow as the detail."""
+    p = _provider(remote, tmp_path)
+    p.push([SyncObject("first.jsonl", b"one")])
+    local = tmp_path / "elsewhere.git"
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(local)], check=True,
+                   capture_output=True, text=True)
+    _git(str(tmp_path / "clone"), "remote", "set-url", "origin", str(local))
+
+    r = p.push([SyncObject("second.jsonl", b"two")])
+
+    assert r.outcome == "permanent", r
+    assert r.detail.startswith(
+        "PersonalClaw's git does not reach a remote at a local path, because"
+    ), r.detail
+    assert "Reach it over ssh or https instead. Details: " in r.detail, r.detail
+
+
+# ── what git runs in the working clone, and with what ────────────────────────────────
+
+
+def test_the_remote_gets_the_ssh_agent_and_no_gateway_secret(remote, tmp_path, monkeypatch):
+    """git over ssh signs in through the owner's SSH agent, so the transport's git carries its
+    socket; it carries nothing else of the gateway's, which holds every secret saved in
+    PersonalClaw."""
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/example-agent.sock")
+    monkeypatch.setenv("EXAMPLE_SERVICE_API_TOKEN", "example-secret-token-4d1e9c")
+    r = _provider(remote, tmp_path).push([SyncObject("first.jsonl", b"hello")])
+    assert r.outcome == "delivered", r.detail
+    saw = (tmp_path / "ssh-saw").read_text().splitlines()
+    assert saw, "the push never reached ssh: the test is vacuous"
+    assert set(saw) == {"agent=/tmp/example-agent.sock secret=none"}, saw
+
+
+def test_a_hook_or_monitor_planted_in_the_working_clone_does_not_run(remote, tmp_path):
+    """An agent's shell can write the working clone's ``.git`` as easily as its files. A hook
+    or a file-system monitor planted there ran, as the gateway, on the next sync."""
+    p = _provider(remote, tmp_path)
+    p.push([SyncObject("first.jsonl", b"one")])
+    clone = tmp_path / "clone"
+    marker = tmp_path / "ran"
+    plant = tmp_path / "plant.sh"
+    plant.write_text(f'#!/bin/sh\necho "$0" >> "{marker}"\nexit 1\n')
+    plant.chmod(0o755)
+    for hook in ("pre-commit", "pre-push"):
+        target = clone / ".git" / "hooks" / hook
+        target.write_text(plant.read_text())
+        target.chmod(0o755)
+    subprocess.run(["git", "-C", str(clone), "config", "core.fsmonitor", str(plant)], check=True)
+    # The control: plain git in the clone runs the plant.
+    subprocess.run(["git", "-C", str(clone), "status", "--porcelain"], capture_output=True)
+    assert marker.exists(), "the planted monitor never ran: the test is vacuous"
+    marker.unlink()
+
+    r = p.push([SyncObject("second.jsonl", b"two")])
+
+    assert r.outcome == "delivered" and r.pushed == 1, r.detail
+    assert "second.jsonl" in _files_in_fresh_remote_checkout(remote, tmp_path)
+    assert not marker.exists(), marker.read_text()
 
 
 # ── factory + config ─────────────────────────────────────────────────────────────────
@@ -372,11 +483,11 @@ def _refusing(stderr: str):
     return _run
 
 
-def test_probe_names_a_missing_repository_and_where_to_fix_it(tmp_path, c_locale):
+def test_probe_names_a_missing_repository_and_where_to_fix_it(tmp_path, ssh_url, c_locale):
     """git's first stderr line, "fatal: '…' does not appear to be a git repository", used to be
     the whole message."""
     res = GitSyncProvider(
-        repo_url=str(tmp_path / "does-not-exist.git"), local_clone=str(tmp_path / "c")
+        repo_url=ssh_url(tmp_path / "does-not-exist.git"), local_clone=str(tmp_path / "c")
     ).test()
 
     assert res.ok is False
@@ -457,12 +568,14 @@ def test_probe_says_when_git_itself_cannot_start(monkeypatch):
     )
 
 
-def test_a_push_that_cannot_clone_names_the_trouble_and_that_it_retries(tmp_path, c_locale):
+def test_a_push_that_cannot_clone_names_the_trouble_and_that_it_retries(
+    tmp_path, ssh_url, c_locale
+):
     """"Command '['git', 'clone', …]' returned non-zero exit status 128." used to be the whole
     message."""
     clone = tmp_path / "c"
     res = GitSyncProvider(
-        repo_url=str(tmp_path / "does-not-exist.git"), local_clone=str(clone)
+        repo_url=ssh_url(tmp_path / "does-not-exist.git"), local_clone=str(clone)
     ).push([SyncObject("k", b"v")])
 
     assert res.outcome == "transient"
@@ -534,13 +647,14 @@ def test_a_push_turned_away_by_a_moved_remote_says_so_and_that_it_retries(remote
 def test_a_push_the_remote_rules_refuse_names_the_branch(remote, tmp_path, c_locale):
     """A remote whose own hook declines the push. The hook's first stderr line used to be the
     whole message, and nothing said it wasn't a race: git's "[remote rejected]" reads as one."""
-    hook = os.path.join(remote, "hooks", "pre-receive")
+    bare = str(tmp_path / "remote.git")
+    hook = os.path.join(bare, "hooks", "pre-receive")
     with open(hook, "w", encoding="utf-8") as fh:
         fh.write("#!/bin/sh\necho 'pushes to this branch are not accepted' >&2\nexit 1\n")
     os.chmod(hook, 0o755)
     # A machine-wide core.hooksPath (a system gitconfig can set one) would run its hooks in
     # place of the remote's own, and the push would land; the remote names its own directory.
-    subprocess.run(["git", "-C", remote, "config", "core.hooksPath", os.path.join(remote, "hooks")],
+    subprocess.run(["git", "-C", bare, "config", "core.hooksPath", os.path.join(bare, "hooks")],
                    check=True, capture_output=True, text=True)
 
     r = _provider(remote, tmp_path).push([SyncObject("k", b"v")])
@@ -596,16 +710,13 @@ def test_a_local_git_step_that_hangs_says_where_to_look(remote, tmp_path, monkey
 
 
 def test_a_git_step_this_machines_git_settings_break_says_to_check_them(
-    remote, tmp_path, monkeypatch, c_locale
+    remote, tmp_path, c_locale
 ):
-    """git set, on this machine, to sign every commit with a program that isn't there. The
-    commit's failure used to arrive as "Command '[…]' returned non-zero exit status 128."."""
-    for i, (key, value) in enumerate(
-        [("commit.gpgsign", "true"), ("gpg.program", "/nonexistent/pc-fixture-gpg")]
-    ):
-        monkeypatch.setenv(f"GIT_CONFIG_KEY_{i}", key)
-        monkeypatch.setenv(f"GIT_CONFIG_VALUE_{i}", value)
-    monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+    """git set up, in this machine's own git configuration, in a way that breaks a commit: a
+    cleanup mode git does not have. The commit's failure used to arrive as "Command '[…]'
+    returned non-zero exit status 128."."""
+    with open(os.path.join(os.environ["HOME"], ".gitconfig"), "a", encoding="utf-8") as fh:
+        fh.write("[commit]\n\tcleanup = pc-fixture-mode\n")
     clone = tmp_path / "clone"
 
     r = _provider(remote, tmp_path).push([SyncObject("k", b"v")])

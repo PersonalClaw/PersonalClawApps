@@ -106,7 +106,10 @@ boundary, and never let untrusted text forge a log record) to each untrusted edg
   passed through, because this app only ever reads a note's own past.
 - **`git` itself** is invoked with a fixed argv list — never a shell string — with pathspecs
   after `--`, a hard timeout, and `GIT_TERMINAL_PROMPT=0` so a notebook operation can never
-  block on a credential prompt.
+  block on a credential prompt. Anything that can write the notebook can write its `.git`, so
+  git runs with the settings that stop a repository's hooks, file-system monitor and other
+  programs from running, and with PersonalClaw's child environment rather than the gateway's,
+  which holds every secret saved in PersonalClaw (`personalclaw.sdk.git`).
 - **Commit subjects** are stripped to one printable line. A message reaching `git` as an
   argv element cannot inject a command, but a newline in it would forge what looks like a
   second commit in every log the notebook is read through.

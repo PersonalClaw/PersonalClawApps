@@ -24,7 +24,7 @@
           "default": "",
           "x-meta": {
             "label": "Git remote URL",
-            "help": "The ssh or https URL of a git remote you own (both machines point at the same one). Leave empty to configure later — the transport stays idle until set."
+            "help": "The ssh or https URL of a git remote you own (both machines point at the same one). A remote at a local path is refused. Leave empty to configure later — the transport stays idle until set."
           }
         },
         "local_clone": {

@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from personalclaw.sdk.git import git_argv, git_env
 from personalclaw.sdk.util import app_data_dir, atomic_write
 
 APP_NAME = "notes"
@@ -211,22 +212,25 @@ class Notebook:
     # ── The `git` edge ──────────────────────────────────────────────────────────
 
     def _run(self, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-        """Run one `git` command in the notebook. Fixed argv, captured output, hard timeout."""
-        argv = [
-            "git",
+        """Run one `git` command in the notebook. Fixed argv, captured output, hard timeout.
+
+        The notebook is a folder an agent's shell can write, `.git` included, so git runs with
+        the settings that stop the repository's own configuration from running a program: no
+        hook, file-system monitor or ssh command a repository sets runs (`git_argv`). Its
+        environment is the child allowlist, never the gateway's secrets, and it never waits on
+        a credential prompt (`git_env`): there is no remote here (syncing a notebook is
+        `git-sync`'s job, not this app's), but a user-pointed notebook_path may sit in a repo
+        that has one."""
+        argv = git_argv([
             "-C", str(self._root),
             "-c", f"user.name={COMMIT_NAME}",
             "-c", f"user.email={COMMIT_EMAIL}",
             *args,
-        ]
-        # A notebook operation must never block on a credential prompt. There is no remote
-        # here (syncing a notebook is `git-sync`'s job, not this app's), but a user-pointed
-        # notebook_path may sit in a repo that has one.
-        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        ])
         try:
             proc = subprocess.run(  # noqa: S603 — fixed argv, no shell, validated pathspecs
                 argv, capture_output=True, text=True, timeout=self._timeout,
-                check=False, env=env,
+                check=False, env=git_env(),
             )
         except FileNotFoundError as exc:
             raise GitError(GIT_MISSING) from exc

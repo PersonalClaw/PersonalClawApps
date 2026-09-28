@@ -38,8 +38,13 @@ It is deliberately **not**:
   channel — it owns neither the fetch nor a model call.
 
 It imports only the PersonalClaw **SDK** (`personalclaw.sdk.knowledge`, `personalclaw.sdk.net`,
-`personalclaw.sdk.credentials`, `personalclaw.sdk.util`), never core internals, so core can
-evolve without breaking it.
+`personalclaw.sdk.credentials`, `personalclaw.sdk.util`, `personalclaw.sdk.git`), never core
+internals, so core can evolve without breaking it.
+
+Anything that can write the clone can write its `.git`, so its git runs with the settings that
+stop a repository's own configuration (a hook, a file-system monitor, an ssh command) from
+running a program, and with PersonalClaw's child environment rather than the gateway's, which
+holds every secret saved in PersonalClaw (`personalclaw.sdk.git`).
 
 ## Install & use
 

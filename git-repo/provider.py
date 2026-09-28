@@ -64,6 +64,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 from urllib.parse import quote, urlparse
 
+from personalclaw.sdk.git import git_argv, git_env
 from personalclaw.sdk.knowledge import (
     KnowledgeItem,
     KnowledgeSource,
@@ -419,12 +420,17 @@ class GitRepoSourceProvider(KnowledgeSourceProvider):
         """Run ``git -C <repo> <args>`` captured, with a hard timeout. Every call site below
         passes only LOCAL plumbing (``rev-parse`` / ``ls-tree`` / ``show`` / ``diff``) — this
         method must never be handed a network verb (clone/fetch/pull/remote/ls-remote).
-        Reading an existing clone touches no socket."""
+        Reading an existing clone touches no socket.
+
+        An agent's shell can write the clone's ``.git`` as easily as its files, so git runs
+        with the settings that stop the repository's own configuration from running a program
+        (``git_argv``) and with the child allowlist, never the gateway's secrets (``git_env``)."""
         return subprocess.run(
-            ["git", "-C", repo, *args],
+            git_argv(["-C", repo, *args]),
             capture_output=True,
             timeout=GIT_TIMEOUT_SECS,
             check=False,
+            env=git_env(),
         )
 
     def _rev(self, repo: str, ref: str) -> str | None:

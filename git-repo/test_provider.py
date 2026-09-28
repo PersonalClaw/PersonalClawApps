@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -353,10 +354,13 @@ def test_module_owns_no_socket_and_runs_no_network_git_verb():
             if isinstance(func, ast.Attribute) and func.attr == "run":
                 if isinstance(func.value, ast.Name) and func.value.id == "subprocess":
                     subprocess_calls += 1
-                    # First arg is the ["git", "-C", repo, "<verb>", ...] list.
-                    if node.args and isinstance(node.args[0], ast.List):
+                    # First arg is git_argv(["-C", repo, "<verb>", ...]): the list inside it.
+                    argv = node.args[0] if node.args else None
+                    if isinstance(argv, ast.Call) and argv.args:
+                        argv = argv.args[0]
+                    if isinstance(argv, ast.List):
                         strs = [
-                            e.value for e in node.args[0].elts
+                            e.value for e in argv.elts
                             if isinstance(e, ast.Constant) and isinstance(e.value, str)
                         ]
                         for s in strs:
@@ -606,3 +610,38 @@ async def test_an_empty_spec_install_is_unchanged_by_the_new_contract(store, rep
     ]
     assert through_engine.cursor == legacy_shape.cursor
     assert await _poll(engine, store, sid) == 3
+
+
+# ── what git runs in the owner's clone ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_the_clones_git_gets_neither_the_gateways_secrets_nor_the_repos_programs(
+    store, repo, monkeypatch
+):
+    """An agent's shell can write the clone's ``.git`` as easily as its files, and a provider
+    runs inside the gateway, whose environment holds every secret saved in PersonalClaw. So
+    every git the connector runs gets the child allowlist and the settings that stop the
+    repository's own configuration from running a program (``personalclaw.sdk.git``)."""
+    import provider as provider_mod
+
+    monkeypatch.setenv("EXAMPLE_SERVICE_API_TOKEN", "example-secret-token-4d1e9c")
+    seen: list[tuple[list[str], dict | None]] = []
+    real = subprocess.run
+
+    def spy(argv, **kwargs):
+        seen.append((list(argv), kwargs.get("env")))
+        return real(argv, **kwargs)
+
+    monkeypatch.setattr(provider_mod.subprocess, "run", spy)
+    provider = create_provider({"repo": str(repo)})
+    sid = store.create_source(name="r", provider="git-repo", kind="external", spec={})
+    result = await provider.poll(sid, "", spec={})
+
+    assert {i.guid for i in result.items} == {"alpha.py", "beta.ts", "guide.md"}
+    gits = [(argv, env) for argv, env in seen if argv and argv[0] == "git"]
+    assert gits, "the poll ran no git: the test is vacuous"
+    for argv, env in gits:
+        assert env is not None and "EXAMPLE_SERVICE_API_TOKEN" not in env, argv
+        assert f"core.hooksPath={os.devnull}" in argv and "core.fsmonitor=false" in argv, argv
+

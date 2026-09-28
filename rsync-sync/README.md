@@ -41,6 +41,10 @@ never prompt, because a prompt inside a background sync job hangs until the time
 of failing with a readable reason. Use an ssh agent, or an unencrypted key dedicated to this
 host.
 
+rsync and the ssh it starts get PersonalClaw's child environment, not the gateway's, which
+holds every secret saved in PersonalClaw: the child allowlist plus your SSH agent's socket
+(`personalclaw.sdk.util.child_process_env(ssh_agent=True)`), and nothing else.
+
 **Host-key checking is left at your own ssh default, deliberately.** This app does not pass
 `StrictHostKeyChecking=no` or point `UserKnownHostsFile` at `/dev/null` to make first contact
 "just work" — that would accept any key from any host claiming to be yours, which is the

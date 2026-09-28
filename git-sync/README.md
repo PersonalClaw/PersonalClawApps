@@ -16,12 +16,14 @@ self-contained directory:
 
 - `app.json` — the manifest (`provider.type: "sync"` + `implementation`).
 - `provider.py` — the implementation, exposed via `create_provider`.
-- `test_provider.py` — the app's own tests, driven against a real local git remote.
+- `test_provider.py` — the app's own tests, driven against a real git remote on this machine,
+  reached over ssh through a stand-in ssh command.
 
 It imports only the PersonalClaw **SDK** (never core internals), so core can evolve without
 breaking it:
 
 - `personalclaw.sdk.sync`
+- `personalclaw.sdk.git`
 
 The transport moves bytes only. The merge, the machine-seq registry contents, and the
 outbox retry loop all live above it in the core durability layer. It shells out to `git`
@@ -39,7 +41,7 @@ other app. (Or [install it from a shell](../docs/third-party-install.md#installi
 
 | Key | Label | Notes |
 |---|---|---|
-| `repo_url` | Git remote URL | The ssh or https URL of a git remote you own (both machines point at the same one). Leave empty to configure later — the transport stays idle until set. |
+| `repo_url` | Git remote URL | The ssh or https URL of a git remote you own (both machines point at the same one). A remote at a local path is refused. Leave empty to configure later — the transport stays idle until set. |
 | `local_clone` | Local working clone | Where the working clone lives on this machine (default `~/.personalclaw/sync/git-sync`). Supports `~` and `$VARS`. Cloned on first use, reused after. |
 | `branch` | Branch | The branch to sync on (default `main`). Both machines must use the same branch. |
 
@@ -84,8 +86,14 @@ clone of an empty repo succeeds and the first push publishes the branch.
 ## Security posture
 
 - **Your git credentials, your remote.** The transport uses whatever git credentials the
-  machine already has for the remote you point it at (ssh key, credential helper). It reads
-  and writes only that repo; the remote's own access controls are the trust boundary.
+  machine already has for the remote you point it at: your SSH agent, and the ssh command and
+  credential helpers in your own git configuration. It reads and writes only that repo; the
+  remote's own access controls are the trust boundary.
+- **The working clone's own configuration runs nothing.** Anything that can write the clone
+  can write its `.git`, so git runs with the settings that stop a repository's hooks,
+  file-system monitor, ssh command and credential helpers from running
+  (`personalclaw.sdk.git.git_argv`), and with PersonalClaw's child environment: none of the
+  gateway's secrets, and the SSH agent only for a command that talks to the remote.
 - **The repo holds shard objects only.** Secrets are excluded upstream by the durability
   layer before anything reaches a transport, so this app never sees `.env`, API keys, or the
   credential store — it cannot sync what it is never handed.

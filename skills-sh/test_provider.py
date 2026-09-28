@@ -178,3 +178,26 @@ def test_the_skill_clone_runs_git_without_the_gateways_secrets(monkeypatch):
     names, seen = _handed_env(monkeypatch, lambda: mkt._fetch_via_cli("owner/repo@a-skill"))
     leaked = sorted(set(_PLANTED) & set(names))
     assert leaked == [] and "PATH" in names and seen["values"]["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_what_a_failing_npx_prints_reaches_the_log_masked(monkeypatch, caplog):
+    """`npx` runs a package someone else publishes, and what it prints can carry a credential it
+    read. The gateway log keeps it masked and on one line."""
+    import logging
+    import subprocess as _sp
+    from unittest.mock import patch as _patch
+
+    mkt = SkillsShMarketplace()
+    monkeypatch.setattr(mkt, "_api_key", lambda: None)
+    printed = "npm error 401 with key AKIAIOSFODNN7EXAMPLE\nnpm error see the log"
+
+    def fake_run(argv, **kwargs):
+        return _sp.CompletedProcess(args=argv, returncode=1, stdout="", stderr=printed)
+
+    with _patch("subprocess.run", side_effect=fake_run), _patch(
+        "shutil.which", side_effect=lambda name: f"/usr/bin/{name}"
+    ), caplog.at_level(logging.WARNING):
+        assert mkt.search("changelog") == []
+    warned = [r.getMessage() for r in caplog.records if "npx skills find failed" in r.getMessage()]
+    assert warned, "the failure was not logged: the test is vacuous"
+    assert all("AKIAIOSFODNN7EXAMPLE" not in m and "\n" not in m for m in warned), warned

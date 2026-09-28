@@ -15,6 +15,7 @@ Contract: personalclaw.sdk.tool:ToolProvider
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -685,6 +686,37 @@ def test_read_source_reads_the_commit_not_the_dirty_working_tree(
     text = store.read_source("src/router.py")["text"]
     assert "uncommitted garbage" not in text
     assert "def route()" in text
+
+
+@needs_git
+def test_the_source_repositorys_git_gets_neither_secrets_nor_the_repos_programs(
+    tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An agent's shell can write the source repository's `.git`, and a provider runs inside the
+    gateway, whose environment holds every secret saved in PersonalClaw. So the seed's git gets
+    the child allowlist and the settings that stop the repository's own programs."""
+    import specs as specs_mod
+
+    monkeypatch.setenv("EXAMPLE_SERVICE_API_TOKEN", "example-secret-token-4d1e9c")
+    seen: list[tuple[list[str], Any]] = []
+    real = subprocess.run
+
+    def spy(argv: Any, **kwargs: Any) -> Any:
+        seen.append((list(argv), kwargs.get("env")))
+        return real(argv, **kwargs)
+
+    monkeypatch.setattr(specs_mod.subprocess, "run", spy)
+    store = SpecStore(tmp_path / "specs", source_repo=str(repo))
+    assert "def route()" in store.read_source("src/router.py")["text"]
+    assert seen, "the seed ran no git: the test is vacuous"
+    for argv, env in seen:
+        assert env is not None and "EXAMPLE_SERVICE_API_TOKEN" not in env, argv
+        assert env.get("GIT_TERMINAL_PROMPT") == "0", argv
+        assert f"core.hooksPath={os.devnull}" in argv, argv
+    # The read itself is a `git show`, which would otherwise run a textconv filter the
+    # repository assigns to the file.
+    shows = [argv for argv, _env in seen if "show" in argv]
+    assert shows and all("--no-textconv" in argv for argv in shows), shows
 
 
 @needs_git

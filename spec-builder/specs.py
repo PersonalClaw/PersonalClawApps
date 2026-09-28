@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from personalclaw.sdk.git import git_argv, git_env
 from personalclaw.sdk.util import app_data_dir, atomic_write
 
 APP_NAME = "spec-builder"
@@ -571,19 +572,22 @@ class SpecStore:
         return repo
 
     def _git(self, repo: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
-        """Run one read-only `git` command. Fixed argv, captured output, hard timeout."""
-        argv = ["git", "-C", str(repo), *args]
-        # Seeding must never block on a credential prompt: the configured repo may well have
-        # a remote, and `git show` on a missing object can otherwise stall on one.
-        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+        """Run one read-only `git` command. Fixed argv, captured output, hard timeout.
+
+        The source repository is one an agent's shell can write, `.git` included, so git runs
+        with the settings that stop the repository's own configuration from running a program
+        (`git_argv`), and with the child allowlist, never the gateway's secrets (`git_env`).
+        Seeding never blocks on a credential prompt either (`git_env` says so): the configured
+        repo may well have a remote, and `git show` on a missing object can otherwise stall on
+        one."""
         try:
             return subprocess.run(  # noqa: S603 — fixed argv, no shell, validated pathspec
-                argv,
+                git_argv(["-C", str(repo), *args]),
                 capture_output=True,
                 text=True,
                 timeout=self._timeout,
                 check=False,
-                env=env,
+                env=git_env(),
             )
         except FileNotFoundError as exc:
             raise GitError(GIT_MISSING) from exc
