@@ -54,6 +54,17 @@ def _answering(code: int, stderr: str):
     return _run
 
 
+def _no_root(path: str, where: str) -> str:
+    """What a sync root path that isn't there says — a folder this transport never creates, since
+    a share that isn't mounted looks just like one — with the step for each likely cause: the
+    share, a folder not made yet, and a mistyped setting."""
+    return (
+        f"The sync root path {path} doesn't exist {where}. If it's on a disk or share that isn't "
+        f"mounted, mount it; if it's the folder you meant, create it (mkdir -p {path}); otherwise "
+        f"set Sync root path {ON_CARD} to the right folder. Then sync again."
+    )
+
+
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path, monkeypatch):
     """Never touch the real home or the real workspace."""
@@ -528,16 +539,13 @@ class TestConnection:
 
     def test_test_reports_a_missing_root(self, tmp_path):
         """rsync's "change_dir … failed: No such file or directory" used to follow a bare
-        "unreachable"; now the probe says the folder isn't there and what to do."""
+        "unreachable"; now the probe says the folder isn't there, and to mount it or make it —
+        a folder this transport never makes itself."""
         root = tmp_path / "does-not-exist"
         p = RsyncSyncProvider(path=str(root), staging_dir=str(tmp_path / "s"))
         r = p.test()
         assert r.ok is False
-        assert r.detail.startswith(
-            f"The sync root path {root} doesn't exist on this machine. Create that folder or "
-            f"reconnect the drive it lives on, or set Sync root path {ON_CARD} to one that "
-            "exists. Details: "
-        ), r.detail
+        assert r.detail.startswith(f"{_no_root(str(root), 'on this machine')} Details: "), r.detail
 
 
 class TestFailureHandling:
@@ -806,8 +814,7 @@ _REFUSALS = [
         11,
         'rsync: [Receiver] mkdir "/srv/sync" failed: No such file or directory (2)\nrsync error: '
         "error in file IO (code 11)\n",
-        "The sync root path /srv/sync doesn't exist on nas.example.com. Create that folder there, "
-        f"or set Sync root path {ON_CARD} to one that exists.",
+        _no_root("/srv/sync", "on nas.example.com"),
     ),
     (
         23,
@@ -1032,12 +1039,9 @@ class TestAPullThatFails:
 #
 # list_remote answered [] and the registry swap False for every rsync run that failed, which
 # read as a target with nothing on it, or as a swap another machine won. Now the run's failure
-# is raised, said as a push's is. What stays: a sync root path that doesn't exist yet lists as
-# empty — the first machine's first push creates it — and a registry that isn't there when one
-# was expected is a lost race.
-
-#: Every refusal a push names, but the one that says the sync root path isn't there.
-_NOT_MISSING = [row for row in _REFUSALS if "No such file or directory" not in row[1]]
+# is raised, said as a push's is — a sync root path that isn't there among them, since this
+# transport never creates one. What stays: a registry that isn't there, in a root that is, is
+# nothing yet — or, when one was expected, a lost race.
 
 
 @pytest.fixture
@@ -1080,10 +1084,15 @@ def _unreadable(where: str, who: str, path: str) -> str:
 class TestAListingThatFails:
     @needs_rsync
     @pytest.mark.skipif(os.geteuid() == 0, reason="root reads an unreadable folder anyway")
-    def test_a_listing_is_empty_only_while_the_root_doesnt_exist_yet(self, tmp_path):
+    def test_a_root_that_isnt_there_is_a_failure_as_is_one_it_cannot_read(self, tmp_path):
+        """A root that wasn't there listed as empty — the first machine's to create, even when
+        it was a share that wasn't mounted."""
         root = tmp_path / "target"
         p = RsyncSyncProvider(path=str(root), staging_dir=str(tmp_path / "s"), timeout_secs=60)
-        assert p.list_remote() == [], "a root not there yet is the first machine's to create"
+        with pytest.raises(provider_mod.RsyncFailed) as caught:
+            p.list_remote()
+        says = _no_root(str(root), "on this machine")
+        assert str(caught.value).startswith(f"{says} Details: "), caught.value
 
         root.mkdir()
         root.chmod(0o000)
@@ -1098,14 +1107,18 @@ class TestAListingThatFails:
 
     @needs_rsync
     @pytest.mark.skipif(os.geteuid() == 0, reason="root reads an unreadable folder anyway")
-    def test_over_ssh_a_root_not_there_yet_lists_as_empty_however_it_is_written(
+    def test_over_ssh_a_root_that_isnt_there_is_a_failure_however_it_is_written(
         self, tmp_path, over_ssh
     ):
         """A real rsync on both ends. The host's rsync names a folder under ``~``, or relative to
-        the login's home, by its full path there."""
+        the login's home, by its full path there; the sentence names it as the setting has it."""
         make, home = over_ssh
         for path in (str(tmp_path / "gone"), "~/gone", "gone"):
-            assert make(path).list_remote() == [], path
+            with pytest.raises(provider_mod.RsyncFailed) as caught:
+                make(path).list_remote()
+            says = _no_root(path, "on example.invalid")
+            assert str(caught.value).startswith(f"{says} Details: "), caught.value
+        assert list(home.iterdir()) == [], "a listing made a folder on the host"
 
         locked = home / "locked"
         locked.mkdir()
@@ -1119,7 +1132,7 @@ class TestAListingThatFails:
         says = _unreadable("on example.invalid", "this machine's SSH login", "~/locked")
         assert str(caught.value).startswith(f"{says} Details: "), caught.value
 
-    def test_each_rsync_s_words_for_a_root_not_there_yet_read_the_same(
+    def test_each_rsync_s_words_for_a_root_that_isnt_there_read_the_same(
         self, tmp_path, monkeypatch
     ):
         """GNU rsync (as CI's Ubuntu runs it) and openrsync (as macOS ships it) word a missing
@@ -1135,7 +1148,11 @@ class TestAListingThatFails:
         ):
             monkeypatch.setattr(provider_mod.subprocess, "run", _answering(23, stderr))
             p = create_provider({**REMOTE, "path": path, "staging_dir": str(tmp_path)})
-            assert p.list_remote() == [], stderr
+            with pytest.raises(provider_mod.RsyncFailed) as caught:
+                p.list_remote()
+            assert str(caught.value) == sentence_with_detail(
+                _no_root(path, "on nas.example.com"), stderr
+            )
 
         for stderr in (
             gnu.format("/srv/sync-old", "No such file or directory"),
@@ -1144,10 +1161,11 @@ class TestAListingThatFails:
         ):
             monkeypatch.setattr(provider_mod.subprocess, "run", _answering(255, stderr))
             p = create_provider({**REMOTE, "staging_dir": str(tmp_path)})
-            with pytest.raises(provider_mod.RsyncFailed):
+            with pytest.raises(provider_mod.RsyncFailed) as caught:
                 p.list_remote()
+            assert "doesn't exist" not in str(caught.value), caught.value
 
-    @pytest.mark.parametrize(("code", "stderr", "says"), _NOT_MISSING)
+    @pytest.mark.parametrize(("code", "stderr", "says"), _REFUSALS)
     def test_a_listing_the_host_refuses_raises_the_same_words(
         self, tmp_path, monkeypatch, code, stderr, says
     ):
@@ -1181,7 +1199,7 @@ class TestAListingThatFails:
 class TestARegistrySwapThatFails:
     @pytest.mark.parametrize("expected", [None, hashlib.sha256(b"{}").hexdigest()],
                              ids=["create", "swap"])
-    @pytest.mark.parametrize(("code", "stderr", "says"), _NOT_MISSING)
+    @pytest.mark.parametrize(("code", "stderr", "says"), _REFUSALS)
     def test_a_swap_whose_rsync_run_fails_raises_rather_than_losing_the_race(
         self, tmp_path, monkeypatch, code, stderr, says, expected
     ):
@@ -1195,11 +1213,27 @@ class TestARegistrySwapThatFails:
 
         assert str(caught.value) == f"{says} Details: {' '.join(stderr.split())}"
 
-    def test_a_registry_not_there_when_one_was_expected_is_still_a_lost_race(
+    def test_a_registry_not_there_in_a_root_that_is_is_still_a_lost_race(
         self, tmp_path, monkeypatch
     ):
-        """In each rsync's words — and a run the host refused is no such registry."""
+        """In each rsync's words. rsync says a missing root the same way when it reads the
+        registry, so the root's listing tells the two apart: a root that isn't there raises —
+        it read as the race — and so does a run the host refused."""
         sha = hashlib.sha256(b"{}").hexdigest()
+        root_missing = (
+            'rsync: [sender] change_dir "/srv/sync" failed: No such file or directory (2)\n'
+        )
+
+        def answering(registry_stderr: str, root_stderr: str = ""):
+            def _run(argv, **kwargs):
+                if "--list-only" in argv:  # the listing of the root's top level
+                    code = 23 if root_stderr else 0
+                    listed = "" if root_stderr else "drwxr-xr-x  64 2026/09/28 12:00:00 .\n"
+                    return subprocess.CompletedProcess(argv, code, listed, root_stderr)
+                return subprocess.CompletedProcess(argv, 23, stdout="", stderr=registry_stderr)
+
+            return _run
+
         for stderr in (
             'rsync: [sender] link_stat "/srv/sync/registry.json" failed: No such file or '
             "directory (2)\n",
@@ -1207,9 +1241,16 @@ class TestARegistrySwapThatFails:
             "nicht gefunden (2)\n",
             "rsync(4242): error: '/srv/sync/registry.json': (l)stat: No such file or directory\n",
         ):
-            monkeypatch.setattr(provider_mod.subprocess, "run", _answering(23, stderr))
+            monkeypatch.setattr(provider_mod.subprocess, "run", answering(stderr))
             p = create_provider({**REMOTE, "staging_dir": str(tmp_path)})
             assert p.cas_registry(sha, b"{}") is False, stderr
+
+            monkeypatch.setattr(provider_mod.subprocess, "run", answering(stderr, root_missing))
+            with pytest.raises(provider_mod.RsyncFailed) as caught:
+                p.cas_registry(sha, b"{}")
+            assert str(caught.value) == sentence_with_detail(
+                _no_root("/srv/sync", "on nas.example.com"), root_missing
+            )
 
         monkeypatch.setattr(provider_mod.subprocess, "run", _answering(255, _REFUSALS[2][1]))
         with pytest.raises(provider_mod.RsyncFailed):
@@ -1217,7 +1258,7 @@ class TestARegistrySwapThatFails:
 
     @needs_rsync
     @pytest.mark.skipif(os.geteuid() == 0, reason="root reads an unreadable file anyway")
-    def test_over_ssh_a_registry_not_there_is_a_lost_race_and_one_it_cannot_read_raises(
+    def test_over_ssh_a_registry_not_there_is_a_lost_race_and_a_root_not_there_raises(
         self, tmp_path, over_ssh
     ):
         make, home = over_ssh
@@ -1225,7 +1266,11 @@ class TestARegistrySwapThatFails:
         root = home / "sync"
         root.mkdir()
         assert make("~/sync").cas_registry(sha, b"{}") is False, "no registry there yet"
-        assert make("~/gone").cas_registry(sha, b"{}") is False, "no sync root there yet"
+        with pytest.raises(provider_mod.RsyncFailed) as caught:
+            make("~/gone").cas_registry(sha, b"{}")
+        says = _no_root("~/gone", "on example.invalid")
+        assert str(caught.value).startswith(f"{says} Details: "), caught.value
+        assert not (home / "gone").exists()
 
         registry = root / "registry.json"
         registry.write_bytes(b"{}")
@@ -1265,6 +1310,69 @@ class TestARegistrySwapThatFails:
             f"space on it, or set Local working directory {ON_CARD} to a folder on another disk. "
             "Details: "
         ), caught.value
+
+
+@pytest.fixture
+def unmounted(tmp_path):
+    """An empty folder standing in for a share's mount point with nothing mounted on it, and the
+    sync root path under it — ``/mnt/nas`` and ``/mnt/nas/pcsync``, say."""
+    stub = tmp_path / "nas"
+    stub.mkdir()
+    return stub, stub / "pcsync"
+
+
+def _under(over: str, root, tmp_path, request) -> tuple[RsyncSyncProvider, str]:
+    """A provider for ``root`` on this machine, or on example.invalid through the ssh stand-in,
+    and where its sentences say the root is."""
+    if over == "ssh":
+        make, _home = request.getfixturevalue("over_ssh")
+        return make(str(root)), "on example.invalid"
+    provider = RsyncSyncProvider(path=str(root), staging_dir=str(tmp_path / "s"), timeout_secs=60)
+    return provider, "on this machine"
+
+
+@needs_rsync
+class TestTheSyncRootIsNeverCreated:
+    """rsync makes a missing folder to write into, and a sync root missing under a share that
+    isn't mounted looks just like one not made yet. The root listed as not there yet, and the
+    first push made it under the empty mount point: the sync went onto the local disk, quietly,
+    instead of onto the share."""
+
+    @pytest.mark.parametrize("encrypt", ["on", "off"])
+    @pytest.mark.parametrize("over", ["local", "ssh"])
+    def test_a_sync_cycle_fails_and_makes_nothing(
+        self, isolated_home, tmp_path, unmounted, request, monkeypatch, over, encrypt
+    ):
+        stub, root = unmounted
+        p, where = _under(over, root, tmp_path, request)
+        _seed_task(isolated_home, "task-a", "a row")
+
+        report = _run_cycle(p, isolated_home, monkeypatch, encrypt=encrypt)
+
+        assert report.ok is False
+        says = _no_root(str(root), where)
+        assert report.error.startswith(f"pull: {says} Details: "), report.error
+        assert list(stub.iterdir()) == [], "a folder was made under the empty mount point"
+
+    @pytest.mark.parametrize("over", ["local", "ssh"])
+    def test_no_write_called_on_its_own_makes_the_root(
+        self, tmp_path, unmounted, request, over
+    ):
+        """The cycle lists first, but a push — the salt's among them — and the registry's create
+        and swap must not make the root when called without it."""
+        stub, root = unmounted
+        p, where = _under(over, root, tmp_path, request)
+        says = _no_root(str(root), where)
+
+        res = p.push([SyncObject(key="machines/A/seq-0001/tasks/tasks.jsonl", data=b"v")])
+
+        assert res.outcome == "transient", "it clears once the root is mounted, made or corrected"
+        assert res.detail.startswith(f"{says} {RETRIES} Details: "), res.detail
+        for expected in (None, hashlib.sha256(b"{}").hexdigest()):
+            with pytest.raises(provider_mod.RsyncFailed) as caught:
+                p.cas_registry(expected, b"{}")
+            assert str(caught.value).startswith(f"{says} Details: "), caught.value
+        assert list(stub.iterdir()) == [], "a folder was made under the empty mount point"
 
 
 class TestTheSyncCycleSaysWhatFailed:

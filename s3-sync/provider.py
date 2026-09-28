@@ -728,12 +728,14 @@ class S3SyncProvider(SyncTransportProvider):
         expected) followed by ``If-Match: <etag>``. Both conditions are evaluated by the
         store, so two machines racing cannot both win.
 
-        ``False`` is a lost race and nothing else: the condition failed (a 412), the registry
-        holds other bytes than the caller expected, or it is gone when the caller expected some.
-        Anything else that stops the swap raises :class:`S3RequestFailed`, said as what is
-        wrong — a request that raised, a refusal, a read cut off at the download cap, a read
-        with no ETag to make the write conditional on, a store without conditional writes —
-        rather than reading as a race core retries to no purpose, then reports lost.
+        ``False`` is a lost race and nothing else: the condition failed (a 412), another
+        machine's conditional write to the registry was still landing (a 409, which S3 answers
+        so that the writer tries again — core's loop re-reads the registry and does), the
+        registry holds other bytes than the caller expected, or it is gone when the caller
+        expected some. Anything else that stops the swap raises :class:`S3RequestFailed`, said
+        as what is wrong — a request that raised, a refusal, a read cut off at the download cap,
+        a read with no ETag to make the write conditional on, a store without conditional
+        writes — rather than reading as a race core retries to no purpose, then reports lost.
 
         It never falls back to an unconditional PUT, however the store answers: an
         unconditional registry write silently discards another machine's registration.
@@ -769,9 +771,11 @@ class S3SyncProvider(SyncTransportProvider):
             raise self._raised(e) from e
         if 200 <= resp.status < 300:
             return True
-        if resp.status == 412:
-            return False  # the condition failed: another machine swapped it first
         code, words = _answer(resp)
+        if resp.status == 412 or (resp.status == 409 and code in _WRITE_IN_PROGRESS):
+            # The condition failed — another machine swapped it first — or another machine's
+            # conditional write to it was still landing: a race either way, lost or not yet run.
+            return False
         raise self._refusal(resp, code, words, condition=header)
 
     def test(self) -> ConnectionResult:

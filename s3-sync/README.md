@@ -141,7 +141,9 @@ as an empty bucket or as a swap another machine won; an empty bucket still lists
 an object the store no longer has is skipped. A refusal the store may lift by itself (it is
 busy, timed out, failed, or was still finishing another conditional write to the same object)
 and a host that can't be found (DNS, or this machine offline) are retried on the next sync; a
-refusal that needs something changed says what, and keeps failing until it is.
+refusal that needs something changed says what, and keeps failing until it is. On
+`registry.json` itself, another machine's write still landing is a race like any other: the
+registry is read again and the swap tried again at once.
 
 | Symptom | Cause |
 |---|---|
@@ -151,7 +153,7 @@ refusal that needs something changed says what, and keeps failing until it is.
 | "PersonalClaw's network egress rules stopped a request", or "won't use … as a sync endpoint" | The endpoint is not an `http://` or `https://` address with a host, its host is on your `security.egress` deny list (Denied hosts, under Settings → Security → Network egress), or the store redirected off the pinned host — refused by design. |
 | "doesn't support conditional writes" (`HTTP 501`), on a push or the registry swap | The store rejected the conditional header — see What the store must support. |
 | "is larger than …, the most PersonalClaw downloads from a sync store" | A shard past the response body cap: a machine's synced data grew past it, and a transport without the cap, such as `rsync-sync`, can carry it. For `registry.json` or the salt object, something other than this app put a large object at that key. |
-| "registry CAS lost after 5 attempts" | Other machines swapped the registry each time this one tried; a later sync tries again. |
+| "registry CAS lost after 5 attempts" | Other machines swapped the registry, or were still writing it (the store answered `HTTP 409`), each time this one tried; a later sync tries again. |
 
 ## Network
 

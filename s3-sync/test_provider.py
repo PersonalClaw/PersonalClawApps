@@ -392,8 +392,9 @@ class _StubS3(http.server.BaseHTTPRequestHandler):
         # Keep the exact bytes that crossed the wire, so an adversarial scan can look at
         # what LEFT the machine rather than at what the store chose to keep.
         self.server.wire_bodies.append((key, data))  # type: ignore[attr-defined]
-        answers = self.server.answers  # type: ignore[attr-defined]
-        answer = answers.get(("PUT", key)) or self.server.put_answer  # type: ignore[attr-defined]
+        server: Any = self.server
+        queued = server.queued.get(("PUT", key)) or []
+        answer = queued.pop(0) if queued else server.answers.get(("PUT", key)) or server.put_answer
         if answer is not None:
             return self._send(*answer)
         exists = key in self.store
@@ -462,6 +463,8 @@ class _StubServer(http.server.ThreadingHTTPServer):
         self.list_answer: tuple[int, bytes] | None = None
         #: ``(method, key) → (status, body)``: one object's GET or PUT answered so instead.
         self.answers: dict[tuple[str, str], tuple[int, bytes]] = {}
+        #: The same, one answer per request in turn — the next PUT of that key onward is real.
+        self.queued: dict[tuple[str, str], list[tuple[int, bytes]]] = {}
 
     @property
     def endpoint(self) -> str:
@@ -768,21 +771,25 @@ class TestCasRegistry:
         )
         assert stub.store["personalclaw/registry.json"] == b"{}"
 
-    def test_a_registry_write_still_in_progress_elsewhere_raises_and_says_it_retries(
-        self, live, stub
+    @pytest.mark.parametrize(
+        "code", ["ConditionalRequestConflict", "OperationAborted", ""],
+        ids=["conflict", "aborted", "no-error-body"],
+    )
+    @pytest.mark.parametrize("expected", [None, "sha"], ids=["create", "swap"])
+    def test_a_registry_write_still_in_progress_elsewhere_is_a_lost_race(
+        self, live, stub, expected, code
     ):
-        """A 409 is another conditional write to the registry still landing — not the 412 of
-        a condition that failed — so it is said, with the retry, rather than counted a race."""
-        stub.answers[("PUT", "personalclaw/registry.json")] = (409, b"")
+        """A 409 is another machine's conditional write to the registry still landing, which
+        S3 answers so that the writer tries again: a race, which core's loop runs again after
+        re-reading the registry. It raised, and failed the cycle."""
+        stub.store["personalclaw/registry.json"] = b"{}"
+        body = _s3_error(code, "A conflicting conditional operation is currently in progress "
+                         "against this resource.") if code else b""
+        stub.answers[("PUT", "personalclaw/registry.json")] = (409, body)
+        sha = hashlib.sha256(b"{}").hexdigest() if expected else None
 
-        with pytest.raises(RuntimeError) as caught:
-            live.cas_registry(None, b"{}")
-
-        assert str(caught.value) == (
-            f"The store at {live._endpoint} was still busy with another conditional write to the "
-            f"same object when S3 Sync's write arrived, so it turned this one away. {RETRIES} "
-            "Details: HTTP 409"
-        )
+        assert live.cas_registry(sha, b'{"machines":{"B":1}}') is False
+        assert stub.store["personalclaw/registry.json"] == b"{}"
 
     def test_a_registry_read_the_store_refuses_raises_rather_than_losing_the_race(
         self, live, stub
@@ -1991,6 +1998,30 @@ class TestTheSyncCycleSaysWhatFailed:
         )
         assert "CAS lost" not in repr(report)
         assert "personalclaw/registry.json" not in stub.store
+
+
+class TestTheSyncCycleRunsARaceAgain:
+    """Driven through core's real sync cycle, over real HTTP through the real guard, with
+    encryption on."""
+
+    def test_a_registry_write_still_landing_elsewhere_is_read_again_and_swapped(
+        self, isolated_home, stub, live, monkeypatch
+    ):
+        """Another machine's write of the registry was still landing when this one's arrived —
+        a 409, the first time only. That raised and failed the cycle; now core reads the
+        registry again and swaps on top of what the other machine wrote."""
+        stub.store["personalclaw/registry.json"] = b'{"machines":{}}'
+        conflict = _s3_error("ConditionalRequestConflict", "A conflicting conditional operation "
+                             "is currently in progress against this resource.")
+        stub.queued[("PUT", "personalclaw/registry.json")] = [(409, conflict)]
+        _seed_task(isolated_home, "task-a", "a row")
+
+        report = _run_cycle(live, isolated_home, monkeypatch, encrypt="on")
+
+        assert report.ok is True, report.error
+        assert (report.pushed.registry_committed, report.pushed.cas_attempts) == (True, 2)
+        registry = json.loads(stub.store["personalclaw/registry.json"])
+        assert list(registry["machines"]) == ["A"], registry
 
 
 def test_no_secret_material_in_the_module_source():

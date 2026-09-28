@@ -16,8 +16,9 @@ What counts as reaching the network, read on the AST from each bundle's own code
 * an import of something that opens connections itself: an HTTP, socket or WebSocket client, a
   mail or cloud SDK, a vendor's model or chat SDK, or a library that downloads its model
   weights. ``aiohttp.web`` alone is a server, and does not count. An import by name at run time
-  (``importlib.import_module``, ``__import__``) counts the same, a relative name resolved
-  against its package;
+  (``importlib.import_module``, ``__import__``, ``runpy.run_module``, or a ``find_spec`` whose
+  spec is executed) counts the same, a relative name resolved against its package. A bare
+  ``find_spec`` only asks whether a module is there, and does not count;
 * anything from ``personalclaw.sdk.net`` but its two sentence helpers;
 * a model provider on the SDK's OpenAI or Anthropic wire, or registered as a branded app: core
   makes those calls, and they go to the vendor the app names;
@@ -25,14 +26,18 @@ What counts as reaching the network, read on the AST from each bundle's own code
 * in a file that starts a program, a program that talks to another machine (``rsync``,
   ``ssh``, ``scp``, ``sftp``, ``curl``, ``wget``, a forge's CLI, ``npx``), or git with
   ``clone``, ``fetch``, ``pull``, ``push`` or ``ls-remote``; or a command line for a shell
-  (``os.system``, ``shell=True``) whose first word is one. A spawn is recognised by what it is,
-  resolved through the file's imports, whatever name it was imported as.
+  (``os.system``, ``shell=True``) any of whose commands runs one, read past ``VAR=value``,
+  simple prefixes (``env``, ``sudo``, ``nohup`` …) and one level of ``sh -c``. A spawn is
+  recognised by what it is, resolved through the file's imports and assignments, whatever name
+  it was imported or bound as; one passed as a callable (``run_in_executor``, ``partial``) marks
+  the file as starting programs too.
 
 An app that shows any of those and does not declare ``network: true`` fails by name, with the
 signals the rail saw, unless ``EXEMPT`` says why it reaches no network after all. A stale
 exemption fails too, and so does a file the rail cannot parse, since its network use is then
-unknown. So does an import whose module name is only known at run time, in an app that does not
-declare network, unless ``EXEMPT`` says why.
+unknown. So does, in an app that does not declare network, unless ``EXEMPT`` says why, an import
+whose module name is only known at run time, or code loaded from a path that is not the app's
+own (``spec_from_file_location``, ``SourceFileLoader``, ``runpy.run_path``).
 
 **Vacuity floor.** A rail that matches nothing reads as clean, so the detectors are checked
 against every shape they tell apart before anything is read, and each app in
@@ -49,6 +54,8 @@ from __future__ import annotations
 import ast
 import json
 import pathlib
+import re
+import shlex
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -115,7 +122,7 @@ RUNTIME_IMPORTS = frozenset(
 #: What an import whose module name is not a constant says: what it reaches is unknown.
 RUNTIME_NAME = "imports a module named only at run time"
 
-#: Spawns that take one command line for a shell, whose first word names the program.
+#: Spawns that take one command line for a shell, whose commands the rail reads.
 SHELL_SPAWNS = frozenset(
     {
         "os.system",
@@ -145,6 +152,51 @@ REMOTE_PROGRAMS = frozenset({"rsync", "ssh", "scp", "sftp", "curl", "wget", "gh"
 #: Git's verbs that talk to a remote.
 GIT_REMOTE_VERBS = frozenset({"clone", "fetch", "pull", "push", "ls-remote"})
 
+#: On a shell line: the prefixes a command can carry and those of their options that take the
+#: next word as their value, the shells whose ``-c`` script is read one level down, a
+#: ``VAR=value`` assignment, git's options that take the next word as their value, and the one
+#: word a part of the line only known at run time is read as.
+SHELL_PREFIXES = frozenset({"env", "exec", "sudo", "nohup", "command", "time"})
+PREFIX_VALUE_OPTIONS = {
+    "sudo": frozenset({"-C", "-D", "-g", "-h", "-p", "-R", "-r", "-T", "-t", "-U", "-u"}),
+    "env": frozenset({"-C", "-P", "-u"}),
+    "exec": frozenset({"-a"}),
+    "time": frozenset({"-f", "-o"}),
+}
+SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
+ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+GIT_VALUE_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
+UNKNOWN_WORD = "…"
+
+#: What a shell line is split on, and which of it ends a command: ``&&``, ``||``, ``;``, ``|``,
+#: ``&``, and a newline that is neither quoted nor escaped.
+PUNCTUATION = "();<>|&\n"
+SEPARATORS = frozenset("|&;\n")
+
+#: What code loaded from a path that is not the app's own says: what it runs is unknown.
+RUNTIME_PATH = "loads code from a path only known at run time"
+
+#: Each kind of unknown, and what naming it takes, so the rail can read what it reaches.
+UNKNOWN_STEPS = {
+    RUNTIME_NAME: "Name the module",
+    RUNTIME_PATH: "Load it from the app's own folder",
+}
+
+#: Loaders that run code from a file, and where the path is: ``(position, keyword)``. A path
+#: built on ``__file__`` is the app's own code, which the rail reads anyway.
+PATH_LOADERS = {
+    "importlib.util.spec_from_file_location": (1, "location"),
+    "importlib.machinery.SourceFileLoader": (1, "path"),
+    "importlib.machinery.SourcelessFileLoader": (1, "path"),
+    "importlib.machinery.ExtensionFileLoader": (1, "path"),
+    "runpy.run_path": (0, "path_name"),
+}
+FIND_SPEC = "importlib.util.find_spec"
+MODULE_FROM_SPEC = "importlib.util.module_from_spec"
+RUN_MODULE = "runpy.run_module"
+#: Calls that make a spec whose origin the rail judges where it is made.
+SPEC_MAKERS = frozenset({FIND_SPEC, "importlib.util.spec_from_file_location"})
+
 #: Apps whose code shows a signal but reaches no network, and why.
 EXEMPT: dict[str, str] = {}
 
@@ -161,15 +213,21 @@ KNOWN_SIGNALLED = {
 }
 
 
-def _callee(call: ast.Call) -> str:
+def _dotted(node: ast.AST) -> str:
+    """``a.b.c`` for a name or an attribute chain rooted in a name, else ``""``: the callee of
+    ``foo().run()`` is no name the file bound."""
     parts: list[str] = []
-    node = call.func
     while isinstance(node, ast.Attribute):
         parts.append(node.attr)
         node = node.value
-    if isinstance(node, ast.Name):
-        parts.append(node.id)
+    if not isinstance(node, ast.Name):
+        return ""
+    parts.append(node.id)
     return ".".join(reversed(parts))
+
+
+def _callee(call: ast.Call) -> str:
+    return _dotted(call.func)
 
 
 def _imported(node: ast.AST) -> list[str]:
@@ -204,10 +262,56 @@ def _import_signal(dotted: str) -> str:
     return ""
 
 
+def _pairs(target: ast.AST, value: ast.AST) -> list[tuple[str, ast.AST]]:
+    """``(bound name, value)`` for each name or ``x.y`` target an assignment binds, a tuple
+    target paired element by element."""
+    if isinstance(target, (ast.Tuple, ast.List)):
+        if isinstance(value, (ast.Tuple, ast.List)) and len(value.elts) == len(target.elts):
+            return [pair for t, v in zip(target.elts, value.elts) for pair in _pairs(t, v)]
+        return []
+    name = _dotted(target)
+    return [(name, value)] if name else []
+
+
+def _assigned(tree: ast.AST) -> list[tuple[str, ast.AST]]:
+    """Every ``(bound name, value)`` the file's assignments make, at any scope."""
+    out: list[tuple[str, ast.AST]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                out += _pairs(target, node.value)
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            out += _pairs(node.target, node.value)
+    return out
+
+
+def _lookup(dotted: str, aliases: dict[str, str]) -> str | None:
+    """What *dotted* stands for through the longest part of it the file bound, or ``None``."""
+    parts = dotted.split(".")
+    for end in range(len(parts), 0, -1):
+        target = aliases.get(".".join(parts[:end]))
+        if target is not None:
+            return ".".join([target, *parts[end:]])
+    return None
+
+
+def _bound(value: ast.AST, aliases: dict[str, str]) -> str | None:
+    """What an assigned *value* stands for: a name the file bound, or a ``functools.partial``
+    of one."""
+    if isinstance(value, ast.Call) and value.args:
+        if _lookup(_callee(value), aliases) == "functools.partial":
+            return _bound(value.args[0], aliases)
+        return None
+    name = _dotted(value)
+    return _lookup(name, aliases) if name else None
+
+
 def _aliases(tree: ast.AST) -> dict[str, str]:
-    """What each name a file binds by import stands for: ``import subprocess as sp`` binds
-    ``sp`` to ``subprocess``, ``from subprocess import run as r`` binds ``r`` to
-    ``subprocess.run``, and ``import a.b`` binds ``a``."""
+    """What each name a file binds stands for: ``import subprocess as sp`` binds ``sp`` to
+    ``subprocess``, ``from subprocess import run as r`` binds ``r`` to ``subprocess.run``, and
+    ``import a.b`` binds ``a``. An assignment of one of those, at any scope (``run =
+    subprocess.run``, ``self._run = sp.run``, ``run = partial(subprocess.run, …)``), binds its
+    target too, followed to a fixed point so a chain of them resolves."""
     out: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -217,16 +321,22 @@ def _aliases(tree: ast.AST) -> dict[str, str]:
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             for alias in node.names:
                 out[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    pairs = _assigned(tree)
+    for _ in range(len(pairs)):
+        changed = False
+        for name, value in pairs:
+            target = _bound(value, out)
+            if target is not None and out.get(name) != target:
+                out[name] = target
+                changed = True
+        if not changed:
+            break
     return out
 
 
 def _resolve(callee: str, aliases: dict[str, str]) -> str:
-    """*callee* with its first name replaced by what the file imported under it."""
-    head, _, rest = callee.partition(".")
-    target = aliases.get(head)
-    if target is None:
-        return callee
-    return f"{target}.{rest}" if rest else target
+    """*callee* with the longest part of it the file bound replaced by what it stands for."""
+    return _lookup(callee, aliases) or callee
 
 
 def _relative(name: str, package: str) -> str:
@@ -271,20 +381,208 @@ def _runtime_names(call: ast.Call, callee: str, package: str) -> list[str] | Non
     return names
 
 
+def _shell_text(node: ast.AST) -> str | None:
+    """A command line given as a string (a constant, an f-string or a ``+`` concatenation),
+    each part only known at run time read as one unknown word; ``None`` when none of it is a
+    constant."""
+    parts: list[ast.AST] = []
+    stack = [node]
+    while stack:
+        part = stack.pop()
+        if isinstance(part, ast.BinOp) and isinstance(part.op, ast.Add):
+            stack += [part.right, part.left]
+        elif isinstance(part, ast.JoinedStr):
+            stack += reversed(part.values)
+        else:
+            parts.append(part)
+    texts = [_text(part) for part in parts]
+    if all(text is None for text in texts):
+        return None
+    return "".join(UNKNOWN_WORD if text is None else text for text in texts)
+
+
+def _shell_commands(line: str) -> list[list[str]]:
+    """The words of each command on a shell line, split where the shell splits them (``&&``,
+    ``||``, ``;``, ``|``, ``&``, a newline), its quoting honoured: a newline inside quotes, or
+    escaped by a backslash, ends no command."""
+    line = line.replace("\\\n", "")
+    lexer = shlex.shlex(line, posix=True, punctuation_chars=PUNCTUATION)
+    lexer.whitespace = " \t\r"  # a newline is punctuation here, not space
+    lexer.commenters = ""  # a comment would swallow the newline that ends it
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:  # an unclosed quote: read it word by word, a line at a time
+        tokens = [word for piece in line.splitlines() for word in [*piece.split(), "\n"]]
+    commands: list[list[str]] = []
+    words: list[str] = []
+    for token in tokens:
+        if set(token) <= set(PUNCTUATION) and set(token) & SEPARATORS:
+            commands += [words] if words else []
+            words = []
+        elif token.strip("()"):  # a subshell's parentheses are not words
+            words.append(token)
+    commands += [words] if words else []
+    return commands
+
+
+def _git_subcommand(args: list[str]) -> str:
+    """Git's subcommand: its first word past the options (``-C path``, ``-c key=value`` …)."""
+    takes_value = False
+    for word in args:
+        if takes_value:
+            takes_value = False
+        elif word in GIT_VALUE_OPTIONS:
+            takes_value = True
+        elif not word.startswith("-"):
+            return word
+    return ""
+
+
+def _dash_c(args: list[str]) -> str | None:
+    """The script a shell is handed with ``-c`` (``-c``, ``-lc``, ``-ec`` …): the first word
+    past its options, ``-o pipefail`` and the like skipped with their value; or ``None``."""
+    dash_c = takes_value = False
+    for word in args:
+        if takes_value:
+            takes_value = False
+        elif word.startswith("-") and word != "--":
+            short = not word.startswith("--")
+            dash_c = dash_c or (short and "c" in word[1:])
+            takes_value = short and word[-1] in "oO"
+        elif word != "--":
+            return word if dash_c else None
+    return None
+
+
+def _command_signals(words: list[str], nested: bool = False) -> list[str]:
+    """What one shell command runs, read past ``VAR=value`` assignments and simple prefixes
+    (``env``, ``sudo -u deploy`` …); a shell's ``-c`` script is read one level down."""
+    words = list(words)
+    while words and (ASSIGNMENT.match(words[0]) or words[0] in SHELL_PREFIXES):
+        prefix = words.pop(0)
+        if prefix == "command" and words[:1] in (["-v"], ["-V"]):
+            return []  # `command -v x` asks where x is, and runs nothing
+        while prefix in SHELL_PREFIXES and words and (
+            words[0].startswith("-") or ASSIGNMENT.match(words[0])
+        ):
+            if words.pop(0) in PREFIX_VALUE_OPTIONS.get(prefix, ()):
+                words = words[1:]  # the option's value, which is not the program
+    if not words:
+        return []
+    program = words[0].rsplit("/", 1)[-1]
+    if program in REMOTE_PROGRAMS:
+        return [f"starts {program}"]
+    if program == "git":
+        verb = _git_subcommand(words[1:])
+        return [f"runs git {verb}"] if verb in GIT_REMOTE_VERBS else []
+    script = _dash_c(words[1:]) if program in SHELLS and not nested else None
+    found: list[str] = []
+    for command in _shell_commands(script) if script is not None else []:
+        found += _command_signals(command, nested=True)
+    return found
+
+
 def _shell_signals(line: int, command: ast.AST) -> list[tuple[int, str]]:
-    """The signal a command line for a shell shows, read from its first words: a constant, or
-    the constant head of an f-string or of a ``+`` concatenation."""
-    while isinstance(command, ast.BinOp) and isinstance(command.op, ast.Add):
-        command = command.left
-    if isinstance(command, ast.JoinedStr) and command.values:
-        command = command.values[0]
-    words = (_text(command) or "").split()
-    if words and words[0] in REMOTE_PROGRAMS:
-        return [(line, f"starts {words[0]}")]
-    if words and words[0] == "git":
-        verb = next((word for word in words[1:] if word in GIT_REMOTE_VERBS), "")
-        return [(line, f"runs git {verb}")] if verb else []
-    return []
+    """The signals a command line for a shell shows, from every command on it."""
+    text = _shell_text(command)
+    found: list[tuple[int, str]] = []
+    for words in _shell_commands(text) if text is not None else []:
+        found += [(line, signal) for signal in _command_signals(words)]
+    return found
+
+
+def _anchored(node: ast.AST, own: set[str]) -> bool:
+    """Whether a path is built on ``__file__``, directly or through a name bound to one."""
+    return any(
+        isinstance(part, (ast.Name, ast.Attribute))
+        and (_dotted(part) == "__file__" or _dotted(part) in own)
+        for part in ast.walk(node)
+    )
+
+
+def _own_paths(tree: ast.AST) -> set[str]:
+    """The names bound to a path built on ``__file__`` (``HERE = Path(__file__).parent``,
+    ``PLUGIN = HERE / "x.py"``): the app's own files, followed to a fixed point."""
+    own: set[str] = set()
+    pairs = _assigned(tree)
+    changed = True
+    while changed:
+        changed = False
+        for name, value in pairs:
+            if name not in own and _anchored(value, own):
+                own.add(name)
+                changed = True
+    return own
+
+
+#: How a file's module specs are used: each spec-making call's bound names (by the call's
+#: ``id``), the names whose spec is executed, and the spec-making calls executed in place.
+Specs = tuple[dict[int, list[str]], set[str], set[int]]
+
+
+def _specs(tree: ast.AST, aliases: dict[str, str]) -> Specs:
+    """A spec is executed by ``module_from_spec(spec)`` or ``spec.loader.exec_module(…)``
+    (``load_module``), by the name it is bound to or in place."""
+    made: dict[int, list[str]] = {}
+    executed: set[str] = set()
+    inline: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            if _resolve(_callee(node.value), aliases) in SPEC_MAKERS:
+                pairs = [pair for target in node.targets for pair in _pairs(target, node.value)]
+                made[id(node.value)] = [name for name, _value in pairs]
+        if not isinstance(node, ast.Call):
+            continue
+        callee = _callee(node)
+        if _resolve(callee, aliases) == MODULE_FROM_SPEC and node.args:
+            spec = node.args[0]
+            if isinstance(spec, ast.Call):
+                inline.add(id(spec))
+            elif _dotted(spec):
+                executed.add(_dotted(spec))
+        for suffix in (".loader.exec_module", ".loader.load_module"):
+            if callee.endswith(suffix):
+                executed.add(callee[: -len(suffix)])
+    return made, executed, inline
+
+
+def _loader_signals(
+    node: ast.Call, callee: str, package: str, aliases: dict[str, str], own: set[str],
+    specs: Specs,
+) -> list[str]:
+    """What an ``importlib.util`` / ``importlib.machinery`` / ``runpy`` load shows.
+
+    A module named by a constant is judged like an import; code from a path not built on
+    ``__file__`` is unknown. A ``find_spec`` whose spec is never executed only asks whether a
+    module is there, and says nothing; a ``module_from_spec`` of a spec made elsewhere loads a
+    module only known at run time."""
+    made, executed, inline = specs
+    if callee in PATH_LOADERS:
+        position, keyword = PATH_LOADERS[callee]
+        path = _argument(node, position, keyword)
+        return [] if path is not None and _anchored(path, own) else [RUNTIME_PATH]
+    if callee == MODULE_FROM_SPEC and node.args:
+        spec = node.args[0]
+        if isinstance(spec, ast.Call):
+            here = _resolve(_callee(spec), aliases) in SPEC_MAKERS
+        else:
+            here = any(_dotted(spec) in names for names in made.values())
+        return [] if here else [RUNTIME_NAME]
+    if callee == FIND_SPEC:
+        if id(node) not in inline and not any(n in executed for n in made.get(id(node), [])):
+            return []
+        name = _text(_argument(node, 0, "name"))
+        if name is not None and name.startswith("."):
+            name = _relative(name, _text(_argument(node, 1, "package")) or package)
+    elif callee == RUN_MODULE:
+        name = _text(_argument(node, 0, "mod_name"))
+    else:
+        return []
+    if name is None:
+        return [RUNTIME_NAME]
+    signal = _import_signal(name)
+    return [signal] if signal else []
 
 
 def signals(source: str, package: str = "") -> list[tuple[int, str]]:
@@ -292,6 +590,9 @@ def signals(source: str, package: str = "") -> list[tuple[int, str]]:
     *package* is the file's own package, for a relative name imported at run time."""
     tree = ast.parse(source)
     aliases = _aliases(tree)
+    own = _own_paths(tree)
+    specs = _specs(tree, aliases)
+    called = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
     found: list[tuple[int, str]] = []
     spawns = mentions_git = False
     constants: list[tuple[int, str]] = []
@@ -300,8 +601,15 @@ def signals(source: str, package: str = "") -> list[tuple[int, str]]:
             signal = _import_signal(dotted)
             if signal:
                 found.append((node.lineno, signal))
+        if isinstance(node, (ast.Name, ast.Attribute)) and id(node) not in called:
+            # A spawn handed on as a callable (run_in_executor, to_thread, partial, submit)
+            # starts programs as surely as one called by name.
+            if _resolve(_dotted(node), aliases) in SPAWNS:
+                spawns = True
         if isinstance(node, ast.Call):
             callee = _resolve(_callee(node), aliases)
+            loaded = _loader_signals(node, callee, package, aliases, own, specs)
+            found += [(node.lineno, signal) for signal in loaded]
             if callee in SPAWNS:
                 spawns = True
                 shell = callee in SHELL_SPAWNS or any(
@@ -349,12 +657,12 @@ def declares_network(manifest: pathlib.Path) -> bool:
 
 def census(
     root: pathlib.Path = ROOT,
-) -> tuple[dict[str, list[str]], dict[str, list[str]], list[str]]:
+) -> tuple[dict[str, list[str]], dict[str, list[tuple[str, str]]], list[str]]:
     """``app → ["file:line: signal", …]`` for every app whose code shows a signal,
-    ``app → ["file:line", …]`` for every import whose module name is only known at run time,
-    and the files that could not be read."""
+    ``app → [("file:line", what), …]`` for every import whose module name, or load whose path,
+    is only known at run time, and the files that could not be read."""
     out: dict[str, list[str]] = {}
-    unknown: dict[str, list[str]] = {}
+    unknown: dict[str, list[tuple[str, str]]] = {}
     unreadable: list[str] = []
     for manifest in sorted(root.glob("*/app.json")):
         bundle = manifest.parent
@@ -369,8 +677,8 @@ def census(
                 unreadable.append(f"{rel}: {exc}")
                 continue
             for line, signal in found:
-                if signal == RUNTIME_NAME:
-                    unknown.setdefault(bundle.name, []).append(f"{rel}:{line}")
+                if signal in UNKNOWN_STEPS:
+                    unknown.setdefault(bundle.name, []).append((f"{rel}:{line}", signal))
                 else:
                     out.setdefault(bundle.name, []).append(f"{rel}:{line}: {signal}")
     return out, unknown, unreadable
@@ -441,6 +749,91 @@ def _detector_problems() -> list[str]:
         ("subprocess.run(f'curl {url}', shell=True)\n", ["starts curl"]),
         ("import os\nos.popen('scp ' + src + ' ' + dst)\n", ["starts scp"]),
         ("import os\nos.system('ls -la')\n", []),
+        # every command of a shell line, past assignments, prefixes and one `sh -c`
+        ("subprocess.run('cd repo && git push', shell=True)\n", ["runs git push"]),
+        ("subprocess.run('make; ssh host deploy', shell=True)\n", ["starts ssh"]),
+        ("subprocess.run('tar cz . | curl -T - x', shell=True)\n", ["starts curl"]),
+        ("subprocess.run('build &\\nwget x', shell=True)\n", ["starts wget"]),
+        ("subprocess.run('FOO=1 nohup rsync -a a b', shell=True)\n", ["starts rsync"]),
+        ("subprocess.run('env -i A=1 /usr/bin/ssh h', shell=True)\n", ["starts ssh"]),
+        ("subprocess.run(\"sh -c 'git fetch origin'\", shell=True)\n", ["runs git fetch"]),
+        ("subprocess.run(f'(cd {repo} && git -C {repo} push)', shell=True)\n", ["runs git push"]),
+        ("subprocess.run('echo \"git push\"', shell=True)\n", []),
+        ("subprocess.run('git commit -m push', shell=True)\n", []),
+        ("subprocess.run('command -v ssh', shell=True)\n", []),
+        # a quoted or escaped newline ends no command, and an option's value is not the program
+        ("subprocess.run(\"sh -c 'cd repo\\ngit push'\", shell=True)\n", ["runs git push"]),
+        ("subprocess.run(\"echo 'built\\nssh host'\", shell=True)\n", []),
+        (r"subprocess.run('git \\\n  push origin', shell=True)", ["runs git push"]),
+        ("subprocess.run('sudo -u deploy rsync -a a b', shell=True)\n", ["starts rsync"]),
+        ("subprocess.run('env -C /srv/ssh make', shell=True)\n", []),
+        ("subprocess.run(\"bash -euo pipefail -c 'git push'\", shell=True)\n", ["runs git push"]),
+        ("subprocess.run('bash -o pipefail deploy.sh', shell=True)\n", []),
+        # a spawn bound by assignment, at any scope, and called through the name
+        ("import subprocess\nrun = subprocess.run\nrun(['ssh', host])\n", ["starts ssh"]),
+        (
+            "import subprocess\nclass C:\n    def __init__(self):\n"
+            "        self._run = subprocess.run\n"
+            "    def go(self, host):\n        self._run(['rsync', host])\n",
+            ["starts rsync"],
+        ),
+        ("import os\nsh = os.system\nsh('ssh host uptime')\n", ["starts ssh"]),
+        (
+            "import functools, subprocess\nrun = functools.partial(subprocess.run, check=True)\n"
+            "run(['scp', a, b])\n",
+            ["starts scp"],
+        ),
+        ("import subprocess as sp\nr = sp.run\nrun = r\nrun(['ssh', host])\n", ["starts ssh"]),
+        ("run = self.run\nrun(['ssh', host])\n", []),
+        # a spawn handed on as a callable
+        (
+            "import subprocess\nloop.run_in_executor(None, subprocess.run, ['ssh', host])\n",
+            ["starts ssh"],
+        ),
+        (
+            "import asyncio, subprocess\nasyncio.to_thread(subprocess.run, ['gh', 'pr'])\n",
+            ["starts gh"],
+        ),
+        (
+            "import subprocess\npool.submit(subprocess.check_output, ['curl', url])\n",
+            ["starts curl"],
+        ),
+        ("import subprocess\nERROR = subprocess.CalledProcessError\nARGV = ['ssh']\n", []),
+        # importlib.util, importlib.machinery and runpy loads
+        (
+            "import importlib.util\nspec = importlib.util.find_spec('httpx')\n"
+            "mod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\n",
+            ["imports httpx (an HTTP client)"],
+        ),
+        (
+            "from importlib.util import find_spec, module_from_spec\n"
+            "module_from_spec(find_spec('socket'))\n",
+            ["imports socket (sockets)"],
+        ),
+        ("import importlib.util\nimportlib.util.find_spec('httpx')\n", []),
+        (
+            "import importlib.util\nspec = importlib.util.find_spec('x')\nok = spec is not None\n",
+            [],
+        ),
+        (
+            "import importlib.util\nspec = importlib.util.spec_from_file_location('p', path)\n",
+            [RUNTIME_PATH],
+        ),
+        (
+            "import importlib.util\nfrom pathlib import Path\nHERE = Path(__file__).parent\n"
+            "spec = importlib.util.spec_from_file_location('p', HERE / 'plugin.py')\n",
+            [],
+        ),
+        (
+            "import importlib.machinery\n"
+            "importlib.machinery.SourceFileLoader('p', path).load_module()\n",
+            [RUNTIME_PATH],
+        ),
+        ("import runpy\nrunpy.run_module('httpx')\n", ["imports httpx (an HTTP client)"]),
+        ("import runpy\nrunpy.run_module(name)\n", [RUNTIME_NAME]),
+        ("import runpy\nrunpy.run_path(path)\n", [RUNTIME_PATH]),
+        ("import importlib.util\nmodule_from_spec = importlib.util.module_from_spec\n"
+         "module_from_spec(handed_in)\n", [RUNTIME_NAME]),
     ]
     problems = []
     for source, want in cases:
@@ -472,15 +865,18 @@ def problems(root: pathlib.Path = ROOT) -> list[str]:
             '"network": true under permissions. Declare it, and name the host in the README; or '
             "say in EXEMPT why it reaches no network"
         )
-    # An app that declares network is not made wrong by an import the rail cannot name.
+    # An app that declares network is not made wrong by code the rail cannot name.
     for app, sites in sorted(unknown.items()):
         if app in EXEMPT or declares_network(manifests[app]):
             continue
-        found.append(
-            f"{app}: {', '.join(sites)} imports a module named only at run time, so whether "
-            f"{app} reaches the network is unknown. Name the module, declare "
-            '"network": true, or say in EXEMPT why it reaches no network'
-        )
+        for what, step in UNKNOWN_STEPS.items():
+            where = [site for site, kind in sites if kind == what]
+            if where:
+                found.append(
+                    f"{app}: {', '.join(where)} {what}, so whether {app} reaches the network is "
+                    f"unknown. {step}, declare \"network\": true, or say in EXEMPT why it reaches "
+                    "no network"
+                )
     for app in sorted(EXEMPT):
         if app not in seen and app not in unknown:
             found.append(f"{app} is exempt, but its code shows no network signal now; remove it")

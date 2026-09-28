@@ -194,3 +194,63 @@ def test_a_module_named_at_run_time_reds_unless_the_app_declares_network(tmp_pat
         "whether plugin-app reaches the network is unknown"
     ) in run.stdout, run.stdout
     assert "declared-app" not in run.stdout, run.stdout
+
+
+@pytest.mark.parametrize(("source", "signal"), [
+    ("import subprocess\n\nrun = subprocess.run\n\n\ndef send(host):\n    run(['ssh', host])\n",
+     "provider.py:7: starts ssh"),
+    ("import subprocess\n\n\nclass Syncer:\n    def __init__(self):\n"
+     "        self._run = subprocess.run\n\n    def send(self, src, dst):\n"
+     "        self._run(['rsync', src, dst])\n", "provider.py:9: starts rsync"),
+])
+def test_a_spawn_bound_to_a_name_reds(tmp_path, source, signal):
+    """``run = subprocess.run`` makes a call through ``run`` a spawn, at any scope."""
+    out = _red_for(tmp_path, "bound-app", source)
+    assert f"bound-app: its code reaches the network (bound-app/{signal})" in out, out
+
+
+def test_a_spawn_handed_on_as_a_callable_reds(tmp_path):
+    """A spawn run through ``run_in_executor`` is never called by its own name."""
+    source = (
+        "import asyncio\nimport subprocess\n\n\nasync def send(host):\n"
+        "    loop = asyncio.get_running_loop()\n"
+        "    await loop.run_in_executor(None, subprocess.run, ['ssh', host])\n"
+    )
+    out = _red_for(tmp_path, "executor-app", source)
+    assert (
+        "executor-app: its code reaches the network (executor-app/provider.py:7: starts ssh)"
+    ) in out, out
+
+
+@pytest.mark.parametrize(("line", "signal"), [
+    ("'cd repo && git push'", "runs git push"),
+    ("\"sh -c 'git fetch origin'\"", "runs git fetch"),
+    ("'sudo -u deploy rsync -a src host:dst'", "starts rsync"),
+    ("\"sh -c 'cd repo\\ngit push'\"", "runs git push"),
+])
+def test_every_command_of_a_shell_line_is_read(tmp_path, line, signal):
+    """The remote command is not the first word of the line."""
+    source = f"import subprocess\n\n\ndef publish():\n    subprocess.run({line}, shell=True)\n"
+    out = _red_for(tmp_path, "shell-line-app", source)
+    said = f"shell-line-app: its code reaches the network (shell-line-app/provider.py:5: {signal})"
+    assert said in out, out
+
+
+@pytest.mark.parametrize(("load", "said"), [
+    ("importlib.util.find_spec('httpx')",
+     "loader-app: its code reaches the network (loader-app/provider.py:5: imports httpx (an HTTP "
+     "client))"),
+    ("importlib.util.spec_from_file_location('plugin', path)",
+     "loader-app: loader-app/provider.py:5 loads code from a path only known at run time, so "
+     "whether loader-app reaches the network is unknown"),
+])
+def test_code_loaded_through_importlib_util_is_read(tmp_path, load, said):
+    """A spec that is executed runs its module: a named one is judged like an import, and one
+    from a path only known at run time leaves the app's network use unknown."""
+    source = (
+        f"import importlib.util\n\n\ndef load(path):\n    spec = {load}\n"
+        "    module = importlib.util.module_from_spec(spec)\n"
+        "    spec.loader.exec_module(module)\n    return module\n"
+    )
+    out = _red_for(tmp_path, "loader-app", source)
+    assert said in out, out

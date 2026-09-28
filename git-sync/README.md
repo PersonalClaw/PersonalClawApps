@@ -67,7 +67,10 @@ clone of an empty repo succeeds and the first push publishes the branch.
   append-only per object and the sync cycle can retry freely after a lost race.
 - **Catch up before every step.** Every push, read and registry swap first fetches the
   remote and replays this machine's unpushed commits on top of it (`git rebase`), so the
-  clone carries everyone's objects; a fetch failure against a fresh/empty remote is fine.
+  clone carries everyone's objects. A remote with nothing on the branch yet has nothing to
+  catch up with. Any other catch-up that can't be made stops a read or a registry swap and
+  says why, since the clone would be served as the remote it has fallen behind; a push goes
+  on, and says what went wrong in its own words.
 - **A lost race is caught up in the same push.** When another machine pushes between this
   one's catch-up and its push, git turns the push away; Git Sync catches up again and pushes
   once more (up to three tries in all), so the push lands rather than leaving the clone
@@ -99,12 +102,24 @@ clone of an empty repo succeeds and the first push publishes the branch.
   and what to do — the remote didn't accept this machine's credentials, no repository is
   visible at that URL, the working clone can't be written, which lock file is in the way, git
   isn't installed — with git's own message after it.
+- **A listing, a read or a registry swap that fails says so.** The sync cycle's listing is
+  empty only when there is nothing there yet: no Git remote URL set, settings git can't use
+  (the push and **Test connection** say why), or a remote with nothing on the branch. A clone that
+  can't be made, a catch-up that can't be made, a folder Git Sync won't sync through, a file
+  in the working clone that can't be read — each raises what stopped it, and the cycle reports
+  that sentence. A read drops only an object the clone doesn't have. A registry swap answers
+  "lost the race" only when another machine's push got there first or the registry isn't the
+  one expected; one the remote refuses for any other reason says why, and its write is taken
+  back from the clone.
 - **A changed Git remote URL.** The working clone always syncs with Git remote URL. When the
   setting changes — or the clone's own `.git/config` points it anywhere else — Git Sync clones
   Git remote URL into a new folder beside the old clone and swaps it in once that clone has
-  succeeded; until one does, it fetches from and pushes to neither remote. It replaces only a
-  clone holding nothing but what Git Sync put there. A folder with commits or files of anyone
-  else's is left as it is, and the sync says to set Local working clone to a new folder.
+  succeeded, with the old folder's permissions; until one does, it fetches from and pushes to
+  neither remote. It swaps out a clone of its own whenever everything in it that the old remote
+  doesn't have is Git Sync's own work: a commit the old remote had, such as a hosting service's
+  first README, doesn't hold the swap back, and neither does one on the new remote. A clone
+  holding anything else — a commit made there by hand that the old remote never got, a file
+  made there — is left as it is, and the sync says to set Local working clone to a new folder.
 - **Deterministic committer.** The transport's automated commits use a fixed identity
   (`PersonalClaw Sync <sync@personalclaw.local>`) set via `git -c` flags, so a sync commit
   never depends on — or pollutes — ambient git config and names no real person.
@@ -115,14 +130,28 @@ clone of an empty repo succeeds and the first push publishes the branch.
   machine already has for the remote you point it at: your SSH agent, and the ssh command and
   credential helpers in your own git configuration. It reads and writes only that repo; the
   remote's own access controls are the trust boundary.
+- **A credential in Git remote URL is never shown.** A URL can carry a user name and password,
+  or a token (`https://<token>@host/…`). **Test connection**'s success, and every failure's detail
+  and error, name the URL without it — and without any query or fragment, or anything written
+  before the host of an scp-like `user@host:path` — so the credential reaches neither the sync
+  job's result nor its audit record, whichever way the URL is written.
+- **Git Sync commits only into a clone of its own.** Every working clone it makes is marked as
+  its own in the clone's git configuration (`personalclaw.gitSyncClone`). A folder at Local
+  working clone that holds commits or files Git Sync didn't make — a repository of your own,
+  even one whose remote is Git remote URL — is never committed into, pushed from, fetched into
+  or checked out; it is only looked at, and left byte-for-byte as it was. The sync says to set
+  Local working clone to a new folder. A clone an older Git Sync made, before clones were
+  marked, is taken as its own only when every commit in it is Git Sync's and nothing else is
+  uncommitted there; one whose remote holds a commit someone else made (a hosting service's
+  first README) is left alone the same way, and syncing resumes in a new folder.
 - **The working clone's own configuration runs nothing.** Anything that can write the clone
   can write its `.git`, so git runs with the settings that stop a repository's hooks,
   file-system monitor, ssh command and credential helpers from running
   (`personalclaw.sdk.git.git_argv`), and with PersonalClaw's child environment: none of the
   gateway's secrets, and the SSH agent only for a command that talks to the remote. Nor does it
   send a push anywhere but Git remote URL: an origin, push URL, second URL or url rewrite set
-  there gets the clone replaced by a fresh clone of Git remote URL — or, when it holds anything
-  Git Sync didn't make, left alone and not synced through.
+  there gets the clone replaced by a fresh clone of Git remote URL — or, when it holds work Git
+  Sync didn't make, left alone and not synced through.
 - **The repo holds shard objects only.** Secrets are excluded upstream by the durability
   layer before anything reaches a transport, so this app never sees `.env`, API keys, or the
   credential store — it cannot sync what it is never handed.

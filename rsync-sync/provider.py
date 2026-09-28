@@ -10,7 +10,7 @@ cycle, at the transport boundary — so this module never sees a key or a passph
 come down into a persistent local **mirror** whose whole point is that rsync then transfers
 only what changed. Reads are served from that mirror.
 
-Three things about driving ``rsync`` safely are worth stating, because each one is a defect
+Four things about driving ``rsync`` safely are worth stating, because each one is a defect
 this module exists to avoid:
 
 **No shell, ever, and no argument injection.** Every invocation is an argv list with
@@ -34,6 +34,12 @@ the ones it expected, or not its own after its write. That bias is deliberate: c
 re-pulls, re-merges peers' entries and retries on a ``False``, so a false ``False`` costs one
 round trip, while a false ``True`` silently discards another machine's registration. An rsync
 run that fails is no race, and raises instead: no re-pull fixes it.
+
+**The sync root is never created.** rsync makes a missing destination folder to write into —
+openrsync the whole path, GNU rsync its last part — and a folder missing under a share that
+isn't mounted looks exactly like one not made yet. Created, it would quietly take the sync onto
+the local disk. So a write first lists the root's top level (:meth:`_root_listing`), and a root
+that isn't there is a failure the owner fixes by mounting or creating it, never a first sync.
 """
 
 import errno
@@ -253,6 +259,12 @@ class RsyncSyncProvider(SyncTransportProvider):
         base = self._path.rstrip("/")
         base = f"{base}/" if trailing_slash else base
         return f"{self._host}:{base}" if self._host else base
+
+    def _root_listing(self) -> list[str]:
+        """The argv of a listing of the sync root's top level only — one folder's entries,
+        however much is under them. Every run that writes into the root runs it first: rsync
+        would create a root that isn't there, and this lists one as missing instead."""
+        return ["--list-only", *self._rsh_arg(), "--", self._target()]
 
     def _rsh_arg(self) -> list[str]:
         """The ``-e`` remote-shell argument, or nothing for a local transfer.
@@ -479,15 +491,14 @@ class RsyncSyncProvider(SyncTransportProvider):
                     f"anything, or set SSH identity file {_ON_CARD} to a key {host} accepts."
                 )
         where = f"on {host}" if self._host else "on this machine"
-        if "no such file or directory" in low:
-            create = (
-                "Create that folder there"
-                if self._host
-                else "Create that folder or reconnect the drive it lives on"
-            )
+        if self._missing(proc):
+            # Never created for the owner: it may be a disk or share that isn't mounted, and a
+            # folder made in its place would quietly take the sync onto the local disk.
             return (
-                f"The sync root path {self._path} doesn't exist {where}. {create}, or set Sync "
-                f"root path {_ON_CARD} to one that exists."
+                f"The sync root path {self._path} doesn't exist {where}. If it's on a disk or "
+                "share that isn't mounted, mount it; if it's the folder you meant, create it "
+                f"(mkdir -p {self._path}); otherwise set Sync root path {_ON_CARD} to the right "
+                "folder. Then sync again."
             )
         if "read-only file system" in low:
             return (
@@ -574,7 +585,9 @@ class RsyncSyncProvider(SyncTransportProvider):
                 self._target(),
             ]
             try:
-                proc = self._run(args)
+                # The root must be there before anything goes into it: rsync would create it.
+                check = self._run(self._root_listing())
+                proc = check if check.returncode not in (0, 24) else self._run(args)
             except subprocess.TimeoutExpired as e:
                 return PushResult(
                     outcome="transient",
@@ -583,7 +596,10 @@ class RsyncSyncProvider(SyncTransportProvider):
             except OSError as e:
                 return PushResult(outcome="permanent", detail=self._cannot_start(e))
             if proc.returncode != 0:
-                outcome = _outcome_for_rsync(proc.returncode)
+                # A root that isn't there clears once it is mounted, created or corrected,
+                # whatever exit code the rsync that found it used.
+                missing = self._missing(proc)
+                outcome = "transient" if missing else _outcome_for_rsync(proc.returncode)
                 sentence = self._refused(proc)
                 if outcome == "transient":
                     sentence = f"{sentence} {_RETRIES}"
@@ -599,16 +615,15 @@ class RsyncSyncProvider(SyncTransportProvider):
             shutil.rmtree(stage, ignore_errors=True)
 
     def list_remote(self, prefix: str = "") -> list[RemoteRef]:
-        # EMPTY only while there is nothing there yet: an unconfigured transport, or a sync root
-        # path that doesn't exist yet, which the first machine's first push creates. A listing
-        # that fails otherwise raises, said as what went wrong — see :class:`RsyncFailed`.
+        # EMPTY only for an unconfigured transport, or a sync root with nothing in it yet. A
+        # listing that fails raises, said as what went wrong — see :class:`RsyncFailed` — and a
+        # root that isn't there is one: it may be a share that isn't mounted, which this
+        # transport never creates a folder in place of (see the module docstring).
         if not self.configured:
             return []
         proc = self._run_or_fail(["-r", "--list-only", *self._rsh_arg(), "--", self._target()])
         # 24 is files that vanished while rsync listed them; the rest of the listing stands.
         if proc.returncode not in (0, 24):
-            if self._missing(proc):
-                return []
             raise RsyncFailed(self._refused(proc), _words(proc))
         refs: list[RemoteRef] = []
         for key, size, fingerprint in _parse_listing(proc.stdout):
@@ -655,11 +670,11 @@ class RsyncSyncProvider(SyncTransportProvider):
 
         ``False`` is a lost race and nothing else: a registry already there when this machine
         expected none, one with other bytes than the caller expected — before this machine's
-        write or after it — or none there when it expected one. An rsync run that fails raises
-        :class:`RsyncFailed`, and a Local working directory that refuses the staging raises
-        :class:`WorkdirUnusable`: re-pulling and swapping again fixes neither, and a ``False``
-        would send core round its loop to no purpose, then report the swap lost to another
-        machine."""
+        write or after it — or none in the sync root when it expected one. An rsync run that
+        fails raises :class:`RsyncFailed`, a sync root that isn't there among them, and a Local
+        working directory that refuses the staging raises :class:`WorkdirUnusable`: re-pulling
+        and swapping again fixes none of these, and a ``False`` would send core round its loop
+        to no purpose, then report the swap lost to another machine."""
         if not self.configured:
             return False
         if expected_sha is None:
@@ -676,13 +691,22 @@ class RsyncSyncProvider(SyncTransportProvider):
 
     # ── registry helpers ─────────────────────────────────────────────────────────────
 
+    def _require_root(self) -> None:
+        """Raise :class:`RsyncFailed` unless the sync root is there — said as a root that
+        doesn't exist, or as whatever else stopped the listing of it."""
+        check = self._run_or_fail(self._root_listing())
+        if check.returncode not in (0, 24):
+            raise RsyncFailed(self._refused(check), _words(check))
+
     def _create_only_registry(self, data: bytes) -> bool:
         """Create ``registry.json`` only if absent, reporting whether WE created it.
 
         ``--ignore-existing`` will not overwrite, and ``--itemize-changes`` names the files
         actually transferred — so an empty itemize means the file was already there and this
-        machine lost the race. A run that fails raises.
+        machine lost the race. A run that fails raises, and so does a sync root that isn't
+        there, which this run would otherwise create.
         """
+        self._require_root()
         stage = self._stage("reg-")
         try:
             self._stage_file(stage, _REGISTRY_KEY, data)
@@ -703,8 +727,8 @@ class RsyncSyncProvider(SyncTransportProvider):
             shutil.rmtree(stage, ignore_errors=True)
 
     def _read_remote_registry(self) -> bytes | None:
-        """The target's current ``registry.json`` bytes, or None when it has none — the file
-        isn't there, or the sync root path isn't. A run that fails otherwise raises."""
+        """The target's current ``registry.json`` bytes, or None when the sync root has none.
+        A root that isn't there raises, as does a run that fails otherwise."""
         stage = self._stage("regr-")
         try:
             src = self._target(trailing_slash=False) + "/" + _REGISTRY_KEY
@@ -714,9 +738,12 @@ class RsyncSyncProvider(SyncTransportProvider):
             proc = self._run_or_fail(args)
             # 24: the file vanished as rsync copied it, which the read below finds.
             if proc.returncode not in (0, 24):
-                if self._missing(proc, _REGISTRY_KEY):
-                    return None
-                raise RsyncFailed(self._run_refused(proc, stage), _words(proc))
+                if not self._missing(proc, _REGISTRY_KEY):
+                    raise RsyncFailed(self._run_refused(proc, stage), _words(proc))
+                # rsync words a missing registry and a missing root alike, and only the
+                # first is "nothing there yet": the root is listed to tell them apart.
+                self._require_root()
+                return None
             try:
                 with open(os.path.join(stage, _REGISTRY_KEY), "rb") as fh:
                     return fh.read()
@@ -729,7 +756,7 @@ class RsyncSyncProvider(SyncTransportProvider):
 
     def _write_registry(self, data: bytes) -> None:
         """Overwrite ``registry.json`` on the target, forcing the transfer. A run that fails
-        raises.
+        raises. It runs only just after a read found the registry, so the root is there.
 
         ``--ignore-times`` is load-bearing, not defensive: rsync's size+mtime quick check
         silently skips a same-length rewrite inside the same clock second and still exits 0.

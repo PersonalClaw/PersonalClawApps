@@ -21,6 +21,9 @@ above it.
 
 1. **Pick a host and a directory.** `ssh you@nas.local` should already work, using a key —
    not a password (see below). Create the sync root, e.g. `mkdir -p /srv/personalclaw-sync`.
+   Rsync Sync never creates it: a sync root that isn't there stops the sync with that as its
+   error. A folder missing under a disk or share that isn't mounted looks just like one not
+   made yet, and making it would quietly move the sync onto the local disk.
 2. **Fill in the settings** (Settings → Apps → Rsync Sync):
    - **SSH host** — `nas.local` or `backup@nas.local`. Leave empty to rsync to a local or
      mounted path instead.
@@ -128,13 +131,15 @@ trusted yet, the host turned down the ssh login, the sync root path doesn't exis
 isn't installed on one end, a run went past **Command timeout**, this machine's **Local working
 directory** can't be written — with rsync's, ssh's or the filesystem's own words after it. A
 listing, a pull or a registry swap whose rsync run fails stops the sync with that as its error,
-rather than reading as a target with nothing on it or a swap another machine won. The one
-exception is a **Sync root path** that doesn't exist yet: it lists as empty, so the first
-machine to sync creates it. Files that vanish from the target while a pull copies — another
-machine rewriting the registry — are not a failure: what arrived is used.
+rather than reading as a target with nothing on it or a swap another machine won — and a
+**Sync root path** that doesn't exist is such a failure too, on every machine, the first one
+included: nothing is pushed until it is mounted, created, or the setting corrected. Files that
+vanish from the target while a pull copies — another machine rewriting the registry — are not a
+failure: what arrived is used.
 
 | Symptom | Cause |
 |---|---|
+| "The sync root path … doesn't exist" | The disk or share it lives on isn't mounted, the folder was never made, or **Sync root path** is mistyped. Mount it; create it if it's the folder you meant (`mkdir -p` the path, on the host for an SSH target); or correct the setting. Then sync again. |
 | Times out on every cycle | With `BatchMode=yes` set, a timeout means the host is unreachable or the key is not accepted — **not** that it asked for a password. Try the same `ssh` by hand. |
 | `Host key verification failed` | Expected on first contact. Connect once by hand to record the key; the app will not accept an unknown key for you. |
 | PersonalClaw couldn't start rsync on this machine | rsync is not installed here, or is not on the `PATH` PersonalClaw runs with. |
