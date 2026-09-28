@@ -10,13 +10,13 @@ installs through the same scanner-gated lifecycle as any third-party app.
 
 ## What's here
 
-**68 app bundles**, one `app.json` each. 64 contribute a capability provider and
+**67 app bundles**, one `app.json` each. 63 contribute a capability provider and
 4 contribute none. Five contribute more than one — `companion` (a `tool` and a
 `trigger`) and each of the four channel apps (a `channel` plus a
 `trigger_source`, and `slack-channel` an `inbox` as well) — so the lists below
-count **providers, not bundles**, and those five appear once per provider. 70
-providers over 64 bundles, plus the 4 provider-less bundles, is 74 entries over
-68 bundles; that is the whole gap between the headline and the sum of the counts.
+count **providers, not bundles**, and those five appear once per provider. 69
+providers over 63 bundles, plus the 4 provider-less bundles, is 73 entries over
+67 bundles; that is the whole gap between the headline and the sum of the counts.
 
 Nobody has to keep that true by hand: the `readme-census` CI job
 (`.github/scripts/check_readme_census.py`) checks the headline, every count
@@ -56,7 +56,7 @@ unlisted.
   `discord-channel`, `telegram-channel`, `email-channel`.
 - **Agents** (`agent`, 4) — `claude-code-agent`, `codex-agent`, `gemini-cli-agent`,
   `kiro-cli-agent` (ACP bundles).
-- **Tools** (`tool`, 12) — `mcp-tools`, `openai-tools`, `web-tools`, `code-review`
+- **Tools** (`tool`, 11) — `openai-tools`, `web-tools`, `code-review`
   (deep per-file review of a GitHub PR over your local `gh`), `research-lab`
   (unattended multi-cycle research campaigns synthesised into one report),
   `notes` (a git-backed markdown notebook — an editor, not a second knowledge
@@ -70,7 +70,8 @@ unlisted.
   (GitHub/GitLab issue triage — labels from the repository's own set,
   investigation notes kept locally), `docs-slides` (a brief becomes a real
   `.pptx` deck or a compiled `.docx`, rendered by the document writers core
-  already ships).
+  already ships). MCP Tool Servers, which hands your agents the tools of the MCP
+  servers you connect, ships with PersonalClaw itself.
 - **Sync** (`sync`, 4) — four transports for the same state, pick by what you
   already have: `dir-sync` (a shared/synced folder or mount), `git-sync` (a git
   remote you own), `rsync-sync` (rsync over ssh to any host you can already log

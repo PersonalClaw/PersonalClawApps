@@ -489,7 +489,7 @@ boundary is lint-enforced):
 | `model` | `personalclaw.sdk.model` (chat LLMs), `sdk.stt`, `sdk.tts`, `sdk.diarization`, `sdk.embedding`, `sdk.image`, `sdk.local_model` (download/manage local models) | Settings → Models; bound per use-case (chat/background/embedding/stt/tts/…) | `anthropic-models` (branded API), `openai-compatible` (generic endpoint), `claude-subscription` (rides a CLI's subscription sign-in, no API key), `faster-whisper` (local STT), `sentence-transformers` (local embeddings) |
 | `search` | `personalclaw.sdk.search` `SearchProvider` | Settings → Search; the `web_search` tool | `brave-search`, `duckduckgo-search` (keyless) |
 | `agent` | `personalclaw.sdk.acp` (ACP agent bundles) | the Agents list | `claude-code-agent`, `codex-agent` |
-| `tool` | `personalclaw.sdk.tool` (+ `sdk.mcp`) | the agent tool layer | `mcp-tools`, `web-tools` |
+| `tool` | `personalclaw.sdk.tool` (+ `sdk.mcp`) | the agent tool layer | `web-tools`, `openai-tools` |
 | `channel` | `personalclaw.sdk.channel` `ChannelTransportProvider` + `ChannelDelivery` | messaging channels (inbound + outbound delivery) | `slack-channel` |
 | `action` | `personalclaw.sdk.action` | trigger/schedule action providers | `webhook-action` |
 | `skills` | `personalclaw.sdk.skill` `SkillsMarketplace` | Skills → Browse (read-only search + fetch) | `skills-sh` |
