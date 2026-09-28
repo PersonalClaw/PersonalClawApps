@@ -10,13 +10,13 @@ installs through the same scanner-gated lifecycle as any third-party app.
 
 ## What's here
 
-**67 app bundles**, one `app.json` each. 63 contribute a capability provider and
+**69 app bundles**, one `app.json` each. 65 contribute a capability provider and
 4 contribute none. Five contribute more than one — `companion` (a `tool` and a
 `trigger`) and each of the four channel apps (a `channel` plus a
 `trigger_source`, and `slack-channel` an `inbox` as well) — so the lists below
-count **providers, not bundles**, and those five appear once per provider. 69
-providers over 63 bundles, plus the 4 provider-less bundles, is 73 entries over
-67 bundles; that is the whole gap between the headline and the sum of the counts.
+count **providers, not bundles**, and those five appear once per provider. 71
+providers over 65 bundles, plus the 4 provider-less bundles, is 75 entries over
+69 bundles; that is the whole gap between the headline and the sum of the counts.
 
 Nobody has to keep that true by hand: the `readme-census` CI job
 (`.github/scripts/check_readme_census.py`) checks the headline, every count
@@ -78,7 +78,9 @@ unlisted.
   into), `s3-sync` (an S3-compatible object store you own).
 - **Actions** (`action`, 2) — `webhook-action`, `a2a-action` (hand one task to an
   external A2A agent when a trigger fires, egress-allowlisted).
-- **Inboxes** (`inbox`, 2) — `mail-inbox`, plus `slack-channel`'s inbox half.
+- **Inboxes** (`inbox`, 3) — `mail-inbox`, `inbox-github-notifications` (your GitHub
+  notifications, read-only, filtered by time so history never floods in), plus
+  `slack-channel`'s inbox half.
 - **Notification delivery** (`notification`, 1) — `dir-notification` (a notification
   addressed to a teammate is recorded here and fired nowhere here; this writes it
   into a shared folder as one JSON file per note, so pairing it with `dir-sync` or
@@ -88,9 +90,10 @@ unlisted.
 - **Triggers** (`trigger`, 2) — `shared-automations` (serve trigger rows from one
   file a team shares — a synced folder, an NFS share, a checked-out repo), plus
   `companion`'s trigger half.
-- **Trigger sources** (`trigger_source`, 4) — the trigger-source half of every
-  channel app: `slack-channel`, `discord-channel`, `telegram-channel`,
-  `email-channel`. Each turns the inbound traffic its transport already receives
+- **Trigger sources** (`trigger_source`, 5) — `watched-source-github` (fires your
+  automations when a GitHub repository you watch ships a release or opens an issue;
+  it owns its own watch loop), plus the trigger-source half of every channel app:
+  `slack-channel`, `discord-channel`, `telegram-channel`, `email-channel`. Each turns the inbound traffic its transport already receives
   into `app:<name>:<event>` automation events, so a `kind: event` trigger can fire
   on a real message. Only traffic the app's trust gate already admitted is
   observed, and the event name comes from a frozen vocabulary in the app rather

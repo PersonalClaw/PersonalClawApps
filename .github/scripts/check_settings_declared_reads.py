@@ -29,10 +29,10 @@ fallback in the same module — is reached only for the schema-LESS document sur
 this. This is the defect the four published satellite exemplars carried
 (``action-home-assistant``, ``watched-source-github``, ``inbox-github-notifications``,
 ``channel-null``): each declared only ``timeout_secs`` while reading 2-4 more settings, and
-two read a GitHub ``token`` no schema declared, hence unmasked everywhere. Those four sit in
+two read a GitHub ``token`` no schema declared, hence unmasked everywhere. Those four sat in
 standalone repositories with no catalogue CI. Every app under THIS CI was clean of Class C
 when the rail landed — 0 of 61 — which is the measured case for keeping exemplars here
-rather than in satellite repos.
+rather than in satellite repos, and the two GitHub ones now live here.
 
 **Why the factory's own parameter, and not a receiver-name match.** A first draft matched
 ``config``/``settings``/``cfg`` by NAME anywhere in the bundle and reported

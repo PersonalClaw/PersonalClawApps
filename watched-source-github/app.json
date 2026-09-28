@@ -1,0 +1,83 @@
+{
+  "name": "watched-source-github",
+  "version": "0.2.0",
+  "displayName": "GitHub Repo Watcher",
+  "description": "Fires your automations when a GitHub repo you watch ships a release or opens an issue. A newly watched repository starts from what exists now, so its history never floods in, and every request goes through your network egress settings.",
+  "icon": "Telescope",
+  "author": "PersonalClaw",
+  "license": "MIT",
+  "tags": [
+    "trigger_source",
+    "github"
+  ],
+  "permissions": {
+    "network": true
+  },
+  "cli": {
+    "setup": "app_cli:setup",
+    "doctor": "app_cli:doctor"
+  },
+  "loggerRoots": [
+    "watched_source_github"
+  ],
+  "provider": {
+    "type": "trigger_source",
+    "implementation": "provider:create_provider",
+    "settingsSchema": {
+      "type": "object",
+      "properties": {
+        "repos": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Repositories",
+            "help": "Comma-separated owner/name list, e.g. \"acme/widgets, acme/gadgets\". An entry that is not owner/name is skipped."
+          }
+        },
+        "token": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "GitHub Token",
+            "help": "A GitHub personal access token. Required for private repositories and to raise the anonymous rate limit. Leave it empty to watch public repositories anonymously.",
+            "sensitive": true
+          }
+        },
+        "poll_interval_secs": {
+          "type": "integer",
+          "default": 300,
+          "minimum": 60,
+          "x-meta": {
+            "label": "Poll Interval",
+            "help": "Seconds between polls. Floored at 60.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        },
+        "api_base": {
+          "type": "string",
+          "default": "https://api.github.com",
+          "x-meta": {
+            "label": "GitHub API Base",
+            "help": "Override for GitHub Enterprise. Defaults to the public API. A server on your own network is reachable only once its host is allowed under Settings → Security → Network egress.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        },
+        "timeout_secs": {
+          "type": "integer",
+          "default": 20,
+          "x-meta": {
+            "label": "Request Timeout",
+            "help": "Maximum seconds to wait for a GitHub API response.",
+            "tags": [
+              "advanced"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
