@@ -151,9 +151,9 @@ def test_manifest_round_trips_and_declares_minimum_permissions() -> None:
     raw = json.loads((HERE / "app.json").read_text(encoding="utf-8"))
     manifest = AppManifest.from_dict(raw)
     assert AppManifest.from_dict(manifest.to_dict()).to_dict() == manifest.to_dict()
-    # The install-consent surface: local storage for the findings log, and no network —
-    # GitHub is reached only through the user's own already-authenticated `gh`.
-    assert raw["permissions"] == {"storage": True, "network": False}
+    # The install-consent surface: local storage for the findings log, and network, because
+    # the user's own already-authenticated `gh` that it starts reaches GitHub for it.
+    assert raw["permissions"] == {"storage": True, "network": True}
     assert raw["provider"]["type"] == "tool"
 
 

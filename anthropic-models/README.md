@@ -54,6 +54,10 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | `default_model` | Default Model | An Anthropic model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 | `endpoint` | Base URL | Optional custom Anthropic-compatible base URL. Empty uses the Anthropic default. |
 
+## Network
+
+Reaches `api.anthropic.com`, or the endpoint you set in **Base URL**.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

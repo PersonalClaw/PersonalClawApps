@@ -94,14 +94,15 @@ def test_gemini_app_manifest_is_valid():
     assert m["provider"]["capabilities"] == ["acp"]
 
 
-def test_gemini_declares_no_permissions():
-    """Minimum permissions: an ACP agent bundle needs none. The Store shows the
-    permission block as the install-consent surface, so an empty one is a claim
-    worth pinning — a later drive-by widening has to change this test."""
+def test_gemini_declares_only_network():
+    """Minimum permissions: the Gemini CLI this bundle runs reaches Google, so network, and
+    nothing else. The Store shows the permission block as the install-consent surface, so
+    the exact block is a claim worth pinning — a later drive-by widening has to change this
+    test."""
     import json
 
     m = json.loads((Path(__file__).parent / "app.json").read_text())
-    assert not m.get("permissions")
+    assert m.get("permissions") == {"network": True}
 
 
 # ── registration + launch wiring ─────────────────────────────────────────────

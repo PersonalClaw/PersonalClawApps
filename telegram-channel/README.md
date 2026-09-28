@@ -152,6 +152,10 @@ row says so; save the new token in Configure to start it again. A long-poll that
 retried (another poller holding the token, Telegram unreachable) reads as not receiving, with
 Telegram's answer, until a poll gets through.
 
+## Network
+
+Reaches `api.telegram.org` only.
+
 ## License
 
 MIT — see `LICENSE`.

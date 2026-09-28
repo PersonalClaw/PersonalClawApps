@@ -1,6 +1,6 @@
 {
   "name": "alibaba-models",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "displayName": "Alibaba Model Studio",
   "description": "Alibaba Cloud Model Studio (DashScope) \u2014 Qwen chat and embedding models. Image generation too (Qwen-Image, Wan), and more. Select your regional endpoint.",
   "icon": "Cloud",
@@ -16,6 +16,9 @@
     "pythonDependencies": [
       "openai>=1.0"
     ]
+  },
+  "permissions": {
+    "network": true
   },
   "provider": {
     "type": "model",

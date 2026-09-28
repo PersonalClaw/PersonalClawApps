@@ -35,6 +35,10 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | `default_model` | Default Model | An OpenAI model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 | `endpoint` | Base URL | Optional custom OpenAI-compatible base URL. Empty uses the OpenAI default. |
 
+## Network
+
+Reaches `api.openai.com`, or the endpoint you set in **Base URL**.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

@@ -74,6 +74,10 @@ providers sit relative to PersonalClaw's native runtime — at parity, host-comp
 a protocol or CLI constraint — is documented in [the ACP parity statement](https://github.com/PersonalClaw/PersonalClaw/blob/main/docs/agents/acp-parity.md). Gemini's own
 column there is marked unverified until the binary has been driven on a measuring host.
 
+## Network
+
+Runs Gemini CLI, which reaches Google's service with the account it signs in to.
+
 ## License
 
 MIT — see `LICENSE`.

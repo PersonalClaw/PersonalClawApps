@@ -71,7 +71,11 @@ Use a **fresh collection name**. This app owns the points it writes and deletes 
 `item_id` payload filter when a document is re-ingested or removed, so pointing it at a
 collection holding other data risks deleting that data. The collection is created on first use
 at the dimension of whatever embedding model you have bound; changing embedding models means
-using a new collection name (vectors from two models are not comparable).
+using a new collection name (vectors from two models are not comparable). The collection's size
+is read before every write and search, so vectors of another size are never sent: the ingest or
+search says the collection was made for another size and to set a new name, against a server
+and a local folder alike. In a batch that mixes sizes, the vectors that fit the collection are
+still written.
 
 ## What is proven, and what is not
 
@@ -122,6 +126,10 @@ Three rules the seam depends on:
 Declare `"type": "vector_store"` in your `app.json` provider block. Everything vendor-specific
 — the client library, the endpoint, the auth, the schema — belongs in your bundle; core carries
 no vector-store client at all.
+
+## Network
+
+Reaches only the Qdrant server you set in **Qdrant URL** (by default `localhost:6333`, on this machine). With **Local folder (no server)** set, it runs Qdrant's engine in-process over that folder and reaches nothing.
 
 ## Licence
 

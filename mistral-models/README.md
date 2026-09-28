@@ -35,6 +35,10 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | `default_model` | Default Model | A Mistral model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 | `endpoint` | Base URL | Optional override of the Mistral AI base URL. Empty uses https://api.mistral.ai/v1. |
 
+## Network
+
+Reaches `api.mistral.ai`, or the endpoint you set in **Base URL**.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

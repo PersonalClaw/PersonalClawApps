@@ -1,6 +1,6 @@
 {
   "name": "webhook-action",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "HTTP Webhook Hooks",
   "description": "POST agent lifecycle events to an HTTP endpoint. Supports method/headers overrides and a templated body.",
   "icon": "Webhook",
@@ -9,6 +9,9 @@
   "tags": [
     "action"
   ],
+  "permissions": {
+    "network": true
+  },
   "provider": {
     "type": "action",
     "entity": "webhook",

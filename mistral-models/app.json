@@ -1,6 +1,6 @@
 {
   "name": "mistral-models",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Mistral AI",
   "description": "Mistral AI models via its OpenAI-compatible endpoint. Bring your own Mistral API key.",
   "icon": "Wind",
@@ -14,6 +14,9 @@
     "pythonDependencies": [
       "openai>=1.0"
     ]
+  },
+  "permissions": {
+    "network": true
   },
   "provider": {
     "type": "model",

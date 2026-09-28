@@ -27,6 +27,7 @@ import pytest
 
 import provider as git_sync
 from provider import GitSyncProvider, create_provider
+from personalclaw.sdk.net import sentence_with_detail
 from personalclaw.sdk.sync import RemoteRef, SyncObject
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the repo root: apps_testkit
@@ -920,6 +921,237 @@ def test_a_push_the_remote_rules_refuse_names_the_branch(remote, tmp_path, monke
     ), r.detail
     assert RETRIES not in r.detail
     assert len(pushes) == 1, "a declined push was caught up and pushed again, as if a race"
+
+
+# The remote's other refusals, each met for real: the remote is a repository on this machine
+# reached through the ssh stand-in, set up to refuse the way a remote does. git's "[remote
+# rejected]" read as a race for every one of them — ``transient``, and tried again on every run,
+# though no retry changes any of them but the ref lock.
+
+
+def _count_pushes(monkeypatch) -> list[list[str]]:
+    """Every ``git push`` the transport runs, as it runs it."""
+    real_run = GitSyncProvider._run
+    pushes: list[list[str]] = []
+
+    def _counting(self, args, check=True):
+        if git_sync._subcommand(args) == "push":
+            pushes.append(args)
+        return real_run(self, args, check=check)
+
+    monkeypatch.setattr(GitSyncProvider, "_run", _counting)
+    return pushes
+
+
+def _bare(path) -> str:
+    """A new, empty bare repository at *path*."""
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(path)], check=True,
+                   capture_output=True, text=True)
+    return str(path)
+
+
+def test_a_push_into_a_branch_checked_out_on_the_remote_says_to_use_a_bare_one(
+    tmp_path, ssh_url, monkeypatch, c_locale
+):
+    shared = tmp_path / "shared"
+    subprocess.run(["git", "init", "-b", "main", str(shared)], check=True, capture_output=True,
+                   text=True)
+    _git(str(shared), "config", "receive.denyCurrentBranch", "refuse")  # git's default, pinned
+    (shared / "notes.md").write_text("a repository someone works in\n", encoding="utf-8")
+    _git(str(shared), "add", "-A")
+    _git(str(shared), "commit", "-m", "start")
+    pushes = _count_pushes(monkeypatch)
+
+    r = _provider(ssh_url(shared), tmp_path).push([SyncObject("k", b"v")])
+
+    assert r.outcome == "permanent", r.detail
+    assert r.detail.startswith(
+        "Git Sync couldn't push to the git remote: it is a repository with a working tree that "
+        "has branch 'main' checked out, and git won't push into a checked-out branch. Point Git "
+        f"remote URL {ON_CARD} at a bare repository (one made with git init --bare), or set Branch "
+        "to one that isn't checked out there. Details: "
+    ), r.detail
+    assert "refusing to update checked out branch" in r.detail
+    assert len(pushes) == 1
+
+
+def test_a_push_from_a_shallow_clone_the_remote_refuses_says_to_clone_afresh(
+    tmp_path, ssh_url, monkeypatch, c_locale
+):
+    """A working clone holding only part of its history (made with ``--depth``) pushing to a
+    remote that lacks the rest."""
+    history = tmp_path / "history"
+    subprocess.run(["git", "init", "-b", "main", str(history)], check=True, capture_output=True,
+                   text=True)
+    for n in (1, 2):
+        (history / f"f{n}").write_text(f"{n}\n", encoding="utf-8")
+        _git(str(history), "add", "-A")
+        _git(str(history), "commit", "-m", f"commit {n}")
+    source = _bare(tmp_path / "source.git")
+    _git(str(history), "push", "-q", source, "main")
+    target = _bare(tmp_path / "remote.git")
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "--depth", "1", ssh_url(source), str(clone)], check=True,
+                   capture_output=True, text=True)
+    _git(str(clone), "remote", "set-url", "origin", ssh_url(target))
+    said: list[subprocess.CompletedProcess] = []
+    real_run = GitSyncProvider._run
+
+    def _saying(self, args, check=True):
+        cp = real_run(self, args, check=check)
+        if git_sync._subcommand(args) == "push":
+            said.append(cp)
+        return cp
+
+    monkeypatch.setattr(GitSyncProvider, "_run", _saying)
+
+    r = GitSyncProvider(repo_url=ssh_url(target), local_clone=str(clone)).push(
+        [SyncObject("k", b"v")]
+    )
+
+    assert r.outcome == "permanent", r.detail
+    assert len(said) == 1
+    # git names the remote's URL before its refusal, so how much of the refusal survives the
+    # cut depends on how long this run's temporary path is: the words are checked whole here,
+    # and the detail as those words cut to fit.
+    words = git_sync._words(said[0])
+    assert "[remote rejected] main -> main (shallow update not allowed)" in words, words
+    assert r.detail == sentence_with_detail(
+        f"Git Sync couldn't push to the git remote: the working clone at {clone} is shallow — it "
+        "holds only part of its history — and the remote won't take a push from a shallow "
+        "clone. If nothing there needs keeping, delete that folder, and Git Sync clones the "
+        "remote in full on its next run.",
+        words,
+    ), r.detail
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes into a read-only directory anyway")
+def test_a_remote_that_cannot_store_the_push_says_so(remote, tmp_path, monkeypatch, c_locale):
+    p = _provider(remote, tmp_path)
+    assert p.push([SyncObject("base", b"0")]).outcome == "delivered"
+    objects = tmp_path / "remote.git" / "objects"
+    objects.chmod(0o555)  # the account this machine pushes as can't write the objects there
+    try:
+        pushes = _count_pushes(monkeypatch)
+        r = p.push([SyncObject("k", b"v")])
+    finally:
+        objects.chmod(0o755)
+
+    assert r.outcome == "permanent", r.detail
+    assert r.detail.startswith(
+        "Git Sync couldn't push to the git remote: the remote couldn't store what this machine "
+        "sent — the repository there isn't writable by the account this machine pushes as, or "
+        "the disk it is on is full. Fix that on the remote. Details: "
+    ), r.detail
+    assert len(pushes) == 1
+
+
+def test_a_branch_name_the_remote_refuses_says_which_setting(
+    remote, tmp_path, monkeypatch, c_locale
+):
+    """A remote that won't take the branch's name. git lets no name through that a stock remote
+    then refuses, so the remote's words here are real git's, from a push it refused as a
+    "funny refname", handed to the transport's push step."""
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "clone", remote, str(seed)], check=True, capture_output=True,
+                   text=True)
+    (seed / "f").write_text("x\n", encoding="utf-8")
+    _git(str(seed), "add", "-A")
+    _git(str(seed), "commit", "-m", "x")
+    refused = subprocess.run(["git", "-C", str(seed), "push", "origin", "HEAD:refs/sync"],
+                             capture_output=True, text=True)
+    assert refused.returncode != 0 and "funny refname" in refused.stderr, refused.stderr
+    real_run = GitSyncProvider._run
+    pushes: list[list[str]] = []
+
+    def _refused_push(self, args, check=True):
+        if git_sync._subcommand(args) == "push":
+            pushes.append(args)
+            return subprocess.CompletedProcess(
+                ["git", *args], refused.returncode, stdout=refused.stdout, stderr=refused.stderr
+            )
+        return real_run(self, args, check=check)
+
+    monkeypatch.setattr(GitSyncProvider, "_run", _refused_push)
+
+    r = GitSyncProvider(repo_url=remote, local_clone=str(tmp_path / "c"), branch="sync").push(
+        [SyncObject("k", b"v")]
+    )
+
+    assert r.outcome == "permanent", r.detail
+    assert r.detail.startswith(
+        "Git Sync couldn't push to the git remote: it won't take 'sync' as the name of a branch. "
+        f"Set Branch {ON_CARD} to a name it accepts, such as main. Details: "
+    ), r.detail
+    assert len(pushes) == 1
+
+
+def test_a_push_the_remotes_ref_lock_keeps_out_says_so_and_that_it_retries(
+    remote, tmp_path, monkeypatch, c_locale
+):
+    """The one refusal a retry can change: the branch's lock, held by a push landing at that
+    moment — or, as here, a lock file an interrupted one left behind."""
+    p = _provider(remote, tmp_path)
+    assert p.push([SyncObject("base", b"0")]).outcome == "delivered"
+    lock = tmp_path / "remote.git" / "refs" / "heads" / "main.lock"
+    lock.write_text("", encoding="utf-8")
+    pushes = _count_pushes(monkeypatch)
+
+    r = p.push([SyncObject("k", b"v")])
+
+    assert r.outcome == "transient", r.detail
+    assert r.detail.startswith(
+        "Git Sync couldn't push to the git remote: branch 'main' there was still locked by "
+        "another git process after 3 tries — a push landing at the same moment, or an "
+        "interrupted one that left refs/heads/main.lock behind. If it keeps happening, remove "
+        f"that file in the remote repository. {RETRIES} Details: "
+    ), r.detail
+    assert "cannot lock ref" in r.detail
+    assert len(pushes) == 3, "a taken ref lock was not tried again"
+    lock.unlink()
+    assert p.push([SyncObject("k2", b"w")]).outcome == "delivered"
+
+
+@pytest.mark.parametrize("branch", ["bad..name", "has space", "ends.lock", "-dash", "HEAD"])
+def test_a_branch_git_will_not_name_is_refused_before_git_runs(remote, tmp_path, branch):
+    """git itself said only "invalid refspec", at the push — after the objects had been
+    committed to whatever branch the clone had checked out — and nothing named the setting."""
+    clone = tmp_path / "clone"
+    p = GitSyncProvider(repo_url=remote, local_clone=str(clone), branch=branch)
+    says = (
+        f"Git Sync can't sync on '{branch}': git doesn't accept that as a branch name. Set Branch "
+        f"{ON_CARD} to one it does, such as main."
+    )
+
+    pushed = p.push([SyncObject("k", b"v")])
+
+    assert (pushed.outcome, pushed.detail) == ("permanent", says)
+    probe = p.test()
+    assert (probe.ok, probe.detail) == (False, says)
+    assert p.list_remote() == [] and p.cas_registry(None, b"{}") is False
+    assert not clone.exists(), "git ran for a Branch git won't take"
+
+
+def test_the_branch_names_refused_are_the_ones_git_refuses(remote, tmp_path):
+    """The check is git's own rules for a branch name. Drifting from the git in use would refuse
+    a branch git takes, or let through one it won't — so each name is put to that git too."""
+    names = [
+        "main", "feature/x", "sync/main", "v1.0", "a-b", "a@b", "@", "@a", "a{b", "a}b", "日本",
+        "a..b", "a b", "a\tb", ".hidden", "x/.y", "x.lock", "x.lock/y", "x/y.lock", "a/", "/a",
+        "a//b", "HEAD", "-x", "a~b", "a^b", "a:b", "a?b", "a*b", "a[b", "a\\b", "a@{b", "a.",
+        "a./b", "a\x7fb", "..",
+    ]
+    disagree = []
+    for name in names:
+        git_takes = subprocess.run(
+            ["git", "check-ref-format", "--branch", name], cwd=tmp_path, capture_output=True
+        ).returncode == 0
+        p = GitSyncProvider(repo_url=remote, local_clone=str(tmp_path / "c"), branch=name)
+        probe = p.test()
+        refused = probe.detail.startswith("Git Sync can't sync on")
+        if refused == git_takes:
+            disagree.append((name, git_takes, probe.detail))
+    assert not disagree, disagree
 
 
 def test_a_push_that_cannot_reach_the_remote_says_so_and_that_it_retries(

@@ -66,6 +66,10 @@ When that chain can't sign in — no credentials found, a profile that isn't in 
 
 Speech-to-text, embeddings, images and video say the same, and name what else stops them: no S3 Bucket (speech-to-text and video need one), a bucket that doesn't exist, an IAM action the identity lacks, or a Transcribe or Nova Reel job that failed, with its reason and the next step. A Nova Reel job that runs past ten minutes may still finish, so the message names the S3 folder its video will land in. When speech-to-text is unavailable, the composer's microphone says why; when an embedding model can't embed, a re-index refused on it does.
 
+## Network
+
+Reaches AWS in the region you set in **AWS Region**: Amazon Bedrock, plus Amazon S3 and Amazon Transcribe for the features that use them.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

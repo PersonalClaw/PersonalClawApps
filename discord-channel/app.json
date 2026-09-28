@@ -1,6 +1,6 @@
 {
   "name": "discord-channel",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "displayName": "Discord Channel",
   "description": "Discord bot integration over the raw Gateway WebSocket + REST API. Pair a DM, converse in servers, and receive results with approval buttons.",
   "icon": "MessagesSquare",
@@ -17,6 +17,9 @@
   "loggerRoots": [
     "discord_runtime"
   ],
+  "permissions": {
+    "network": true
+  },
   "provider": {
     "type": "channel",
     "implementation": "discord_runtime.transport:create_provider",

@@ -73,6 +73,7 @@ If the POST fails:
 
 ```json
 "permissions": {
+  "network": true,
   "api": ["/api/loops", "/api/approvals", "/api/ws"],
   "events": ["approval", "approval_resolved"]
 }
@@ -80,6 +81,8 @@ If the POST fails:
 
 That is the whole list, and each entry is used:
 
+- `network` — its one connection is your own gateway, at the URL you give it, which can be
+  on another machine. It reaches nothing else.
 - `/api/loops` — the live run rows and the needs-input rows (read-only).
 - `/api/approvals` — the pending approvals, and the one write this app makes.
 - `/api/ws` — the single doorbell connection.
@@ -91,7 +94,6 @@ Nothing else is claimed. In particular:
 
 - **no `storage`** — a client app is never server-installed, so the platform never hands
   it a `DATA_DIR`. It keeps its own settings on your Mac (below).
-- **no `network`** — it talks to your own gateway, not out to the internet.
 - **no `cron`, `agent`, `memory`, `mcpTools`, app messaging or shared storage.**
 
 Native notifications are posted **locally** with `osascript`, on your own machine — not
@@ -180,3 +182,7 @@ python3 -m pytest menu-bar-companion -q
 
 No PersonalClaw core import anywhere outside `test_manifest.py` (which checks the
 manifest against core's own `AppManifest.from_dict`, and skips when core is absent).
+
+## Network
+
+Reaches only the PersonalClaw gateway URL you give it (`run.py --configure`, or `PERSONALCLAW_COMPANION_URL`).

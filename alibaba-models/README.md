@@ -36,3 +36,7 @@ For workspace-based access, enter your workspace URL manually:
 - Beijing: `https://{workspace_id}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`
 - Singapore: `https://{workspace_id}.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1`
 - Tokyo: `https://{workspace_id}.ap-northeast-1.maas.aliyuncs.com/compatible-mode/v1`
+
+## Network
+
+Reaches the Model Studio endpoint you set in **Endpoint** (by default `dashscope-intl.aliyuncs.com`).

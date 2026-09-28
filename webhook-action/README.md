@@ -51,6 +51,10 @@ own:
 The webhook id is the credential: Home Assistant does not ask for anything else, so keep the
 URL out of anything you share.
 
+## Network
+
+Reaches only the URL you set in **Webhook URL**.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

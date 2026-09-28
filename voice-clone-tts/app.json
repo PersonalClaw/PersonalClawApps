@@ -1,6 +1,6 @@
 {
   "name": "voice-clone-tts",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "displayName": "Voice Clone TTS",
   "description": "Clone a voice from a short clip and speak with it, on your own machine. It needs the OmniVoice engine (torch, several GB), which Install engine on its card in Settings → Providers puts in this app's own Python environment; then download OmniVoice in Settings → Models. The engine runs in a process of its own, so a crash in it leaves the gateway up. A clone-kind voice profile routes here instead of being refused.",
   "icon": "AudioLines",
@@ -17,6 +17,9 @@
     "sidecarDependencies": [
       "omnivoice>=0.2.1,<0.3"
     ]
+  },
+  "permissions": {
+    "network": true
   },
   "provider": {
     "type": "model",

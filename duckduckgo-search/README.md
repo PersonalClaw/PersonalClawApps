@@ -31,6 +31,10 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 |---|---|---|
 | `timeout_secs` | Request Timeout | Maximum seconds to wait for a search response. |
 
+## Network
+
+Reaches `html.duckduckgo.com` only.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

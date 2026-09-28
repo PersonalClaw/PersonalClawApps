@@ -31,6 +31,10 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | `api_key` | Exa API Key | Your Exa API key (exa.ai). Leave empty to fall back to the EXA_API_KEY environment variable. |
 | `timeout_secs` | Request Timeout | Maximum seconds to wait for a search/contents response. |
 
+## Network
+
+Reaches `api.exa.ai` only.
+
 ## License
 
 MIT — see `LICENSE`.

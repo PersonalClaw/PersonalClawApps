@@ -73,6 +73,11 @@ _SERVICE = "s3"
 #: trades round trips against response size.
 _LIST_PAGE_SIZE = 1000
 
+#: S3's codes for the 409 it answers a conditional write with while another conditional write
+#: to the same key is still in progress. That is not "already present" (a 412): the key may not
+#: exist yet, so the write is tried again. ``""`` is a 409 that came with no S3 error body.
+_WRITE_IN_PROGRESS = ("ConditionalRequestConflict", "OperationAborted", "")
+
 
 def _utcnow() -> datetime:
     """Current UTC time. Separate function so a test can pin the signing timestamp."""
@@ -380,11 +385,18 @@ class S3SyncProvider(SyncTransportProvider):
             f"is running and reachable from this machine, and the settings {_ON_CARD}."
         )
 
-    def _store_refused(self, status: int, code: str) -> str:
-        """What a store's non-2xx answer to a write means, and what to do — by S3's own error
-        ``code`` where that pins the fix to one setting, else by the status's class. The
-        sentence alone: the caller says whether the cycle retries, and adds the store's words."""
+    def _store_refused(self, status: int, code: str, *, probe: bool = False) -> str:
+        """What a store's non-2xx answer means, and what to do — by S3's own error ``code``
+        where that pins the fix to one setting, else by the status's class. ``probe`` is the
+        connection test's zero-key listing rather than a push's write. The sentence alone: the
+        caller says whether the cycle retries, and adds the store's words."""
         endpoint, bucket = self._endpoint, self._bucket
+        request = "request" if probe else "write"
+        if status == 409 and not probe and code in _WRITE_IN_PROGRESS:
+            return (
+                f"The store at {endpoint} was still busy with another conditional write to the "
+                "same object when S3 Sync's write arrived, so it turned this one away."
+            )
         if code == "InvalidAccessKeyId":
             return (
                 f"The store at {endpoint} doesn't recognise the access key ID S3 Sync signs with. "
@@ -419,21 +431,23 @@ class S3SyncProvider(SyncTransportProvider):
                 f"{_ON_CARD} to one that exists."
             )
         if code == "RequestTimeout" or status == 408:
+            what = "request" if probe else "upload"
             return (
-                f"The store at {endpoint} gave up waiting for S3 Sync's upload to arrive. If it "
+                f"The store at {endpoint} gave up waiting for S3 Sync's {what} to arrive. If it "
                 "keeps happening, check this machine's connection to the store."
             )
         if status in (429, 503):
             return (
-                f"The store at {endpoint} was too busy to take S3 Sync's write — it is limiting "
-                "how fast it takes requests. If it keeps happening, check the store's load and any "
-                "request limits on the bucket."
+                f"The store at {endpoint} was too busy to take S3 Sync's {request} — it is "
+                "limiting how fast it takes requests. If it keeps happening, check the store's "
+                "load and any request limits on the bucket."
             )
         if status in (401, 403):
+            may = "list" if probe else "write objects to"
             return (
-                f"The store at {endpoint} refused S3 Sync's write to bucket {bucket}. Check Access "
-                f"key ID and Secret access key {_ON_CARD}, and that the key's policy lets it write "
-                "objects to that bucket."
+                f"The store at {endpoint} refused S3 Sync's {request} to bucket {bucket}. Check "
+                f"Access key ID and Secret access key {_ON_CARD}, and that the key's policy lets "
+                f"it {may} that bucket."
             )
         if status == 404:
             return (
@@ -442,6 +456,11 @@ class S3SyncProvider(SyncTransportProvider):
                 f"Endpoint URL {_ON_CARD}."
             )
         if status == 501:
+            if probe:
+                return (
+                    f"The store at {endpoint} doesn't support ListObjectsV2, the listing S3 Sync "
+                    "reads the bucket with. Use a store, or a version of it, that supports it."
+                )
             return (
                 f"The store at {endpoint} doesn't support conditional writes (If-None-Match), "
                 "which S3 Sync relies on to never overwrite an object. Use a store, or a version "
@@ -449,18 +468,18 @@ class S3SyncProvider(SyncTransportProvider):
             )
         if 300 <= status < 400:
             return (
-                f"The store at {endpoint} redirected S3 Sync's write — usually because bucket "
+                f"The store at {endpoint} redirected S3 Sync's {request} — usually because bucket "
                 f"{bucket} is in another region, reached through a different endpoint. Set "
                 f"Endpoint URL {_ON_CARD} to the endpoint the store's answer names, and Region to "
                 "match."
             )
         if status >= 500:
             return (
-                f"The store at {endpoint} failed while handling S3 Sync's write. That trouble is "
-                "the store's own; if it keeps happening, check the store."
+                f"The store at {endpoint} failed while handling S3 Sync's {request}. That trouble "
+                "is the store's own; if it keeps happening, check the store."
             )
         return (
-            f"The store at {endpoint} refused S3 Sync's write. Check Endpoint URL, Bucket and "
+            f"The store at {endpoint} refused S3 Sync's {request}. Check Endpoint URL, Bucket and "
             f"Region {_ON_CARD}."
         )
 
@@ -494,8 +513,10 @@ class S3SyncProvider(SyncTransportProvider):
                     outcome=outcome,
                     detail=sentence_with_detail(sentence, e),
                 )
-            if resp.status in (412, 409):
-                # Already present — insert-only means this is a no-op, not a failure.
+            if resp.status == 412:
+                # Already present — insert-only means this is a no-op, not a failure. (A 409 is
+                # not: it says another conditional write to this key is still in progress, and
+                # the key may not exist at all — see ``_WRITE_IN_PROGRESS``.)
                 skipped += 1
                 continue
             if 200 <= resp.status < 300:
@@ -658,19 +679,15 @@ class S3SyncProvider(SyncTransportProvider):
                 detail=f"bucket reachable at {where}",
                 extra={"endpoint": self._endpoint, "region": self._region},
             )
-        if resp.status in (401, 403):
-            return ConnectionResult(
-                ok=False,
-                detail=(
-                    f"access denied (HTTP {resp.status}) — check the access key, its policy "
-                    f"for this bucket, and that the region ({self._region}) matches the bucket"
-                ),
-            )
-        if resp.status == 404:
-            return ConnectionResult(
-                ok=False, detail=f"bucket {self._bucket!r} not found at {self._endpoint}"
-            )
-        return ConnectionResult(ok=False, detail=f"unexpected response (HTTP {resp.status})")
+        # Said as a push's refusal is — by S3's own code, then the status — for the listing.
+        code, said = _store_error(resp.body)
+        return ConnectionResult(
+            ok=False,
+            detail=sentence_with_detail(
+                self._store_refused(resp.status, code, probe=True),
+                f"HTTP {resp.status} {said}".strip(),
+            ),
+        )
 
 
 def _outcome_for_status(status: int, code: str = "") -> str:
@@ -685,6 +702,8 @@ def _outcome_for_status(status: int, code: str = "") -> str:
     """
     if code == "RequestTimeout" or status in (307, 408, 429):
         return "transient"
+    if status == 409 and code in _WRITE_IN_PROGRESS:
+        return "transient"  # another conditional write to the key, still in progress
     return "transient" if status >= 500 and status != 501 else "permanent"
 
 

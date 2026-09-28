@@ -883,6 +883,146 @@ class TestWhatAFailureSays:
         ), res.detail
 
 
+# ── a pull whose rsync run fails ─────────────────────────────────────────────────────
+#
+# pull returned [] for every rsync run that failed — a timeout, rsync that couldn't start, an
+# exit with an error — which reads as a remote with nothing on it. The sync cycle then took an
+# empty registry, published as though this were the first machine, and reported its registry
+# swap lost five times over, to no other machine. Now the run's failure is raised, said as what
+# went wrong, and the cycle records it.
+
+
+class TestAPullThatFails:
+    @needs_rsync
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root reads an unreadable file anyway")
+    def test_the_sync_cycle_names_the_failure_not_a_lost_race(
+        self, isolated_home, local, target, monkeypatch
+    ):
+        """Driven for real: the registry on the target can't be read by this account — another
+        machine's login wrote it — so the listing works and the pull fails. The cycle reported
+        "registry CAS lost after 5 attempts", with no error."""
+        registry = target / "registry.json"
+        registry.write_bytes(b"{}")
+        registry.chmod(0o000)
+        try:
+            report = _run_cycle(local, isolated_home, monkeypatch, encrypt="off")
+        finally:
+            registry.chmod(0o644)
+
+        assert report.ok is False
+        assert report.error.startswith(
+            f"pull: The sync root path {target} on this machine doesn't let PersonalClaw read or "
+            f"write it. Fix that folder's permissions, or set Sync root path {ON_CARD} to one "
+            "PersonalClaw can write to. Details: "
+        ), report.error
+        assert report.pushed is None, "the cycle pushed on after a read it couldn't make"
+
+    def test_a_pull_that_times_out_raises_what_to_check(self, tmp_path, monkeypatch):
+        def slow(*a, **k):
+            raise subprocess.TimeoutExpired(cmd="rsync", timeout=300)
+
+        monkeypatch.setattr(provider_mod.subprocess, "run", slow)
+        p = create_provider({**REMOTE, "staging_dir": str(tmp_path)})
+
+        with pytest.raises(Exception) as caught:
+            p.pull([RemoteRef("registry.json")])
+
+        assert str(caught.value) == (
+            f"rsync didn't finish within 300 seconds. If it keeps happening, check that {SSH} "
+            "logs in from a terminal here — a host that doesn't answer keeps rsync waiting — or, "
+            f"for a slow link, raise Command timeout {ON_CARD}. Details: Command 'rsync' timed "
+            "out after 300 seconds"
+        )
+        assert isinstance(caught.value.__cause__, subprocess.TimeoutExpired)
+
+    def test_a_pull_rsync_cannot_start_for_raises_what_to_install(self, tmp_path):
+        """Driven through a real exec of a binary that cannot exist."""
+        p = RsyncSyncProvider(
+            path=str(tmp_path / "t"),
+            staging_dir=str(tmp_path / "s"),
+            rsync_bin="/nonexistent/pc-fixture-rsync",
+        )
+
+        with pytest.raises(Exception) as caught:
+            p.pull([RemoteRef("registry.json")])
+
+        assert str(caught.value) == (
+            "Rsync Sync runs the rsync command, and PersonalClaw couldn't start it on this "
+            "machine: it isn't installed, isn't on the PATH PersonalClaw runs with, or isn't "
+            "executable. Install rsync where PersonalClaw can run it. Details: [Errno 2] No such "
+            "file or directory: '/nonexistent/pc-fixture-rsync'"
+        )
+
+    @pytest.mark.parametrize(("code", "stderr", "says"), _REFUSALS)
+    def test_a_pull_the_host_refuses_raises_the_same_words(
+        self, tmp_path, monkeypatch, code, stderr, says
+    ):
+        monkeypatch.setattr(provider_mod.subprocess, "run", _answering(code, stderr))
+        p = create_provider({**REMOTE, "staging_dir": str(tmp_path)})
+
+        with pytest.raises(Exception) as caught:
+            p.pull([RemoteRef("registry.json")])
+
+        assert str(caught.value) == f"{says} Details: {' '.join(stderr.split())}"
+
+    @pytest.mark.parametrize(
+        ("error", "says"),
+        [
+            (
+                "mkstemp \"{mirror}/.registry.json.Xy12Ab\" failed: Permission denied (13)",
+                "Rsync Sync isn't allowed to write to its local working directory {workdir}. Fix "
+                "that folder's permissions, or set Local working directory {on_card} to a folder "
+                "PersonalClaw can write to.",
+            ),
+            (
+                "write failed on \"{mirror}/registry.json\": No space left on device (28)",
+                "The disk holding Rsync Sync's local working directory {workdir} is full. Free "
+                "some space on it, or set Local working directory {on_card} to a folder on "
+                "another disk.",
+            ),
+            (
+                "mkstemp \"{mirror}/.registry.json.Xy12Ab\" failed: Read-only file system (30)",
+                "Rsync Sync's local working directory {workdir} is on a read-only disk. Set Local "
+                "working directory {on_card} to a folder PersonalClaw can write to.",
+            ),
+        ],
+        ids=["denied", "disk-full", "read-only"],
+    )
+    def test_a_pull_the_mirror_refuses_names_the_working_directory(
+        self, tmp_path, monkeypatch, error, says
+    ):
+        """In a pull the receiving side is this machine's own mirror: its refusal is the Local
+        working directory's, not the sync root's."""
+        workdir = tmp_path / "work"
+        p = create_provider({**REMOTE, "staging_dir": str(workdir)})
+        stderr = f"rsync: [receiver] {error.format(mirror=p._mirror)}\n"
+        monkeypatch.setattr(provider_mod.subprocess, "run", _answering(23, stderr))
+
+        with pytest.raises(Exception) as caught:
+            p.pull([RemoteRef("registry.json")])
+
+        expected = says.format(workdir=workdir, on_card=ON_CARD)
+        assert str(caught.value).startswith(f"{expected} Details: "), caught.value
+
+    def test_files_that_vanished_mid_pull_leave_the_rest(self, tmp_path, monkeypatch):
+        """rsync's exit 24: files that vanished while it copied, as when another machine
+        rewrites the registry through a temporary file. What arrived is kept; a ref that didn't
+        drops like any ref the target no longer has."""
+        p = create_provider({"path": str(tmp_path / "t"), "staging_dir": str(tmp_path / "s")})
+        mirror = pathlib.Path(p._mirror)
+        mirror.mkdir(parents=True)
+        (mirror / "registry.json").write_bytes(b'{"seq":1}')
+        stderr = (
+            'file has vanished: "/t/.registry.json.Xy12Ab"\nrsync warning: some files vanished '
+            "before they could be transferred (code 24)\n"
+        )
+        monkeypatch.setattr(provider_mod.subprocess, "run", _answering(24, stderr))
+
+        out = p.pull([RemoteRef("registry.json"), RemoteRef("gone.jsonl")])
+
+        assert [(o.key, o.data) for o in out] == [("registry.json", b'{"seq":1}')]
+
+
 # ── 3. output parsing (the two formats this transport depends on) ─────────────────────
 
 
@@ -975,9 +1115,9 @@ class TestConfiguration:
         assert p.name == manifest["name"] == "rsync-sync"
         assert p.display_name == manifest["displayName"]
         assert manifest["provider"]["type"] == "sync"
-        # No network permission: this transport speaks through ssh/rsync, not the HTTP
-        # egress chokepoint, so claiming `network` would overstate what it reaches.
-        assert "network" not in manifest.get("permissions", {})
+        # Network: the rsync and ssh it starts reach the SSH host, so install consent says so
+        # even though nothing goes through the HTTP egress chokepoint.
+        assert manifest["permissions"]["network"] is True
 
     def test_every_manifest_setting_is_honoured_by_the_factory(self):
         manifest = json.loads(

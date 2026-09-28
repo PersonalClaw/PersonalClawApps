@@ -19,7 +19,7 @@ core, above it.
 
 1. **Create a private bucket.** Do not enable public access. Versioning is optional but
    recommended — it turns an accidental deletion into a recoverable one.
-2. **Create a least-privilege identity** for it. This app needs exactly four actions,
+2. **Create a least-privilege identity** for it. This app needs exactly three actions,
    scoped to your bucket and (if you set one) your prefix:
    `s3:PutObject`, `s3:GetObject`, `s3:ListBucket`, and nothing else. It never deletes, never
    changes an ACL, and never touches another bucket. Do not reuse an admin key.
@@ -131,20 +131,26 @@ to configure.
 A request that fails before the store answers says what went wrong and what to do — the store
 refused the connection or didn't answer, its host can't be found, its certificate isn't
 trusted, PersonalClaw won't use that endpoint — with the underlying error's own words after it.
-A write the store refuses says which setting to check for what S3 answered — an access key ID
-it doesn't recognise, a secret access key that doesn't match it, a clock too far off, an
-expired session token, the wrong region, a bucket that isn't there — with S3's error code and
-message after it. A refusal the store may lift by itself (it is busy, timed out, or failed)
-and a host that can't be found (DNS, or this machine offline) are retried on the next sync;
-a refusal that needs something changed says what, and keeps failing until it is.
+A write the store refuses — and the connection test's listing, the same way — says which
+setting to check for what S3 answered — an access key ID it doesn't recognise, a secret access
+key that doesn't match it, a clock too far off, an expired session token, the wrong region, a
+bucket that isn't there — with S3's error code and message after it. A refusal the store may
+lift by itself (it is busy, timed out, failed, or was still finishing another conditional write
+to the same object) and a host that can't be found (DNS, or this machine offline) are retried
+on the next sync; a refusal that needs something changed says what, and keeps failing until it
+is.
 
 | Symptom | Cause |
 |---|---|
-| `access denied (HTTP 403)` | Wrong key, a bucket policy that does not grant the four actions, or a **region mismatch** — SigV4 binds the signature to the region, so a wrong region reads as an auth failure. |
-| `bucket ... not found` | Typo in the bucket, or an endpoint in a different region than the bucket. |
+| "refused S3 Sync's request" or "…write" (`HTTP 403`) | Wrong key, or a bucket policy that does not grant the three actions. A **region mismatch** can read as an auth failure too, since SigV4 binds the signature to the region; where the store says so, the message names Region instead. |
+| "There is no bucket named …", or "answered \"not found\"" | Typo in the bucket, or an endpoint that isn't the store's S3 API. |
 | "PersonalClaw's network egress rules stopped a request", or "won't use … as a sync endpoint" | The endpoint is not an `http://` or `https://` address with a host, its host is on your `security.egress` deny list (Denied hosts, under Settings → Security → Network egress), or the store redirected off the pinned host — refused by design. |
 | Sync stalls with no error | Registry CAS is losing every race — usually a store without conditional-write support. |
 | "doesn't support conditional writes" on push (`HTTP 501`) | Same cause: the store rejected the conditional header. |
+
+## Network
+
+Reaches only the S3 store you set in **Endpoint URL**; with it empty, it reaches nothing.
 
 ## License
 

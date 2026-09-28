@@ -1,6 +1,6 @@
 {
   "name": "anthropic-models",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "displayName": "Anthropic",
   "description": "Anthropic Claude chat models (Messages API). Bring your own Anthropic API key.",
   "icon": "Sparkles",
@@ -16,6 +16,9 @@
     "pythonDependencies": [
       "anthropic>=0.20,<1"
     ]
+  },
+  "permissions": {
+    "network": true
   },
   "provider": {
     "type": "model",

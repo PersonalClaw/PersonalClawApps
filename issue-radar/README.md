@@ -9,8 +9,8 @@ suggestion — and ranks the queue by what actually costs you: unlabeled, unassi
 quiet, or carrying a security signal. Whatever you find while digging into an issue is
 appended to that issue's note log on your machine.
 
-Nothing is ever labeled, commented on or closed. The app has no write path to a tracker
-and no network permission with which to invent one.
+Nothing is ever labeled, commented on or closed. The app has no write path to a tracker:
+it opens no connection of its own, and every command it gives `gh` or `glab` only lists.
 
 **Issue Radar** is a **tool provider** — it implements the `personalclaw.sdk.tool`
 `ToolProvider` contract and its four tools appear on the agent tool layer.
@@ -194,7 +194,7 @@ at the boundary, and never let untrusted text forge a log record):
 | Permission | Why |
 |---|---|
 | `storage` | sweeps and investigation notes live under the app's own data dir |
-| `network` | declared **false** — the app opens no connection of its own; trackers are reached only through your already-authenticated CLIs |
+| `network` | declared **true** — the app opens no connection of its own, but the already-authenticated `gh` / `glab` it starts reach GitHub or GitLab |
 
 No `cron`, no `agent`, no `api`. That is the whole declaration.
 
@@ -276,6 +276,10 @@ Stated plainly, because the difference matters.
   here, and deliberately not part of this PR.
 
 None of these are faked or asserted as done anywhere in this bundle.
+
+## Network
+
+Reaches GitHub or GitLab through your `gh` or `glab` CLI: `github.com` or `gitlab.com`, or the host each is signed in to.
 
 ## License
 

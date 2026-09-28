@@ -121,6 +121,21 @@ class WorkdirUnusable(OSError):
         self.failure = failure
 
 
+class RsyncFailed(RuntimeError):
+    """An rsync run a read needed that didn't complete — it timed out, couldn't start, or ended
+    with an error — said as what is wrong and what to do, then rsync's (or ssh's) own words.
+
+    ``pull`` raises it, having no outcome to carry a sentence. Returning nothing instead read as
+    a remote with nothing on it: the sync cycle took an empty registry, published as if this
+    were the first machine, and reported its registry swap lost five times over — to no other
+    machine at all. Raised, the cycle records the read as its failure, in this text.
+    """
+
+    def __init__(self, sentence: str, words: object) -> None:
+        super().__init__(sentence_with_detail(sentence, words))
+        self.sentence = sentence
+
+
 def validate_host(host: str) -> str:
     """Return ``host`` if it is a safe ssh destination, else raise.
 
@@ -283,46 +298,61 @@ class RsyncSyncProvider(SyncTransportProvider):
         return " ".join([*parts, self._host])
 
     def _cannot_start(self, failure: OSError) -> str:
-        """What rsync not starting on this machine at all says."""
+        """What rsync not starting on this machine at all says, with the error's own words."""
+        return sentence_with_detail(self._not_started(failure), failure)
+
+    def _not_started(self, failure: OSError) -> str:
+        """The sentence alone for rsync not starting on this machine at all."""
         if (
             isinstance(failure, (FileNotFoundError, PermissionError))
             and failure.filename == self._rsync
         ):
-            sentence = (
+            return (
                 "Rsync Sync runs the rsync command, and PersonalClaw couldn't start it on this "
                 "machine: it isn't installed, isn't on the PATH PersonalClaw runs with, or isn't "
                 "executable. Install rsync where PersonalClaw can run it."
             )
-        else:
-            sentence = (
-                "Rsync Sync couldn't start rsync on this machine. Check that rsync runs from a "
-                "terminal here."
-            )
-        return sentence_with_detail(sentence, failure)
+        return (
+            "Rsync Sync couldn't start rsync on this machine. Check that rsync runs from a "
+            "terminal here."
+        )
 
     def _workdir_unusable(self, failure: OSError) -> str:
         """What this machine's Local working directory refusing a write says. The sentence
         alone: the caller says whether the cycle retries, and adds the filesystem's words, which
         name the exact path."""
+        if failure.errno == errno.ENOSPC:
+            return self._workdir_says("full")
+        if failure.errno == errno.EROFS:
+            return self._workdir_says("read-only")
+        if isinstance(failure, PermissionError):
+            return self._workdir_says("denied")
+        if isinstance(failure, (FileExistsError, NotADirectoryError)):
+            return self._workdir_says("in-the-way")
+        return self._workdir_says("")
+
+    def _workdir_says(self, trouble: str) -> str:
+        """The Local working directory's sentence for ``trouble`` (``full``, ``read-only``,
+        ``denied``, ``in-the-way``, or ``""`` for anything else)."""
         where = self._staging_root
         setting = f"Local working directory {_ON_CARD}"
-        if failure.errno == errno.ENOSPC:
+        if trouble == "full":
             return (
                 f"The disk holding Rsync Sync's local working directory {where} is full. Free "
                 f"some space on it, or set {setting} to a folder on another disk."
             )
-        if failure.errno == errno.EROFS:
+        if trouble == "read-only":
             return (
                 f"Rsync Sync's local working directory {where} is on a read-only disk. Set "
                 f"{setting} to a folder PersonalClaw can write to."
             )
-        if isinstance(failure, PermissionError):
+        if trouble == "denied":
             return (
                 f"Rsync Sync isn't allowed to write to its local working directory {where}. Fix "
                 f"that folder's permissions, or set {setting} to a folder PersonalClaw can write "
                 "to."
             )
-        if isinstance(failure, (FileExistsError, NotADirectoryError)):
+        if trouble == "in-the-way":
             return (
                 f"Rsync Sync couldn't create its local working directory {where}, or a folder in "
                 f"it, because a file is in the way. Move that file, or set {setting} to another "
@@ -332,6 +362,23 @@ class RsyncSyncProvider(SyncTransportProvider):
             f"Rsync Sync couldn't use its local working directory {where}. Check that folder, or "
             f"set {setting} to another one."
         )
+
+    def _pull_refused(self, proc: subprocess.CompletedProcess) -> str:
+        """What a pull that rsync ended with an error says. A pull's receiving side is this
+        machine's own mirror, under the Local working directory, so an error naming the mirror
+        is that folder's — its disk full, read-only, or not writable. Anything else is the
+        target's, or the ssh under rsync, said as for any run."""
+        words = _words(proc)
+        if self._mirror not in words:
+            return self._refused(proc)
+        low = words.lower()
+        if "no space left on device" in low:
+            return self._workdir_says("full")
+        if "read-only file system" in low:
+            return self._workdir_says("read-only")
+        if "permission denied" in low:
+            return self._workdir_says("denied")
+        return self._workdir_says("")
 
     def _stage(self, prefix: str) -> str:
         """A fresh staging folder under the Local working directory."""
@@ -539,12 +586,19 @@ class RsyncSyncProvider(SyncTransportProvider):
             # what to fix, for the cycle to report.
             raise WorkdirUnusable(self._workdir_unusable(e), e) from e
         args = ["-rt", *self._rsh_arg(), "--", self._target(), f"{mirror}/"]
+        # A run that fails is not an empty remote: raised, said as what went wrong, for the
+        # cycle to record — see :class:`RsyncFailed`.
         try:
             proc = self._run(args)
-        except (subprocess.TimeoutExpired, OSError):
-            return []
-        if proc.returncode != 0:
-            return []
+        except subprocess.TimeoutExpired as e:
+            raise RsyncFailed(self._timed_out(), e) from e
+        except OSError as e:
+            raise RsyncFailed(self._not_started(e), e) from e
+        # 24 is rsync's "some files vanished before they could be transferred" — another
+        # machine rewriting the registry through a temporary file while this one copied. The
+        # rest arrived, and a ref that didn't is dropped below like any the target no longer has.
+        if proc.returncode not in (0, 24):
+            raise RsyncFailed(self._pull_refused(proc), _words(proc))
         out: list[SyncObject] = []
         for ref in refs:
             local = os.path.join(mirror, *ref.key.split("/"))

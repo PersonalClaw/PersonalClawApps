@@ -26,6 +26,7 @@ import contextlib
 import errno
 import hashlib
 import os
+import re
 import subprocess
 from typing import Any
 
@@ -121,9 +122,31 @@ _NO_REPOSITORY = (
     "not found",
 )
 _RULES = ("hook declined", "protected branch", "not allowed to push")
+# What the remote says when it turns a push away for good for a reason of its own — each said
+# as what it is, with its own next step, and none of them changed by trying again: a repository
+# with the branch checked out in a working tree (not a bare one), a push from a shallow clone,
+# a repository it can't write the objects into, and a branch name it won't take.
+_CHECKED_OUT = ("branch is currently checked out", "refusing to update checked out branch")
+_SHALLOW = ("shallow update not allowed",)
+_CANT_STORE = (
+    "unpacker error",
+    "unpack failed",
+    "unable to migrate objects to permanent storage",
+    "insufficient permission for adding an object",
+    "unable to create temporary object directory",
+)
+_FUNNY_REF = ("funny ref",)
+# What the remote says when the branch's ref lock is taken — another push landing at that moment,
+# or a lock file an interrupted one left behind: retried, like a lost race.
+_LOCKED = ("cannot lock ref", "failed to lock")
 # What ``git push`` prints (untranslated) when the remote has commits this clone doesn't: a lost
 # race, which a catch-up and another push recover from.
 _RACE = ("fetch first", "non-fast-forward")
+#: The refusals above that no retry changes, by the name ``_refusal`` gives each.
+_FINAL = ("rules", "checked-out", "shallow", "cant-store", "funny-ref")
+#: What git never allows in a ref name (``git check-ref-format``): a control character, space,
+#: or one of ``~ ^ : ? * [ \``.
+_REF_FORBIDDEN = re.compile(r"[\x00-\x20\x7f~^:?*\[\\]")
 # ``git status --porcelain``'s states for a path a stopped rebase couldn't merge.
 _UNMERGED = ("DD", "AU", "UD", "UA", "DU", "AA", "UU")
 # What git prints when the working clone's own folder refuses it.
@@ -199,6 +222,32 @@ def _remote_wins(state: str, path: str) -> bool:
     return state == "AA" or path == _REGISTRY_KEY
 
 
+def _valid_branch(name: str) -> bool:
+    """Whether git takes ``name`` as a branch name, by ``git check-ref-format --branch``'s rules:
+    no leading ``-``, not ``HEAD``, none of the forbidden characters, no ``..`` or ``@{``, no
+    trailing ``.``, and no empty part, part starting with ``.`` or part ending in ``.lock``."""
+    if not name or name.startswith("-") or name == "HEAD":
+        return False
+    if _REF_FORBIDDEN.search(name) or ".." in name or "@{" in name or name.endswith("."):
+        return False
+    return all(
+        part and not part.startswith(".") and not part.endswith(".lock")
+        for part in name.split("/")
+    )
+
+
+def _branch_refusal(branch: str) -> str:
+    """What a Branch git won't take as a branch name says, or ``""``. Checked before any git step
+    runs: git itself says only ``invalid refspec``, at the push, after the objects were committed
+    to whatever branch the clone had checked out."""
+    if _valid_branch(branch):
+        return ""
+    return (
+        f"Git Sync can't sync on '{branch}': git doesn't accept that as a branch name. Set Branch "
+        f"{_ON_CARD} to one it does, such as main."
+    )
+
+
 def _git_unrunnable(failure: BaseException) -> bool:
     """Whether ``failure`` is this machine not being able to start the git executable at all."""
     return isinstance(failure, (FileNotFoundError, PermissionError)) and failure.filename == "git"
@@ -240,10 +289,12 @@ class GitSyncProvider(SyncTransportProvider):
 
     @property
     def _refused(self) -> str:
-        """Why the configured remote is refused (a local path, ``ext::``, ``git://``), and what to
-        use instead; ``""`` for an ssh or https remote. Said before git runs, so the owner reads
-        it beside the setting rather than as git's ``transport 'file' not allowed``."""
-        return remote_refusal(self._repo_url)
+        """Why these settings can't be used, and what to set instead; ``""`` when they can. The
+        configured remote may be one PersonalClaw's git doesn't reach (a local path, ``ext::``,
+        ``git://``), or the Branch one git won't take as a branch name. Said before git runs, so
+        the owner reads it beside the setting rather than as git's ``transport 'file' not
+        allowed`` or ``invalid refspec``."""
+        return remote_refusal(self._repo_url) or _branch_refusal(self._branch)
 
     def _resolve(self, key: str) -> str:
         """Map a remote-relative posix key to an absolute path inside the working clone."""
@@ -306,7 +357,8 @@ class GitSyncProvider(SyncTransportProvider):
     def _rebasing(self) -> bool:
         """Whether a rebase is stopped part-way in the working clone."""
         git_dir = os.path.join(self._clone, ".git")
-        return any(os.path.isdir(os.path.join(git_dir, d)) for d in ("rebase-merge", "rebase-apply"))
+        states = ("rebase-merge", "rebase-apply")
+        return any(os.path.isdir(os.path.join(git_dir, state)) for state in states)
 
     def _catch_up(self) -> str:
         """Bring the working clone level with the remote's branch: fetch it, then replay this
@@ -481,30 +533,40 @@ class GitSyncProvider(SyncTransportProvider):
 
     @staticmethod
     def _refusal(cp: subprocess.CompletedProcess) -> str:
-        """What kind of "no" a failed ``git push`` got: ``"rules"`` when the remote's own rules
-        (a hook, branch protection) turned it away, ``"race"`` when the remote has commits this
-        clone doesn't, else ``""``. The rules come first: a declined push is no race, however
-        its words read, and pushing it again after a catch-up would be declined again."""
+        """What kind of "no" a failed ``git push`` got, else ``""``. Final ones first — the
+        remote's rules (a hook, branch protection), a checked-out branch, a shallow clone, a
+        repository that can't store the push, a branch name it won't take — since a push turned
+        away for any of them is no race, however its words read. Then the retried ones: the
+        branch's ref lock taken (``"locked"``), and the remote having commits this clone doesn't
+        (``"race"``)."""
         low = f"{cp.stderr or ''}\n{cp.stdout or ''}".lower()
-        if any(needle in low for needle in _RULES):
-            return "rules"
-        if any(needle in low for needle in _RACE):
-            return "race"
+        for kind, needles in (
+            ("rules", _RULES),
+            ("checked-out", _CHECKED_OUT),
+            ("shallow", _SHALLOW),
+            ("cant-store", _CANT_STORE),
+            ("funny-ref", _FUNNY_REF),
+            ("locked", _LOCKED),
+            ("race", _RACE),
+        ):
+            if any(needle in low for needle in needles):
+                return kind
         return ""
 
     @classmethod
     def _push_outcome(cls, cp: subprocess.CompletedProcess) -> str:
-        """Classify a failed ``git push`` for the outbox. The remote's rules refusing it will
-        not change on a retry, so that is ``permanent``, like a bad URL or denied auth. A race
-        still lost after every catch-up, the network, or a refusal the remote may lift (its ref
-        lock busy with a push landing that same moment) is ``transient``: the cycle tries again."""
+        """Classify a failed ``git push`` for the outbox. A refusal no retry changes — the
+        remote's rules, a checked-out branch, a shallow clone, a repository that can't store the
+        push, a branch name it won't take — is ``permanent``, like a bad URL or denied auth. A
+        race still lost after every catch-up, a ref lock still taken, the network, or another
+        refusal the remote may lift is ``transient``: the cycle tries again."""
         refusal = cls._refusal(cp)
-        if refusal == "rules" or transport_refusal(_words(cp)):
+        if refusal in _FINAL or transport_refusal(_words(cp)):
             # A remote PersonalClaw's git does not reach (a local path) is refused the same way
             # on every try.
             return "permanent"
         low = f"{cp.stderr or ''}\n{cp.stdout or ''}".lower()
-        if refusal == "race" or "rejected" in low or any(n in low for n in _UNREACHABLE):
+        if refusal or "rejected" in low or any(n in low for n in _UNREACHABLE):
             return "transient"
         return "permanent"
 
@@ -519,11 +581,44 @@ class GitSyncProvider(SyncTransportProvider):
             return sentence_with_detail(refused, words)
         trouble = _remote_trouble(words)
         refusal = self._refusal(cp)
+        branch = self._branch
         if refusal == "rules":
             sentence = (
                 "Git Sync couldn't push to the git remote: its rules don't let this machine push "
-                f"to branch '{self._branch}'. Allow that on the remote, or set Branch "
+                f"to branch '{branch}'. Allow that on the remote, or set Branch "
                 f"{_ON_CARD} to one that does."
+            )
+        elif refusal == "checked-out":
+            sentence = (
+                "Git Sync couldn't push to the git remote: it is a repository with a working tree "
+                f"that has branch '{branch}' checked out, and git won't push into a checked-out "
+                f"branch. Point Git remote URL {_ON_CARD} at a bare repository (one made with "
+                "git init --bare), or set Branch to one that isn't checked out there."
+            )
+        elif refusal == "shallow":
+            sentence = (
+                f"Git Sync couldn't push to the git remote: the working clone at {self._clone} is "
+                "shallow — it holds only part of its history — and the remote won't take a push "
+                "from a shallow clone. If nothing there needs keeping, delete that folder, and "
+                "Git Sync clones the remote in full on its next run."
+            )
+        elif refusal == "cant-store":
+            sentence = (
+                "Git Sync couldn't push to the git remote: the remote couldn't store what this "
+                "machine sent — the repository there isn't writable by the account this machine "
+                "pushes as, or the disk it is on is full. Fix that on the remote."
+            )
+        elif refusal == "funny-ref":
+            sentence = (
+                f"Git Sync couldn't push to the git remote: it won't take '{branch}' as the name "
+                f"of a branch. Set Branch {_ON_CARD} to a name it accepts, such as main."
+            )
+        elif refusal == "locked":
+            sentence = (
+                f"Git Sync couldn't push to the git remote: branch '{branch}' there was still "
+                f"locked by another git process after {_PUSH_TRIES} tries — a push landing at the "
+                f"same moment, or an interrupted one that left refs/heads/{branch}.lock behind. If "
+                "it keeps happening, remove that file in the remote repository."
             )
         elif refusal == "race":
             sentence = (
@@ -712,10 +807,11 @@ class GitSyncProvider(SyncTransportProvider):
                         pushed = self._landed(written, base)
                         skipped = len(objects) - pushed
                     return PushResult(pushed=pushed, skipped=skipped, outcome="delivered")
-                if attempt == _PUSH_TRIES or self._refusal(push_cp) != "race":
+                if attempt == _PUSH_TRIES or self._refusal(push_cp) not in ("race", "locked"):
                     break
-                # Lost the race: another machine pushed between the catch-up and this push. Catch
-                # up again — this commit goes on top of theirs — and push once more.
+                # Lost the race: another machine pushed between the catch-up and this push (or
+                # was pushing at that moment, holding the branch's lock). Catch up again — this
+                # commit goes on top of theirs — and push once more.
                 conflict = self._catch_up()
                 if conflict:
                     return PushResult(pushed=pushed, skipped=skipped, outcome="permanent",

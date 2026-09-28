@@ -409,6 +409,8 @@ class _StubS3(http.server.BaseHTTPRequestHandler):
             return self._send(403, b"<Error><Code>AccessDenied</Code></Error>")
         _bucket, key, q = self._split()
         if not key and "list-type" in q:
+            if self.server.list_answer is not None:  # type: ignore[attr-defined]
+                return self._send(*self.server.list_answer)  # type: ignore[attr-defined]
             return self._list(q)
         if key not in self.store:
             return self._send(404, b"<Error><Code>NoSuchKey</Code></Error>")
@@ -451,6 +453,8 @@ class _StubServer(http.server.ThreadingHTTPServer):
         self.wire_bodies: list[tuple[str, bytes]] = []
         #: ``(status, body)`` every PUT is answered with instead, when set — a store refusing.
         self.put_answer: tuple[int, bytes] | None = None
+        #: The same for every bucket listing — the connection test's request.
+        self.list_answer: tuple[int, bytes] | None = None
 
     @property
     def endpoint(self) -> str:
@@ -705,6 +709,10 @@ class TestConnection:
         assert r.extra.get("region") == REGION
 
     def test_test_reports_access_denied(self, live, monkeypatch):
+        """A bare 403. "access denied (HTTP 403) — check the access key, its policy for this
+        bucket, and that the region (us-east-1) matches the bucket" was the whole message: no
+        card to go to, and nothing of what the store said."""
+
         class Resp:
             status = 403
             body = b""
@@ -714,8 +722,11 @@ class TestConnection:
         monkeypatch.setattr(provider_mod.S3SyncProvider, "_request", lambda *a, **k: Resp())
         r = live.test()
         assert r.ok is False
-        assert "access denied" in r.detail
-        assert REGION in r.detail  # the region mismatch is the usual cause; name it
+        assert r.detail == (
+            f"The store at {live._endpoint} refused S3 Sync's request to bucket mybucket. Check "
+            f"Access key ID and Secret access key {ON_CARD}, and that the key's policy lets it "
+            "list that bucket. Details: HTTP 403"
+        )
 
     def test_test_never_raises(self, live, monkeypatch):
         def boom(*a, **k):
@@ -933,6 +944,122 @@ _STORE_REFUSALS = [
         "permanent",
         "MethodNotAllowed — The specified method is not allowed against this resource.",
     ),
+    (
+        409,
+        _s3_error("ConditionalRequestConflict", "A conflicting conditional operation is "
+                  "currently in progress against this resource."),
+        lambda e: f"The store at {e} was still busy with another conditional write to the same "
+        "object when S3 Sync's write arrived, so it turned this one away.",
+        "transient",
+        "ConditionalRequestConflict — A conflicting conditional operation is currently in "
+        "progress against this resource.",
+    ),
+]
+
+#: What each store refusal of the connection test's zero-key listing says, and the store's
+#: words. Each used to be "access denied (HTTP <status>) — check the access key, …", "bucket …
+#: not found at …" or "unexpected response (HTTP <status>)": no card named, S3's words dropped.
+_PROBE_REFUSALS = [
+    (
+        403,
+        _s3_error("InvalidAccessKeyId", "The Access Key Id you provided does not exist in our "
+                  "records."),
+        lambda e: f"The store at {e} doesn't recognise the access key ID S3 Sync signs with. "
+        f"Check Access key ID {ON_CARD}.",
+        "InvalidAccessKeyId — The Access Key Id you provided does not exist in our records.",
+    ),
+    (
+        403,
+        _s3_error("SignatureDoesNotMatch", "The request signature we calculated does not match "
+                  "the signature you provided."),
+        lambda e: f"The store at {e} didn't accept S3 Sync's request signature, which usually "
+        "means the secret access key doesn't belong to the access key ID. Check Secret access "
+        f"key {ON_CARD}.",
+        "SignatureDoesNotMatch — The request signature we calculated does not match the "
+        "signature you provided.",
+    ),
+    (
+        403,
+        _s3_error("AccessDenied", "Access Denied"),
+        lambda e: f"The store at {e} refused S3 Sync's request to bucket mybucket. Check Access "
+        f"key ID and Secret access key {ON_CARD}, and that the key's policy lets it list that "
+        "bucket.",
+        "AccessDenied — Access Denied",
+    ),
+    (
+        403,
+        _s3_error("RequestTimeTooSkewed", "The difference between the request time and the "
+                  "server's time is too large."),
+        lambda e: f"The store at {e} refused S3 Sync's request because this machine's clock is too "
+        "far from the store's. Set this machine's clock to the correct time.",
+        "RequestTimeTooSkewed — The difference between the request time and the server's time is "
+        "too large.",
+    ),
+    (
+        400,
+        _s3_error("AuthorizationHeaderMalformed", "The authorization header is malformed; the "
+                  "region 'us-east-1' is wrong; expecting 'eu-west-1'", Region="eu-west-1"),
+        lambda e: f"The store at {e} expects requests for bucket mybucket signed for a different "
+        f"region than us-east-1. Set Region {ON_CARD} to the region the store's answer names.",
+        "AuthorizationHeaderMalformed (Region: eu-west-1) — The authorization header is malformed; "
+        "the region 'us-east-1' is wrong; expecting 'eu-west-1'",
+    ),
+    (
+        404,
+        _s3_error("NoSuchBucket", "The specified bucket does not exist"),
+        lambda e: f"There is no bucket named mybucket at {e}. Create it, or set Bucket {ON_CARD} "
+        "to one that exists.",
+        "NoSuchBucket — The specified bucket does not exist",
+    ),
+    (
+        404,
+        b"404 page not found",
+        lambda e: f'The store at {e} answered "not found" for bucket mybucket: the bucket doesn\'t '
+        "exist there, or Endpoint URL doesn't point at an S3 API. Check Bucket and Endpoint URL "
+        f"{ON_CARD}.",
+        "404 page not found",
+    ),
+    (
+        301,
+        _s3_error("PermanentRedirect", "The bucket you are attempting to access must be addressed "
+                  "using the specified endpoint.", Endpoint="mybucket.s3.eu-west-1.example.com"),
+        lambda e: f"The store at {e} redirected S3 Sync's request — usually because bucket "
+        "mybucket is in another region, reached through a different endpoint. Set Endpoint URL "
+        f"{ON_CARD} to the endpoint the store's answer names, and Region to match.",
+        "PermanentRedirect (Endpoint: mybucket.s3.eu-west-1.example.com) — The bucket you are "
+        "attempting to access must be addressed using the specified endpoint.",
+    ),
+    (
+        503,
+        _s3_error("SlowDown", "Please reduce your request rate."),
+        lambda e: f"The store at {e} was too busy to take S3 Sync's request — it is limiting how "
+        "fast it takes requests. If it keeps happening, check the store's load and any request "
+        "limits on the bucket.",
+        "SlowDown — Please reduce your request rate.",
+    ),
+    (
+        500,
+        _s3_error("InternalError", "We encountered an internal error. Please try again."),
+        lambda e: f"The store at {e} failed while handling S3 Sync's request. That trouble is the "
+        "store's own; if it keeps happening, check the store.",
+        "InternalError — We encountered an internal error. Please try again.",
+    ),
+    (
+        501,
+        _s3_error("NotImplemented", "A header you provided implies functionality that is not "
+                  "implemented"),
+        lambda e: f"The store at {e} doesn't support ListObjectsV2, the listing S3 Sync reads the "
+        "bucket with. Use a store, or a version of it, that supports it.",
+        "NotImplemented — A header you provided implies functionality that is not implemented",
+    ),
+    (
+        405,
+        _s3_error("MethodNotAllowed", "The specified method is not allowed against this "
+                  "resource."),
+        lambda e: f"The store at {e} refused S3 Sync's request. Check Endpoint URL, Bucket and "
+        f"Region {ON_CARD}.",
+        "MethodNotAllowed — The specified method is not allowed against this resource.",
+    ),
 ]
 
 
@@ -1037,6 +1164,7 @@ class TestWhatAFailureSays:
             "unknown-key-id", "wrong-secret", "access-denied", "clock-skew", "expired-token",
             "wrong-region", "no-such-bucket", "not-found-page", "redirect", "slow-down",
             "internal-error", "request-timeout", "no-conditional-writes", "method-not-allowed",
+            "write-in-progress",
         ],
     )
     def test_a_write_the_store_refuses_says_why_and_what_to_do(
@@ -1051,6 +1179,44 @@ class TestWhatAFailureSays:
         assert res.outcome == outcome
         retries = f" {RETRIES}" if outcome == "transient" else ""
         assert res.detail == f"{says(stub.endpoint)}{retries} Details: HTTP {status} {words}"
+
+    def test_a_write_still_in_progress_elsewhere_is_tried_again_not_counted_as_present(
+        self, stub, live
+    ):
+        """A 409 was counted as "already present" and skipped, so the push reported delivered
+        and the registry went on to announce an object the store may never have stored."""
+        stub.put_answer = (409, b"")
+
+        res = live.push([SyncObject(key="k", data=b"v")])
+
+        assert (res.outcome, res.pushed, res.skipped) == ("transient", 0, 0)
+        assert res.detail == (
+            f"The store at {stub.endpoint} was still busy with another conditional write to the "
+            f"same object when S3 Sync's write arrived, so it turned this one away. {RETRIES} "
+            "Details: HTTP 409"
+        )
+
+    @pytest.mark.parametrize(
+        ("status", "body", "says", "words"),
+        _PROBE_REFUSALS,
+        ids=[
+            "unknown-key-id", "wrong-secret", "access-denied", "clock-skew", "wrong-region",
+            "no-such-bucket", "not-found-page", "redirect", "slow-down", "internal-error",
+            "no-list-v2", "method-not-allowed",
+        ],
+    )
+    def test_a_probe_the_store_refuses_says_why_and_what_to_do(
+        self, stub, live, status, body, says, words
+    ):
+        """The connection test, driven through the real guard and HTTP client, against a store
+        that answers every listing with the refusal. It says what a push would — by S3's code,
+        then the status — for the listing it makes."""
+        stub.list_answer = (status, body)
+
+        res = live.test()
+
+        assert res.ok is False
+        assert res.detail == f"{says(stub.endpoint)} Details: HTTP {status} {words}"
 
     def test_a_store_that_is_not_running_says_so_and_that_it_retries(self):
         """Driven through the real guard and HTTP client, at a loopback port nothing listens

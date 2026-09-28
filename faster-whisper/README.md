@@ -44,6 +44,10 @@ home**. PersonalClaw only reads it: nothing is downloaded to, changed in or dele
 folder, so Delete removes the home's copy only, and the model's row says when it is read from
 there.
 
+## Network
+
+Downloads Whisper models from `huggingface.co` when you download one; transcribing runs on this machine.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

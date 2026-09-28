@@ -31,6 +31,10 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | `api_key` | Perplexity API Key | Your Perplexity API key (perplexity.ai). Leave empty to fall back to the PERPLEXITY_API_KEY environment variable. |
 | `timeout_secs` | Request Timeout | Maximum seconds to wait for a Sonar response (answer synthesis can take longer than a plain search). |
 
+## Network
+
+Reaches `api.perplexity.ai` only.
+
 ## License
 
 MIT — see `LICENSE`.

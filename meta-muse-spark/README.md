@@ -50,6 +50,10 @@ like any other app. (Or [install it from a shell](../docs/third-party-install.md
 | `default_model` | Default Model | A Meta AI model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 | `endpoint` | Base URL | Optional override of the Meta AI base URL. Empty uses https://api.meta.ai/v1. |
 
+## Network
+
+Reaches `api.meta.ai`, or the endpoint you set in **Base URL**.
+
 ## License
 
 MIT — see `LICENSE`.

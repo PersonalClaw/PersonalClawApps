@@ -70,6 +70,10 @@ CLI or the ACP protocol grows a surface for them. What is at parity, what is hos
 what is a constraint is written down per provider — with the CLI and adapter versions each verdict
 was measured against — in [the ACP parity statement](https://github.com/PersonalClaw/PersonalClaw/blob/main/docs/agents/acp-parity.md).
 
+## Network
+
+Runs Claude Code, which reaches Anthropic's service with the account it signs in to; its ACP adapter is installed from the npm registry when this computer doesn't have it.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

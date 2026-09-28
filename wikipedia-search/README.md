@@ -31,6 +31,10 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | `lang` | Language | Wikipedia language edition to search (e.g. en, de, fr, ja). |
 | `timeout_secs` | Request Timeout | Maximum seconds to wait for a search response. |
 
+## Network
+
+Reaches `<language>.wikipedia.org` for the language you set in **Language** (`en.wikipedia.org` by default).
+
 ## License
 
 MIT — see `LICENSE`.

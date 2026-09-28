@@ -63,6 +63,10 @@ From the App Store, add the `apps/` directory as a **local source**, then instal
 **Voice Clone TTS** — the install runs through the security scanner and lifecycle exactly
 like any other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).)
 
+## Network
+
+Downloads each voice engine's weights from its `huggingface.co` repository when you download it; speech is made on this machine.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).

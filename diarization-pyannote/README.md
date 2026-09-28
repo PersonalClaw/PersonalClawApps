@@ -40,6 +40,10 @@ Earlier releases kept them in the Hugging Face folder other tools share (`$HF_HO
 `~/.cache/huggingface`). That folder is not read any more, so a pipeline that is only there
 downloads once more, into the home.
 
+## Network
+
+Downloads the pyannote pipeline from `huggingface.co` when you download it; diarizing runs on this machine.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

@@ -32,6 +32,10 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 |---|---|---|
 | `api_key` | FAL API Key | Your FAL API key (fal.ai). Leave empty to fall back to the FAL_KEY / FAL_API_KEY environment variable. |
 
+## Network
+
+Reaches `queue.fal.run`, and the file URLs fal returns for the finished images and videos.
+
 ## License
 
 MIT — see `LICENSE`.

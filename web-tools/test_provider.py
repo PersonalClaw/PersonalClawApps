@@ -83,9 +83,20 @@ async def test_web_search_uses_bound_provider_for_use_case():
 
 @pytest.mark.asyncio
 async def test_web_search_no_provider_gives_recovery_hint():
+    # This said to "Enable SearXNG or Tavily in Settings → Providers", but search providers
+    # are Store apps, one registers only while its app is on, and one that is on is used
+    # whether or not it is chosen.
     res = await WebToolProvider().invoke("web_search", {"query": "q"})
     assert res.success is False
-    assert any("Settings" in h for h in res.recovery_hints)
+    assert res.error == (
+        "No search provider app is installed and turned on, so there is nothing to search with."
+    )
+    assert res.recovery_hints == [
+        "Install a search provider app from the Store on the Apps page, or turn on one you "
+        "already have there; if it asks for an API key or an endpoint, add it in Settings → "
+        "Providers. Once one is on, web_search uses it; to choose which one each kind of search "
+        "uses, go to Settings → Search."
+    ]
 
 
 @pytest.mark.asyncio

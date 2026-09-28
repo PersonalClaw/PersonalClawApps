@@ -34,6 +34,10 @@ because a plain Python child does not see app packages — else
 `~/piper-venv/bin/piper`. Piper gets the child allowlist (`PATH`, the home, locale, proxy and
 certificate settings), never the gateway's environment and the secrets in it.
 
+## Network
+
+Downloads voices from `huggingface.co` (the `rhasspy/piper-voices` repository) when you download one; speech is made on this machine.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

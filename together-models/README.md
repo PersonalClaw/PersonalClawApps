@@ -35,6 +35,10 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | `default_model` | Default Model | A Together AI model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 | `endpoint` | Base URL | Optional override of the Together AI base URL. Empty uses https://api.together.xyz/v1. |
 
+## Network
+
+Reaches `api.together.xyz`, or the endpoint you set in **Base URL**.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

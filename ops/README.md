@@ -219,9 +219,10 @@ untrusted edge:
   queue and in `doctor` — a silently shorter queue during an incident is the worst failure
   this app could have.
 
-What this app does **not** do: no network (`network: false`, and nothing in the bundle opens
-a socket), no credentials, no writes to any tracker or monitor, and no arbitrary command —
-only one you declared.
+What this app does **not** do: no network of its own (`network: false`, and nothing in the
+bundle opens a socket), no credentials, no writes to any tracker or monitor, and no arbitrary
+command — only one you declared. A remediation you allow runs that command as written, so it
+reaches whatever the command reaches: `kubectl` your cluster, `ssh` another machine.
 
 ## Settings
 
@@ -237,7 +238,8 @@ only one you declared.
 
 `storage: true` (the incident ledger), `cron: true` (the ten-minute sweep), `network:
 false`. That is the whole declaration — there is no remote and no wire call anywhere in this
-bundle.
+bundle. The one command it can start is a remediation from your own runbook, and what that
+command reaches is what you wrote into it.
 
 ## Tests
 

@@ -33,6 +33,10 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | `api_key` | API Key | Optional bearer token for authentication. |
 | `tool_filter` | Tool Filter | Comma-separated list of tool names to expose. Leave empty for all. |
 
+## Network
+
+Reaches only the tool server you set in **Endpoint URL**.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

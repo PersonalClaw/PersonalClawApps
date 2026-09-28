@@ -39,6 +39,10 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | `default_model` | Default Model | A Groq model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 | `endpoint` | Base URL | Optional override of the Groq base URL. Empty uses https://api.groq.com/openai/v1. |
 
+## Network
+
+Reaches `api.groq.com`, or the endpoint you set in **Base URL**.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

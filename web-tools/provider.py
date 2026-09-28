@@ -26,9 +26,18 @@ def _session_key() -> str:
     except Exception:
         return ""
 
+# Said only when no search provider is registered at all. Search providers are Store apps, and
+# one registers when its app is turned on and leaves when it is turned off. Core's resolver falls
+# back to any registered one when nothing is bound, so an installed, turned-on search app is the
+# whole fix, and choosing one in Settings → Search is for picking between several.
+_NO_PROVIDER = (
+    "No search provider app is installed and turned on, so there is nothing to search with."
+)
 _NO_PROVIDER_HINT = (
-    "No search provider is configured. Enable SearXNG or Tavily in Settings → "
-    "Providers, add its endpoint / API key, then bind it in Settings → Search."
+    "Install a search provider app from the Store on the Apps page, or turn on one you already "
+    "have there; if it asks for an API key or an endpoint, add it in Settings → Providers. Once "
+    "one is on, web_search uses it; to choose which one each kind of search uses, go to "
+    "Settings → Search."
 )
 
 
@@ -200,8 +209,7 @@ class WebToolProvider(ToolProvider):
             )
         if result is None:
             return ToolResult(
-                success=False, error="No search provider configured.",
-                recovery_hints=[_NO_PROVIDER_HINT],
+                success=False, error=_NO_PROVIDER, recovery_hints=[_NO_PROVIDER_HINT],
             )
 
         payload = result.to_dict()

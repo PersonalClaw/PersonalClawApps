@@ -154,9 +154,11 @@ def test_manifest_round_trips_stably() -> None:
     assert AppManifest.from_dict(once).to_dict() == once
 
 
-def test_manifest_asks_for_no_network(provider) -> None:
+def test_manifest_declares_the_network_its_clis_reach(provider) -> None:
+    # The app opens no connection of its own, but the `gh` / `glab` it starts reach GitHub
+    # or GitLab for it, so install consent says so.
     data = json.loads((HERE / "app.json").read_text())
-    assert data["permissions"] == {"storage": True, "network": False}
+    assert data["permissions"] == {"storage": True, "network": True}
 
 
 def test_manifest_declares_no_cron() -> None:

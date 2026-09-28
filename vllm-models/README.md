@@ -34,6 +34,10 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | `endpoint` | vLLM Base URL | The OpenAI-compatible base URL of your vLLM server (e.g. http://localhost:8000). |
 | `default_model` | Default Model | The model id served by your vLLM deployment. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 
+## Network
+
+Reaches only the vLLM server you set in **vLLM Base URL** (by default `localhost:8000`, on this machine).
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

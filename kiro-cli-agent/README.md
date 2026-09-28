@@ -44,6 +44,10 @@ kiro-cli speaks the baseline ACP shape, which means several host features are su
 PersonalClaw and a few are unavailable. [The ACP parity statement](https://github.com/PersonalClaw/PersonalClaw/blob/main/docs/agents/acp-parity.md) states which is which per
 provider, with the CLI version each verdict was measured against.
 
+## Network
+
+Runs Kiro CLI, which reaches Kiro's service with the account it signs in to.
+
 ## License
 
 MIT — see `LICENSE`.

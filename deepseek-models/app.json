@@ -1,6 +1,6 @@
 {
   "name": "deepseek-models",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "DeepSeek",
   "description": "DeepSeek chat + reasoner models (OpenAI-compatible). Bring your own DeepSeek API key.",
   "icon": "Waves",
@@ -14,6 +14,9 @@
     "pythonDependencies": [
       "openai>=1.0"
     ]
+  },
+  "permissions": {
+    "network": true
   },
   "provider": {
     "type": "model",

@@ -215,6 +215,10 @@ intent, and invite the bot to a server. The automated suite above covers the
 protocol; it cannot cover "Discord accepted this token". Run the Channels page →
 Discord → **Test** action for the live gateway-hello probe once configured.
 
+## Network
+
+Reaches Discord only: its API at `discord.com`, and the gateway WebSocket that API names.
+
 ## License
 
 MIT — see `LICENSE`.

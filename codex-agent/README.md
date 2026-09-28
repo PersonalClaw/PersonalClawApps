@@ -53,6 +53,10 @@ See [the ACP parity statement](https://github.com/PersonalClaw/PersonalClaw/blob
 codex's behalf, and what is a protocol or CLI constraint — each with the verified version it was
 measured against.
 
+## Network
+
+Runs Codex, which reaches OpenAI's service with the account it signs in to; its ACP adapter is installed from the npm registry when this computer doesn't have it.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

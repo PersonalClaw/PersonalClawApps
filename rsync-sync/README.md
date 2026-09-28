@@ -124,7 +124,10 @@ review on the host is enough.
 A failed sync or connection test says what went wrong and what to do — the host key isn't
 trusted yet, the host turned down the ssh login, the sync root path doesn't exist there, rsync
 isn't installed on one end, a run went past **Command timeout**, this machine's **Local working
-directory** can't be written — with rsync's, ssh's or the filesystem's own words after it.
+directory** can't be written — with rsync's, ssh's or the filesystem's own words after it. A
+pull whose rsync run fails stops the sync with that as its error, rather than reading as a
+target with nothing on it. Files that vanish from the target while a pull copies — another
+machine rewriting the registry — are not a failure: what arrived is used.
 
 | Symptom | Cause |
 |---|---|
@@ -141,6 +144,10 @@ directory** can't be written — with rsync's, ssh's or the filesystem's own wor
 <path>/encryption-salt                                  # first-write-wins, plaintext
 <path>/machines/<machine-id>/seq-<n>/<domain>/<file>     # shard objects (encrypted by default)
 ```
+
+## Network
+
+Reaches only the host you set in **SSH host**, over ssh. With **SSH host** empty, it syncs to **Sync root path** on this machine and reaches nothing.
 
 ## License
 

@@ -32,6 +32,10 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | `endpoint` | SearXNG Endpoint | Base URL of your SearXNG instance (e.g. https://searxng.example.com). The JSON API must be enabled. |
 | `timeout_secs` | Request Timeout | Maximum seconds to wait for a search response. |
 
+## Network
+
+Reaches only the SearXNG instance you set in **SearXNG Endpoint**.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

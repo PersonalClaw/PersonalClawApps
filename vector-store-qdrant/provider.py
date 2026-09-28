@@ -91,6 +91,15 @@ def _shown(url: str) -> str:
     return urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[1]))
 
 
+class _SizeMismatch(ValueError):
+    """Vectors of another size than the collection was made for, found before they were sent."""
+
+    def __init__(self, collection_size: int, vector_size: int) -> None:
+        super().__init__(
+            f"the collection's vectors have {collection_size} dimensions; these have {vector_size}"
+        )
+
+
 class QdrantStoreError(RuntimeError):
     """A Qdrant call that failed, said as what is wrong and what to do. Its text is that
     sentence and then the client's own words — the text core logs when this arm cannot answer —
@@ -129,10 +138,6 @@ class QdrantVectorStore(VectorStoreProvider):
         self._timeout = max(1, int(timeout_secs or 10))
         self._api_key = (api_key or "").strip()
         self._client = None
-        #: Dimension of the collection as it exists. Learned from the first upsert (or from a
-        #: describe of a collection that already exists), because the embedding model — and
-        #: therefore the vector width — is the user's choice and can change.
-        self._dim: int | None = None
 
     # ── client ───────────────────────────────────────────────────────────────────────
 
@@ -161,8 +166,9 @@ class QdrantVectorStore(VectorStoreProvider):
             )
         return self._client
 
-    def _ensure_collection(self, dim: int) -> None:
-        """Create the collection at *dim* if it is not there yet.
+    def _ensure_collection(self, dim: int) -> int | None:
+        """Create the collection at *dim* if it is not there yet, and return the vector size it
+        holds: *dim* for a new one, what an existing one was made with otherwise.
 
         The dimension comes from the vectors being written rather than from configuration:
         asking the user for it would be asking them to restate a property of the embedding
@@ -173,14 +179,21 @@ class QdrantVectorStore(VectorStoreProvider):
 
         client = self._connect()
         if client.collection_exists(self._collection):
-            self._dim = dim
-            return
+            return self._collection_size(client)
         client.create_collection(
             collection_name=self._collection,
             vectors_config=VectorParams(size=dim, distance=Distance[_DISTANCE.upper()]),
         )
-        self._dim = dim
         logger.info("created Qdrant collection %r at dimension %d", self._collection, dim)
+        return dim
+
+    def _collection_size(self, client) -> int | None:
+        """The vector size the existing collection was made with — read each time, since the
+        collection can be dropped and made again at another size — or None when it holds
+        named vectors, which this app never makes, and so has no one size to hold vectors to."""
+        params = client.get_collection(self._collection).config.params.vectors
+        size = getattr(params, "size", None)
+        return int(size) if size else None
 
     # ── the seam's four methods ──────────────────────────────────────────────────────
 
@@ -191,7 +204,9 @@ class QdrantVectorStore(VectorStoreProvider):
             from qdrant_client.models import PointStruct
 
             dim = len(records[0].vector)
-            self._ensure_collection(dim)
+            # The collection's own size, checked before anything is sent, so vectors of another
+            # size are said as that — against a server and a local folder alike.
+            size = self._ensure_collection(dim) or dim
             points = [
                 PointStruct(
                     id=_point_id(r.chunk_id),
@@ -208,10 +223,12 @@ class QdrantVectorStore(VectorStoreProvider):
                     },
                 )
                 for r in records
-                if len(r.vector) == dim
+                if len(r.vector) == size
             ]
             if not points:
-                return 0
+                # Not one vector the collection's size: the embedding model changed since it
+                # was made. A record of another size among ones that fit is skipped, as ever.
+                raise _SizeMismatch(size, dim)
             self._connect().upsert(collection_name=self._collection, points=points, wait=True)
         except Exception as exc:  # noqa: BLE001 - every failure is said, then raised for core
             raise self._failed(exc) from exc
@@ -249,6 +266,11 @@ class QdrantVectorStore(VectorStoreProvider):
             client = self._connect()
             if not client.collection_exists(self._collection):
                 return []
+            # Checked before searching: a server refuses a query vector of another size, but a
+            # local folder's engine fails with an error of its own that names no size at all.
+            size = self._collection_size(client)
+            if size is not None and len(vector) != size:
+                raise _SizeMismatch(size, len(vector))
             res = client.query_points(
                 collection_name=self._collection,
                 query=list(vector),
@@ -327,9 +349,12 @@ class QdrantVectorStore(VectorStoreProvider):
                 "Qdrant through. Reinstall Qdrant Vector Store from the Store — that package "
                 "ships with this app, not with PersonalClaw itself."
             )
-        if any("vector dimension error" in str(c).lower() for c in causes):
-            # Qdrant's own words, from a server and from a local folder alike, for vectors of
-            # another size than the collection was made for.
+        if any(
+            isinstance(c, _SizeMismatch) or "vector dimension error" in str(c).lower()
+            for c in causes
+        ):
+            # Found before the call (the collection's size, read up front), or in Qdrant's own
+            # words for vectors of another size than the collection was made for.
             return (
                 f"The collection {self._collection} holds vectors of a different size than the "
                 f"embedding model in use now makes. Set Collection {_ON_CARD} to a new name, and "

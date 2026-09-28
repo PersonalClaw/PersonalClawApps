@@ -178,6 +178,10 @@ to its own key, so the bot keeps its owner rather than waiting for a first sende
 `/personalclaw @user` to allowlist more users and `/personalclaw #channel` to
 track a channel.
 
+## Network
+
+Reaches Slack only: its Web API at `slack.com`, the Socket Mode WebSocket that API opens, and the private links Slack sends for shared files.
+
 ## License
 
 MIT — see `LICENSE`.

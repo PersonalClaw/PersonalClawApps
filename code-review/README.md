@@ -93,9 +93,10 @@ reviewer sees. A number with no explanation is not a judgment anyone can argue w
 one JSON object per line: `file`, `severity`, `summary`, `evidence`, `weight`, `source`
 (`static` / `model` / `subagent`), `ts`. There is no uploader, no reporter, no
 `gh pr review`, no `gh pr comment` — the app's entire GitHub surface is one read:
-`gh pr diff <n> --repo <owner>/<repo> --patch`. The manifest declares
-`network: false`, so it opens no socket of its own either. Findings accumulate; a second
-review of the same PR appends rather than overwrites, and `review_findings` reads them back.
+`gh pr diff <n> --repo <owner>/<repo> --patch`. It opens no socket of its own either; the
+manifest declares `network: true` because the `gh` it starts reaches GitHub. Findings
+accumulate; a second review of the same PR appends rather than overwrites, and
+`review_findings` reads them back.
 
 ## Security posture
 
@@ -125,8 +126,8 @@ text forge a log record) to the three untrusted edges:
 
 ## Permissions
 
-`storage: true` (the findings log), `network: false`. That is the whole declaration —
-GitHub is reached only through your already-authenticated `gh`.
+`storage: true` (the findings log) and `network: true`. That is the whole declaration —
+GitHub is reached only through your already-authenticated `gh`, which the app starts.
 
 ## Tests
 
@@ -188,6 +189,10 @@ Stated plainly, because the difference matters.
   provider has run a per-file review.
 
 None of these are faked or asserted as done anywhere in this bundle.
+
+## Network
+
+Reaches GitHub through your `gh` CLI: `github.com`, or the GitHub Enterprise host `gh` is signed in to.
 
 ## License
 

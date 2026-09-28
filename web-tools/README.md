@@ -34,6 +34,10 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 - `web_fetch` — SSRF-guarded page fetch + extraction.
 - `web_extract` — structured extraction from a page.
 
+## Network
+
+Reaches the pages it is asked to fetch or read, on any public host, through PersonalClaw's egress guard (Settings → Security → Network egress).
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

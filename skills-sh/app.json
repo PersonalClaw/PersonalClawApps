@@ -1,6 +1,6 @@
 {
   "name": "skills-sh",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Skills.sh Marketplace",
   "description": "Browse and install community skills from skills.sh. Search, preview, and manage external skill packages.",
   "icon": "Store",
@@ -11,6 +11,9 @@
     "skills",
     "bundled"
   ],
+  "permissions": {
+    "network": true
+  },
   "provider": {
     "type": "skills",
     "implementation": "provider:create_provider",

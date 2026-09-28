@@ -1,6 +1,6 @@
 {
   "name": "slack-channel",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "displayName": "Slack Channel",
   "description": "Slack workspace integration. Monitor channels, respond to mentions, and interact via Slack.",
   "icon": "Slack",
@@ -21,6 +21,9 @@
     "pythonDependencies": [
       "slack-sdk>=3.27,<4"
     ]
+  },
+  "permissions": {
+    "network": true
   },
   "provider": {
     "type": "channel",

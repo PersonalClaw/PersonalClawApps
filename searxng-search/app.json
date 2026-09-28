@@ -1,6 +1,6 @@
 {
   "name": "searxng-search",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "SearXNG",
   "description": "Self-hosted, no-key web search via a SearXNG meta-search instance. Point it at your own SearXNG URL for private, free web search and links.",
   "icon": "Search",
@@ -10,6 +10,9 @@
     "search",
     "self-hosted"
   ],
+  "permissions": {
+    "network": true
+  },
   "provider": {
     "type": "search",
     "implementation": "provider:create_provider",

@@ -1,6 +1,6 @@
 {
   "name": "code-review",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Code Review",
   "description": "Deep-review a GitHub pull request one file at a time, riskiest changes first. It works through the GitHub CLI you are already signed in to. Findings stay in a local log on your machine — nothing is ever posted back to the PR.",
   "icon": "GitPullRequest",
@@ -21,7 +21,7 @@
   ],
   "permissions": {
     "storage": true,
-    "network": false
+    "network": true
   },
   "provider": {
     "type": "tool",

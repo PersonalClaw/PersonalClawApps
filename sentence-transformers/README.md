@@ -36,6 +36,10 @@ Hugging Face about the base model as a model loads and again as it is saved, thr
 token setting reaches. The download itself sends only the token PersonalClaw resolved, or none,
 and models download into the PersonalClaw home (`models`).
 
+## Network
+
+Downloads embedding models from `huggingface.co` when you download one; embedding runs on this machine.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

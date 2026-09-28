@@ -1,6 +1,6 @@
 {
   "name": "web-tools",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Web Tools",
   "description": "General web primitives the agent can call: web_search, web_fetch, and web_extract. web_search runs over the search provider you bind in Settings \u2192 Search, web_fetch is an SSRF-guarded page fetch + extraction, and web_extract does structured extraction. No key of its own \u2014 it uses the bound search provider's.",
   "icon": "Globe",
@@ -13,6 +13,9 @@
   "prompts": [
     "prompts/web-extract.yaml"
   ],
+  "permissions": {
+    "network": true
+  },
   "provider": {
     "type": "tool",
     "implementation": "provider:create_provider",

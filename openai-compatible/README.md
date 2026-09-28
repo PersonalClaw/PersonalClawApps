@@ -34,6 +34,10 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | `api_key` | API Key | Bearer API key for the endpoint. Leave empty to fall back to the OPENAI_API_KEY environment variable. |
 | `default_model` | Default Model | The model id served by your endpoint. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 
+## Network
+
+Reaches only the endpoint you set in **Base URL**.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

@@ -1,6 +1,6 @@
 {
   "name": "together-models",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Together AI",
   "description": "Together AI serverless inference (OpenAI-compatible). Bring your own Together API key.",
   "icon": "Boxes",
@@ -14,6 +14,9 @@
     "pythonDependencies": [
       "openai>=1.0"
     ]
+  },
+  "permissions": {
+    "network": true
   },
   "provider": {
     "type": "model",

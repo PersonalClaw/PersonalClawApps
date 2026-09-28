@@ -314,7 +314,8 @@ def test_a_store_that_cannot_answer_is_logged_as_what_to_fix(tmp_path, caplog):
         with caplog.at_level(logging.WARNING):
             q = _vec(1.0)
             _ingest(store, "Keywordfindable", "sentinelsearchword", [q])
-            hits = HybridRetriever(store, embedder=lambda _q: q).search("sentinelsearchword", limit=5)
+            retriever = HybridRetriever(store, embedder=lambda _q: q)
+            hits = retriever.search("sentinelsearchword", limit=5)
 
         assert hits, "FTS5 still answers"
         logged = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]

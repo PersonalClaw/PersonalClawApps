@@ -1276,6 +1276,71 @@ def test_a_poll_whose_host_stops_resolving_is_retried(monkeypatch, _no_sleep):
     assert _no_sleep == [prov._VIDEO_POLL_INTERVAL_S]  # waited once, then polled again
 
 
+def test_a_host_that_stays_unresolvable_is_what_the_timeout_names(monkeypatch, _no_sleep):
+    """🔴 Red before: every poll failed its lookup for the whole wait, and the timeout still
+    read as a job that didn't finish in time."""
+    from personalclaw.sdk.net import EgressBlocked, GuardDecision
+
+    monkeypatch.setattr(prov, "_VIDEO_TIMEOUT_S", 30.0)
+    unresolvable = EgressBlocked(GuardDecision(
+        allow=False, host="proxy.example", reason="host 'proxy.example' is not resolvable",
+        category="unresolvable",
+    ))
+    _fake_fetch(monkeypatch, [
+        _FakeResponse(200, _video_models_payload()),
+        _FakeResponse(202, {"id": "job-1", "status": "pending"}),
+        _FakeResponse(200, {"id": "job-1", "status": "in_progress"}),
+        unresolvable,
+    ])
+    with pytest.raises(VideoGenError) as ei:
+        _run(_video_provider(endpoint="https://proxy.example/v1").generate(
+            "waves", model="google/veo-3.1-fast"))
+    assert str(ei.value) == (
+        "PersonalClaw stopped waiting for OpenRouter's video job: proxy.example could not be "
+        "found for the last 25 seconds of the wait, so no check reached OpenRouter. OpenRouter "
+        "may still finish the job and bill for it. Check this computer's internet connection, "
+        "then generate the video again. Details: host 'proxy.example' is not resolvable"
+    )
+
+
+def test_a_timeout_after_polls_that_got_no_answer_keeps_their_words(monkeypatch, _no_sleep):
+    monkeypatch.setattr(prov, "_VIDEO_TIMEOUT_S", 10.0)
+    _fake_fetch(monkeypatch, [
+        _FakeResponse(200, _video_models_payload()),
+        _FakeResponse(202, {"id": "job-1", "status": "pending"}),
+        ConnectionResetError(54, "Connection reset by peer"),
+    ])
+    with pytest.raises(VideoGenError) as ei:
+        _run(_video_provider().generate("waves", model="google/veo-3.1-fast"))
+    assert str(ei.value) == (
+        "OpenRouter's video job didn't finish within 10 seconds, so PersonalClaw stopped waiting "
+        "for it; OpenRouter may still finish it and bill for it. Generate a shorter clip, or "
+        "choose a faster model in Settings → Models. Details: [Errno 54] Connection reset by peer"
+    )
+
+
+def test_a_host_that_resolves_again_is_not_named(monkeypatch, _no_sleep):
+    """A lookup that failed and then came back is a blip the timeout does not blame."""
+    from personalclaw.sdk.net import EgressBlocked, GuardDecision
+
+    monkeypatch.setattr(prov, "_VIDEO_TIMEOUT_S", 15.0)
+    unresolvable = EgressBlocked(GuardDecision(
+        allow=False, host="proxy.example", reason="host 'proxy.example' is not resolvable",
+        category="unresolvable",
+    ))
+    _fake_fetch(monkeypatch, [
+        _FakeResponse(200, _video_models_payload()),
+        _FakeResponse(202, {"id": "job-1", "status": "pending"}),
+        unresolvable,
+        _FakeResponse(200, {"id": "job-1", "status": "in_progress"}),
+    ])
+    with pytest.raises(VideoGenError) as ei:
+        _run(_video_provider(endpoint="https://proxy.example/v1").generate(
+            "waves", model="google/veo-3.1-fast"))
+    assert str(ei.value).startswith("OpenRouter's video job didn't finish within 15 seconds")
+    assert "Details" not in str(ei.value)
+
+
 def test_a_poll_the_egress_guard_refuses_says_so_at_once(monkeypatch, _no_sleep):
     # A refusal by policy (here the Denied hosts list) was retried until the deadline and then
     # reported as a timeout, blaming the job.

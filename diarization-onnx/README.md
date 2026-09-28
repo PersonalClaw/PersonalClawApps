@@ -30,6 +30,10 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 |---|---|---|
 | `max_speakers` | Max speakers | Upper bound on distinct speakers (0 = auto-cluster). |
 
+## Network
+
+Downloads its two models from `github.com` (the sherpa-onnx releases) when you download them; diarizing runs on this machine.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

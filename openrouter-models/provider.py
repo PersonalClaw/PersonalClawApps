@@ -1240,10 +1240,15 @@ class OpenRouterVideoProvider(VideoGenProvider):
         guard refuses by policy (a denied host, a private address, a malformed URL):
         a setting decides that, so waiting it out would only end in a timeout that
         blames the job. A host that stops resolving is a DNS or network blip, and is
-        waited out like a lost connection.
+        waited out like a lost connection; one still failing when the wait ends is what the
+        timeout names, so a host that stayed unresolvable reads as that, not as a slow job.
         """
         url = f"{self._base()}/videos/{job_id}"
         elapsed = 0.0
+        # The failure of the poll that got no answer, until one gets an answer, and how long the
+        # host has gone unresolved: what the timeout names when it still holds at the deadline.
+        failing: Exception | None = None
+        unresolved_since: float | None = None
         while elapsed < _VIDEO_TIMEOUT_S:
             doc: dict[str, Any] = {}
             try:
@@ -1254,9 +1259,13 @@ class OpenRouterVideoProvider(VideoGenProvider):
                 if e.decision.category != "unresolvable":
                     raise VideoGenError(_unanswered_message(e, what="video polling")) from e
                 logger.debug("OpenRouter video poll: host did not resolve", exc_info=True)
-            except Exception:  # noqa: BLE001 — a transient poll error is retried
+                failing = e
+                unresolved_since = elapsed if unresolved_since is None else unresolved_since
+            except Exception as e:  # noqa: BLE001 — a transient poll error is retried
                 logger.debug("OpenRouter video poll error", exc_info=True)
+                failing, unresolved_since = e, None
             else:
+                failing, unresolved_since = None, None
                 if resp.status == 200:
                     doc = _poll_answer(resp)
                 elif resp.status in (401, 403, 402):
@@ -1294,11 +1303,21 @@ class OpenRouterVideoProvider(VideoGenProvider):
             await asyncio.sleep(_VIDEO_POLL_INTERVAL_S)
             elapsed += _VIDEO_POLL_INTERVAL_S
         # The job is still OpenRouter's to finish, and a finished job is billed.
-        raise VideoGenError(
+        if isinstance(failing, EgressBlocked) and unresolved_since is not None:
+            host = failing.decision.host or "OpenRouter's host"
+            raise VideoGenError(sentence_with_detail(
+                f"PersonalClaw stopped waiting for OpenRouter's video job: {host} could not be "
+                f"found for the last {elapsed - unresolved_since:.0f} seconds of the wait, so no "
+                "check reached OpenRouter. OpenRouter may still finish the job and bill for it. "
+                "Check this computer's internet connection, then generate the video again.",
+                failing,
+            ))
+        raise VideoGenError(sentence_with_detail(
             f"OpenRouter's video job didn't finish within {_VIDEO_TIMEOUT_S:.0f} seconds, so "
             "PersonalClaw stopped waiting for it; OpenRouter may still finish it and bill for "
-            "it. Generate a shorter clip, or choose a faster model in Settings → Models."
-        )
+            "it. Generate a shorter clip, or choose a faster model in Settings → Models.",
+            failing or "",
+        ))
 
     async def _download(
         self, job_id: str, key: str, *, duration_s: float = 0.0,

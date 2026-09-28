@@ -139,6 +139,10 @@ job require the `Authorization` header, and how long they stay valid. Nothing in
 this app branches on the answer (v1 always downloads via `/content` with the key
 attached).
 
+## Network
+
+Reaches `openrouter.ai`, or the server you set in **Base URL**.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

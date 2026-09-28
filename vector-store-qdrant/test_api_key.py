@@ -25,6 +25,7 @@ import json
 import math
 import secrets
 import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -32,7 +33,7 @@ from urllib.parse import urlsplit
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
-from provider import API_KEY_NAME, create_provider
+from provider import API_KEY_NAME, QdrantVectorStore, create_provider
 
 from personalclaw.apps import app_manager
 from personalclaw.dashboard.handlers.apps import register_app_routes
@@ -70,6 +71,10 @@ class KeyedQdrant:
         self.key = key
         self.seen: list[tuple[str, str, str | None]] = []
         self.collections: dict[str, dict[str, tuple[list[float], dict]]] = {}
+        #: The vector size each collection was made with. Like a store that doesn't check it,
+        #: the fake keeps a vector of any size it is sent — so only the provider's own check
+        #: stands between a wrong-size vector and the collection.
+        self.sizes: dict[str, int] = {}
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -122,9 +127,12 @@ class KeyedQdrant:
             return 200, _ok({"exists": points is not None})
         if method == "PUT" and not rest:
             self.collections[name] = {}
+            self.sizes[name] = int(body["vectors"]["size"])
             return 200, _ok(True)
         if points is None:
             return 404, {"status": {"error": f"Collection `{name}` doesn't exist!"}}
+        if method == "GET" and not rest:
+            return 200, _ok(_collection_info(self.sizes[name], len(points)))
         if method == "PUT" and rest == ["points"]:
             for p in body["points"]:
                 points[str(p["id"])] = (p["vector"], p.get("payload") or {})
@@ -145,6 +153,22 @@ class KeyedQdrant:
 
 def _ok(result) -> dict:
     return {"result": result, "status": "ok", "time": 0.0}
+
+
+def _collection_info(size: int, count: int) -> dict:
+    """Just enough of Qdrant's collection info for the client to read the vector size from."""
+    return {
+        "status": "green",
+        "optimizer_status": "ok",
+        "segments_count": 1,
+        "points_count": count,
+        "config": {
+            "params": {"vectors": {"size": size, "distance": "Cosine"}},
+            "hnsw_config": {"m": 16, "ef_construct": 100, "full_scan_threshold": 10000},
+            "optimizer_config": {"default_segment_number": 0, "flush_interval_sec": 5},
+        },
+        "payload_schema": {},
+    }
 
 
 def _cosine(a, b) -> float:
@@ -311,6 +335,32 @@ def test_a_refused_key_on_a_write_or_query_says_which_setting_to_fix(home, qdran
             "Store card in Settings → Providers to that server's key. Details: "
         ), (name, caught.value)
         assert "wrong-key" not in str(caught.value), name
+
+
+def test_a_write_or_query_of_another_size_is_named_before_it_reaches_the_server(qdrant):
+    """Server mode, over a real socket: the collection's size is read first, so vectors of
+    another size are said as that and never sent. This fake keeps whatever it is sent, as a store
+    that doesn't check would, so the old path wrote the odd vector and answered the search with
+    the cosine of vectors that don't line up."""
+    store = QdrantVectorStore(url=qdrant.url, collection="kb", api_key=KEY)
+    assert store.upsert([_record()]) == 1  # the collection is made at DIM
+    says = (
+        "The collection kb holds vectors of a different size than the embedding model in use "
+        "now makes. Set Collection on the Qdrant Vector Store card in Settings → Providers to a "
+        "new name, and one is created at the new size when the next document is ingested. "
+        f"Details: the collection's vectors have {DIM} dimensions; these have 2"
+    )
+    narrow = VectorRecord(chunk_id="0" * 31 + "2", item_id="item-b", chunk_index=0,
+                          vector=[1.0, 0.0])
+
+    with pytest.raises(Exception) as write:
+        store.upsert([narrow])
+    with pytest.raises(Exception) as search:
+        store.query([1.0, 0.0], k=1)
+
+    assert (str(write.value), str(search.value)) == (says, says)
+    assert list(qdrant.collections["kb"]) == [str(uuid.UUID(hex=C1))], "the odd vector was stored"
+    assert ("POST", "/collections/kb/points/query") not in {(m, p) for m, p, _ in qdrant.calls()}
 
 
 def test_the_key_stays_out_of_the_settings_file_and_uninstall_removes_it(home, qdrant):

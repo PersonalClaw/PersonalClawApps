@@ -232,6 +232,62 @@ def test_a_mismatched_dimension_is_skipped_not_written(store):
     assert [h.chunk_id for h in store.query(_vec(1.0), k=10)] == [C1]
 
 
+def test_a_batch_led_by_the_odd_width_still_writes_the_chunks_that_fit(store):
+    """The same library, its odd one out first in the batch. The batch was held to the first
+    vector's width rather than the collection's, so the one chunk sent was refused and the ones
+    that fit were lost with it."""
+    store.upsert([_rec(C1, "item-a", _vec(1.0))])  # the collection is made at DIM
+
+    assert store.upsert([_rec(C2, "item-b", [1.0, 0.0]), _rec(C3, "item-c", _vec(0.0, 1.0))]) == 1
+
+    assert [h.chunk_id for h in store.query(_vec(0.0, 1.0), k=1)] == [C3]
+
+
+# ── a vector of another size, named before it is sent ───────────────────────────────
+#
+# The collection's size is read before a write or a search, so a vector the embedding model now
+# makes at another width is said as that — in a local folder, whose engine answered a search
+# with an error of its own naming no size, as against a server.
+
+def _another_size(got: int) -> str:
+    """What vectors of ``got`` dimensions, for the DIM-wide ``test_chunks``, say."""
+    return (
+        "The collection test_chunks holds vectors of a different size than the embedding model "
+        f"in use now makes. Set Collection {ON_CARD} to a new name, and one is created at the new "
+        "size when the next document is ingested. Details: the collection's vectors have "
+        f"{DIM} dimensions; these have {got}"
+    )
+
+
+def test_a_query_of_another_size_is_named_before_it_searches(store):
+    """It said "Qdrant Vector Store's request to the Qdrant engine over its local folder …
+    failed" — the engine's numpy error, "shapes (1,8) and (4,) not aligned", naming no size."""
+    store.upsert([_rec(C1, "item-a", _vec(1.0))])  # the collection is made at DIM
+
+    with pytest.raises(Exception) as caught:
+        store.query([1.0, 0.0, 0.0, 0.0], k=3)
+
+    assert str(caught.value) == _another_size(4)
+
+
+def test_a_write_of_another_size_is_refused_before_anything_is_sent(store, monkeypatch):
+    store.upsert([_rec(C1, "item-a", _vec(1.0))])  # the collection is made at DIM
+    sent = []
+    real_upsert = store._client.upsert
+
+    def _upsert(*args, **kwargs):
+        sent.append(kwargs)
+        return real_upsert(*args, **kwargs)
+
+    monkeypatch.setattr(store._client, "upsert", _upsert)
+
+    with pytest.raises(Exception) as caught:
+        store.upsert([_rec(C2, "item-b", [1.0, 0.0, 0.0, 0.0])])
+
+    assert str(caught.value) == _another_size(4)
+    assert sent == [], "vectors of another size were sent to the collection"
+
+
 # ── dimension + collection lifecycle ────────────────────────────────────────────────
 
 

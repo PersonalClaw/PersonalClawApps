@@ -33,6 +33,10 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 |---|---|---|
 | `api_key` | API Key | Skills.sh API key for search and install. Get one at skills.sh/settings. Without this, search uses npx CLI (slower) and install may fail. |
 
+## Network
+
+Reaches `skills.sh`, clones a skill's repository from `github.com`, and runs the `skills` CLI through `npx`, which fetches it from the npm registry.
+
 ## License
 
 MIT — see `LICENSE`.

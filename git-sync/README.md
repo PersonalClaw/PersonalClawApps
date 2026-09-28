@@ -84,14 +84,17 @@ clone of an empty repo succeeds and the first push publishes the branch.
   side and a folder on the other. The push then says which path, and that you can run
   `git pull --rebase origin <branch>` in the working clone to resolve it, or delete the clone
   so Git Sync clones the remote afresh.
-- **Transient vs permanent.** A push still turned away after its tries, one that can't reach
-  the remote, and a failure before the push — the first clone, a step in the working clone —
-  are `transient` (the next sync tries again). A push the remote refuses for a bad URL,
-  denied auth or its own rules (a hook, branch protection), and a real conflict, are
-  `permanent` (retrying will not fix them). A clean run is `delivered`. Every failure says
-  what went wrong and what to do — the remote didn't accept this machine's credentials, no
-  repository is visible at that URL, the working clone can't be written, git isn't installed
-  — with git's own message after it.
+- **Transient vs permanent.** A push still turned away after its tries (another push first, or
+  the branch's ref lock taken), one that can't reach the remote, and a failure before the push
+  — the first clone, a step in the working clone — are `transient` (the next sync tries
+  again). A push the remote refuses for a bad URL, denied auth, its own rules (a hook, branch
+  protection), a branch checked out in its working tree (point at a bare repository instead),
+  a shallow working clone, a repository it can't store the objects in, or a branch name it
+  won't take — and a real conflict — are `permanent` (retrying will not fix them). A Branch
+  that git doesn't accept as a branch name is refused before git runs. A clean run is
+  `delivered`. Every failure says what went wrong and what to do — the remote didn't accept
+  this machine's credentials, no repository is visible at that URL, the working clone can't be
+  written, git isn't installed — with git's own message after it.
 - **Deterministic committer.** The transport's automated commits use a fixed identity
   (`PersonalClaw Sync <sync@personalclaw.local>`) set via `git -c` flags, so a sync commit
   never depends on — or pollutes — ambient git config and names no real person.
@@ -113,6 +116,10 @@ clone of an empty repo succeeds and the first push publishes the branch.
 - **No encryption, on purpose.** Unlike third-party-storage transports, git-sync keeps the
   shards plaintext so `git log -p` stays human-readable — the readable history is the value.
   Point it at a remote whose access you control; anyone who can read the repo has the state.
+
+## Network
+
+Reaches only the git remote you set in **Git remote URL**, over HTTPS or SSH.
 
 ## License
 

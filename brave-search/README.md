@@ -31,6 +31,10 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | `api_key` | Brave API Key | Your Brave Search API subscription token (search.brave.com). Leave empty to fall back to the BRAVE_API_KEY environment variable. |
 | `timeout_secs` | Request Timeout | Maximum seconds to wait for a search response. |
 
+## Network
+
+Reaches `api.search.brave.com` only.
+
 ## License
 
 MIT — see `LICENSE`.

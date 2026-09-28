@@ -1,6 +1,6 @@
 {
   "name": "brave-search",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Brave Search",
   "description": "Cheap, broad web search: ranked links with descriptions and a recency filter. Extra snippets come with each result. Links-only (no answer or page content \u2014 web_fetch a result to read it). API key from search.brave.com.",
   "icon": "Search",
@@ -10,6 +10,9 @@
     "search",
     "bundled"
   ],
+  "permissions": {
+    "network": true
+  },
   "provider": {
     "type": "search",
     "implementation": "provider:create_provider",
