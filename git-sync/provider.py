@@ -335,10 +335,43 @@ def _bare_url(url: str) -> str:
     return url.split("::", 1)[1] if "::" in head else url
 
 
+def _scheme(url: str) -> str:
+    """The scheme of ``url`` written as a URL, lower-cased; ``""`` for any other form."""
+    found = re.match(r"([A-Za-z][A-Za-z0-9+.-]*)://", _bare_url(url))
+    return found.group(1).lower() if found else ""
+
+
 def _web(url: str) -> bool:
     """Whether git reaches ``url`` over http or https."""
-    scheme = re.match(r"([A-Za-z][A-Za-z0-9+.-]*)://", _bare_url(url))
-    return bool(scheme) and scheme.group(1).lower() in ("http", "https")
+    return _scheme(url) in ("http", "https")
+
+
+def _ssh_url(url: str) -> bool:
+    """Whether git reaches ``url``, written as a URL (``ssh://…``), over ssh."""
+    return _scheme(url) in ("ssh", "git+ssh", "ssh+git")
+
+
+def _credential(url: str) -> tuple[str, str]:
+    """``(copy, in its place)``: the credential written into ``url``'s address and what that part
+    of it becomes without it, or ``("", "")`` when it carries none. An http(s) URL's is its whole
+    ``user:password@`` or ``token@``; an ssh URL's is the password after its user name, which git
+    hands to ssh as part of the login name, so only the user name is kept."""
+    found = _USERINFO.search(url)
+    if not found:
+        return "", ""
+    if _web(url):
+        return found.group(0), "://"
+    userinfo = found.group(0)[3:-1]
+    if _ssh_url(url) and ":" in userinfo:
+        user = userinfo.split(":", 1)[0]
+        return found.group(0), f"://{user}@" if user else "://"
+    return "", ""
+
+
+def _without_credential(url: str) -> str:
+    """``url`` with the credential written into it taken out (:func:`_credential`)."""
+    copy, clean = _credential(url)
+    return url.replace(copy, clean, 1) if copy else url
 
 
 def _takes_token(url: str) -> bool:
@@ -463,6 +496,7 @@ class GitSyncProvider(SyncTransportProvider):
         return (
             remote_refusal(self._repo_url)
             or self._credential_in_url()
+            or self._password_in_ssh_url()
             or self._token_refused()
             or _branch_refusal(self._branch)
         )
@@ -479,6 +513,21 @@ class GitSyncProvider(SyncTransportProvider):
             f"this machine. Set Git remote URL {_ON_CARD} to the address without it "
             f"({_shown(self._repo_url)}), and put the token in Access token — and the user name "
             "in User name, if your host wants one."
+        )
+
+    def _password_in_ssh_url(self) -> str:
+        """Why Git Sync won't use an ssh Git remote URL with a password written into it, or
+        ``""``. git would keep it in the working clone's ``.git/config`` and hand it to ssh as
+        part of the login name, on ssh's command line, where anyone on this machine can read it;
+        ssh never signs in with it."""
+        if not _ssh_url(self._repo_url) or not _credential(self._repo_url)[0]:
+            return ""
+        return (
+            "Git Sync won't use a password written into Git remote URL: git keeps it in the "
+            "working clone's .git/config and hands it to ssh on its command line, where anyone on "
+            "this machine can read it, and ssh never signs in with it. Take the password out of "
+            f"Git remote URL {_ON_CARD}: leave the user name before the @, or nothing before the "
+            f"host ({_shown(self._repo_url)}), and sign in with your ssh key."
         )
 
     def _token_refused(self) -> str:
@@ -838,16 +887,16 @@ class GitSyncProvider(SyncTransportProvider):
 
     def _leaked(self, where: list[tuple[str, str]]) -> bool:
         """Whether the clone's origin — and its push URL, if it has one — is Git remote URL with
-        a user name or token written into it, and nothing else sends its fetches or pushes
-        anywhere: a clone made from such a URL, before Git Sync took the token from Access
-        token instead."""
+        a credential written into it (:func:`_credential`: an http(s) URL's user name or token,
+        an ssh URL's password), and nothing else sends its fetches or pushes anywhere: a clone
+        made from such a URL, before Git Sync refused one."""
         return (
-            _web(self._repo_url)
+            (_web(self._repo_url) or _ssh_url(self._repo_url))
             and any(key == "remote.origin.url" for key, _ in where)
-            and any(_USERINFO.search(value) for _, value in where)
+            and any(_credential(value)[0] for _, value in where)
             and all(
                 key in ("remote.origin.url", "remote.origin.pushurl")
-                and _USERINFO.sub("://", value, count=1) == self._repo_url
+                and _without_credential(value) == self._repo_url
                 for key, value in where
             )
         )
@@ -859,9 +908,9 @@ class GitSyncProvider(SyncTransportProvider):
         - ``"ours"``: a clone Git Sync made (:data:`_MARK`), pointing at Git remote URL.
         - ``"adopt"``: pointing at Git remote URL, unmarked, and holding nothing but Git Sync's
           own work — a clone an older Git Sync made, before clones were marked.
-        - ``"rewrite"``: Git Sync's, its origin Git remote URL with a user name or token written
-          into it (:meth:`_leaked`). Its origin is rewritten without it, and every copy of it
-          taken out of the clone (:meth:`_rewrite_origin`), rather than the clone replaced.
+        - ``"rewrite"``: Git Sync's, its origin Git remote URL with a credential written into it
+          (:meth:`_leaked`). Its origin is rewritten without it, and every copy of it taken out
+          of the clone (:meth:`_rewrite_origin`), rather than the clone replaced.
         - ``"replace"``: Git Sync's, but pointing at another remote — Git remote URL changed, or
           its own settings send pushes elsewhere — and holding nothing that remote lacks but Git
           Sync's own work. A fresh clone of Git remote URL takes its place.
@@ -899,14 +948,14 @@ class GitSyncProvider(SyncTransportProvider):
 
     def _rewrite_origin(self) -> None:
         """Point the clone's origin at Git remote URL itself, with no push URL of its own, and
-        take the user name and token its old URL carried out of every file under ``.git`` that
-        holds a copy. git today writes the URL whole only into ``.git/config`` — its fetch
-        record and its logs name the URL without the credential — but a clone an older git made
-        may hold it in those as well."""
+        take the credential its old URL carried (:func:`_credential`) out of every file under
+        ``.git`` that holds a copy. git today writes the URL whole only into ``.git/config`` —
+        its fetch record and its logs name the URL without the credential — but a clone an older
+        git made may hold it in those as well."""
         old = {
             value
             for key, value in self._clone_config()
-            if key in ("remote.origin.url", "remote.origin.pushurl") and _USERINFO.search(value)
+            if key in ("remote.origin.url", "remote.origin.pushurl") and _credential(value)[0]
         }
         self._git("config", "--local", "--replace-all", "remote.origin.url", self._repo_url)
         self._git("config", "--local", "--unset-all", "remote.origin.pushurl", check=False)
@@ -914,9 +963,8 @@ class GitSyncProvider(SyncTransportProvider):
             (value.encode(), self._repo_url.encode()) for value in old
         ]
         for value in old:
-            userinfo = _USERINFO.search(value)
-            if userinfo:
-                needles.append((userinfo.group(0).encode(), b"://"))
+            copy, clean = _credential(value)
+            needles.append((copy.encode(), clean.encode()))
         _scrub(os.path.join(self._clone, ".git"), needles)
 
     def _replace_clone(self) -> None:

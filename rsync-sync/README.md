@@ -24,7 +24,7 @@ above it.
    Rsync Sync never creates it: a sync root that isn't there stops the sync with that as its
    error. A folder missing under a disk or share that isn't mounted looks just like one not
    made yet, and making it would quietly move the sync onto the local disk.
-2. **Fill in the settings** (Settings → Apps → Rsync Sync):
+2. **Fill in the settings** (the Rsync Sync card in Settings → Providers):
    - **SSH host** — `nas.local` or `backup@nas.local`. Leave empty to rsync to a local or
      mounted path instead.
    - **Sync root path** — the absolute path **on the target**, e.g. `/srv/personalclaw-sync`.
@@ -184,4 +184,4 @@ Reaches only the host you set in **SSH host**, over ssh. With **SSH host** empty
 
 ## License
 
-Apache-2.0. See `LICENSE`.
+MIT — see `LICENSE`.

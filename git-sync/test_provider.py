@@ -69,11 +69,11 @@ def _git(cwd: str, *args: str) -> subprocess.CompletedProcess:
 def ssh_url(tmp_path, monkeypatch):
     """``ssh_url(path)``: an ``ssh://`` URL that reaches the repository at *path* on this machine.
 
-    The owner's ssh command, in a scratch ``HOME`` both the tests' git and the transport's read,
-    is a stand-in: it records the SSH agent socket and the planted secret it was handed, then
-    runs the git command a server would. It runs that command with an environment of its own,
-    as a login on the server gets one, so none of the client's git settings reach the server's
-    git: a hook the remote runs is the remote's."""
+    The owner's ssh command, in a scratch global git file (``GIT_CONFIG_GLOBAL``) both the
+    tests' git and the transport's read, is a stand-in: it records the SSH agent socket and the
+    planted secret it was handed, then runs the git command a server would. It runs that command
+    with an environment of its own, as a login on the server gets one, so none of the client's
+    git settings reach the server's git: a hook the remote runs is the remote's."""
     home = tmp_path / "home"
     home.mkdir()
     seen = tmp_path / "ssh-saw"
@@ -86,6 +86,7 @@ def ssh_url(tmp_path, monkeypatch):
     )
     stand_in.chmod(0o755)
     (home / ".gitconfig").write_text(f"[core]\n\tsshCommand = {stand_in}\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(home / ".gitconfig"))
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
     return lambda path: f"ssh://example.invalid{os.path.realpath(path)}"
@@ -631,7 +632,7 @@ def test_a_refusal_git_reports_is_said_in_the_transports_words(remote, tmp_path)
     local = tmp_path / "elsewhere.git"
     subprocess.run(["git", "init", "--bare", "-b", "main", str(local)], check=True,
                    capture_output=True, text=True)
-    with open(os.path.join(os.environ["HOME"], ".gitconfig"), "a", encoding="utf-8") as fh:
+    with open(os.environ["GIT_CONFIG_GLOBAL"], "a", encoding="utf-8") as fh:
         fh.write(f'[url "{local}"]\n\tinsteadOf = {remote}\n')
 
     r = p.push([SyncObject("second.jsonl", b"two")])
@@ -1274,7 +1275,7 @@ def test_a_git_step_this_machines_git_settings_break_says_to_check_them(
     """git set up, in this machine's own git configuration, in a way that breaks a commit: a
     cleanup mode git does not have. The commit's failure used to arrive as "Command '[…]'
     returned non-zero exit status 128."."""
-    with open(os.path.join(os.environ["HOME"], ".gitconfig"), "a", encoding="utf-8") as fh:
+    with open(os.environ["GIT_CONFIG_GLOBAL"], "a", encoding="utf-8") as fh:
         fh.write("[commit]\n\tcleanup = pc-fixture-mode\n")
     clone = tmp_path / "clone"
 
@@ -1868,7 +1869,8 @@ def _answering(returncode: int = 0, stderr: str = "", *, hangs: bool = False):
 @pytest.mark.parametrize(
     ("url", "shown"),
     [
-        (_TOKEN_URLS["ssh"], "ssh://git.example.com:2222/owner/state.git"),
+        ("ssh://sync-user@git.example.com:2222/owner/state.git",
+         "ssh://git.example.com:2222/owner/state.git"),
         (_TOKEN_URLS["scp-like"], "git.example.com:owner/state.git"),
         (
             f"https://git.example.com/owner/state.git?access_token={TOKEN}",
@@ -1884,8 +1886,10 @@ def test_a_reachable_remote_is_named_without_the_credential_its_url_carries(
 ):
     """"git remote reachable: <the URL>" said Git remote URL whole, token included. The last
     case, a URL with nothing before its host, is a control: it reads as it is written. (An
-    https URL with a credential written into it is refused before git runs — see
-    ``test_an_http_url_with_a_credential_written_into_it_is_refused_without_showing_it``.)"""
+    https URL with a credential written into it, and an ssh one with a password, are refused
+    before git runs — see
+    ``test_an_http_url_with_a_credential_written_into_it_is_refused_without_showing_it`` and
+    ``test_an_ssh_url_with_a_password_written_into_it_is_refused_without_showing_it``.)"""
     monkeypatch.setattr(GitSyncProvider, "_run", _answering(0))
 
     res = GitSyncProvider(repo_url=url, local_clone=str(tmp_path / "c")).test()
@@ -1896,11 +1900,10 @@ def test_a_reachable_remote_is_named_without_the_credential_its_url_carries(
 @pytest.mark.parametrize(
     ("url", "token"),
     [
-        (_TOKEN_URLS["ssh"], ""),
         (_TOKEN_URLS["scp-like"], ""),
         ("https://git.example.com/owner/state.git", TOKEN),
     ],
-    ids=["ssh", "scp-like", "access-token"],
+    ids=["scp-like", "access-token"],
 )
 def test_the_credential_in_git_remote_url_appears_in_nothing_git_sync_says(
     tmp_path, ssh_url, monkeypatch, caplog, url, token
@@ -1909,7 +1912,8 @@ def test_the_credential_in_git_remote_url_appears_in_nothing_git_sync_says(
     listing, a read or a registry swap returns or raises — for a remote that answers, one whose
     error names the URL whole (as an older git's does), one that fails without a word (so the
     failure names its command line), one that never answers, a clone that fails, and a working
-    clone Git Sync won't sync through. The token is in the URL, or in Access token."""
+    clone Git Sync won't sync through. The token is in the URL, or in Access token. (A URL that
+    is refused before git runs says only its refusal: see the refusal tests.)"""
     real_run = GitSyncProvider._run
     surfaces: list[str] = []
     signs_in = {"token": token} if token else {}
@@ -2491,6 +2495,7 @@ def web_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     (home / ".gitconfig").write_text("", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(home / ".gitconfig"))
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     for name in _PROXIES:
@@ -2748,6 +2753,111 @@ def test_a_clone_made_from_a_url_with_the_token_in_it_is_rewritten_without_it(
     assert web_home() == []
     tip = subprocess.run(["git", "-C", str(token_host.bare), "ls-tree", "-r", "--name-only",
                           "main"], check=True, capture_output=True, text=True).stdout.split()
+    assert "machines/a/seq-0002/x.jsonl" in tip
+
+
+# ── a password written into an ssh Git remote URL ────────────────────────────────────────
+
+SSH_PASS = "pc-fixture-ssh-pass-7c2a"
+
+
+def _password_refusal(url: str) -> str:
+    return (
+        "Git Sync won't use a password written into Git remote URL: git keeps it in the working "
+        "clone's .git/config and hands it to ssh on its command line, where anyone on this "
+        "machine can read it, and ssh never signs in with it. Take the password out of Git "
+        f"remote URL {ON_CARD}: leave the user name before the @, or nothing before the host "
+        f"({git_sync._shown(url)}), and sign in with your ssh key."
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        f"ssh://{SIGN_IN}:{SSH_PASS}@git.example.com/owner/state.git",
+        f"git+ssh://{SIGN_IN}:{SSH_PASS}@git.example.com:2222/owner/state.git",
+        f"ssh+git://:{SSH_PASS}@git.example.com/owner/state.git",
+    ],
+    ids=["ssh", "git+ssh-with-a-port", "no-user-name"],
+)
+def test_an_ssh_url_with_a_password_written_into_it_is_refused_without_showing_it(
+    tmp_path, monkeypatch, caplog, url
+):
+    """git kept a password written into an ssh Git remote URL in the working clone's
+    .git/config, and handed it to ssh on its command line as part of the login name, where
+    anyone on this machine can read it and ssh never signs in with it. Refused before git runs,
+    at every entry point, as an https URL with a credential in it is."""
+    started = _no_git(monkeypatch)
+    p = _provider(url, tmp_path)
+    says = _password_refusal(url)
+
+    with caplog.at_level(logging.DEBUG):
+        _refused_everywhere(p, says)
+        probed = p.test()
+
+    assert SSH_PASS not in says
+    for text in (repr(p), str(p), repr(probed.extra), *(r.getMessage() for r in caplog.records)):
+        assert SSH_PASS not in text, text
+    assert started == [], "git ran for an ssh URL with a password written into it"
+    assert not (tmp_path / "clone").exists()
+
+
+def test_an_ssh_url_with_only_a_user_name_is_not_refused(remote, tmp_path, c_locale):
+    """A control: ``ssh://user@host/…`` is how an ssh remote names its login, and nothing in it
+    is a credential."""
+    url = remote.replace("ssh://", f"ssh://{SIGN_IN}@", 1)
+
+    r = _provider(url, tmp_path).push([SyncObject("k", b"v")])
+
+    assert r.outcome == "delivered", r.detail
+    origin = _git(str(tmp_path / "clone"), "config", "--get", "remote.origin.url").stdout.strip()
+    assert origin == url
+
+
+@pytest.mark.parametrize("marked", [True, False], ids=["marked", "unmarked"])
+def test_a_clone_made_from_an_ssh_url_with_a_password_is_rewritten_without_it(
+    remote, tmp_path, c_locale, marked
+):
+    """Git remote URL set again without the password. The clone's origin still carried it, so
+    the clone read as one of another remote and was replaced, and a copy of the password in it
+    was only as safe as the folder's removal. Now its origin is rewritten, every copy taken out,
+    and the clone kept."""
+    clean = remote.replace("ssh://", f"ssh://{SIGN_IN}@", 1)
+    leaky = remote.replace("ssh://", f"ssh://{SIGN_IN}:{SSH_PASS}@", 1)
+    clone = tmp_path / "clone"
+    mark = ["-c", f"{MARK}=true"] if marked else []
+    subprocess.run(["git", "clone", "-q", *mark, leaky, str(clone)], check=True,
+                   capture_output=True, timeout=60)
+    (clone / "machines" / "a").mkdir(parents=True)
+    (clone / "machines" / "a" / "x.jsonl").write_bytes(b"1")
+    identity = ["-c", "user.name=PersonalClaw Sync", "-c", "user.email=sync@personalclaw.local"]
+    for step in (
+        ["checkout", "-q", "-B", "main"],
+        ["add", "-A"],
+        [*identity, "commit", "-qm", "sync: 1 objects"],
+        ["push", "-q", "origin", "main"],
+        ["fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main"],
+    ):
+        subprocess.run(["git", "-C", str(clone), *step], check=True, capture_output=True,
+                       timeout=60)
+    git_dir = clone / ".git"
+    (git_dir / "FETCH_HEAD").write_text(f"0000\t\tbranch 'main' of {leaky}\n", encoding="utf-8")
+    with open(git_dir / "logs" / "HEAD", "a", encoding="utf-8") as fh:
+        who = "PersonalClaw Sync <sync@personalclaw.local>"
+        fh.write(f"0000 0000 {who} 0 +0000\tclone: from {leaky}\n")
+    (git_dir / "pc-fixture-kept").write_text("only in the clone the transport found\n")
+    assert _files_holding(git_dir, SSH_PASS), "the clone this test is about holds no password"
+
+    r = _provider(clean, tmp_path).push([SyncObject("machines/a/seq-0002/x.jsonl", b"2")])
+
+    assert r.outcome == "delivered", r.detail
+    assert _git(str(clone), "config", "--get", "remote.origin.url").stdout.strip() == clean
+    assert _git(str(clone), "config", "--get", MARK).stdout.strip() == "true"
+    assert (git_dir / "pc-fixture-kept").exists(), "the clone was replaced, not rewritten"
+    assert _files_holding(tmp_path, SSH_PASS) == []
+    tip = subprocess.run(["git", "-C", str(tmp_path / "remote.git"), "ls-tree", "-r",
+                          "--name-only", "main"], check=True, capture_output=True,
+                         text=True).stdout.split()
     assert "machines/a/seq-0002/x.jsonl" in tip
 
 

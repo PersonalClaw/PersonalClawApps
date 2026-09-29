@@ -49,10 +49,6 @@ opened and checked just before rsync starts, and held open until it is done, so 
 unmount of its disk is refused as busy while rsync writes. A listing takes an unmarked root for
 no sync root at all. A root that isn't there, or isn't marked, is a failure the owner fixes by
 mounting it, creating it, marking it or correcting the setting — never a first sync.
-
-This module is named for the app rather than ``provider.py`` because the app's CLI step
-(``app_cli.py``) imports it: ``personalclaw setup`` runs every app's step in one process, where
-a bare ``provider`` is whichever app's was imported first.
 """
 
 import contextlib

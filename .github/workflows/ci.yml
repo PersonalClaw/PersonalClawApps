@@ -127,6 +127,10 @@ jobs:
       - name: No test reaches a real local model server
         # conftest.py refuses a connection to a local model server's port unless the test serves it.
         run: python -m pytest .github/tests/test_local_model_ports_are_refused.py -q
+      - name: No test's git reaches the machine's own credential helper
+        # conftest.py gives every test's git no system or global configuration and an empty
+        # credential.helper, and refuses a git that could still sign in with the machine's helper.
+        run: python -m pytest .github/tests/test_no_test_git_reaches_the_machines_credential_helper.py -q
       - name: The publication-hygiene rail reds on a planted defect
         # Drives the rail's own script against seeded repos: one control per rule and field.
         run: python -m pytest .github/tests/test_publication_hygiene.py -q
@@ -438,6 +442,8 @@ jobs:
           python-version: "3.12"
       - name: README census matches the tree
         run: python .github/scripts/check_readme_census.py
+      - name: Every app's README says the licence its LICENSE and app.json say
+        run: python .github/scripts/check_readme_license.py
 
   store-card-copy:
     # Cross-app rail: `description` is documented as "One or two sentences shown on the

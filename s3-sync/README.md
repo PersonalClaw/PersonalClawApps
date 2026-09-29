@@ -23,7 +23,7 @@ core, above it.
    scoped to your bucket and (if you set one) your prefix:
    `s3:PutObject`, `s3:GetObject`, `s3:ListBucket`, and nothing else. It never deletes, never
    changes an ACL, and never touches another bucket. Do not reuse an admin key.
-3. **Fill in the settings** (Settings → Apps → S3 Sync):
+3. **Fill in the settings** (the S3 Sync card in Settings → Providers):
    - **Endpoint URL** — scheme included, e.g. `https://s3.us-east-1.amazonaws.com`, or
      `http://nas.local:9000` for a self-hosted MinIO.
    - **Bucket**, and optionally a **key prefix** to confine the sync root.
@@ -161,4 +161,4 @@ Reaches only the S3 store you set in **Endpoint URL**; with it empty, it reaches
 
 ## License
 
-Apache-2.0. See `LICENSE`.
+MIT — see `LICENSE`.

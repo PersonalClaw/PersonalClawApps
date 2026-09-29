@@ -41,7 +41,7 @@ other app. (Or [install it from a shell](../docs/third-party-install.md#installi
 
 | Key | Label | Notes |
 |---|---|---|
-| `repo_url` | Git remote URL | The ssh or https URL of a git remote you own (both machines point at the same one). A remote at a local path is refused, and so is an https URL with a user name or token written into it: put the token in Access token. Leave empty to configure later — the transport stays idle until set. |
+| `repo_url` | Git remote URL | The ssh or https URL of a git remote you own (both machines point at the same one). A remote at a local path is refused, and so is an https URL with a user name or token written into it (put the token in Access token), or an ssh one with a password (ssh signs in with your key). Leave empty to configure later — the transport stays idle until set. |
 | `local_clone` | Local working clone | Where the working clone lives on this machine (default `~/.personalclaw/sync/git-sync`). Supports `~` and `$VARS`. Cloned on first use, reused after. |
 | `branch` | Branch | The branch to sync on (default `main`). Both machines must use the same branch. A branch the remote doesn't have yet starts empty. |
 | `token` | Access token | For an https remote that needs a token to sign in (sensitive: kept in PersonalClaw's credential store). Handed to git by its own credential helper, never written into the working clone or onto a command line; only an https remote is given it, or an http one on this machine. Leave empty for ssh. |
@@ -143,6 +143,12 @@ clone of an empty repo succeeds and the first push publishes the branch.
   to anywhere else would carry it unencrypted, so that is refused — and an ssh remote never is.
   A working clone made earlier from a URL with a token in it has its origin rewritten without
   it, and every copy of the token taken out of its `.git`.
+- **A password in an ssh Git remote URL is refused too.** git would keep
+  `ssh://user:password@host/…` in `.git/config` and hand the password to ssh on its command line
+  as part of the login name, where anyone on this machine can read it, and ssh never signs in
+  with it. Take the password out and sign in with your ssh key; a working clone made from such a
+  URL has its origin rewritten with only the user name, and every copy of the password taken out
+  of its `.git`.
 - **A credential in Git remote URL is never shown.** A URL can carry a user name and password,
   or a token (`https://<token>@host/…`). **Test connection**'s success, and every failure's detail
   and error, name the URL without it — and without any query or fragment, or anything written
