@@ -25,19 +25,22 @@ What counts as reaching the network, read on the AST from each bundle's own code
 * an ACP agent entry: the agent's CLI reaches its vendor, and an adapter ``npx`` fetches;
 * in a file that starts a program, a program that talks to another machine (``rsync``,
   ``ssh``, ``scp``, ``sftp``, ``curl``, ``wget``, a forge's CLI, ``npx``), or git with
-  ``clone``, ``fetch``, ``pull``, ``push`` or ``ls-remote``; or a command line for a shell
-  (``os.system``, ``shell=True``) any of whose commands runs one, read past ``VAR=value``,
-  simple prefixes (``env``, ``sudo``, ``nohup`` …) and one level of ``sh -c``. A spawn is
-  recognised by what it is, resolved through the file's imports and assignments, whatever name
-  it was imported or bound as; one passed as a callable (``run_in_executor``, ``partial``) marks
-  the file as starting programs too.
+  ``clone``, ``fetch``, ``pull``, ``push`` or ``ls-remote``, one given by path read by its
+  basename (``/usr/bin/ssh``); or a command line for a shell (``os.system``, ``shell=True``)
+  any of whose commands runs one, read past ``VAR=value``, simple prefixes (``env``, ``sudo``,
+  ``nohup`` …) and one level of ``sh -c``, and into its command substitutions (``$(…)``,
+  backticks, ``<(…)``). A spawn is recognised by what it is, resolved through the file's
+  imports and assignments, whatever name it was imported or bound as; one passed as a callable
+  (``run_in_executor``, ``partial``) marks the file as starting programs too;
+* the code in a constant handed to ``exec`` or ``eval``, read like the rest of the file.
 
 An app that shows any of those and does not declare ``network: true`` fails by name, with the
 signals the rail saw, unless ``EXEMPT`` says why it reaches no network after all. A stale
 exemption fails too, and so does a file the rail cannot parse, since its network use is then
 unknown. So does, in an app that does not declare network, unless ``EXEMPT`` says why, an import
 whose module name is only known at run time, or code loaded from a path that is not the app's
-own (``spec_from_file_location``, ``SourceFileLoader``, ``runpy.run_path``).
+own (``spec_from_file_location``, ``SourceFileLoader``, ``runpy.run_path``, or ``exec`` of a
+file's text).
 
 **Vacuity floor.** A rail that matches nothing reads as clean, so the detectors are checked
 against every shape they tell apart before anything is read, and each app in
@@ -146,6 +149,11 @@ SPAWNS = SHELL_SPAWNS | frozenset(
     }
 )
 
+#: Spawns handed their argv as separate arguments, the program first.
+EXEC_SPAWNS = frozenset(
+    {"asyncio.create_subprocess_exec", "asyncio.subprocess.create_subprocess_exec"}
+)
+
 #: Programs that talk to another machine when an app's code starts them.
 REMOTE_PROGRAMS = frozenset({"rsync", "ssh", "scp", "sftp", "curl", "wget", "gh", "glab", "npx"})
 
@@ -196,6 +204,12 @@ MODULE_FROM_SPEC = "importlib.util.module_from_spec"
 RUN_MODULE = "runpy.run_module"
 #: Calls that make a spec whose origin the rail judges where it is made.
 SPEC_MAKERS = frozenset({FIND_SPEC, "importlib.util.spec_from_file_location"})
+
+#: Calls that run the code they are handed as text, the call that compiles it first, and the
+#: calls that open a file whose text can be read.
+EXECS = frozenset({"exec", "eval", "builtins.exec", "builtins.eval"})
+COMPILES = frozenset({"compile", "builtins.compile"})
+OPENS = frozenset({"open", "builtins.open", "io.open", "codecs.open"})
 
 #: Apps whose code shows a signal but reaches no network, and why.
 EXEMPT: dict[str, str] = {}
@@ -401,11 +415,68 @@ def _shell_text(node: ast.AST) -> str | None:
     return "".join(UNKNOWN_WORD if text is None else text for text in texts)
 
 
+def _closing(line: str, start: int) -> int:
+    """Where the parenthesis open just before *start* closes, quotes honoured; the line's end
+    when it never does."""
+    depth, quote, at = 1, "", start
+    while at < len(line):
+        char = line[at]
+        if char == "\\" and quote != "'":
+            at += 2
+            continue
+        if quote:
+            quote = "" if char == quote else quote
+        elif char in "'\"":
+            quote = char
+        elif char in "()":
+            depth += 1 if char == "(" else -1
+            if not depth:
+                return at
+        at += 1
+    return len(line)
+
+
+def _substitutions(line: str) -> tuple[str, list[str]]:
+    """*line* with each command substitution the shell runs read as one unknown word of its
+    command, and the command lines substituted: ``$(…)`` and backticks, which double quotes do
+    not stop, and ``<(…)`` and ``>(…)``. Inside single quotes nothing is substituted."""
+    outer: list[str] = []
+    inner: list[str] = []
+    quote, at = "", 0
+    while at < len(line):
+        char = line[at]
+        if quote == "'":
+            quote = "" if char == "'" else quote
+        elif char == "\\":
+            outer.append(line[at : at + 2])
+            at += 2
+            continue
+        elif char in "'\"" and quote in ("", char):
+            quote = "" if quote else char
+        elif char == "`":
+            end = at + 1
+            while end < len(line) and line[end] != "`":
+                end += 2 if line[end] == "\\" else 1
+            inner.append(line[at + 1 : end])
+            outer.append(UNKNOWN_WORD)
+            at = end + 1
+            continue
+        elif line.startswith("$(", at) or (not quote and line.startswith(("<(", ">("), at)):
+            end = _closing(line, at + 2)
+            inner.append(line[at + 2 : end])
+            outer.append(UNKNOWN_WORD)
+            at = end + 1
+            continue
+        outer.append(char)
+        at += 1
+    return "".join(outer), inner
+
+
 def _shell_commands(line: str) -> list[list[str]]:
     """The words of each command on a shell line, split where the shell splits them (``&&``,
     ``||``, ``;``, ``|``, ``&``, a newline), its quoting honoured: a newline inside quotes, or
-    escaped by a backslash, ends no command."""
-    line = line.replace("\\\n", "")
+    escaped by a backslash, ends no command. The commands a substitution runs are read too."""
+    line, substituted = _substitutions(line.replace("\\\n", ""))
     lexer = shlex.shlex(line, posix=True, punctuation_chars=PUNCTUATION)
     lexer.whitespace = " \t\r"  # a newline is punctuation here, not space
     lexer.commenters = ""  # a comment would swallow the newline that ends it
@@ -423,6 +494,8 @@ def _shell_commands(line: str) -> list[list[str]]:
         elif token.strip("()"):  # a subshell's parentheses are not words
             words.append(token)
     commands += [words] if words else []
+    for inner in substituted:
+        commands += _shell_commands(inner)
     return commands
 
 
@@ -455,28 +528,45 @@ def _dash_c(args: list[str]) -> str | None:
     return None
 
 
+def _basename(word: str) -> str:
+    """A program's name however it is given: ``/usr/bin/ssh`` and ``./bin/ssh`` are ``ssh``."""
+    return word.rsplit("/", 1)[-1]
+
+
+def _program_at(words: list[str]) -> int | None:
+    """Where a command's program is among its *words*: past ``VAR=value`` assignments and
+    simple prefixes (``env``, ``sudo -u deploy`` …) with their options; ``None`` when it runs
+    none."""
+    at = 0
+    while at < len(words):
+        if ASSIGNMENT.match(words[at]):
+            at += 1
+            continue
+        prefix = _basename(words[at])
+        if prefix not in SHELL_PREFIXES:
+            return at
+        at += 1
+        if prefix == "command" and words[at : at + 1] in (["-v"], ["-V"]):
+            return None  # `command -v x` asks where x is, and runs nothing
+        while at < len(words) and (words[at].startswith("-") or ASSIGNMENT.match(words[at])):
+            # an option's value is not the program either
+            at += 2 if words[at] in PREFIX_VALUE_OPTIONS.get(prefix, ()) else 1
+    return None
+
+
 def _command_signals(words: list[str], nested: bool = False) -> list[str]:
-    """What one shell command runs, read past ``VAR=value`` assignments and simple prefixes
-    (``env``, ``sudo -u deploy`` …); a shell's ``-c`` script is read one level down."""
-    words = list(words)
-    while words and (ASSIGNMENT.match(words[0]) or words[0] in SHELL_PREFIXES):
-        prefix = words.pop(0)
-        if prefix == "command" and words[:1] in (["-v"], ["-V"]):
-            return []  # `command -v x` asks where x is, and runs nothing
-        while prefix in SHELL_PREFIXES and words and (
-            words[0].startswith("-") or ASSIGNMENT.match(words[0])
-        ):
-            if words.pop(0) in PREFIX_VALUE_OPTIONS.get(prefix, ()):
-                words = words[1:]  # the option's value, which is not the program
-    if not words:
+    """What one command runs, its program read by basename; a shell's ``-c`` script is read one
+    level down."""
+    at = _program_at(words)
+    if at is None:
         return []
-    program = words[0].rsplit("/", 1)[-1]
+    program = _basename(words[at])
     if program in REMOTE_PROGRAMS:
         return [f"starts {program}"]
     if program == "git":
-        verb = _git_subcommand(words[1:])
+        verb = _git_subcommand(words[at + 1 :])
         return [f"runs git {verb}"] if verb in GIT_REMOTE_VERBS else []
-    script = _dash_c(words[1:]) if program in SHELLS and not nested else None
+    script = _dash_c(words[at + 1 :]) if program in SHELLS and not nested else None
     found: list[str] = []
     for command in _shell_commands(script) if script is not None else []:
         found += _command_signals(command, nested=True)
@@ -585,6 +675,74 @@ def _loader_signals(
     return [signal] if signal else []
 
 
+#: Every value each name in a file is bound to.
+Bindings = dict[str, list[ast.AST]]
+
+
+def _bindings(tree: ast.AST) -> Bindings:
+    """Every value each name is bound to, by an assignment or a ``with … as``, at any scope."""
+    pairs = _assigned(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if item.optional_vars is not None:
+                    pairs += _pairs(item.optional_vars, item.context_expr)
+    out: Bindings = {}
+    for name, value in pairs:
+        out.setdefault(name, []).append(value)
+    return out
+
+
+def _read_path(node: ast.AST, aliases: dict[str, str], bindings: Bindings) -> ast.AST | None:
+    """The path whose text *node* reads (``open(p).read()``, ``Path(p).read_text()``, or
+    ``f.read()`` after ``with open(p) as f``), or ``None`` when it reads no file."""
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+        return None
+    receiver, method = node.func.value, node.func.attr
+    if method in ("read_text", "read_bytes"):
+        return receiver
+    if method != "read":
+        return None
+    name = _dotted(receiver)
+    for opened in [receiver, *(bindings.get(name, []) if name else [])]:
+        if not isinstance(opened, ast.Call):
+            continue
+        if _resolve(_callee(opened), aliases) in OPENS:
+            return _argument(opened, 0, "file") or opened
+        if isinstance(opened.func, ast.Attribute) and opened.func.attr == "open":
+            return opened.func.value  # Path(p).open()
+    return None
+
+
+def _source_signals(
+    node: ast.AST, package: str, aliases: dict[str, str], own: set[str], bindings: Bindings,
+    seen: frozenset[str] = frozenset(),
+) -> list[str]:
+    """What running the code *node* holds shows (``exec``, ``eval``), ``compile`` looked through
+    and a name followed to what it is bound to: a constant is read as code like the rest of the
+    file, and a file's text is code from a path only known at run time unless that path is
+    built on ``__file__``."""
+    if isinstance(node, ast.Call) and node.args:
+        if _resolve(_callee(node), aliases) in COMPILES:
+            return _source_signals(node.args[0], package, aliases, own, bindings, seen)
+    text = _text(node)
+    if text is not None:
+        try:
+            return [signal for _line, signal in signals(text, package)]
+        except (SyntaxError, ValueError):
+            return []  # exec raises before it runs any of it
+    name = _dotted(node)
+    if name:
+        found: list[str] = []
+        for value in bindings.get(name, []) if name not in seen else []:
+            found += _source_signals(value, package, aliases, own, bindings, seen | {name})
+        return list(dict.fromkeys(found))
+    path = _read_path(node, aliases, bindings)
+    if path is None:
+        return []
+    return [] if _anchored(path, own) else [RUNTIME_PATH]
+
+
 def signals(source: str, package: str = "") -> list[tuple[int, str]]:
     """``(line, signal)`` for every sign in *source* that its code reaches the network.
     *package* is the file's own package, for a relative name imported at run time."""
@@ -592,10 +750,18 @@ def signals(source: str, package: str = "") -> list[tuple[int, str]]:
     aliases = _aliases(tree)
     own = _own_paths(tree)
     specs = _specs(tree, aliases)
+    bindings: Bindings | None = None  # read only for a file that runs code with exec
     called = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
+    # A function or class the module defines under a builtin's name is not that builtin.
+    defined = {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
     found: list[tuple[int, str]] = []
     spawns = mentions_git = False
     constants: list[tuple[int, str]] = []
+    argvs: list[list[ast.expr]] = []
     for node in ast.walk(tree):
         for dotted in _imported(node):
             signal = _import_signal(dotted)
@@ -606,10 +772,16 @@ def signals(source: str, package: str = "") -> list[tuple[int, str]]:
             # starts programs as surely as one called by name.
             if _resolve(_dotted(node), aliases) in SPAWNS:
                 spawns = True
+        if isinstance(node, (ast.List, ast.Tuple)) and node.elts:
+            argvs.append(node.elts)
         if isinstance(node, ast.Call):
             callee = _resolve(_callee(node), aliases)
             loaded = _loader_signals(node, callee, package, aliases, own, specs)
             found += [(node.lineno, signal) for signal in loaded]
+            if callee in EXECS and callee not in defined and node.args:
+                bindings = _bindings(tree) if bindings is None else bindings
+                ran = _source_signals(node.args[0], package, aliases, own, bindings)
+                found += [(node.lineno, signal) for signal in ran]
             if callee in SPAWNS:
                 spawns = True
                 shell = callee in SHELL_SPAWNS or any(
@@ -618,6 +790,10 @@ def signals(source: str, package: str = "") -> list[tuple[int, str]]:
                 )
                 if shell and node.args:
                     found += _shell_signals(node.lineno, node.args[0])
+                elif callee in EXEC_SPAWNS:
+                    argvs.append(node.args)
+                elif node.args and _text(node.args[0]) is not None:
+                    argvs.append(node.args[:1])  # a program given alone, as a string
             if callee.split(".")[-1] == "git_argv":
                 spawns = mentions_git = True
             if callee in RUNTIME_IMPORTS:
@@ -631,6 +807,17 @@ def signals(source: str, package: str = "") -> list[tuple[int, str]]:
             if node.value == "git":
                 mentions_git = True
     if spawns:
+        # An argv's program given by path is read by its basename, as on a shell line; one
+        # named bare is read with the file's constants below.
+        for elts in argvs:
+            words = [_text(elt) or UNKNOWN_WORD for elt in elts]
+            at = _program_at(words)
+            if at is None or "/" not in words[at]:
+                continue
+            program = _basename(words[at])
+            mentions_git = mentions_git or program == "git"
+            if program in REMOTE_PROGRAMS:
+                found.append((elts[at].lineno, f"starts {program}"))
         for line, value in constants:
             if value in REMOTE_PROGRAMS:
                 found.append((line, f"starts {value}"))
@@ -769,6 +956,32 @@ def _detector_problems() -> list[str]:
         ("subprocess.run('env -C /srv/ssh make', shell=True)\n", []),
         ("subprocess.run(\"bash -euo pipefail -c 'git push'\", shell=True)\n", ["runs git push"]),
         ("subprocess.run('bash -o pipefail deploy.sh', shell=True)\n", []),
+        # a command substitution is one word of its command, and its commands are read too
+        ("subprocess.run('echo $(ssh host uptime)', shell=True)\n", ["starts ssh"]),
+        ("subprocess.run('x=`git fetch`', shell=True)\n", ["runs git fetch"]),
+        ("subprocess.run('echo \"$(curl -s x)\"', shell=True)\n", ["starts curl"]),
+        ("subprocess.run('git -C $(pwd) push', shell=True)\n", ["runs git push"]),
+        ("subprocess.run('diff <(ssh h cat f) f', shell=True)\n", ["starts ssh"]),
+        ("subprocess.run(\"echo '$(ssh host)' '`ssh host`'\", shell=True)\n", []),
+        (r"subprocess.run('echo \\`ssh host\\`', shell=True)", []),
+        ("subprocess.run('echo \"<(ssh h)\"', shell=True)\n", []),
+        # an argv's program given by path is read by its basename, and only its program
+        ("import subprocess\nsubprocess.run(['/usr/bin/ssh', host])\n", ["starts ssh"]),
+        ("import subprocess\nsubprocess.run(['./bin/rsync', '-a', a, b])\n", ["starts rsync"]),
+        (
+            "import asyncio\nasyncio.create_subprocess_exec('/opt/homebrew/bin/gh', 'pr')\n",
+            ["starts gh"],
+        ),
+        ("import subprocess\nsubprocess.Popen('/usr/local/bin/wget')\n", ["starts wget"]),
+        ("import subprocess\nsubprocess.run(['/usr/bin/git', 'push'])\n", ["runs git push"]),
+        (
+            "import subprocess\nsubprocess.run(['/usr/bin/env', 'A=1', '/usr/bin/scp', a, b])\n",
+            ["starts scp"],
+        ),
+        ("import subprocess\nsubprocess.run(['/srv/ssh-backup/tool'])\n", []),
+        ("import subprocess\nsubprocess.run(['cp', '/usr/bin/ssh', dst])\n", []),
+        ("import subprocess\nsubprocess.run(['ls', '/etc/ssh'])\nDATA = '/srv/rsync'\n", []),
+        ("KNOWN = ['/usr/bin/ssh']\n", []),
         # a spawn bound by assignment, at any scope, and called through the name
         ("import subprocess\nrun = subprocess.run\nrun(['ssh', host])\n", ["starts ssh"]),
         (
@@ -834,6 +1047,27 @@ def _detector_problems() -> list[str]:
         ("import runpy\nrunpy.run_path(path)\n", [RUNTIME_PATH]),
         ("import importlib.util\nmodule_from_spec = importlib.util.module_from_spec\n"
          "module_from_spec(handed_in)\n", [RUNTIME_NAME]),
+        # code run by exec or eval: a constant is read as code, and a file's text is code from a
+        # path only known at run time, unless the path is built on __file__
+        ("exec(open(path).read())\n", [RUNTIME_PATH]),
+        ("exec(compile(open(path).read(), path, 'exec'))\n", [RUNTIME_PATH]),
+        ("from pathlib import Path\nexec(Path(path).read_text())\n", [RUNTIME_PATH]),
+        ("with open(path) as f:\n    exec(f.read(), {})\n", [RUNTIME_PATH]),
+        (
+            "src = Path(path).read_text()\ncode = compile(src, path, 'exec')\neval(code)\n",
+            [RUNTIME_PATH],
+        ),
+        ("exec('import socket')\n", ["imports socket (sockets)"]),
+        (
+            "from pathlib import Path\nHERE = Path(__file__).parent\n"
+            "exec((HERE / 'plugin.py').read_text())\n",
+            [],
+        ),
+        ("exec(open(os.path.join(os.path.dirname(__file__), 'x.py')).read())\n", []),
+        ("exec('x = 1')\nexec('def (')\n", []),
+        ("open(path).read()\n", []),
+        ("sandbox.exec(open(path).read())\n", []),
+        ("def exec(command):\n    pass\nexec(open(path).read())\n", []),
     ]
     problems = []
     for source, want in cases:

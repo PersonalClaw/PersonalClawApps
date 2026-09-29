@@ -83,7 +83,7 @@ BUILT = {
     "spec-builder/specs.py::SpecStore._git::subprocess.run": (
         "read-only git in the owner's source repository, which an agent's shell can write"
     ),
-    "rsync-sync/provider.py::RsyncSyncProvider._run::subprocess.run": (
+    "rsync-sync/rsync_sync_transport.py::RsyncSyncProvider._run::subprocess.run": (
         "rsync over ssh to the owner's own host: the allowlist and the SSH agent socket only"
     ),
 }

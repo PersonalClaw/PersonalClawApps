@@ -25,8 +25,10 @@ from typing import Any
 
 import pytest
 
-import provider as provider_mod
-from provider import (
+import app_cli
+import rsync_sync_transport as provider_mod
+from rsync_sync_transport import (
+    RootRefused,
     RsyncConfigError,
     RsyncSyncProvider,
     create_provider,
@@ -34,6 +36,7 @@ from provider import (
     validate_remote_path,
 )
 
+from personalclaw.sdk.cli import DoctorLine, SetupContext
 from personalclaw.sdk.net import sentence_with_detail
 from personalclaw.sdk.sync import RemoteRef, SyncObject
 
@@ -43,6 +46,9 @@ needs_rsync = pytest.mark.skipif(not HAVE_RSYNC, reason="rsync binary not availa
 #: Where a failure's sentence sends the user to fix a setting, and what a retried one adds.
 ON_CARD = "on the Rsync Sync card in Settings → Providers"
 RETRIES = "Sync tries again on its next run."
+#: The file that marks a folder as the sync root, and the command that puts it there.
+MARKER = ".personalclaw-sync-root"
+SETUP = "personalclaw setup --app rsync-sync"
 
 
 def _answering(code: int, stderr: str):
@@ -57,12 +63,30 @@ def _answering(code: int, stderr: str):
 def _no_root(path: str, where: str) -> str:
     """What a sync root path that isn't there says — a folder this transport never creates, since
     a share that isn't mounted looks just like one — with the step for each likely cause: the
-    share, a folder not made yet, and a mistyped setting."""
+    share, a folder not made yet (made, it is marked), and a mistyped setting."""
     return (
         f"The sync root path {path} doesn't exist {where}. If it's on a disk or share that isn't "
-        f"mounted, mount it; if it's the folder you meant, create it (mkdir -p {path}); otherwise "
-        f"set Sync root path {ON_CARD} to the right folder. Then sync again."
+        f"mounted, mount it; if it's the folder you meant, create it (mkdir -p {path}) and run "
+        f"{SETUP} to mark it; otherwise set Sync root path {ON_CARD} to the right folder. Then "
+        "sync again."
     )
+
+
+def _no_marker(path: str, where: str) -> str:
+    """What a sync root without its marker says: the empty folder a share that isn't mounted
+    leaves looks just like one, so it asks."""
+    return (
+        f"The sync root path {path} {where} has no {MARKER} file in it, so Rsync Sync won't sync "
+        "with it. Is the disk or share it's on mounted? If it is, and this is the sync root you "
+        f"meant, run {SETUP} to mark it. Then sync again."
+    )
+
+
+def _mark(root: pathlib.Path) -> pathlib.Path:
+    """Make ``root`` a sync root as ``personalclaw setup`` leaves one: there, and marked."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / MARKER).write_text("a marker a test put here\n", encoding="utf-8")
+    return root
 
 
 @pytest.fixture(autouse=True)
@@ -79,10 +103,8 @@ def isolated_home(tmp_path, monkeypatch):
 
 @pytest.fixture
 def target(tmp_path):
-    """A local directory standing in for the sync root."""
-    d = tmp_path / "target"
-    d.mkdir()
-    return d
+    """A local directory standing in for the sync root, marked as setup leaves it."""
+    return _mark(tmp_path / "target")
 
 
 @pytest.fixture
@@ -208,6 +230,13 @@ class TestArgumentInjection:
         assert "no spaces or quotes" in p._unconfigured_detail()
 
 
+#: What ``rsync --list-only`` prints for a marked sync root with nothing else in it yet.
+LISTED_MARKED = (
+    "drwxr-xr-x          128 2026/09/28 12:00:00 .\n"
+    f"-rw-r--r--           64 2026/09/28 12:00:00 {MARKER}\n"
+)
+
+
 class TestCommandConstruction:
     def _capture(self, monkeypatch, provider) -> list[list[str]]:
         seen: list[list[str]] = []
@@ -216,7 +245,9 @@ class TestCommandConstruction:
         def fake_run(argv, **kw):
             seen.append(list(argv))
             kwargs_seen.append(kw)
-            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+            # A listing answers as a marked sync root with nothing else in it yet does.
+            listed = LISTED_MARKED if "--list-only" in argv else ""
+            return subprocess.CompletedProcess(argv, 0, stdout=listed, stderr="")
 
         monkeypatch.setattr(provider_mod.subprocess, "run", fake_run)
         provider._captured_kwargs = kwargs_seen  # type: ignore[attr-defined]
@@ -557,7 +588,7 @@ class TestFailureHandling:
             raise subprocess.TimeoutExpired(cmd="rsync", timeout=300)
 
         monkeypatch.setattr(provider_mod.subprocess, "run", slow)
-        root = tmp_path / "t"
+        root = _mark(tmp_path / "t")
         p = create_provider({"path": str(root), "staging_dir": str(tmp_path / "s")})
         res = p.push([SyncObject(key="k", data=b"v")])
         says = (
@@ -598,7 +629,7 @@ class TestFailureHandling:
         """Driven through a real exec of a binary that cannot exist. "cannot run rsync:
         [Errno 2] No such file or directory: '…'" used to be the whole message."""
         p = RsyncSyncProvider(
-            path=str(tmp_path / "t"),
+            path=str(_mark(tmp_path / "t")),
             staging_dir=str(tmp_path / "s"),
             rsync_bin="/nonexistent/pc-fixture-rsync",
         )
@@ -628,7 +659,7 @@ class TestFailureHandling:
             "run",
             _answering(23, "rsync: link_stat failed: No such file\n"),
         )
-        root = tmp_path / "t"
+        root = _mark(tmp_path / "t")
         p = create_provider({"path": str(root), "staging_dir": str(tmp_path / "s")})
         res = p.push([SyncObject(key="k", data=b"v")])
         assert res.outcome == "transient"
@@ -651,8 +682,7 @@ def _blocked(tmp_path: pathlib.Path) -> tuple[RsyncSyncProvider, pathlib.Path, p
     as any user. Returns it, that path, and its sync root."""
     blocker = tmp_path / "not-a-folder"
     blocker.write_text("a file where the working directory should be", encoding="utf-8")
-    root = tmp_path / "target"
-    root.mkdir(exist_ok=True)
+    root = _mark(tmp_path / "target")
     provider = RsyncSyncProvider(path=str(root), staging_dir=str(blocker), timeout_secs=60)
     return provider, blocker, root
 
@@ -881,7 +911,7 @@ class TestWhatAFailureSays:
         assert RETRIES not in permanent.detail
 
     def test_a_local_folder_that_refuses_names_personalclaw(self, tmp_path, monkeypatch):
-        root = tmp_path / "t"
+        root = _mark(tmp_path / "t")
         stderr = f'rsync: [Receiver] mkstemp "{root}/.k.Xy12Ab" failed: Permission denied (13)\n'
         monkeypatch.setattr(provider_mod.subprocess, "run", _answering(23, stderr))
         p = create_provider({"path": str(root), "staging_dir": str(tmp_path / "s")})
@@ -1373,6 +1403,418 @@ class TestTheSyncRootIsNeverCreated:
                 p.cas_registry(expected, b"{}")
             assert str(caught.value).startswith(f"{says} Details: "), caught.value
         assert list(stub.iterdir()) == [], "a folder was made under the empty mount point"
+
+
+# ── only a marked sync root is synced ────────────────────────────────────────────────
+#
+# A share that isn't mounted can leave an empty folder where the sync root was — its mount point,
+# when the root IS the share — and that folder is there, so no check that the root exists can
+# tell it from a new sync root. The first push wrote the sync into it, on the local disk. So
+# setup marks the root with a file once the owner says its disk is mounted, and every write goes
+# only into a root that holds it — checked in the write itself, so a disk gone since the last
+# look is never written in its absence.
+
+
+def _holds_open(identity: tuple[int, int]) -> bool:
+    """Whether this process has the file or folder with this ``(st_dev, st_ino)`` open."""
+    for name in os.listdir("/dev/fd"):
+        try:
+            found = os.fstat(int(name))
+        except (OSError, ValueError):
+            continue
+        if (found.st_dev, found.st_ino) == identity:
+            return True
+    return False
+
+
+@needs_rsync
+class TestOnlyAMarkedRootIsSynced:
+    @pytest.mark.parametrize("over", ["local", "ssh"])
+    def test_no_write_goes_into_a_root_without_its_marker(self, tmp_path, request, over):
+        """A root an earlier release synced with, which has a registry and no marker: nothing is
+        written, and each write says what to check and how to mark it."""
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / "registry.json").write_bytes(b"{}")
+        p, where = _under(over, root, tmp_path, request)
+        says = _no_marker(str(root), where)
+
+        res = p.push([SyncObject(key="machines/A/seq-0001/tasks/tasks.jsonl", data=b"v")])
+
+        assert (res.outcome, res.detail) == ("transient", f"{says} {RETRIES}")
+        for expected in (None, hashlib.sha256(b"{}").hexdigest()):
+            with pytest.raises(RootRefused) as caught:
+                p.cas_registry(expected, b'{"machines":{"B":1}}')
+            assert str(caught.value) == says
+        assert [x.name for x in root.iterdir()] == ["registry.json"]
+        assert (root / "registry.json").read_bytes() == b"{}"
+
+    @pytest.mark.parametrize("over", ["local", "ssh"])
+    def test_a_listing_and_the_probe_take_an_unmarked_root_for_no_sync_root(
+        self, tmp_path, request, over
+    ):
+        """Read as a sync root with nothing in it yet, it had the sync start over into it as the
+        first machine."""
+        root = tmp_path / "root"
+        root.mkdir()
+        p, where = _under(over, root, tmp_path, request)
+        says = _no_marker(str(root), where)
+
+        with pytest.raises(RootRefused) as caught:
+            p.list_remote()
+        assert str(caught.value) == says
+        probe = p.test()
+        assert (probe.ok, probe.detail) == (False, says)
+
+    def test_a_marked_root_lists_its_objects_and_not_its_marker(self, local, target):
+        assert local.list_remote() == []
+        local.push([SyncObject(key="machines/A/seq-0001/tasks/tasks.jsonl", data=b"v")])
+        assert [r.key for r in local.list_remote()] == ["machines/A/seq-0001/tasks/tasks.jsonl"]
+        assert local.test().ok is True
+
+    @pytest.mark.parametrize("encrypt", ["on", "off"])
+    @pytest.mark.parametrize("over", ["local", "ssh"])
+    def test_a_sync_cycle_never_syncs_into_the_empty_mount_point_itself(
+        self, isolated_home, tmp_path, unmounted, request, monkeypatch, over, encrypt
+    ):
+        """The sync root is the share: with it not mounted, what's there is its empty mount
+        point. It was taken for a new sync root, and the whole sync went onto the local disk."""
+        stub, _below = unmounted
+        p, where = _under(over, stub, tmp_path, request)
+        _seed_task(isolated_home, "task-a", "a row")
+
+        report = _run_cycle(p, isolated_home, monkeypatch, encrypt=encrypt)
+
+        assert report.ok is False
+        assert report.error == f"pull: {_no_marker(str(stub), where)}", report.error
+        assert list(stub.iterdir()) == [], "the sync was written into the empty mount point"
+
+    def test_over_ssh_the_host_checks_the_marker_in_the_write_itself(
+        self, tmp_path, over_ssh, monkeypatch
+    ):
+        """The marker goes after every earlier look — the listing, anything this machine checks —
+        and before the host's rsync starts, as it does when the share is unmounted in that
+        moment. The host finds it gone in the write's own command, and writes nothing."""
+        make, home = over_ssh
+        root = _mark(home / "sync")
+        p = make("~/sync")
+        assert p.list_remote() == []
+        real_run = RsyncSyncProvider._run
+
+        def unmounted_just_before_the_write(self, args):
+            if "--list-only" not in args:
+                (root / MARKER).unlink(missing_ok=True)
+            return real_run(self, args)
+
+        monkeypatch.setattr(RsyncSyncProvider, "_run", unmounted_just_before_the_write)
+
+        res = p.push([SyncObject(key="machines/A/seq-0001/tasks/tasks.jsonl", data=b"v")])
+
+        says = _no_marker("~/sync", "on example.invalid")
+        assert (res.outcome, res.detail) == ("transient", f"{says} {RETRIES}")
+        assert list(root.iterdir()) == [], "the host's rsync wrote into the unmarked root"
+
+    def test_on_this_machine_the_root_is_held_open_while_rsync_writes(
+        self, local, target, monkeypatch
+    ):
+        """Checked just before rsync starts and held open until it's done: an open folder keeps
+        its disk busy, so an ordinary unmount is refused while rsync writes."""
+        identity = (target.stat().st_dev, target.stat().st_ino)
+        held: list[bool] = []
+        real_run = RsyncSyncProvider._run
+
+        def looks_first(self, args):
+            if args[-1] == f"{target}/":  # a write into the root, not a read out of it
+                held.append(_holds_open(identity))
+            return real_run(self, args)
+
+        monkeypatch.setattr(RsyncSyncProvider, "_run", looks_first)
+
+        assert local.push([SyncObject(key="k", data=b"v")]).outcome == "delivered"
+        assert local.cas_registry(None, b"{}") is True
+        assert local.cas_registry(hashlib.sha256(b"{}").hexdigest(), b'{"B":1}') is True
+
+        assert held == [True, True, True], "a write ran with the root not held open"
+        assert not _holds_open(identity), "the root was left open after the write"
+
+    def test_every_write_over_ssh_checks_the_root_and_nothing_else_does(
+        self, tmp_path, monkeypatch
+    ):
+        seen: list[list[str]] = []
+
+        def fake_run(argv, **kw):
+            seen.append(list(argv))
+            listed = LISTED_MARKED if "--list-only" in argv else ""
+            return subprocess.CompletedProcess(argv, 0, stdout=listed, stderr="")
+
+        monkeypatch.setattr(provider_mod.subprocess, "run", fake_run)
+        p = create_provider({**REMOTE, "staging_dir": str(tmp_path)})
+        guard = (
+            "--rsync-path=test -d /srv/sync && test -f /srv/sync/.personalclaw-sync-root && rsync"
+        )
+
+        p.push([SyncObject(key="k", data=b"v")])
+        p.cas_registry(None, b"{}")
+        p.list_remote()
+        p.pull([RemoteRef(key="k")])
+        p.test()
+
+        writes = [argv for argv in seen if argv[-1] == "backup@nas.example.com:/srv/sync/"
+                  and "--list-only" not in argv]
+        assert len(writes) == 2, seen
+        assert all(guard in argv[:argv.index("--")] for argv in writes), writes
+        others = [argv for argv in seen if argv not in writes]
+        assert others and not any(a.startswith("--rsync-path") for argv in others for a in argv)
+
+    @pytest.mark.parametrize(
+        ("path", "root", "marker"),
+        [
+            ("/srv/sync", "/srv/sync", "/srv/sync/.personalclaw-sync-root"),
+            ("/srv/sync/", "/srv/sync", "/srv/sync/.personalclaw-sync-root"),
+            ("/srv/my sync", "'/srv/my sync'", "'/srv/my sync/.personalclaw-sync-root'"),
+            ("/srv/it's", "'/srv/it'\"'\"'s'", "'/srv/it'\"'\"'s/.personalclaw-sync-root'"),
+            ("~/sync", "~/sync", "~/sync/.personalclaw-sync-root"),
+            ("~", "~", "~/.personalclaw-sync-root"),
+            ("~backup/my sync", "~backup/'my sync'", "~backup/'my sync/.personalclaw-sync-root'"),
+            ("sync", "sync", "sync/.personalclaw-sync-root"),
+            ("/", "/", "/.personalclaw-sync-root"),
+        ],
+    )
+    def test_the_hosts_shell_is_given_the_root_as_one_word(self, tmp_path, path, root, marker):
+        """Quoted for the host's shell, with a leading ``~`` left for it to resolve, as it
+        resolves the path rsync itself is given."""
+        p = create_provider({"host": "nas.example.com", "path": path, "staging_dir": str(tmp_path)})
+        assert p._write_guard() == [f"--rsync-path=test -d {root} && test -f {marker} && rsync"]
+        assert p._write_guard(marked=False) == [f"--rsync-path=test -d {root} && rsync"]
+
+    def test_a_write_to_this_machine_needs_no_shell(self, local):
+        assert local._write_guard() == []
+
+
+def _asking(saved: dict, answer: str):
+    """A ``SetupContext`` whose settings are ``saved`` and whose owner answers ``answer``, and
+    the lines it printed and the questions it asked."""
+    printed: list[str] = []
+    asked: list[str] = []
+
+    class _Saved:
+        @staticmethod
+        def load(name: str) -> dict:
+            assert name == "rsync-sync"
+            return dict(saved)
+
+    def _input(prompt: str) -> str:
+        asked.append(prompt)
+        return answer
+
+    ctx = SetupContext(
+        app_name="rsync-sync",
+        get_credential=lambda key: "",
+        save_credential=lambda key, value: None,
+        settings=_Saved,  # type: ignore[arg-type]
+        print=printed.append,
+        input=_input,
+    )
+    return ctx, printed, asked
+
+
+def _saved_for(over: str, root, tmp_path) -> tuple[dict, str]:
+    """The settings for ``root`` on this machine, or on example.invalid (``over_ssh`` must be
+    in use), and where the sentences say it is."""
+    saved = {"path": str(root), "staging_dir": str(tmp_path / "s"), "timeout_secs": 60}
+    if over == "ssh":
+        return {**saved, "host": "example.invalid"}, "on example.invalid"
+    return saved, "on this machine"
+
+
+_UNMARKED_SAID = (
+    "Rsync Sync: the sync root path {} isn't marked as the sync root yet. Rsync Sync syncs only "
+    "with a folder that is, so that the empty folder a disk or share leaves when it isn't mounted "
+    "is never synced in its place."
+)
+_ASKED = "Is the disk or share it's on mounted, and is it the folder to sync with? Mark it? [y/N] "
+
+
+@needs_rsync
+class TestSetupMarksTheSyncRoot:
+    @pytest.mark.parametrize("over", ["local", "ssh"])
+    def test_a_root_the_owner_says_is_mounted_is_marked_and_then_syncs(
+        self, tmp_path, request, over
+    ):
+        if over == "ssh":
+            request.getfixturevalue("over_ssh")
+        root = tmp_path / "root"
+        root.mkdir()
+        saved, where = _saved_for(over, root, tmp_path)
+        ctx, printed, asked = _asking(saved, "y")
+
+        app_cli.setup(ctx)
+
+        assert asked == [_ASKED]
+        assert printed == [
+            _UNMARKED_SAID.format(f"{root} {where}"),
+            f"Rsync Sync: Marked the sync root path {root} {where}. Rsync Sync syncs with it "
+            f"while {MARKER} is in it, so the empty folder its disk or share leaves when it isn't "
+            "mounted is never synced in its place.",
+        ]
+        assert (root / MARKER).read_text(encoding="utf-8") == provider_mod._MARKER_TEXT
+        assert [x.name for x in root.iterdir()] == [MARKER], "setup wrote more than the marker"
+        pushed = create_provider(saved).push([SyncObject(key="machines/A/k", data=b"v")])
+        assert pushed.outcome == "delivered", pushed.detail
+
+        again, printed, asked = _asking(saved, "y")
+        app_cli.setup(again)
+        assert asked == [], "an already marked root was asked about again"
+        assert printed == [
+            f"Rsync Sync: The sync root path {root} {where} is marked, so Rsync Sync syncs with it."
+        ]
+
+    @pytest.mark.parametrize("answer", ["", "n", "no", "maybe"])
+    def test_without_a_yes_the_root_stays_unmarked_and_it_says_how_to_mark_it(
+        self, tmp_path, answer
+    ):
+        """An empty answer is also what a run with no one to ask gets."""
+        root = tmp_path / "root"
+        root.mkdir()
+        saved, where = _saved_for("local", root, tmp_path)
+        ctx, printed, _asked = _asking(saved, answer)
+
+        app_cli.setup(ctx)
+
+        assert printed == [
+            _UNMARKED_SAID.format(f"{root} {where}"),
+            "Rsync Sync: not marked, so Rsync Sync won't sync until it is. Once its disk or share "
+            f"is mounted, run {SETUP} again.",
+        ]
+        assert list(root.iterdir()) == []
+
+    @pytest.mark.parametrize("over", ["local", "ssh"])
+    def test_a_root_that_isnt_there_fails_the_step_and_is_never_made(
+        self, tmp_path, unmounted, request, over
+    ):
+        if over == "ssh":
+            request.getfixturevalue("over_ssh")
+        stub, root = unmounted
+        saved, where = _saved_for(over, root, tmp_path)
+        ctx, printed, asked = _asking(saved, "y")
+
+        with pytest.raises(RootRefused) as caught:
+            app_cli.setup(ctx)
+
+        assert str(caught.value).startswith(f"{_no_root(str(root), where)} Details: "), caught.value
+        assert (printed, asked) == ([], [])
+        assert list(stub.iterdir()) == [], "setup made the sync root"
+
+    def test_a_transport_not_set_up_has_nothing_to_mark(self):
+        ctx, printed, asked = _asking({}, "y")
+        app_cli.setup(ctx)
+        assert printed == ["Rsync Sync: not set up, so there is no sync root to mark."]
+        assert asked == []
+
+    def test_a_setting_that_cant_be_used_fails_the_step(self, tmp_path):
+        ctx, printed, asked = _asking(
+            {"host": "-e/bin/sh", "path": "/srv/sync", "staging_dir": str(tmp_path)}, "y"
+        )
+        with pytest.raises(provider_mod.RsyncFailed) as caught:
+            app_cli.setup(ctx)
+        assert str(caught.value) == (
+            "rsync-sync is misconfigured — ssh host may not begin with '-' (rsync would read it as "
+            "an option). Fix that on the Rsync Sync card in Settings → Providers, then run "
+            f"{SETUP} again."
+        )
+        assert asked == []
+
+    def test_over_ssh_marking_never_makes_a_root_gone_since_it_was_listed(
+        self, tmp_path, over_ssh, monkeypatch
+    ):
+        """The root goes after setup's listing and before the marker's write, as a share
+        unmounted in that moment does: the host finds it gone in the write's own command."""
+        make, home = over_ssh
+        root = home / "sync"
+        root.mkdir()
+        p = make("~/sync")
+        real_run = RsyncSyncProvider._run
+
+        def unmounted_just_before_the_write(self, args):
+            if "--list-only" not in args and root.exists():
+                root.rmdir()
+            return real_run(self, args)
+
+        monkeypatch.setattr(RsyncSyncProvider, "_run", unmounted_just_before_the_write)
+
+        with pytest.raises(RootRefused) as caught:
+            p.mark_root()
+
+        says = _no_root("~/sync", "on example.invalid")
+        assert str(caught.value).startswith(f"{says} Details: "), caught.value
+        assert not root.exists(), "marking made the sync root"
+
+    def test_marking_says_so_when_something_else_has_the_markers_name(self, tmp_path):
+        root = tmp_path / "root"
+        (root / MARKER).mkdir(parents=True)
+        p = RsyncSyncProvider(path=str(root), staging_dir=str(tmp_path / "s"), timeout_secs=60)
+
+        with pytest.raises(provider_mod.RsyncFailed) as caught:
+            p.mark_root()
+
+        assert str(caught.value) == (
+            f"Rsync Sync couldn't mark the sync root path {root} on this machine: something named "
+            f"{MARKER} that isn't a file is already in it. Move that away, then run {SETUP} again."
+        )
+
+
+class TestDoctorLooksAtTheSyncRoot:
+    @needs_rsync
+    def test_it_says_whether_the_root_is_there_and_marked(self, tmp_path, monkeypatch):
+        saved: dict = {"staging_dir": str(tmp_path / "s")}
+        monkeypatch.setattr(
+            app_cli, "ProviderSettings", type("Saved", (), {"load": staticmethod(
+                lambda name: dict(saved)
+            )})
+        )
+        assert app_cli.doctor() == [
+            DoctorLine("sync root", "info", "not set up, so Rsync Sync is idle")
+        ]
+
+        root = tmp_path / "root"
+        saved["path"] = str(root)
+        [line] = app_cli.doctor()
+        assert (line.label, line.status) == ("sync root", "fail")
+        assert line.detail.startswith(f"{_no_root(str(root), 'on this machine')} Details: ")
+
+        root.mkdir()
+        assert app_cli.doctor() == [
+            DoctorLine("sync root", "fail", _no_marker(str(root), "on this machine"))
+        ]
+
+        _mark(root)
+        assert app_cli.doctor() == [DoctorLine(
+            "sync root", "ok",
+            f"The sync root path {root} on this machine is marked, so Rsync Sync syncs with it.",
+        )]
+
+    def test_it_stops_waiting_before_doctor_does(self, tmp_path, monkeypatch):
+        """Doctor stops waiting for a probe at 5 seconds, so the listing is bounded under it,
+        and a host that doesn't answer in time is said as that."""
+        waited: list[float] = []
+
+        def slow(argv, **kw):
+            waited.append(kw["timeout"])
+            raise subprocess.TimeoutExpired(cmd="rsync", timeout=kw["timeout"])
+
+        monkeypatch.setattr(provider_mod.subprocess, "run", slow)
+        monkeypatch.setattr(
+            app_cli, "ProviderSettings", type("Saved", (), {"load": staticmethod(
+                lambda name: {**REMOTE, "staging_dir": str(tmp_path)}
+            )})
+        )
+
+        assert app_cli.doctor() == [DoctorLine(
+            "sync root", "warn",
+            f"no answer within 4 seconds, so doctor couldn't check it. {SETUP} checks it with no "
+            "such limit.",
+        )]
+        assert waited == [4]
 
 
 class TestTheSyncCycleSaysWhatFailed:

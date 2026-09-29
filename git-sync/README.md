@@ -41,9 +41,11 @@ other app. (Or [install it from a shell](../docs/third-party-install.md#installi
 
 | Key | Label | Notes |
 |---|---|---|
-| `repo_url` | Git remote URL | The ssh or https URL of a git remote you own (both machines point at the same one). A remote at a local path is refused. Leave empty to configure later — the transport stays idle until set. |
+| `repo_url` | Git remote URL | The ssh or https URL of a git remote you own (both machines point at the same one). A remote at a local path is refused, and so is an https URL with a user name or token written into it: put the token in Access token. Leave empty to configure later — the transport stays idle until set. |
 | `local_clone` | Local working clone | Where the working clone lives on this machine (default `~/.personalclaw/sync/git-sync`). Supports `~` and `$VARS`. Cloned on first use, reused after. |
-| `branch` | Branch | The branch to sync on (default `main`). Both machines must use the same branch. |
+| `branch` | Branch | The branch to sync on (default `main`). Both machines must use the same branch. A branch the remote doesn't have yet starts empty. |
+| `token` | Access token | For an https remote that needs a token to sign in (sensitive: kept in PersonalClaw's credential store). Handed to git by its own credential helper, never written into the working clone or onto a command line; only an https remote is given it, or an http one on this machine. Leave empty for ssh. |
+| `username` | User name | The user name to sign in with alongside Access token, if your host wants one. Empty signs in as `x-access-token`, which a host that checks only the token accepts. Leave empty for ssh. |
 
 ## Configuring two machines
 
@@ -130,6 +132,17 @@ clone of an empty repo succeeds and the first push publishes the branch.
   machine already has for the remote you point it at: your SSH agent, and the ssh command and
   credential helpers in your own git configuration. It reads and writes only that repo; the
   remote's own access controls are the trust boundary.
+- **An https token lives in Access token, and nowhere else.** An http(s) Git remote URL with a
+  user name or token written into it is refused before git runs, since git would keep it in the
+  working clone's `.git/config` and pass it on its command line, where anyone on this machine can
+  read it; the refusal names the URL without it and says to put the token in **Access token**.
+  Access token is kept in PersonalClaw's credential store and signs git in through one credential
+  helper of its own, which reads it from that git command's environment: it is on no command line
+  and in no file, and none of your own credential helpers is asked for this remote or told to
+  keep the token. Only an https remote is given it — or an http one on this machine; plain http
+  to anywhere else would carry it unencrypted, so that is refused — and an ssh remote never is.
+  A working clone made earlier from a URL with a token in it has its origin rewritten without
+  it, and every copy of the token taken out of its `.git`.
 - **A credential in Git remote URL is never shown.** A URL can carry a user name and password,
   or a token (`https://<token>@host/…`). **Test connection**'s success, and every failure's detail
   and error, name the URL without it — and without any query or fragment, or anything written

@@ -16,6 +16,7 @@ probe.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import logging
 import os
@@ -23,6 +24,8 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -575,10 +578,26 @@ def test_a_remote_at_a_local_path_is_refused_with_the_reason_and_the_alternative
     res = p.test()
     assert res.ok is False
     assert "local path" in res.detail and "ssh or https" in res.detail, res.detail
-    pushed = p.push([SyncObject("k", b"v")])
-    assert (pushed.outcome, pushed.detail) == ("permanent", res.detail)
-    assert p.list_remote() == [] and p.cas_registry(None, b"{}") is False
+    _refused_everywhere(p, res.detail)
     assert not (tmp_path / "c").exists(), "git ran for a refused remote"
+
+
+def _refused_everywhere(p: GitSyncProvider, says: str) -> None:
+    """Settings git can't be run with say ``says`` at every entry point: the push, the probe,
+    and a listing, a read and a registry swap, which raise it. A listing used to answer empty
+    and a swap a lost race, so the cycle took the remote for one with nothing on it."""
+    pushed = p.push([SyncObject("k", b"v")])
+    assert (pushed.outcome, pushed.detail) == ("permanent", says)
+    probe = p.test()
+    assert (probe.ok, probe.detail) == (False, says)
+    for step in (
+        p.list_remote,
+        lambda: p.pull([RemoteRef("k")]),
+        lambda: p.cas_registry(None, b"{}"),
+    ):
+        with pytest.raises(git_sync.GitSyncFailed) as caught:
+            step()
+        assert str(caught.value) == says
 
 
 def test_a_clone_whose_remote_was_changed_to_a_local_path_goes_back_to_git_remote_url(
@@ -1151,12 +1170,8 @@ def test_a_branch_git_will_not_name_is_refused_before_git_runs(remote, tmp_path,
         f"{ON_CARD} to one it does, such as main."
     )
 
-    pushed = p.push([SyncObject("k", b"v")])
+    _refused_everywhere(p, says)
 
-    assert (pushed.outcome, pushed.detail) == ("permanent", says)
-    probe = p.test()
-    assert (probe.ok, probe.detail) == (False, says)
-    assert p.list_remote() == [] and p.cas_registry(None, b"{}") is False
     assert not clone.exists(), "git ran for a Branch git won't take"
 
 
@@ -1853,8 +1868,6 @@ def _answering(returncode: int = 0, stderr: str = "", *, hangs: bool = False):
 @pytest.mark.parametrize(
     ("url", "shown"),
     [
-        (_TOKEN_URLS["user-and-token"], "https://git.example.com/owner/state.git"),
-        (_TOKEN_URLS["token-only"], "https://git.example.com/owner/state.git"),
         (_TOKEN_URLS["ssh"], "ssh://git.example.com:2222/owner/state.git"),
         (_TOKEN_URLS["scp-like"], "git.example.com:owner/state.git"),
         (
@@ -1864,13 +1877,15 @@ def _answering(returncode: int = 0, stderr: str = "", *, hangs: bool = False):
         ("git@git.example.com:owner/state.git", "git.example.com:owner/state.git"),
         ("https://git.example.com/owner/state.git", "https://git.example.com/owner/state.git"),
     ],
-    ids=["user-and-token", "token-only", "ssh", "scp-like", "query", "scp-user", "plain"],
+    ids=["ssh", "scp-like", "query", "scp-user", "plain"],
 )
 def test_a_reachable_remote_is_named_without_the_credential_its_url_carries(
     tmp_path, monkeypatch, url, shown
 ):
     """"git remote reachable: <the URL>" said Git remote URL whole, token included. The last
-    case, a URL with nothing before its host, is a control: it reads as it is written."""
+    case, a URL with nothing before its host, is a control: it reads as it is written. (An
+    https URL with a credential written into it is refused before git runs — see
+    ``test_an_http_url_with_a_credential_written_into_it_is_refused_without_showing_it``.)"""
     monkeypatch.setattr(GitSyncProvider, "_run", _answering(0))
 
     res = GitSyncProvider(repo_url=url, local_clone=str(tmp_path / "c")).test()
@@ -1878,17 +1893,26 @@ def test_a_reachable_remote_is_named_without_the_credential_its_url_carries(
     assert (res.ok, res.detail) == (True, f"git remote reachable: {shown}")
 
 
-@pytest.mark.parametrize("url", list(_TOKEN_URLS.values()), ids=list(_TOKEN_URLS))
+@pytest.mark.parametrize(
+    ("url", "token"),
+    [
+        (_TOKEN_URLS["ssh"], ""),
+        (_TOKEN_URLS["scp-like"], ""),
+        ("https://git.example.com/owner/state.git", TOKEN),
+    ],
+    ids=["ssh", "scp-like", "access-token"],
+)
 def test_the_credential_in_git_remote_url_appears_in_nothing_git_sync_says(
-    tmp_path, ssh_url, monkeypatch, caplog, url
+    tmp_path, ssh_url, monkeypatch, caplog, url, token
 ):
     """Every text Git Sync hands back — a push's detail, the probe's detail and extra, what a
     listing, a read or a registry swap returns or raises — for a remote that answers, one whose
     error names the URL whole (as an older git's does), one that fails without a word (so the
     failure names its command line), one that never answers, a clone that fails, and a working
-    clone Git Sync won't sync through."""
+    clone Git Sync won't sync through. The token is in the URL, or in Access token."""
     real_run = GitSyncProvider._run
     surfaces: list[str] = []
+    signs_in = {"token": token} if token else {}
 
     def _drive(p: GitSyncProvider) -> None:
         pushed, probed = p.push([SyncObject("k", b"v")]), p.test()
@@ -1912,7 +1936,8 @@ def test_the_credential_in_git_remote_url_appears_in_nothing_git_sync_says(
     with caplog.at_level(logging.DEBUG):
         for n, fake in enumerate(fakes):
             monkeypatch.setattr(GitSyncProvider, "_run", fake)
-            _drive(GitSyncProvider(repo_url=url, local_clone=str(tmp_path / f"clone-{n}")))
+            clone = str(tmp_path / f"clone-{n}")
+            _drive(GitSyncProvider(repo_url=url, local_clone=clone, **signs_in))
         # A folder of someone's own work at Local working clone, cloned from another remote.
         monkeypatch.setattr(GitSyncProvider, "_run", real_run)
         kept = tmp_path / "kept"
@@ -1921,7 +1946,7 @@ def test_the_credential_in_git_remote_url_appears_in_nothing_git_sync_says(
         _git(str(kept), "add", "-A")
         _git(str(kept), "commit", "-m", "notes")
         _git(str(kept), "remote", "add", "origin", ssh_url(tmp_path / "elsewhere.git"))
-        _drive(GitSyncProvider(repo_url=url, local_clone=str(kept)))
+        _drive(GitSyncProvider(repo_url=url, local_clone=str(kept), **signs_in))
     surfaces.extend(record.getMessage() for record in caplog.records)
 
     # VACUITY FLOORS: the URL, as shown, must reach the details of failures that name it — or
@@ -2357,3 +2382,492 @@ def test_a_listing_of_a_folder_the_clone_cannot_read_says_so_rather_than_leaving
         f"Git Sync isn't allowed to read machines/a in its working clone at {tmp_path / 'clone'}. "
         f"Fix its permissions. {RETRIES} Details: "
     ), caught.value
+
+
+# ── Access token: a token for an https remote, kept out of the clone and every command line ──
+#
+# The only way to give Git Sync a token was to write it into Git remote URL: git kept it in the
+# working clone's .git/config and passed it on its command line, where anyone on this machine can
+# read it, and git asked the owner's own credential helpers too. Driven for real here: a bare
+# repository served through ``git http-backend`` behind Basic auth on 127.0.0.1, and the owner's
+# helper a stand-in that records what git asks of it — never this machine's own keychain.
+
+SIGN_IN = "sync-user"
+ACCESS = "pc-fixture-access-token-4b8e"
+OWNERS = "pc-fixture-owners-password-9d1c"
+_PROXIES = ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY")
+
+
+class _TokenHost:
+    """A bare repository at ``/sync.git`` served by ``git http-backend``, answering only a request
+    signed in as ``user`` with ``password``. ``signed_in`` records each request's Authorization."""
+
+    def __init__(self, root: Path, user: str, password: str) -> None:
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(root / "sync.git")],
+                       check=True)
+        want = "Basic " + base64.b64encode(f"{user}:{password}".encode()).decode()
+        self.bare = root / "sync.git"
+        self.signed_in: list[str | None] = []
+        host = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):  # the test output is not a request log
+                pass
+
+            def _answer(self) -> None:
+                auth = self.headers.get("Authorization")
+                host.signed_in.append(auth)
+                if auth != want:
+                    self.send_response(401)
+                    self.send_header("WWW-Authenticate", 'Basic realm="sync"')
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                try:
+                    self._backend()
+                except Exception:  # noqa: BLE001 — answer, so no git waits on a dead request
+                    self.send_response(500)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+
+            def _backend(self) -> None:
+                path, _, query = self.path.partition("?")
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                env = {
+                    "PATH": os.environ["PATH"],
+                    "HOME": str(root),
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_PROJECT_ROOT": str(root),
+                    "GIT_HTTP_EXPORT_ALL": "1",
+                    "PATH_INFO": path,
+                    "QUERY_STRING": query,
+                    "REQUEST_METHOD": self.command,
+                    "CONTENT_TYPE": self.headers.get("Content-Type", ""),
+                    "CONTENT_LENGTH": str(len(body)),
+                    "HTTP_CONTENT_ENCODING": self.headers.get("Content-Encoding", ""),
+                    "REMOTE_USER": user,
+                    "REMOTE_ADDR": "127.0.0.1",
+                }
+                out = subprocess.run(
+                    ["git", "http-backend"], input=body, env=env, capture_output=True, check=True,
+                    timeout=60,
+                ).stdout
+                cut = min(i for i in (out.find(b"\r\n\r\n"), out.find(b"\n\n")) if i != -1)
+                head, rest = out[:cut].decode(), out[cut:].lstrip(b"\r\n")
+                status, headers = 200, []
+                for line in head.splitlines():
+                    key, _, value = line.partition(":")
+                    if key.lower() == "status":
+                        status = int(value.split()[0])
+                    elif key:
+                        headers.append((key, value.strip()))
+                self.send_response(status)
+                for key, value in headers:
+                    self.send_header(key, value)
+                self.send_header("Content-Length", str(len(rest)))
+                self.end_headers()
+                self.wfile.write(rest)
+
+            do_GET = do_POST = _answer
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self._server.server_address[1]
+        self.url = f"http://127.0.0.1:{self.port}/sync.git"
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+
+@pytest.fixture
+def web_home(tmp_path, monkeypatch):
+    """A scratch HOME with an empty git configuration, no proxy between git and 127.0.0.1, and
+    the owner's own credential helper a stand-in that records each thing git asks of it and
+    answers ``get`` with the owner's password — the wrong one for the host. Returns a reader of
+    what it was asked."""
+    from personalclaw.net import git as net_git
+
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".gitconfig").write_text("", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    for name in _PROXIES:
+        monkeypatch.delenv(name, raising=False)
+    record = tmp_path / "owners-helper-was-asked"
+    helper = tmp_path / "owners-helper.sh"
+    helper.write_text(
+        "#!/bin/sh\n"
+        "cat >/dev/null\n"
+        f'echo "$1" >> "{record}"\n'
+        f'[ "$1" = get ] && printf "username={SIGN_IN}\\npassword={OWNERS}\\n"\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o755)
+    monkeypatch.setattr(net_git, "_owner_auth_settings", lambda: [f"credential.helper={helper}"])
+    return lambda: record.read_text(encoding="utf-8").split() if record.exists() else []
+
+
+@pytest.fixture
+def token_host(tmp_path, web_home):
+    served = _TokenHost(tmp_path / "served", SIGN_IN, ACCESS)
+    yield served
+    served.close()
+
+
+def _recorded(monkeypatch) -> list[tuple[list[str], dict]]:
+    """Every process Git Sync starts, as the argv and environment it starts it with."""
+    real = git_sync.subprocess.run
+    runs: list[tuple[list[str], dict]] = []
+
+    def _run(argv, *args, **kwargs):
+        runs.append((list(argv), dict(kwargs.get("env") or {})))
+        return real(argv, *args, **kwargs)
+
+    monkeypatch.setattr(git_sync.subprocess, "run", _run)
+    return runs
+
+
+def _files_holding(folder: Path, secret: str) -> list[str]:
+    """Each file under ``folder`` whose bytes hold ``secret``."""
+    return sorted(
+        str(p.relative_to(folder))
+        for p in folder.rglob("*")
+        if p.is_file() and secret.encode() in p.read_bytes()
+    )
+
+
+def _web_provider(url: str, tmp_path, **settings) -> GitSyncProvider:
+    """The transport as its settings build it (``create_provider``, which reads Access token and
+    User name from them)."""
+    return create_provider({"repo_url": url, "local_clone": str(tmp_path / "clone"), **settings})
+
+
+def test_access_token_signs_git_sync_in_and_is_kept_nowhere(
+    token_host, web_home, tmp_path, monkeypatch, c_locale
+):
+    """A clone, a push, a catch-up and the probe, each signed in with Access token: no command
+    line git-sync starts holds it, no file under the working clone's .git does, and no credential
+    helper of the owner's is asked for a sign-in or told to keep one."""
+    runs = _recorded(monkeypatch)
+    p = _web_provider(token_host.url, tmp_path, token=ACCESS, username=SIGN_IN)
+
+    pushed = p.push([SyncObject("machines/a/seq-0001/x.jsonl", b"1")])
+    listed = [ref.key for ref in p.list_remote()]
+    swapped = p.cas_registry(None, b'{"seq": 1}')
+    probed = p.test()
+
+    assert pushed.outcome == "delivered", pushed.detail
+    assert listed == ["machines/a/seq-0001/x.jsonl"]
+    assert swapped is True
+    assert probed.ok is True, probed.detail
+    signed = "Basic " + base64.b64encode(f"{SIGN_IN}:{ACCESS}".encode()).decode()
+    assert signed in token_host.signed_in, token_host.signed_in
+    assert web_home() == [], "the owner's credential helper was asked, or told to keep the token"
+    assert runs, "no git ran"
+    assert not [argv for argv, _env in runs if any(ACCESS in part for part in argv)]
+    assert _files_holding(tmp_path / "clone" / ".git", ACCESS) == []
+    shown = _git(str(tmp_path / "clone"), "config", "--get", "remote.origin.url").stdout.strip()
+    assert shown == token_host.url
+
+
+def test_an_empty_user_name_signs_in_as_x_access_token(tmp_path, web_home, c_locale):
+    """git asks for a user name with a token and fails without one, since nobody is there to
+    type it: an empty User name signs in as x-access-token."""
+    host = _TokenHost(tmp_path / "served", "x-access-token", ACCESS)
+    try:
+        r = _web_provider(host.url, tmp_path, token=ACCESS).push([SyncObject("k", b"v")])
+    finally:
+        host.close()
+
+    assert r.outcome == "delivered", r.detail
+    assert web_home() == []
+
+
+def test_without_access_token_the_owners_own_sign_in_is_what_git_uses(
+    token_host, web_home, tmp_path, c_locale
+):
+    """A control, so the silence of the owner's helper above means something: with no Access
+    token it is the helper git asks, and its password is the wrong one for this host."""
+    r = _web_provider(token_host.url, tmp_path).push([SyncObject("k", b"v")])
+
+    assert r.outcome == "transient", r.detail
+    assert web_home()[:1] == ["get"], web_home()
+    assert "didn't accept this machine's credentials" in r.detail, r.detail
+
+
+def test_access_token_is_never_handed_to_an_ssh_remote(remote, tmp_path, monkeypatch, c_locale):
+    """A control: ssh signs in with the owner's key, so neither the token nor its helper reaches
+    a git that talks to an ssh remote."""
+    runs = _recorded(monkeypatch)
+
+    r = create_provider(
+        {"repo_url": remote, "local_clone": str(tmp_path / "clone"), "token": ACCESS}
+    ).push([SyncObject("k", b"v")])
+
+    assert r.outcome == "delivered", r.detail
+    assert runs
+    assert not [env for _argv, env in runs if ACCESS in env.values()]
+    assert not [argv for argv, _env in runs if any("PERSONALCLAW_GIT_TOKEN" in a for a in argv)]
+
+
+def _no_git(monkeypatch) -> list[list[str]]:
+    """Every git Git Sync starts, none of them run: a check that no git starts at all."""
+    started: list[list[str]] = []
+
+    def _run(argv, *args, **kwargs):
+        started.append(list(argv))
+        return subprocess.CompletedProcess(argv, 128, stdout="", stderr="fatal: not run here")
+
+    monkeypatch.setattr(git_sync.subprocess, "run", _run)
+    return started
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        f"https://sync-user:{TOKEN}@git.example.com/owner/state.git",
+        f"https://{TOKEN}@git.example.com/owner/state.git",
+        f"http://sync-user:{TOKEN}@127.0.0.1:8080/owner/state.git",
+    ],
+    ids=["user-and-token", "token-only", "http"],
+)
+def test_an_http_url_with_a_credential_written_into_it_is_refused_without_showing_it(
+    tmp_path, monkeypatch, url
+):
+    """git kept a credential written into Git remote URL in the working clone's .git/config,
+    and passed it on its command line. The URL is refused before git runs, at every entry
+    point, and the sentence names the URL without it."""
+    started = _no_git(monkeypatch)
+    p = _web_provider(url, tmp_path)
+    says = (
+        "Git Sync won't use a user name or token written into Git remote URL: git keeps it in "
+        "the working clone's .git/config and shows it on its command line to anyone on this "
+        f"machine. Set Git remote URL {ON_CARD} to the address without it "
+        f"({git_sync._shown(url)}), and put the token in Access token — and the user name in "
+        "User name, if your host wants one."
+    )
+
+    _refused_everywhere(p, says)
+
+    assert TOKEN not in says
+    assert started == [], "git ran for a URL with a credential written into it"
+    assert not (tmp_path / "clone").exists()
+
+
+def test_access_token_is_never_sent_over_plain_http_to_another_machine(tmp_path, monkeypatch):
+    """Plain http carries the token unencrypted, so only an http remote on this machine is ever
+    given it."""
+    started = _no_git(monkeypatch)
+    p = _web_provider("http://git.example.com/owner/state.git", tmp_path, token=ACCESS)
+
+    _refused_everywhere(
+        p,
+        "Git Sync won't send Access token over http, which would carry it unencrypted to "
+        f"git.example.com. Set Git remote URL {ON_CARD} to the remote's https address.",
+    )
+
+    assert started == []
+
+
+@pytest.mark.parametrize("field", ["token", "username"])
+def test_a_token_or_user_name_git_would_read_as_two_answers_is_refused(
+    tmp_path, monkeypatch, field
+):
+    """git's credential protocol is a line per answer, so a line break inside one is refused
+    before git runs, and the value is not said back."""
+    started = _no_git(monkeypatch)
+    settings = {"token": ACCESS, field: "pc-fixture-first-line\npc-fixture-second-line"}
+    p = _web_provider("https://git.example.com/owner/state.git", tmp_path, **settings)
+    label = {"token": "Access token", "username": "User name"}[field]
+
+    _refused_everywhere(
+        p,
+        f"{label} {ON_CARD} has a line break or a NUL in it, which git would read as more than "
+        "one answer. Enter it again, on its own.",
+    )
+
+    assert started == []
+
+
+def _legacy_web_clone(host: _TokenHost, clone: Path, *, marked: bool) -> str:
+    """A working clone an earlier Git Sync made from a URL with the token written into it: made,
+    committed into under the transport's identity, pushed and caught up the way it did. Copies
+    of the URL are put in its fetch record and its log, as an older git wrote them; git today
+    writes it whole only into .git/config. Returns that URL."""
+    leaky = f"http://{SIGN_IN}:{ACCESS}@127.0.0.1:{host.port}/sync.git"
+    # No credential helper of any kind for this git, the system's included: one that worked
+    # would be told to keep the token — in this machine's own keychain.
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1"}
+    git = ["git", "-c", "credential.helper="]
+    mark = ["-c", f"{MARK}=true"] if marked else []
+    subprocess.run([*git, "clone", "-q", *mark, leaky, str(clone)], check=True, env=env,
+                   capture_output=True, timeout=60)
+    (clone / "machines" / "a").mkdir(parents=True)
+    (clone / "machines" / "a" / "x.jsonl").write_bytes(b"1")
+    identity = ["-c", "user.name=PersonalClaw Sync", "-c", "user.email=sync@personalclaw.local"]
+    for step in (
+        ["checkout", "-q", "-B", "main"],
+        ["add", "-A"],
+        [*identity, "commit", "-qm", "sync: 1 objects"],
+        ["push", "-q", "origin", "main"],
+        ["fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main"],
+    ):
+        subprocess.run([*git, "-C", str(clone), *step], check=True, env=env,
+                       capture_output=True, timeout=60)
+    git_dir = clone / ".git"
+    (git_dir / "FETCH_HEAD").write_text(f"0000\t\tbranch 'main' of {leaky}\n", encoding="utf-8")
+    with open(git_dir / "logs" / "HEAD", "a", encoding="utf-8") as fh:
+        who = "PersonalClaw Sync <sync@personalclaw.local>"
+        fh.write(f"0000 0000 {who} 0 +0000\tclone: from {leaky}\n")
+    assert _files_holding(git_dir, ACCESS), "the clone this test is about holds no token"
+    return leaky
+
+
+@pytest.mark.parametrize("marked", [True, False], ids=["marked", "unmarked"])
+def test_a_clone_made_from_a_url_with_the_token_in_it_is_rewritten_without_it(
+    token_host, web_home, tmp_path, c_locale, marked
+):
+    """Git remote URL set again without the token, and the token put in Access token. The
+    clone's origin still carried it, so the clone read as one of another remote and was cloned
+    afresh — without a sign-in — while every copy of the token stayed where it was."""
+    clone = tmp_path / "clone"
+    _legacy_web_clone(token_host, clone, marked=marked)
+
+    r = _web_provider(token_host.url, tmp_path, token=ACCESS, username=SIGN_IN).push(
+        [SyncObject("machines/a/seq-0002/x.jsonl", b"2")]
+    )
+
+    assert r.outcome == "delivered", r.detail
+    assert _git(str(clone), "config", "--get", "remote.origin.url").stdout.strip() == token_host.url
+    assert _git(str(clone), "config", "--get", MARK).stdout.strip() == "true"
+    assert _files_holding(clone / ".git", ACCESS) == []
+    assert (clone / "machines" / "a" / "x.jsonl").read_bytes() == b"1", "the clone was replaced"
+    assert web_home() == []
+    tip = subprocess.run(["git", "-C", str(token_host.bare), "ls-tree", "-r", "--name-only",
+                          "main"], check=True, capture_output=True, text=True).stdout.split()
+    assert "machines/a/seq-0002/x.jsonl" in tip
+
+
+# ── a Branch the remote doesn't have yet ─────────────────────────────────────────────────
+
+
+def _remote_with_a_readme(tmp_path, ssh_url):
+    """A remote whose only branch, ``main``, holds a README someone else wrote."""
+    bare = tmp_path / "remote.git"
+    url = ssh_url(_bare(bare))
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "clone", url, str(seed)], check=True, capture_output=True, text=True)
+    (seed / "README.md").write_text("# a project\n", encoding="utf-8")
+    _git(str(seed), "add", "-A")
+    _git(str(seed), "commit", "-m", "readme")
+    _git(str(seed), "push", "-q", "origin", "HEAD:main")
+    return bare, url
+
+
+def _starts_empty(tmp_path, ssh_url) -> None:
+    bare, url = _remote_with_a_readme(tmp_path, ssh_url)
+    main = subprocess.run(["git", "-C", str(bare), "rev-parse", "main"], check=True,
+                          capture_output=True, text=True).stdout
+    p = GitSyncProvider(repo_url=url, local_clone=str(tmp_path / "clone"), branch="sync")
+
+    listed = [ref.key for ref in p.list_remote()]
+    pushed = p.push([SyncObject("machines/a/seq-0001/x.jsonl", b"1")])
+
+    assert listed == [], "the default branch's files were listed as sync objects"
+    assert pushed.outcome == "delivered", pushed.detail
+    on_sync = subprocess.run(["git", "-C", str(bare), "ls-tree", "-r", "--name-only", "sync"],
+                             check=True, capture_output=True, text=True).stdout.split()
+    assert on_sync == ["machines/a/seq-0001/x.jsonl"]
+    assert subprocess.run(["git", "-C", str(bare), "rev-parse", "main"], check=True,
+                          capture_output=True, text=True).stdout == main
+
+
+def test_a_branch_the_remote_lacks_starts_empty_not_from_its_default_branch(
+    tmp_path, ssh_url, c_locale
+):
+    """``checkout -B sync`` started Branch from the branch the clone came checked out on: its
+    README was listed as a sync object, and pushed on ``sync``."""
+    _starts_empty(tmp_path, ssh_url)
+
+
+def test_a_branch_the_remote_lacks_starts_empty_on_a_git_without_switch(
+    tmp_path, ssh_url, monkeypatch, c_locale
+):
+    """A git before 2.23 has no ``git switch``: the orphan is made the older way, and the files
+    the clone came with are taken out of its index and working tree just the same."""
+    real_run = GitSyncProvider._run
+
+    def _no_switch(self, args, check=True):
+        if git_sync._subcommand(args) == "switch":
+            return subprocess.CompletedProcess(
+                ["git", *args], 1, stdout="",
+                stderr="git: 'switch' is not a git command. See 'git --help'.",
+            )
+        return real_run(self, args, check=check)
+
+    monkeypatch.setattr(GitSyncProvider, "_run", _no_switch)
+
+    _starts_empty(tmp_path, ssh_url)
+
+
+# ── the ownership look, once per state of the clone ──────────────────────────────────────
+
+
+def _count_subcommand(monkeypatch, name: str) -> list[list[str]]:
+    """Every ``git <name>`` the transport runs."""
+    real_run = GitSyncProvider._run
+    ran: list[list[str]] = []
+
+    def _counting(self, args, check=True):
+        if git_sync._subcommand(args) == name:
+            ran.append(args)
+        return real_run(self, args, check=check)
+
+    monkeypatch.setattr(GitSyncProvider, "_run", _counting)
+    return ran
+
+
+def test_a_refused_folders_history_is_walked_once_until_a_commit_lands(
+    tmp_path, ssh_url, monkeypatch, c_locale
+):
+    """A folder refused for the commits in it was walked (``git log --all``) on every call —
+    every push, listing, read and probe, each cycle — however long its history."""
+    folder, _own_bare, own = _owners_repository(tmp_path, ssh_url)
+    walks = _count_subcommand(monkeypatch, "log")
+    p = GitSyncProvider(repo_url=own, local_clone=str(folder))
+
+    for _ in range(2):
+        assert p.test().ok is False
+        assert p.push([SyncObject("k", b"v")]).outcome == "permanent"
+    assert len(walks) == 1, "the history was walked again with nothing changed"
+
+    (folder / "later.md").write_text("another note\n", encoding="utf-8")
+    _git(str(folder), "add", "later.md")
+    _git(str(folder), "commit", "-m", "another note")
+
+    assert p.test().ok is False
+    assert len(walks) == 2, "a new commit wasn't looked at"
+
+
+def test_the_ownership_look_sees_a_new_file_and_a_config_change_without_a_new_walk(
+    remote, tmp_path, monkeypatch, c_locale
+):
+    """What the walk can't see — a file made by hand, a setting of the clone's own — is read
+    on every look, so each changes the answer as it happens."""
+    p = _provider(remote, tmp_path)
+    assert p.push([SyncObject("machines/a/seq-0001/x.jsonl", b"1")]).outcome == "delivered"
+    clone = tmp_path / "clone"
+    _unmark(str(clone))  # as an older Git Sync made it
+    walks = _count_subcommand(monkeypatch, "log")
+
+    assert (p._standing(), p._standing()) == ("adopt", "adopt")
+    (clone / "notes.md").write_text("made by hand\n", encoding="utf-8")
+    assert p._standing() == "refuse"
+    (clone / "notes.md").unlink()
+    _git(str(clone), "config", "remote.origin.pushurl", "ssh://example.invalid/elsewhere.git")
+    assert p._standing() == "replace"
+
+    assert len(walks) == 1, walks

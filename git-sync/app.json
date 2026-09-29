@@ -1,6 +1,6 @@
 {
   "name": "git-sync",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "displayName": "Git Sync",
   "description": "Sync PersonalClaw state between your machines through a git remote you own. The transport keeps a local working clone and moves durability shard objects as files it commits and pushes, so `git log -p` over the shards is a human-diffable audit history of what the assistant knows — the whole point of this transport. It stays plaintext (never encrypted) so that history stays readable; secrets are excluded upstream and never touch it.",
   "icon": "GitBranch",
@@ -27,7 +27,7 @@
           "default": "",
           "x-meta": {
             "label": "Git remote URL",
-            "help": "The ssh or https URL of a git remote you own (both machines point at the same one). A remote at a local path is refused. Leave empty to configure later — the transport stays idle until set."
+            "help": "The ssh or https URL of a git remote you own (both machines point at the same one). A remote at a local path is refused, and so is an https URL with a user name or token written into it: put the token in Access token. Leave empty to configure later — the transport stays idle until set."
           }
         },
         "local_clone": {
@@ -44,6 +44,23 @@
           "x-meta": {
             "label": "Branch",
             "help": "The branch to sync on. Both machines must use the same branch."
+          }
+        },
+        "token": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Access token",
+            "help": "For an https remote that needs a token to sign in: an access token from your git host. It is kept in PersonalClaw's credential store and handed to git by its own credential helper, never written into the working clone or onto a command line. Only an https remote is given it (or an http one on this machine). Leave empty for ssh, which signs in with your ssh key.",
+            "sensitive": true
+          }
+        },
+        "username": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "User name",
+            "help": "The user name to sign in with alongside Access token, if your host wants one. Leave empty to sign in as x-access-token, which a host that checks only the token accepts; set your account's name for a host that wants it with its token. Leave empty for ssh."
           }
         }
       }

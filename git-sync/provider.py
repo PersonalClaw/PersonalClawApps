@@ -28,6 +28,7 @@ from the clone rather than kept: it lost its swap, and the caller re-reads the r
 import contextlib
 import errno
 import hashlib
+import ipaddress
 import os
 import re
 import shutil
@@ -35,6 +36,7 @@ import stat
 import subprocess
 import tempfile
 from typing import Any
+from urllib.parse import urlsplit
 
 from personalclaw.sdk.git import (
     GitTooOld,
@@ -194,8 +196,18 @@ _CLONE_KEYS = (
 #: What a fetch says when the remote has no such branch yet: a brand-new remote, or one with other
 #: branches only. English whatever the owner's locale (``git_env``).
 _NO_BRANCH_YET = "couldn't find remote ref"
+#: What each working clone's history was last found to hold, so the look at a folder walks it
+#: once rather than on every call (``GitSyncProvider._commits_git_syncs``): by folder and walk,
+#: the refs it was walked at, and whether every commit it met was Git Sync's.
+_WALKED: dict[tuple[str, bool], tuple[str, bool]] = {}
 #: A URL's authority up to its last ``@``: the ``user:password@``, or ``token@``, it can carry.
 _USERINFO = re.compile(r"://[^/?#]*@")
+#: The user name Access token signs in with when User name is empty. git asks for one along
+#: with a token, and fails without one, since nobody is there to type it. Hosts differ in what
+#: they want: GitHub takes this name with any token and needs it with an app's, and a host that
+#: checks only the token takes any name. A host that wants the account's own name beside its
+#: token needs User name set.
+_TOKEN_USERNAME = "x-access-token"
 #: What git never allows in a ref name (``git check-ref-format``): a control character, space,
 #: or one of ``~ ^ : ? * [ \``.
 _REF_FORBIDDEN = re.compile(r"[\x00-\x20\x7f~^:?*\[\\]")
@@ -317,6 +329,68 @@ def _shown(url: str) -> str:
     return head.rsplit("@", 1)[-1] + slash + path
 
 
+def _bare_url(url: str) -> str:
+    """``url`` without the ``<transport>::`` a remote helper's URL can start with."""
+    head = url.split("/", 1)[0]
+    return url.split("::", 1)[1] if "::" in head else url
+
+
+def _web(url: str) -> bool:
+    """Whether git reaches ``url`` over http or https."""
+    scheme = re.match(r"([A-Za-z][A-Za-z0-9+.-]*)://", _bare_url(url))
+    return bool(scheme) and scheme.group(1).lower() in ("http", "https")
+
+
+def _takes_token(url: str) -> bool:
+    """Whether Access token may be handed to git for ``url``: an https remote, or an http one
+    on this machine. A plain http remote anywhere else would get it unencrypted."""
+    if not _web(url):
+        return False
+    try:
+        parts = urlsplit(_bare_url(url))
+        host = parts.hostname or ""
+    except ValueError:  # a malformed address git would refuse anyway
+        return False
+    if parts.scheme.lower() == "https":
+        return True
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _scrub(git_dir: str, needles: list[tuple[bytes, bytes]]) -> None:
+    """Replace each ``(copy, replacement)`` in every file under ``git_dir`` — its configuration,
+    its fetch record, its logs — but its objects and its index, which never hold a remote's URL.
+    A file is rewritten whole, with its mode kept, and put in place in one step."""
+    for dirpath, dirnames, filenames in os.walk(git_dir):
+        if dirpath == git_dir:
+            dirnames[:] = [name for name in dirnames if name != "objects"]
+        for filename in filenames:
+            path = os.path.join(dirpath, filename)
+            if (dirpath == git_dir and filename == "index") or os.path.islink(path):
+                continue
+            with open(path, "rb") as fh:
+                data = fh.read()
+            scrubbed = data
+            for copy, replacement in needles:
+                scrubbed = scrubbed.replace(copy, replacement)
+            if scrubbed == data:
+                continue
+            fd, part = tempfile.mkstemp(prefix=f".{filename}-", dir=dirpath)
+            try:
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(scrubbed)
+                os.chmod(part, stat.S_IMODE(os.stat(path).st_mode))
+                os.replace(part, path)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.remove(part)
+                raise
+
+
 def _reraise(error: OSError) -> None:
     """``os.walk``'s error hook that stops the walk on a folder it couldn't read, rather than
     leaving that folder's files out without a word."""
@@ -357,6 +431,8 @@ class GitSyncProvider(SyncTransportProvider):
         repo_url: str = "",
         local_clone: str = "~/.personalclaw/sync/git-sync",
         branch: str = "main",
+        token: str = "",
+        username: str = "",
     ) -> None:
         self._repo_url = repo_url or ""
         # Expand ``~`` and ``$VARS`` so a configured "~/.personalclaw/sync/git-sync" or
@@ -364,6 +440,10 @@ class GitSyncProvider(SyncTransportProvider):
         # idle rather than crashing.
         self._clone = os.path.expandvars(os.path.expanduser(local_clone)) if local_clone else ""
         self._branch = branch or "main"
+        # Access token (a sensitive setting, so it is kept in the credential store) and the user
+        # name it signs in with. Pasted text can end in a newline; a token never does.
+        self._token = (token or "").strip()
+        self._username = (username or "").strip()
 
     # ── internal helpers ─────────────────────────────────────────────────────────────
 
@@ -376,10 +456,59 @@ class GitSyncProvider(SyncTransportProvider):
     def _refused(self) -> str:
         """Why these settings can't be used, and what to set instead; ``""`` when they can. The
         configured remote may be one PersonalClaw's git doesn't reach (a local path, ``ext::``,
-        ``git://``), or the Branch one git won't take as a branch name. Said before git runs, so
-        the owner reads it beside the setting rather than as git's ``transport 'file' not
-        allowed`` or ``invalid refspec``."""
-        return remote_refusal(self._repo_url) or _branch_refusal(self._branch)
+        ``git://``), an http one with a user name or token written into it, or one Access token
+        can't be handed to, or the Branch one git won't take as a branch name. Said before git
+        runs, so the owner reads it beside the setting rather than as git's ``transport 'file'
+        not allowed`` or ``invalid refspec``."""
+        return (
+            remote_refusal(self._repo_url)
+            or self._credential_in_url()
+            or self._token_refused()
+            or _branch_refusal(self._branch)
+        )
+
+    def _credential_in_url(self) -> str:
+        """Why Git Sync won't use an http(s) Git remote URL with a user name or token written
+        into it, or ``""``. git would keep it in the working clone's ``.git/config`` and pass
+        it on its command line, where anyone on this machine can read it."""
+        if not _web(self._repo_url) or not _USERINFO.search(self._repo_url):
+            return ""
+        return (
+            "Git Sync won't use a user name or token written into Git remote URL: git keeps it "
+            "in the working clone's .git/config and shows it on its command line to anyone on "
+            f"this machine. Set Git remote URL {_ON_CARD} to the address without it "
+            f"({_shown(self._repo_url)}), and put the token in Access token — and the user name "
+            "in User name, if your host wants one."
+        )
+
+    def _token_refused(self) -> str:
+        """Why Access token can't be handed to git for Git remote URL, or ``""``: a plain http
+        remote on another machine would get it unencrypted, and a line break or a NUL would be
+        read by git as more than one answer. Only an http(s) remote is ever given the token."""
+        if not self._token or not _web(self._repo_url):
+            return ""
+        if not _takes_token(self._repo_url):
+            host = urlsplit(_bare_url(self._repo_url)).hostname or "the remote"
+            return (
+                f"Git Sync won't send Access token over http, which would carry it unencrypted "
+                f"to {host}. Set Git remote URL {_ON_CARD} to the remote's https address."
+            )
+        for label, value in (("Access token", self._token), ("User name", self._username)):
+            if any(bad in value for bad in ("\n", "\r", "\0")):
+                return (
+                    f"{label} {_ON_CARD} has a line break or a NUL in it, which git would read "
+                    f"as more than one answer. Enter it again, on its own."
+                )
+        return ""
+
+    @property
+    def _sign_in(self) -> tuple[str, str]:
+        """The token and the user name git signs in to Git remote URL with, or ``("", "")`` for
+        the owner's own sign-in — their ssh key, their credential helpers. Only an http(s)
+        remote gets the token; ssh never does."""
+        if not self._token or not _takes_token(self._repo_url):
+            return "", ""
+        return self._token, self._username or _TOKEN_USERNAME
 
     def _detail(self, sentence: str, words: str) -> str:
         """``sentence``, then git's ``words`` as its detail — every detail Git Sync gives is made
@@ -406,16 +535,20 @@ class GitSyncProvider(SyncTransportProvider):
         An agent's shell can write the working clone's ``.git`` as easily as its files, so git
         runs with the settings that stop the repository's own configuration from running a
         program (``git_argv``): its ssh command and credential helpers are the owner's own,
-        from their global configuration. The environment is the child allowlist, never the
+        from their global configuration. With Access token set for an http(s) remote, a command
+        that talks to it signs in with that token instead: git's one credential helper hands it
+        over from that command's environment, and none of the owner's runs, so the token is on
+        no command line and in no file. The environment is the child allowlist, never the
         gateway's secrets, with the SSH agent for a command that talks to the remote
         (``git_env``) — and without the writes git makes only along the way
         (``GIT_OPTIONAL_LOCKS=0``: ``git status`` doesn't refresh the index), so a look at a
         folder that turns out not to be Git Sync's leaves it byte-for-byte as it was. Every
         write Git Sync itself makes takes its lock whatever that says."""
-        env = git_env(remote=talks_to_remote(args))
+        token, username = self._sign_in
+        env = git_env(remote=talks_to_remote(args), token=token, username=username)
         env["GIT_OPTIONAL_LOCKS"] = "0"
         return subprocess.run(
-            git_argv(args),
+            git_argv(args, token=bool(token)),
             capture_output=True,
             text=True,
             timeout=_GIT_TIMEOUT,
@@ -659,17 +792,37 @@ class GitSyncProvider(SyncTransportProvider):
         said = [entry.partition("\n") for entry in (cp.stdout or "").split("\0") if entry]
         return [(key.lower(), value) for key, _, value in said]
 
-    def _only_git_syncs(self, *, since_remote: bool) -> bool:
-        """Whether the working clone holds nothing but Git Sync's own work: every commit in it
-        made under the transport's own identity — or, ``since_remote``, every one its remote's
-        branches, as last fetched, don't have — and nothing git hasn't committed, ignored files
-        included, outside the sync layout. A folder of the owner's own has commits or files of
-        theirs; a hosting service's first commit on a remote is the remote's, not the folder's."""
+    def _commits_git_syncs(self, *, since_remote: bool) -> bool:
+        """Whether every commit in the working clone was made under the transport's own identity
+        — or, ``since_remote``, every one its remote's branches, as last fetched, don't have.
+
+        Walking the history (``git log --all``) is what the look costs, and a folder refused for
+        its commits would be walked on every call, so each walk's answer is kept (:data:`_WALKED`)
+        against the refs it was made at (``git show-ref --head``): no commit comes, goes or
+        changes without one of them moving."""
+        refs = self._git("show-ref", "--head", check=False)
+        if refs.returncode not in (0, 1):  # 1: no refs at all yet, as in a clone of an empty remote
+            return False
+        walk = (os.path.realpath(self._clone), since_remote)
+        walked = _WALKED.get(walk)
+        if walked is not None and walked[0] == refs.stdout:
+            return walked[1]
         log = ["log", "--all", "--format=%ae%n%ce"]
         if since_remote:
             log += ["--not", "--remotes=origin"]
         commits = self._git(*log, check=False)
-        if commits.returncode != 0 or set((commits.stdout or "").split()) - {_COMMIT_EMAIL}:
+        if commits.returncode != 0:
+            return False
+        ours = not set((commits.stdout or "").split()) - {_COMMIT_EMAIL}
+        _WALKED[walk] = (refs.stdout, ours)
+        return ours
+
+    def _only_git_syncs(self, *, since_remote: bool) -> bool:
+        """Whether the working clone holds nothing but Git Sync's own work: its commits
+        (:meth:`_commits_git_syncs`), and nothing git hasn't committed, ignored files included,
+        outside the sync layout. A folder of the owner's own has commits or files of theirs; a
+        hosting service's first commit on a remote is the remote's, not the folder's."""
+        if not self._commits_git_syncs(since_remote=since_remote):
             return False
         status = self._git(
             "status", "--porcelain", "-z", "--no-renames", "--untracked-files=all", "--ignored",
@@ -683,6 +836,22 @@ class GitSyncProvider(SyncTransportProvider):
             if len(entry) > 3
         )
 
+    def _leaked(self, where: list[tuple[str, str]]) -> bool:
+        """Whether the clone's origin — and its push URL, if it has one — is Git remote URL with
+        a user name or token written into it, and nothing else sends its fetches or pushes
+        anywhere: a clone made from such a URL, before Git Sync took the token from Access
+        token instead."""
+        return (
+            _web(self._repo_url)
+            and any(key == "remote.origin.url" for key, _ in where)
+            and any(_USERINFO.search(value) for _, value in where)
+            and all(
+                key in ("remote.origin.url", "remote.origin.pushurl")
+                and _USERINFO.sub("://", value, count=1) == self._repo_url
+                for key, value in where
+            )
+        )
+
     def _standing(self) -> str:
         """What the folder already at Local working clone is to Git Sync, read without changing
         anything in it:
@@ -690,6 +859,9 @@ class GitSyncProvider(SyncTransportProvider):
         - ``"ours"``: a clone Git Sync made (:data:`_MARK`), pointing at Git remote URL.
         - ``"adopt"``: pointing at Git remote URL, unmarked, and holding nothing but Git Sync's
           own work — a clone an older Git Sync made, before clones were marked.
+        - ``"rewrite"``: Git Sync's, its origin Git remote URL with a user name or token written
+          into it (:meth:`_leaked`). Its origin is rewritten without it, and every copy of it
+          taken out of the clone (:meth:`_rewrite_origin`), rather than the clone replaced.
         - ``"replace"``: Git Sync's, but pointing at another remote — Git remote URL changed, or
           its own settings send pushes elsewhere — and holding nothing that remote lacks but Git
           Sync's own work. A fresh clone of Git remote URL takes its place.
@@ -698,18 +870,54 @@ class GitSyncProvider(SyncTransportProvider):
         config = self._clone_config()
         mark = _MARK.lower()
         marked = (mark, "true") in config
-        follows = [kv for kv in config if kv[0] != mark] == [("remote.origin.url", self._repo_url)]
+        where = [kv for kv in config if kv[0] != mark]
+        follows = where == [("remote.origin.url", self._repo_url)]
+        leaked = not follows and self._leaked(where)
         if marked:
             if follows:
                 return "ours"
+            if leaked:
+                return "rewrite"
             return "replace" if self._only_git_syncs(since_remote=True) else "refuse"
         if not self._only_git_syncs(since_remote=False):
             return "refuse"
+        if leaked:
+            return "rewrite"
         return "adopt" if follows else "replace"
+
+    def _take_up(self, standing: str) -> None:
+        """Make a clone Git Sync may sync through fully its own, as :meth:`_standing` found it: a
+        credential written into its origin taken out, and an unmarked one marked."""
+        if standing == "rewrite":
+            self._rewrite_origin()
+        if standing in ("adopt", "rewrite"):
+            self._mark()
 
     def _mark(self) -> None:
         """Mark the working clone as one Git Sync made."""
         self._git("config", "--local", _MARK, "true")
+
+    def _rewrite_origin(self) -> None:
+        """Point the clone's origin at Git remote URL itself, with no push URL of its own, and
+        take the user name and token its old URL carried out of every file under ``.git`` that
+        holds a copy. git today writes the URL whole only into ``.git/config`` — its fetch
+        record and its logs name the URL without the credential — but a clone an older git made
+        may hold it in those as well."""
+        old = {
+            value
+            for key, value in self._clone_config()
+            if key in ("remote.origin.url", "remote.origin.pushurl") and _USERINFO.search(value)
+        }
+        self._git("config", "--local", "--replace-all", "remote.origin.url", self._repo_url)
+        self._git("config", "--local", "--unset-all", "remote.origin.pushurl", check=False)
+        needles: list[tuple[bytes, bytes]] = [
+            (value.encode(), self._repo_url.encode()) for value in old
+        ]
+        for value in old:
+            userinfo = _USERINFO.search(value)
+            if userinfo:
+                needles.append((userinfo.group(0).encode(), b"://"))
+        _scrub(os.path.join(self._clone, ".git"), needles)
 
     def _replace_clone(self) -> None:
         """Swap the working clone for a fresh clone of Git remote URL (:meth:`_standing` said
@@ -745,12 +953,13 @@ class GitSyncProvider(SyncTransportProvider):
         """Make ``<clone>`` a checkout of Git remote URL on the configured branch. Idempotent.
 
         A brand-new empty remote is not an error — it is the first machine: ``git clone``
-        of an empty remote succeeds (with a warning) leaving an unborn branch, which we
-        adopt with ``checkout -B`` so the first push publishes it. A clone is marked as Git
-        Sync's as it is made. A folder already there is looked at first, without changing it
-        (:meth:`_standing`): a clone pointing elsewhere is replaced, one an older Git Sync made is
-        marked, and a folder holding work Git Sync didn't make raises :class:`GitSyncFailed` —
-        before any git step that could change it runs.
+        of an empty remote succeeds (with a warning), and Branch starts there for the first push
+        to publish (:meth:`_start_branch`). A clone is marked as Git Sync's as it is made. A
+        folder already there is looked at first, without changing it (:meth:`_standing`): a
+        clone pointing elsewhere is replaced, one an older Git Sync made is marked, one whose
+        origin carries a credential is rewritten without it, and a folder holding work Git Sync
+        didn't make raises :class:`GitSyncFailed` — before any git step that could change it
+        runs.
         """
         git_dir = os.path.join(self._clone, ".git")
         if not os.path.isdir(git_dir):
@@ -763,14 +972,45 @@ class GitSyncProvider(SyncTransportProvider):
             standing = self._standing()
             if standing == "refuse":
                 raise GitSyncFailed(self._not_ours())
-            if standing == "adopt":
-                self._mark()
-            elif standing == "replace":
+            if standing == "replace":
                 self._replace_clone()
-        # On a populated remote the branch (or a remote-tracking DWIM of it) checks out; on
-        # an empty/new remote it does not exist yet, so create it locally for the first push.
-        if self._git("checkout", self._branch, check=False).returncode != 0:
-            self._git("checkout", "-B", self._branch, check=False)
+            else:
+                self._take_up(standing)
+        # Branch checks out when the clone has it, or the remote does (git makes it from the
+        # remote's); a branch neither has yet starts empty.
+        if self._rev(f"refs/heads/{self._branch}") or self._rev(self._upstream):
+            self._git("checkout", "-q", self._branch)
+        else:
+            self._start_branch()
+
+    def _start_branch(self) -> None:
+        """Start Branch, which neither the working clone nor the remote has yet, empty: an
+        orphan with none of the files the clone came with. A clone comes checked out on the
+        remote's own branch, and a Branch started from it would carry that branch's files — which
+        the listing would serve as sync objects, and the first push would publish on Branch."""
+        head = self._git("symbolic-ref", "-q", "HEAD", check=False)
+        if (head.stdout or "").strip() == f"refs/heads/{self._branch}":
+            return  # already on it, before its first commit
+        if self._git("switch", "-q", "--orphan", self._branch, check=False).returncode == 0:
+            return
+        # A git before 2.23 has no ``switch``: make the orphan, then take the files the clone
+        # came with out of the index and the working tree, as ``switch --orphan`` does.
+        tracked = [path for path in self._git("ls-files", "-z").stdout.split("\0") if path]
+        self._git("checkout", "-q", "--orphan", self._branch)
+        self._git("read-tree", "--empty")
+        root = os.path.normpath(self._clone)
+        for path in tracked:
+            full = self._resolve(path)
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(full)
+            folder = os.path.dirname(full)
+            while (
+                os.path.normpath(folder) != root
+                and os.path.isdir(folder)
+                and not os.listdir(folder)
+            ):
+                os.rmdir(folder)
+                folder = os.path.dirname(folder)
 
     @staticmethod
     def _refusal(cp: subprocess.CompletedProcess) -> str:
@@ -1173,13 +1413,15 @@ class GitSyncProvider(SyncTransportProvider):
             )
 
     def list_remote(self, prefix: str = "") -> list[RemoteRef]:
-        # Empty only when there is nothing there yet: no remote set, or settings git can't use
-        # (the push and the probe say why), or a remote with nothing on the branch. Anything else
-        # that stops the listing raises GitSyncFailed saying what — a clone that fails, a folder
-        # Git Sync won't sync through, a catch-up that can't be made — since an empty or a stale
-        # listing would be taken for the remote's.
-        if self._idle or self._refused:
+        # Empty only when there is nothing there yet: no remote set, or a remote with nothing on
+        # the branch. Anything else that stops the listing raises GitSyncFailed saying what —
+        # settings git can't be run with, a clone that fails, a folder Git Sync won't sync
+        # through, a catch-up that can't be made — since an empty or a stale listing would be
+        # taken for the remote's.
+        if self._idle:
             return []
+        if self._refused:
+            raise GitSyncFailed(self._refused)
         try:
             self._ensure_clone()
         except (subprocess.SubprocessError, OSError) as e:
@@ -1216,8 +1458,10 @@ class GitSyncProvider(SyncTransportProvider):
         return refs
 
     def pull(self, refs: list[RemoteRef]) -> list[SyncObject]:
-        if self._idle or self._refused:
+        if self._idle:
             return []
+        if self._refused:
+            raise GitSyncFailed(self._refused)
         # list_remote makes the clone; a read never does, and there's nothing to read without one.
         if not os.path.isdir(os.path.join(self._clone, ".git")):
             return []
@@ -1227,8 +1471,7 @@ class GitSyncProvider(SyncTransportProvider):
                 # A folder of work Git Sync didn't make, or a clone of another remote: nothing in
                 # it is served, and it is never fetched from.
                 return []
-            if standing == "adopt":
-                self._mark()
+            self._take_up(standing)
         except (subprocess.SubprocessError, OSError) as e:
             raise GitSyncFailed(self._cycle_stopped(e)) from None
         self._level()
@@ -1248,14 +1491,17 @@ class GitSyncProvider(SyncTransportProvider):
     def cas_registry(self, expected_sha: str | None, data: bytes) -> bool:
         """Compare-and-swap ``registry.json`` through the remote's own push rejection.
 
-        ``False`` is a lost race and nothing else: the registry isn't what the caller expected,
-        or the remote moved under the swap's push. Anything else that stops the swap — a clone
-        that can't be made or caught up, a folder Git Sync won't sync through, a lock file in the
-        clone, a push the remote refuses for another reason — raises :class:`GitSyncFailed`
-        saying so, once the swap's own write is taken back: ``False`` would send the cycle round
-        to re-read and swap again until it gave up, as "registry CAS lost"."""
-        if self._idle or self._refused:
+        ``False`` is a lost race and nothing else — the registry isn't what the caller expected,
+        or the remote moved under the swap's push — besides a transport with no remote set.
+        Anything else that stops the swap — settings git can't be run with, a clone that can't be
+        made or caught up, a folder Git Sync won't sync through, a lock file in the clone, a push
+        the remote refuses for another reason — raises :class:`GitSyncFailed` saying so, once the
+        swap's own write is taken back: ``False`` would send the cycle round to re-read and swap
+        again until it gave up, as "registry CAS lost"."""
+        if self._idle:
             return False
+        if self._refused:
+            raise GitSyncFailed(self._refused)
         before: str | None = None
         wrote = committed = False
         failure = ""
@@ -1338,10 +1584,13 @@ class GitSyncProvider(SyncTransportProvider):
 
 
 def create_provider(config: dict[str, Any] | None = None) -> GitSyncProvider:
-    """Extension factory — builds the git-sync transport from user settings."""
+    """Extension factory — builds the git-sync transport from user settings. ``token`` is
+    declared sensitive, so it is kept in the credential store and arrives here resolved."""
     config = config or {}
     return GitSyncProvider(
         repo_url=str(config.get("repo_url", "") or ""),
         local_clone=str(config.get("local_clone", "") or "~/.personalclaw/sync/git-sync"),
         branch=str(config.get("branch", "") or "main"),
+        token=str(config.get("token", "") or ""),
+        username=str(config.get("username", "") or ""),
     )

@@ -254,3 +254,53 @@ def test_code_loaded_through_importlib_util_is_read(tmp_path, load, said):
     )
     out = _red_for(tmp_path, "loader-app", source)
     assert said in out, out
+
+
+@pytest.mark.parametrize(("line", "signal"), [
+    ("'echo $(ssh host uptime)'", "starts ssh"),
+    ("'x=`git fetch`'", "runs git fetch"),
+])
+def test_the_commands_a_substitution_runs_are_read(tmp_path, line, signal):
+    """``$(…)`` and backticks run a command of their own inside the line."""
+    source = f"import subprocess\n\n\ndef status():\n    subprocess.run({line}, shell=True)\n"
+    out = _red_for(tmp_path, "subst-app", source)
+    said = f"subst-app: its code reaches the network (subst-app/provider.py:5: {signal})"
+    assert said in out, out
+
+
+@pytest.mark.parametrize(("argv", "signal"), [
+    ("['/usr/bin/ssh', host]", "starts ssh"),
+    ("['./bin/rsync', '-a', host, dst]", "starts rsync"),
+])
+def test_a_program_given_by_path_in_an_argv_list_reds(tmp_path, argv, signal):
+    """An argv's program is read by its basename, as on a shell line; a path whose basename
+    names no such program stays clean."""
+    source = f"import subprocess\n\n\ndef send(host, dst):\n    subprocess.run({argv})\n"
+    apps = _known()
+    apps["path-app"] = ({}, {"provider.py": source})
+    apps["tool-app"] = ({}, {"provider.py": source.replace(argv, "['/srv/ssh-backup/tool']")})
+    run = _check(_seeded(tmp_path, apps))
+    assert run.returncode == 1, run.stdout
+    assert f"path-app: its code reaches the network (path-app/provider.py:5: {signal})" in (
+        run.stdout
+    ), run.stdout
+    assert "tool-app" not in run.stdout, run.stdout
+
+
+@pytest.mark.parametrize(("code", "said"), [
+    ("exec(open(path).read())",
+     "exec-app: exec-app/provider.py:5 loads code from a path only known at run time, so "
+     "whether exec-app reaches the network is unknown"),
+    ("exec(compile(Path(path).read_text(), path, 'exec'))",
+     "exec-app: exec-app/provider.py:5 loads code from a path only known at run time, so "
+     "whether exec-app reaches the network is unknown"),
+    ("exec('import httpx')",
+     "exec-app: its code reaches the network (exec-app/provider.py:5: imports httpx (an HTTP "
+     "client))"),
+])
+def test_code_run_by_exec_is_read(tmp_path, code, said):
+    """A file's text run by ``exec`` is code from a path only known at run time, unless that
+    path is built on ``__file__``; a constant it runs is read like the rest of the file."""
+    source = f"from pathlib import Path\n\n\ndef load(path):\n    {code}\n"
+    out = _red_for(tmp_path, "exec-app", source)
+    assert said in out, out

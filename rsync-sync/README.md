@@ -30,12 +30,24 @@ above it.
    - **Sync root path** — the absolute path **on the target**, e.g. `/srv/personalclaw-sync`.
    - **SSH port** / **SSH identity file** — only if they differ from your ssh defaults.
    - **Local working directory** — where the local mirror lives (see Performance).
-3. **Point every machine at the same host + path**, and use the same passphrase on each
+3. **Mark the sync root**: run `personalclaw setup --app rsync-sync` on any one machine. It
+   asks whether the disk or share the sync root is on is mounted, then puts a
+   `.personalclaw-sync-root` file in it, and nothing else. Rsync Sync syncs only with a folder
+   that has one, because a share that isn't mounted can leave an empty folder where the sync
+   root was, which looks just like a new sync root: written, it would quietly take the sync
+   onto the local disk. The marker is in the sync root, so every machine sees it.
+4. **Point every machine at the same host + path**, and use the same passphrase on each
    (see Encryption).
-4. Hit **Test connection**. It runs one recursive listing, which exercises ssh, the host key,
-   authentication and the path in a single command.
+5. Hit **Test connection**. It runs one recursive listing, which exercises ssh, the host key,
+   authentication and the path in a single command, and finds the marker.
 
 `rsync` must be installed on **both** ends. It usually already is.
+
+### A sync root from release 0.1.5 or earlier
+
+It has no marker yet, so syncing stops once, on every machine, with "The sync root path … has
+no .personalclaw-sync-root file in it". Check that its disk or share is mounted, then run
+`personalclaw setup --app rsync-sync` once, on any machine, and sync again.
 
 ### Authentication must be non-interactive
 
@@ -71,6 +83,16 @@ data (the local home stays authoritative).
 
 Secrets (`.env`, `.local_secret`, `sel_hmac.key`, `telemetry_salt`, and anything the state
 inventory marks `secret=True`) are excluded upstream and never reach any transport.
+
+## How a write finds the sync root
+
+Every write checks that the sync root is there and holds its marker, as part of the write
+itself, so a disk or share that goes away after an earlier look is never written in its
+absence. Over ssh, rsync's own `--rsync-path` option starts the host's rsync only once the
+host's shell finds both, in the same command. On this machine, the sync root is opened and
+checked just before rsync starts, and held open until it's done, so an ordinary unmount of its
+disk is refused as busy while rsync writes. A listing takes a folder without the marker for no
+sync root at all, rather than one with nothing in it yet.
 
 ## How commands are run
 
@@ -127,19 +149,20 @@ review on the host is enough.
 ## Troubleshooting
 
 A failed sync or connection test says what went wrong and what to do — the host key isn't
-trusted yet, the host turned down the ssh login, the sync root path doesn't exist there, rsync
-isn't installed on one end, a run went past **Command timeout**, this machine's **Local working
-directory** can't be written — with rsync's, ssh's or the filesystem's own words after it. A
-listing, a pull or a registry swap whose rsync run fails stops the sync with that as its error,
-rather than reading as a target with nothing on it or a swap another machine won — and a
-**Sync root path** that doesn't exist is such a failure too, on every machine, the first one
-included: nothing is pushed until it is mounted, created, or the setting corrected. Files that
-vanish from the target while a pull copies — another machine rewriting the registry — are not a
-failure: what arrived is used.
+trusted yet, the host turned down the ssh login, the sync root path doesn't exist there or
+isn't marked, rsync isn't installed on one end, a run went past **Command timeout**, this
+machine's **Local working directory** can't be written — with rsync's, ssh's or the
+filesystem's own words after it. A listing, a pull or a registry swap whose rsync run fails
+stops the sync with that as its error, rather than reading as a target with nothing on it or a
+swap another machine won — and a **Sync root path** that doesn't exist is such a failure too,
+on every machine, the first one included: nothing is pushed until it is mounted, created and
+marked, or the setting corrected. Files that vanish from the target while a pull copies —
+another machine rewriting the registry — are not a failure: what arrived is used.
 
 | Symptom | Cause |
 |---|---|
-| "The sync root path … doesn't exist" | The disk or share it lives on isn't mounted, the folder was never made, or **Sync root path** is mistyped. Mount it; create it if it's the folder you meant (`mkdir -p` the path, on the host for an SSH target); or correct the setting. Then sync again. |
+| "The sync root path … doesn't exist" | The disk or share it lives on isn't mounted, the folder was never made, or **Sync root path** is mistyped. Mount it; create it if it's the folder you meant (`mkdir -p` the path, on the host for an SSH target) and mark it with `personalclaw setup --app rsync-sync`; or correct the setting. Then sync again. |
+| "The sync root path … has no .personalclaw-sync-root file in it" | The folder there isn't marked as the sync root: its disk or share isn't mounted, and what's there is the empty folder it leaves, or no machine has marked it yet (a new sync root, or one from release 0.1.5 or earlier). Mount it, then run `personalclaw setup --app rsync-sync`, which asks before it marks the folder. |
 | Times out on every cycle | With `BatchMode=yes` set, a timeout means the host is unreachable or the key is not accepted — **not** that it asked for a password. Try the same `ssh` by hand. |
 | `Host key verification failed` | Expected on first contact. Connect once by hand to record the key; the app will not accept an unknown key for you. |
 | PersonalClaw couldn't start rsync on this machine | rsync is not installed here, or is not on the `PATH` PersonalClaw runs with. |
@@ -149,6 +172,7 @@ failure: what arrived is used.
 ## Layout on the target
 
 ```
+<path>/.personalclaw-sync-root                          # the marker setup puts there
 <path>/registry.json                                    # shared, plaintext
 <path>/encryption-salt                                  # first-write-wins, plaintext
 <path>/machines/<machine-id>/seq-<n>/<domain>/<file>     # shard objects (encrypted by default)

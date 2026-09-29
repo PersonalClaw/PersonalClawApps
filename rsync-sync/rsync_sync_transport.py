@@ -35,20 +35,37 @@ re-pulls, re-merges peers' entries and retries on a ``False``, so a false ``Fals
 round trip, while a false ``True`` silently discards another machine's registration. An rsync
 run that fails is no race, and raises instead: no re-pull fixes it.
 
-**The sync root is never created.** rsync makes a missing destination folder to write into —
-openrsync the whole path, GNU rsync its last part — and a folder missing under a share that
-isn't mounted looks exactly like one not made yet. Created, it would quietly take the sync onto
-the local disk. So a write first lists the root's top level (:meth:`_root_listing`), and a root
-that isn't there is a failure the owner fixes by mounting or creating it, never a first sync.
+**The sync root is never created, and never written unless it is marked.** rsync makes a
+missing destination folder to write into — openrsync the whole path, GNU rsync its last part —
+and a folder missing under a share that isn't mounted looks exactly like one not made yet. A
+share that isn't mounted can also leave an empty folder where the sync root was, which looks
+exactly like a new one. Written, either would quietly take the sync onto the local disk. So
+``personalclaw setup --app rsync-sync`` marks the sync root with a file (:data:`_MARKER`,
+:meth:`RsyncSyncProvider.mark_root`) once the owner says its disk is mounted, and every write
+runs only into a root that holds it. The check is part of the write. Over ssh, the host's shell
+checks just before it starts the host's rsync, in the same command (``--rsync-path``: the
+command that shell runs to start it, as for every rsync over ssh). On this machine, the root is
+opened and checked just before rsync starts, and held open until it is done, so an ordinary
+unmount of its disk is refused as busy while rsync writes. A listing takes an unmarked root for
+no sync root at all. A root that isn't there, or isn't marked, is a failure the owner fixes by
+mounting it, creating it, marking it or correcting the setting — never a first sync.
+
+This module is named for the app rather than ``provider.py`` because the app's CLI step
+(``app_cli.py``) imports it: ``personalclaw setup`` runs every app's step in one process, where
+a bare ``provider`` is whichever app's was imported first.
 """
 
+import contextlib
 import errno
 import hashlib
 import os
 import re
+import shlex
 import shutil
+import stat
 import subprocess  # noqa: S404 — argv-only, shell=False; see the module docstring
 import tempfile
+from collections.abc import Iterator
 from typing import Any
 
 from personalclaw.sdk.net import sentence_with_detail
@@ -63,6 +80,14 @@ from personalclaw.sdk.util import child_process_env
 
 #: The single shared registry object every machine compare-and-swaps.
 _REGISTRY_KEY = "registry.json"
+
+#: The file that marks a folder as the sync root. ``personalclaw setup`` writes it there
+#: (:meth:`RsyncSyncProvider.mark_root`), and Rsync Sync syncs with the root only while it is
+#: there: the empty folder a disk or share leaves when it isn't mounted has none.
+_MARKER = ".personalclaw-sync-root"
+_MARKER_TEXT = "PersonalClaw's Rsync Sync syncs with this folder only while this file is in it.\n"
+#: The command that marks the sync root, as a sentence tells the owner to run it.
+_SETUP = "personalclaw setup --app rsync-sync"
 
 # ── What a failure says ──────────────────────────────────────────────────────────────
 #
@@ -146,6 +171,17 @@ class RsyncFailed(RuntimeError):
     def __init__(self, sentence: str, words: object) -> None:
         super().__init__(sentence_with_detail(sentence, words))
         self.sentence = sentence
+
+
+class RootRefused(RsyncFailed):
+    """A sync root this transport won't sync with: it isn't there, or has no marker
+    (:data:`_MARKER`). Nothing was written to it. Its words are what showed the root isn't
+    there (a listing's, or the filesystem's), and none for a missing marker, which is this
+    transport's own finding."""
+
+    def __init__(self, sentence: str, words: object = "") -> None:
+        super().__init__(sentence, words)
+        self.words = words
 
 
 def validate_host(host: str) -> str:
@@ -262,9 +298,208 @@ class RsyncSyncProvider(SyncTransportProvider):
 
     def _root_listing(self) -> list[str]:
         """The argv of a listing of the sync root's top level only — one folder's entries,
-        however much is under them. Every run that writes into the root runs it first: rsync
-        would create a root that isn't there, and this lists one as missing instead."""
+        however much is under them, and never a folder created: what tells a root that isn't
+        there from a registry that isn't, and whether the root holds its marker."""
         return ["--list-only", *self._rsh_arg(), "--", self._target()]
+
+    # ── the sync root's marker ───────────────────────────────────────────────────────
+
+    def _where(self) -> str:
+        """Where the sync root is, as a sentence says it."""
+        return f"on {self._host.rsplit('@', 1)[-1]}" if self._host else "on this machine"
+
+    @property
+    def root_label(self) -> str:
+        """The sync root as a sentence names it: its path, and where it is."""
+        return f"{self._path} {self._where()}"
+
+    def _no_root(self) -> str:
+        """What a sync root path that isn't there says. Never created for the owner: it may be a
+        disk or share that isn't mounted, and a folder made in its place would quietly take the
+        sync onto the local disk."""
+        return (
+            f"The sync root path {self._path} doesn't exist {self._where()}. If it's on a disk or "
+            "share that isn't mounted, mount it; if it's the folder you meant, create it "
+            f"(mkdir -p {self._path}) and run {_SETUP} to mark it; otherwise set Sync root path "
+            f"{_ON_CARD} to the right folder. Then sync again."
+        )
+
+    def _no_marker(self) -> str:
+        """What a sync root without its marker says. The empty folder a disk or share leaves
+        when it isn't mounted looks just like one, so it asks."""
+        return (
+            f"The sync root path {self.root_label} has no {_MARKER} file in it, so Rsync Sync "
+            "won't sync with it. Is the disk or share it's on mounted? If it is, and this is the "
+            f"sync root you meant, run {_SETUP} to mark it. Then sync again."
+        )
+
+    def _root_denied(self) -> str:
+        """What a sync root that refuses this machine's login, or PersonalClaw, says."""
+        who = "this machine's SSH login" if self._host else "PersonalClaw"
+        return (
+            f"The sync root path {self.root_label} doesn't let {who} read or write it. Fix that "
+            f"folder's permissions, or set Sync root path {_ON_CARD} to one {who} can write to."
+        )
+
+    def _root_unreadable(self, failure: OSError) -> str:
+        """What a sync root on this machine that couldn't be opened or looked in says."""
+        if isinstance(failure, PermissionError):
+            return self._root_denied()
+        return (
+            f"Rsync Sync couldn't read the sync root path {self.root_label}. Check the disk or "
+            "share it's on, then sync again."
+        )
+
+    def _shell_word(self, name: str = "") -> str:
+        """The sync root, or the file *name* in it, as one word for the host's shell: quoted, but
+        with a leading ``~`` or ``~user`` left for the shell to resolve, as it resolves the path
+        rsync is given."""
+        root = self._path.rstrip("/") or "/"
+        path = f"{root.rstrip('/')}/{name}" if name else root
+        head, sep, rest = path.partition("/")
+        if re.fullmatch(r"~[A-Za-z0-9._-]*", head):
+            return head + sep + (shlex.quote(rest) if rest else "")
+        return shlex.quote(path)
+
+    def _write_guard(self, *, marked: bool = True) -> list[str]:
+        """The option that makes the host check the sync root just before it writes. Over ssh,
+        rsync starts the host's side through the host's shell, and ``--rsync-path`` is the
+        command that shell runs to start it: here, ``rsync`` once ``test`` finds the root and,
+        for a *marked* write, the marker in it. When one isn't there, the host's side ends
+        before it writes anything, and :meth:`_run_write` finds out which. A write to this
+        machine is checked by :meth:`_local_root_held` instead."""
+        if not self._host:
+            return []
+        checks = [f"test -d {self._shell_word()}"]
+        if marked:
+            checks.append(f"test -f {self._shell_word(_MARKER)}")
+        return ["--rsync-path=" + " && ".join([*checks, "rsync"])]
+
+    @contextlib.contextmanager
+    def _local_root_held(self, *, marked: bool = True) -> Iterator[None]:
+        """For a write to this machine: open the sync root, check that it holds its marker (for
+        a *marked* write), and keep it open while the write runs. An open folder keeps its disk
+        busy, so an ordinary unmount is refused until rsync is done. Raises
+        :class:`RootRefused` when the root isn't there, or the marker isn't in it."""
+        root = self._path.rstrip("/") or "/"
+        try:
+            held = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        except (FileNotFoundError, NotADirectoryError) as e:
+            raise RootRefused(self._no_root(), e) from e
+        except OSError as e:
+            raise RootRefused(self._root_unreadable(e), e) from e
+        try:
+            if marked:
+                try:
+                    found = os.stat(_MARKER, dir_fd=held)
+                except (FileNotFoundError, NotADirectoryError):
+                    raise RootRefused(self._no_marker()) from None
+                except OSError as e:
+                    raise RootRefused(self._root_unreadable(e), e) from e
+                if not stat.S_ISREG(found.st_mode):
+                    raise RootRefused(self._no_marker())
+            yield
+        finally:
+            os.close(held)
+
+    def _run_write(self, args: list[str], *, marked: bool = True) -> subprocess.CompletedProcess:
+        """Run *args*, a write into the sync root, only into a root that is there and, for a
+        *marked* write (every write but the marker's own), holds its marker. Raises
+        :class:`RootRefused` for one that isn't or doesn't. A run that fails otherwise is
+        returned, as :meth:`_run` returns it, for the caller to say."""
+        if not self._host:
+            with self._local_root_held(marked=marked):
+                return self._run(args)
+        proc = self._run([*self._write_guard(marked=marked), *args])
+        if proc.returncode != 0 and not self._ssh_trouble(proc):
+            self._raise_if_refused(marked=marked)
+        return proc
+
+    def _raise_if_refused(self, *, marked: bool) -> None:
+        """After a write over ssh failed: raise :class:`RootRefused` when the sync root isn't
+        there, or has no marker. Either one stops the host's side before it writes, and rsync's
+        own words for a side that ended early don't say which. When the listing that tells
+        fails too, the write's own words say what went wrong."""
+        try:
+            state, listing = self._root_listed()
+        except RsyncFailed:
+            return
+        if state == "missing":
+            raise RootRefused(self._no_root(), _words(listing))
+        if marked and state == "unmarked":
+            raise RootRefused(self._no_marker())
+
+    def _run_write_or_fail(
+        self, args: list[str], *, marked: bool = True
+    ) -> subprocess.CompletedProcess:
+        """:meth:`_run_write`, with a run that times out or can't start raised as
+        :class:`RsyncFailed`, said as a push's failure is."""
+        try:
+            return self._run_write(args, marked=marked)
+        except subprocess.TimeoutExpired as e:
+            raise RsyncFailed(self._timed_out(), e) from e
+        except OSError as e:
+            raise RsyncFailed(self._not_started(e), e) from e
+
+    def _root_listed(self) -> tuple[str, subprocess.CompletedProcess]:
+        """The sync root's state, ``"marked"``, ``"unmarked"`` or ``"missing"``, from a listing
+        of its top level, and that listing. A listing that fails otherwise raises
+        :class:`RsyncFailed`."""
+        proc = self._run_or_fail(self._root_listing())
+        if proc.returncode not in (0, 24):
+            if self._missing(proc):
+                return "missing", proc
+            raise RsyncFailed(self._refused(proc), _words(proc))
+        return ("marked" if _lists_marker(proc.stdout) else "unmarked"), proc
+
+    def root_state(self) -> tuple[str, str]:
+        """``(state, sentence)``: whether the sync root is ``"marked"``, ``"unmarked"`` or
+        ``"missing"``, and what that means, from a listing that changes nothing. A listing that
+        fails otherwise raises :class:`RsyncFailed`. For ``personalclaw setup`` and
+        ``personalclaw doctor``."""
+        state, listing = self._root_listed()
+        if state == "missing":
+            return state, sentence_with_detail(self._no_root(), _words(listing))
+        if state == "unmarked":
+            return state, self._no_marker()
+        return state, (
+            f"The sync root path {self.root_label} is marked, so Rsync Sync syncs with it."
+        )
+
+    def mark_root(self) -> str:
+        """Put the marker in the sync root, which must already be there, and say so. The owner
+        does this (``personalclaw setup``), having said the disk or share the root is on is
+        mounted: the empty folder it leaves when it isn't looks just the same from here. Makes
+        no folder, writes nothing else and replaces nothing already there. Raises
+        :class:`RsyncFailed` (:class:`RootRefused` for a root that isn't there) when it can't."""
+        if not self.configured:
+            raise RsyncFailed(self._unconfigured_detail(), "")
+        state, listing = self._root_listed()
+        if state == "missing":
+            raise RootRefused(self._no_root(), _words(listing))
+        if state == "marked":
+            return f"The sync root path {self.root_label} is already marked."
+        stage = self._stage("mark-")
+        try:
+            self._stage_file(stage, _MARKER, _MARKER_TEXT.encode("utf-8"))
+            args = ["-rt", "--ignore-existing", *self._rsh_arg(), "--", f"{stage}/", self._target()]
+            proc = self._run_write_or_fail(args, marked=False)
+            if proc.returncode != 0:
+                raise RsyncFailed(self._run_refused(proc, stage), _words(proc))
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
+        if self._root_listed()[0] != "marked":
+            raise RsyncFailed(
+                f"Rsync Sync couldn't mark the sync root path {self.root_label}: something named "
+                f"{_MARKER} that isn't a file is already in it. Move that away, then run {_SETUP} "
+                "again.",
+                "",
+            )
+        return (
+            f"Marked the sync root path {self.root_label}. Rsync Sync syncs with it while "
+            f"{_MARKER} is in it, so the empty folder its disk or share leaves when it isn't "
+            "mounted is never synced in its place."
+        )
 
     def _rsh_arg(self) -> list[str]:
         """The ``-e`` remote-shell argument, or nothing for a local transfer.
@@ -450,74 +685,73 @@ class RsyncSyncProvider(SyncTransportProvider):
             f"or raise Command timeout {_ON_CARD}."
         )
 
+    def _ssh_trouble(self, proc: subprocess.CompletedProcess) -> str:
+        """What a run that ssh stopped means, and what to do: the host key, the host itself,
+        the login, a login shell that prints, or no rsync there. ``""`` for a run to this
+        machine, and for any failure past ssh. The sentence alone, as :meth:`_refused` gives it."""
+        if not self._host:
+            return ""
+        low = f"{proc.stderr or ''}\n{proc.stdout or ''}".lower()
+        host = self._host.rsplit("@", 1)[-1]
+        if any(needle in low for needle in _HOST_KEY_CHANGED):
+            return (
+                f"SSH refused {host} because its host key has changed since this machine last "
+                "trusted it. Only if you know why it changed, remove its old key from this "
+                f"machine's known_hosts file, then run {self._ssh_command()} once from a "
+                "terminal here to accept the new one."
+            )
+        if any(needle in low for needle in _HOST_KEY):
+            return (
+                f"SSH on this machine doesn't trust {host}'s host key yet. Run "
+                f"{self._ssh_command()} once from a terminal here to accept it."
+            )
+        if any(needle in low for needle in _SHELL_NOT_CLEAN):
+            return (
+                f"Something on {host} prints text when rsync logs in over SSH — a login "
+                "message, or output from a shell startup file — and it garbles rsync's "
+                f"connection. Stop that output for non-interactive logins on {host}."
+            )
+        if any(needle in low for needle in _NO_RSYNC_THERE):
+            return (
+                f"{host} couldn't run rsync — it isn't installed there, or isn't on the PATH "
+                f"its SSH logins get. Install rsync on {host}."
+            )
+        if any(needle in low for needle in _UNREACHABLE):
+            return (
+                f"{host} couldn't be reached from this machine. Check that it is online, and "
+                f"that SSH host and SSH port {_ON_CARD} are right."
+            )
+        if _LOGIN_REFUSED.search(low):
+            return (
+                f"{host} turned down this machine's SSH login. Check that "
+                f"{self._ssh_command()} logs in from a terminal here without asking for "
+                f"anything, or set SSH identity file {_ON_CARD} to a key {host} accepts."
+            )
+        return ""
+
     def _refused(self, proc: subprocess.CompletedProcess) -> str:
         """What a run that rsync, or the ssh under it, ended with an error means, and what to do.
         The sentence alone: the caller says whether the cycle retries, and adds rsync's words."""
+        trouble = self._ssh_trouble(proc)
+        if trouble:
+            return trouble
         low = f"{proc.stderr or ''}\n{proc.stdout or ''}".lower()
-        host = self._host.rsplit("@", 1)[-1]
-        if self._host:
-            if any(needle in low for needle in _HOST_KEY_CHANGED):
-                return (
-                    f"SSH refused {host} because its host key has changed since this machine last "
-                    "trusted it. Only if you know why it changed, remove its old key from this "
-                    f"machine's known_hosts file, then run {self._ssh_command()} once from a "
-                    "terminal here to accept the new one."
-                )
-            if any(needle in low for needle in _HOST_KEY):
-                return (
-                    f"SSH on this machine doesn't trust {host}'s host key yet. Run "
-                    f"{self._ssh_command()} once from a terminal here to accept it."
-                )
-            if any(needle in low for needle in _SHELL_NOT_CLEAN):
-                return (
-                    f"Something on {host} prints text when rsync logs in over SSH — a login "
-                    "message, or output from a shell startup file — and it garbles rsync's "
-                    f"connection. Stop that output for non-interactive logins on {host}."
-                )
-            if any(needle in low for needle in _NO_RSYNC_THERE):
-                return (
-                    f"{host} couldn't run rsync — it isn't installed there, or isn't on the PATH "
-                    f"its SSH logins get. Install rsync on {host}."
-                )
-            if any(needle in low for needle in _UNREACHABLE):
-                return (
-                    f"{host} couldn't be reached from this machine. Check that it is online, and "
-                    f"that SSH host and SSH port {_ON_CARD} are right."
-                )
-            if _LOGIN_REFUSED.search(low):
-                return (
-                    f"{host} turned down this machine's SSH login. Check that "
-                    f"{self._ssh_command()} logs in from a terminal here without asking for "
-                    f"anything, or set SSH identity file {_ON_CARD} to a key {host} accepts."
-                )
-        where = f"on {host}" if self._host else "on this machine"
         if self._missing(proc):
-            # Never created for the owner: it may be a disk or share that isn't mounted, and a
-            # folder made in its place would quietly take the sync onto the local disk.
-            return (
-                f"The sync root path {self._path} doesn't exist {where}. If it's on a disk or "
-                "share that isn't mounted, mount it; if it's the folder you meant, create it "
-                f"(mkdir -p {self._path}); otherwise set Sync root path {_ON_CARD} to the right "
-                "folder. Then sync again."
-            )
+            return self._no_root()
         if "read-only file system" in low:
             return (
-                f"The sync root path {self._path} {where} is on a read-only disk or mount. Make "
-                f"it writable, or set Sync root path {_ON_CARD} to a writable folder."
+                f"The sync root path {self.root_label} is on a read-only disk or mount. Make it "
+                f"writable, or set Sync root path {_ON_CARD} to a writable folder."
             )
         if "no space left on device" in low:
             return (
-                f"The disk holding the sync root path {self._path} {where} is full. Free some "
-                "space on it."
+                f"The disk holding the sync root path {self.root_label} is full. Free some space "
+                "on it."
             )
         if "permission denied" in low:
-            who = "this machine's SSH login" if self._host else "PersonalClaw"
-            return (
-                f"The sync root path {self._path} {where} doesn't let {who} read or write it. "
-                f"Fix that folder's permissions, or set Sync root path {_ON_CARD} to one {who} "
-                "can write to."
-            )
+            return self._root_denied()
         if self._host:
+            host = self._host.rsplit("@", 1)[-1]
             return (
                 f"rsync couldn't sync with {host} (rsync exit {proc.returncode}). Check SSH host "
                 f"and Sync root path {_ON_CARD}, and that rsync is installed on both machines."
@@ -585,9 +819,15 @@ class RsyncSyncProvider(SyncTransportProvider):
                 self._target(),
             ]
             try:
-                # The root must be there before anything goes into it: rsync would create it.
-                check = self._run(self._root_listing())
-                proc = check if check.returncode not in (0, 24) else self._run(args)
+                # Only into a root that is there, marked: rsync would create one that isn't,
+                # and would write into the empty folder a share that isn't mounted leaves.
+                proc = self._run_write(args)
+            except RootRefused as e:
+                # Cleared once the root is mounted, created, marked or corrected.
+                return PushResult(
+                    outcome="transient",
+                    detail=sentence_with_detail(f"{e.sentence} {_RETRIES}", e.words),
+                )
             except subprocess.TimeoutExpired as e:
                 return PushResult(
                     outcome="transient",
@@ -615,9 +855,9 @@ class RsyncSyncProvider(SyncTransportProvider):
             shutil.rmtree(stage, ignore_errors=True)
 
     def list_remote(self, prefix: str = "") -> list[RemoteRef]:
-        # EMPTY only for an unconfigured transport, or a sync root with nothing in it yet. A
-        # listing that fails raises, said as what went wrong — see :class:`RsyncFailed` — and a
-        # root that isn't there is one: it may be a share that isn't mounted, which this
+        # EMPTY only for an unconfigured transport, or a marked sync root with nothing in it
+        # yet. A listing that fails raises, said as what went wrong — see :class:`RsyncFailed` —
+        # and a root that isn't there is one: it may be a share that isn't mounted, which this
         # transport never creates a folder in place of (see the module docstring).
         if not self.configured:
             return []
@@ -625,9 +865,15 @@ class RsyncSyncProvider(SyncTransportProvider):
         # 24 is files that vanished while rsync listed them; the rest of the listing stands.
         if proc.returncode not in (0, 24):
             raise RsyncFailed(self._refused(proc), _words(proc))
+        listed = _parse_listing(proc.stdout)
+        if not any(key == _MARKER for key, _size, _fingerprint in listed):
+            # No sync root with nothing in it yet: the empty folder a share leaves when it isn't
+            # mounted looks just like that, and the sync would start over into it as the first
+            # machine, onto the wrong disk.
+            raise RootRefused(self._no_marker())
         refs: list[RemoteRef] = []
-        for key, size, fingerprint in _parse_listing(proc.stdout):
-            if not key.startswith(prefix):
+        for key, size, fingerprint in listed:
+            if key == _MARKER or not key.startswith(prefix):
                 continue
             refs.append(RemoteRef(key=key, size=size, fingerprint=fingerprint))
         return refs
@@ -704,9 +950,8 @@ class RsyncSyncProvider(SyncTransportProvider):
         ``--ignore-existing`` will not overwrite, and ``--itemize-changes`` names the files
         actually transferred — so an empty itemize means the file was already there and this
         machine lost the race. A run that fails raises, and so does a sync root that isn't
-        there, which this run would otherwise create.
+        there, which this run would otherwise create, or has no marker (:class:`RootRefused`).
         """
-        self._require_root()
         stage = self._stage("reg-")
         try:
             self._stage_file(stage, _REGISTRY_KEY, data)
@@ -719,7 +964,7 @@ class RsyncSyncProvider(SyncTransportProvider):
                 f"{stage}/",
                 self._target(),
             ]
-            proc = self._run_or_fail(args)
+            proc = self._run_write_or_fail(args)
             if proc.returncode != 0:
                 raise RsyncFailed(self._run_refused(proc, stage), _words(proc))
             return _REGISTRY_KEY in _transferred_paths(proc.stdout)
@@ -755,8 +1000,9 @@ class RsyncSyncProvider(SyncTransportProvider):
             shutil.rmtree(stage, ignore_errors=True)
 
     def _write_registry(self, data: bytes) -> None:
-        """Overwrite ``registry.json`` on the target, forcing the transfer. A run that fails
-        raises. It runs only just after a read found the registry, so the root is there.
+        """Overwrite ``registry.json`` on the target, forcing the transfer, only in a sync root
+        that holds its marker, as every write is. A run that fails raises, and so does a root
+        that isn't there, or has no marker (:class:`RootRefused`).
 
         ``--ignore-times`` is load-bearing, not defensive: rsync's size+mtime quick check
         silently skips a same-length rewrite inside the same clock second and still exits 0.
@@ -773,7 +1019,7 @@ class RsyncSyncProvider(SyncTransportProvider):
                 f"{stage}/",
                 self._target(),
             ]
-            proc = self._run_or_fail(args)
+            proc = self._run_write_or_fail(args)
             if proc.returncode != 0:
                 raise RsyncFailed(self._run_refused(proc, stage), _words(proc))
         finally:
@@ -794,6 +1040,8 @@ class RsyncSyncProvider(SyncTransportProvider):
         except OSError as e:
             return ConnectionResult(ok=False, detail=self._cannot_start(e))
         where = self._target(trailing_slash=False)
+        if proc.returncode == 0 and not _lists_marker(proc.stdout):
+            return ConnectionResult(ok=False, detail=self._no_marker())
         if proc.returncode == 0:
             return ConnectionResult(
                 ok=True,
@@ -870,6 +1118,11 @@ def _parse_listing(stdout: str) -> list[tuple[str, int, str]]:
             continue
         rows.append((path, size, f"{date_s} {time_s}"))
     return rows
+
+
+def _lists_marker(stdout: str) -> bool:
+    """Whether a listing of the sync root shows its marker, a file at its top level."""
+    return any(key == _MARKER for key, _size, _fingerprint in _parse_listing(stdout))
 
 
 def _words(proc: subprocess.CompletedProcess) -> str:
