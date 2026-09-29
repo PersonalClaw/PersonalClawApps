@@ -49,7 +49,7 @@ def test_asking_whether_it_can_run_loads_no_library(monkeypatch):
     and loading it started its maker's telemetry: a device identifier left in the user's home."""
     import sys
 
-    runtimes = ("onnxruntime", "sherpa_onnx", "soundfile")
+    runtimes = ("onnxruntime", "sherpa_onnx", "numpy", "soundfile")
     for name in runtimes:
         monkeypatch.delitem(sys.modules, name, raising=False)
 
@@ -61,13 +61,8 @@ def test_asking_whether_it_can_run_loads_no_library(monkeypatch):
 def test_a_missing_package_is_named_with_the_way_to_get_it(monkeypatch):
     """Found missing without importing anything (a module ``None`` in ``sys.modules`` is one the
     import system reports absent). The packages ship with this app, so the fix is its reinstall."""
-    import importlib.machinery
     import sys
-    import types
 
-    present = types.ModuleType("soundfile")
-    present.__spec__ = importlib.machinery.ModuleSpec("soundfile", None)
-    monkeypatch.setitem(sys.modules, "soundfile", present)
     monkeypatch.setitem(sys.modules, "sherpa_onnx", None)
 
     assert P.availability() == (
@@ -76,19 +71,29 @@ def test_a_missing_package_is_named_with_the_way_to_get_it(monkeypatch):
         "itself. Reinstall Diarization (ONNX) from the Store.",
     )
 
-    monkeypatch.setitem(sys.modules, "soundfile", None)
-    assert P.availability()[1].startswith("ONNX diarization needs sherpa-onnx and soundfile, which ship")
+    monkeypatch.setitem(sys.modules, "numpy", None)
+    assert P.availability()[1].startswith("ONNX diarization needs sherpa-onnx and numpy, which ship")
+
+
+def test_without_ffmpeg_it_says_it_cannot_read_recordings(monkeypatch):
+    """ffmpeg decodes every recording now, so a machine without it cannot diarize anything, and
+    the Models page says so before a single recording fails."""
+    monkeypatch.setattr(P, "missing_modules", lambda *modules: [])  # both packages installed
+    monkeypatch.setattr(P, "ensure_ffmpeg_in_path", lambda: None)
+    monkeypatch.setattr(P.shutil, "which", lambda name: None)
+    assert P.availability() == (False, P._NEEDS_FFMPEG)
 
 
 def test_it_declares_no_runtime_it_does_not_run():
-    """The install's consent lists what the app installs: onnxruntime is not among what it runs."""
+    """The install's consent lists what the app installs: onnxruntime is not among what it runs,
+    and neither is soundfile, since ffmpeg reads the recordings."""
     import json
 
     manifest = json.loads((Path(__file__).parent / "app.json").read_text(encoding="utf-8"))
 
     declared = [d.split(">")[0].split("=")[0] for d in manifest["dependencies"]["pythonDependencies"]]
-    assert "onnxruntime" not in declared, declared
-    assert {"sherpa-onnx", "soundfile"} <= set(declared), declared
+    assert "onnxruntime" not in declared and "soundfile" not in declared, declared
+    assert {"sherpa-onnx", "numpy"} <= set(declared), declared
 
 
 @pytest.mark.asyncio
@@ -99,10 +104,14 @@ async def test_catalog_single_nongated_model():
 
 
 @pytest.mark.asyncio
-async def test_diarize_none_without_model(monkeypatch, tmp_path):
+async def test_a_model_that_is_not_downloaded_says_so(monkeypatch, tmp_path):
+    """🔴 Red before: ``None``, read as a recording with no speakers."""
+    from personalclaw.sdk.diarization import DiarizationError
+
     f = tmp_path / "a.wav"; f.write_bytes(b"\x00" * 32)
     monkeypatch.setattr(P, "_downloaded", lambda: False)
-    assert await P.create_provider({}).diarize(str(f), model=P._MODEL) is None
+    with pytest.raises(DiarizationError, match="isn't downloaded. Download it under Speaker"):
+        await P.create_provider({}).diarize(str(f), model=P._MODEL)
 
 
 @pytest.mark.asyncio
@@ -122,8 +131,11 @@ async def test_a_model_this_app_does_not_have_is_refused_before_anything_runs(
     assert result is None
     assert ran == []
     assert "fake-other-diarizer" in caplog.text and P._MODEL in caplog.text
-    # The control: its own model gets past the same point.
-    await P.create_provider({}).diarize(str(f), model=P._MODEL)
+    # The control: its own model gets past the same point (and then says it isn't downloaded).
+    from personalclaw.sdk.diarization import DiarizationError
+
+    with pytest.raises(DiarizationError):
+        await P.create_provider({}).diarize(str(f), model=P._MODEL)
     assert ran[0] == "ffmpeg"
 
 
@@ -190,17 +202,18 @@ async def test_a_pair_left_in_the_old_cache_outside_the_home_is_not_read(monkeyp
     assert models[0].downloaded is False
 
 
-@pytest.mark.asyncio
-async def test_diarize_reads_the_pair_from_the_home(monkeypatch, tmp_path):
-    """The PIPELINE is handed the home's paths. sherpa-onnx is stubbed into sys.modules (the
-    repo's vendor-SDK pattern)."""
+class _Segment:
+    def __init__(self, start, end, speaker):
+        self.start, self.end, self.speaker = start, end, speaker
+
+
+def _fake_sherpa(monkeypatch, *, turns=(), fail: Exception | None = None, seen=None):
+    """sherpa-onnx stubbed into sys.modules (the repo's vendor-SDK pattern): records the model
+    paths it is given and the samples it is handed, and answers *turns* (or raises *fail*)."""
     import sys
     import types
 
-    _home(monkeypatch, tmp_path)
-    _seed_pair(P._models_dir())
-
-    seen = {}
+    seen = {} if seen is None else seen
 
     def _record(key):
         def _factory(**kwargs):
@@ -216,24 +229,190 @@ async def test_diarize_reads_the_pair_from_the_home(monkeypatch, tmp_path):
     fake.OfflineSpeakerDiarizationConfig = lambda **k: object()
 
     class _Sd:
-        def __init__(self, cfg): pass
+        sample_rate = 16000
+
+        def __init__(self, cfg):
+            pass
+
         def process(self, samples):
+            seen["samples"] = samples
+            if fail is not None:
+                raise fail
+
             class _R:
                 def sort_by_start_time(self):
-                    return []
+                    return list(turns)
             return _R()
 
     fake.OfflineSpeakerDiarization = _Sd
-    fake_sf = types.ModuleType("soundfile")
-    fake_sf.read = lambda p, dtype="float32", always_2d=False: ([0.0] * 8, 16000)
     monkeypatch.setitem(sys.modules, "sherpa_onnx", fake)
-    monkeypatch.setitem(sys.modules, "soundfile", fake_sf)
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_diarize_reads_the_pair_from_the_home(monkeypatch, tmp_path):
+    """The PIPELINE is handed the home's paths."""
+    _home(monkeypatch, tmp_path)
+    _seed_pair(P._models_dir())
+    seen = _fake_sherpa(monkeypatch)
+    monkeypatch.setattr(P, "_decode", lambda path, rate: [0.0] * 8)
 
     f = tmp_path / "a.wav"
     f.write_bytes(b"\x00" * 32)
     assert await P.create_provider({}).diarize(str(f), model=P._MODEL) == []
     assert seen["seg"] == str(P._models_dir() / P._SEG_REL)
     assert seen["emb"] == str(P._models_dir() / P._EMB_REL)
+
+
+@pytest.mark.asyncio
+async def test_the_model_hears_the_recording_decoded_at_its_own_rate(monkeypatch, tmp_path):
+    """Every recording goes through ffmpeg, mono, at the model's sample rate, as float32: the
+    samples the pipeline is handed are exactly what ffmpeg wrote. Turns come back labelled."""
+    import numpy as np
+
+    _home(monkeypatch, tmp_path)
+    _seed_pair(P._models_dir())
+    seen = _fake_sherpa(monkeypatch, turns=[_Segment(0.0, 4.2, 0), _Segment(4.4, 9.1, 1)])
+    pcm = np.linspace(-0.5, 0.5, 64, dtype=np.float32)
+    argv: list = []
+
+    def _run(cmd, **kwargs):
+        argv.extend(cmd)
+        return P.subprocess.CompletedProcess(cmd, 0, stdout=pcm.tobytes(), stderr=b"")
+
+    monkeypatch.setattr(P.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(P.subprocess, "run", _run)
+    memo = tmp_path / "team call.m4a"
+    memo.write_bytes(b"\x00" * 32)
+
+    turns = await P.create_provider({}).diarize(str(memo), model=P._MODEL)
+
+    assert [(t.start, t.end, t.speaker) for t in turns] == [
+        (0.0, 4.2, "SPEAKER_00"), (4.4, 9.1, "SPEAKER_01"),
+    ]
+    assert argv[argv.index("-i") + 1] == str(memo)
+    assert argv[argv.index("-ar") + 1] == "16000" and argv[argv.index("-ac") + 1] == "1"
+    assert argv[argv.index("-f") + 1] == "f32le"
+    assert np.array_equal(seen["samples"], pcm)
+
+
+def _ffmpeg_or_skip() -> str:
+    import shutil
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        pytest.skip("needs ffmpeg to build an AAC recording")
+    return ffmpeg
+
+
+def test_an_aac_voice_memo_is_read_where_soundfile_could_not(tmp_path):
+    """🔴 A two-voice voice memo was an ``.m4a`` (AAC at 22.05 kHz). soundfile's libsndfile cannot
+    open AAC, so the app failed before diarizing and answered "no speakers". Built here with
+    ffmpeg; soundfile's refusal of the same file is the control that it is the failing kind."""
+    import subprocess
+
+    import soundfile
+
+    ffmpeg = _ffmpeg_or_skip()
+    memo = tmp_path / "snippet.m4a"
+    subprocess.run(
+        [ffmpeg, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=22050:duration=1",
+         "-c:a", "aac", "-map_metadata", "-1", str(memo)],
+        check=True,
+    )
+    with pytest.raises(Exception, match="Format not recognised"):
+        soundfile.read(str(memo))
+
+    samples = P._decode(str(memo), 16000)
+
+    assert samples.dtype.name == "float32"
+    assert 15_500 <= len(samples) <= 16_600, len(samples)  # one second at 16 kHz, not 22,050
+    assert float(abs(samples).max()) > 0.1  # the tone, not silence
+
+
+def test_a_file_ffmpeg_cannot_read_says_why(tmp_path):
+    from personalclaw.sdk.diarization import DiarizationError
+
+    _ffmpeg_or_skip()
+    junk = tmp_path / "not audio.m4a"
+    junk.write_text("this is a text file")
+    with pytest.raises(DiarizationError) as raised:
+        P._decode(str(junk), 16000)
+    said = str(raised.value)
+    assert said.startswith("ONNX diarization could not read this recording. Details: ")
+    assert "[in#" not in said and str(tmp_path) not in said and "\n" not in said, said
+
+
+def test_a_recording_cut_off_after_its_header_is_not_a_recording_with_no_speakers(tmp_path):
+    """🔴 Red before: a voice memo whose upload stopped after the file's header (it declares 24
+    seconds of audio and holds none) decoded to nothing, ffmpeg exited 0 with a "partial file"
+    warning, and diarizing nothing reported "done" with no speakers."""
+    import subprocess
+
+    from personalclaw.sdk.diarization import DiarizationError
+
+    ffmpeg = _ffmpeg_or_skip()
+    memo = tmp_path / "memo.m4a"
+    subprocess.run(
+        [ffmpeg, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=22050:duration=3",
+         "-c:a", "aac", "-map_metadata", "-1", "-movflags", "+faststart", str(memo)],
+        check=True,
+    )
+    whole = memo.read_bytes()
+    cut = tmp_path / "cut off memo.m4a"
+    cut.write_bytes(whole[: whole.index(b"mdat") + 4])  # the header, and none of the audio
+
+    assert len(P._decode(str(memo), 16000)) > 0  # the control: the whole memo is read
+    with pytest.raises(DiarizationError) as raised:
+        P._decode(str(cut), 16000)
+    assert str(raised.value) == P._NO_AUDIO
+
+
+def test_ffmpegs_closing_line_is_the_detail():
+    stderr = (b"[in#0 @ 0x76e5020000] moov atom not found\n"
+              b"[in#0 @ 0x76e4c14000] Error opening input: Invalid data found when processing input\n"
+              b"Error opening input file /srv/knowledge/files/0b1c.m4a.\n"
+              b"Error opening input files: Invalid data found when processing input\n")
+    assert P._ffmpeg_said(stderr, 1) == "Error opening input files: Invalid data found when processing input"
+    assert P._ffmpeg_said(b"[aac @ 0x1] Too many bits\n", 1) == "Too many bits"
+    assert P._ffmpeg_said(b"", 183) == "ffmpeg exited with status 183"
+
+
+@pytest.mark.asyncio
+async def test_a_pipeline_that_fails_says_why(monkeypatch, tmp_path):
+    """🔴 Red before: swallowed into ``None``, with no log line."""
+    from personalclaw.sdk.diarization import DiarizationError
+
+    _home(monkeypatch, tmp_path)
+    _seed_pair(P._models_dir())
+    _fake_sherpa(monkeypatch, fail=RuntimeError("Expected samples rate: 16000, given: 22050"))
+    monkeypatch.setattr(P, "_decode", lambda path, rate: [0.0] * 8)
+    with pytest.raises(DiarizationError) as raised:
+        await P.create_provider({}).diarize(str(tmp_path / "a.wav"), model=P._MODEL)
+    assert str(raised.value) == (
+        "ONNX diarization could not tell the speakers apart in this recording. Details: "
+        "Expected samples rate: 16000, given: 22050"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_long_recording_is_not_cut_off_by_a_clock_of_its_own(monkeypatch, tmp_path):
+    """🔴 Red before: a fixed ten-minute ``wait_for`` answered ``None`` when it fired, whatever
+    the caller's budget. Here every ``wait_for`` gives up at once: the provider must not use one."""
+    import asyncio
+
+    async def _out_of_time(awaitable, timeout):
+        if hasattr(awaitable, "cancel"):
+            awaitable.cancel()
+        raise asyncio.TimeoutError
+
+    _home(monkeypatch, tmp_path)
+    _seed_pair(P._models_dir())
+    _fake_sherpa(monkeypatch, turns=[_Segment(0.0, 1.0, 0)])
+    monkeypatch.setattr(P, "_decode", lambda path, rate: [0.0] * 8)
+    monkeypatch.setattr(asyncio, "wait_for", _out_of_time)
+    turns = await P.create_provider({}).diarize(str(tmp_path / "a.wav"), model=P._MODEL)
+    assert [t.speaker for t in turns] == ["SPEAKER_00"]
 
 
 @pytest.mark.asyncio

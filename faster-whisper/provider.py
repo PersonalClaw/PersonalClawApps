@@ -9,7 +9,9 @@ from typing import Any
 from personalclaw.sdk.credentials import resolve_token
 from personalclaw.sdk.local_model import LocalModelProvider
 from personalclaw.sdk.model import ProviderResolutionError, require_model
+from personalclaw.sdk.net import sentence_with_detail
 from personalclaw.sdk.stt import (
+    SttError,
     SttModel,
     SttProvider,
     TranscriptResult,
@@ -178,6 +180,22 @@ def _model_downloaded(model_name: str) -> bool:
     return _in_home(model_name) or _shared_snapshot(model_name) is not None
 
 
+_NO_AUDIO = (
+    "Faster Whisper found no audio it could decode in this recording, so there is nothing to "
+    "transcribe. The file may be cut off or damaged."
+)
+
+
+def _said(exc: BaseException, audio_path: str) -> str:
+    """What a failed transcription said, for the item's status line: the decoding library's own
+    sentence (PyAV's errors, like ``OSError``, carry it as ``strerror``, with an error number
+    before it and the recording's storage path after), else the error's words without the path."""
+    words = getattr(exc, "strerror", None)
+    if isinstance(words, str) and words.strip():
+        return words.strip()
+    return str(exc).replace(audio_path, "the recording")
+
+
 class FasterWhisperProvider(SttProvider, LocalModelProvider):
     @property
     def name(self) -> str:
@@ -261,9 +279,10 @@ class FasterWhisperProvider(SttProvider, LocalModelProvider):
 
     async def transcribe(self, audio_path: str, model: str = "", language: str = "") -> str | None:
         # Flat path: run the detailed transcription and return just its text, so there is
-        # ONE decode implementation. Detailed is a superset (segments + words + VAD).
+        # ONE decode implementation. Detailed is a superset (segments + words + VAD). Its text
+        # is "" when there was no speech; ``None`` only for a call that named no model.
         result = await self.transcribe_detailed(audio_path, model=model, language=language)
-        return result.text if result is not None and result.text else None
+        return result.text if result is not None else None
 
     # faster-whisper emits segments, per-word timestamps, and accepts a bias prompt.
     @property
@@ -291,7 +310,15 @@ class FasterWhisperProvider(SttProvider, LocalModelProvider):
         hotwords). Maps native faster-whisper Segment/Word objects → TranscriptResult.
 
         ``model`` is the speech-to-text binding's model. Like chat, a call that names none is
-        refused before anything is loaded; this used to load ``turbo`` in its place.
+        refused before anything is loaded (``None``); this used to load ``turbo`` in its place.
+
+        The transcript's text is empty when the recording holds no speech. A transcription
+        that could not run raises the SDK's ``SttError`` with why, so it is never read as
+        silence: every failure here used to come back as ``None``, and so did a recording that
+        ran past a fixed five-minute timer. That timer is gone. It could not stop the decode
+        (a thread cannot be cancelled), only throw its result away, and it cut off a six-minute
+        screen recording whose caller had given it fourteen: the caller's budget, which grows with
+        the recording's length, is the one that decides.
         """
         try:
             model_name = require_model(model)
@@ -300,8 +327,8 @@ class FasterWhisperProvider(SttProvider, LocalModelProvider):
             return None
         try:
             from faster_whisper import WhisperModel
-        except ImportError:
-            return None
+        except ImportError as exc:
+            raise SttError(availability()[1]) from exc
 
         ensure_ffmpeg_in_path()
         lang = language.split("-")[0] if language else None
@@ -313,7 +340,7 @@ class FasterWhisperProvider(SttProvider, LocalModelProvider):
         # ~200 chars of comma-separated terms is well under budget while still biasing.
         bias_prompt = ", ".join(bias_terms)[:200].rstrip(", ") if bias_terms else None
 
-        def _run() -> "TranscriptResult | None":
+        def _run() -> "TranscriptResult":
             try:
                 # The home's copy, else the allowed shared folder's snapshot loaded in place
                 # (nothing fetched, copied or written there), else a download into the home.
@@ -352,19 +379,24 @@ class FasterWhisperProvider(SttProvider, LocalModelProvider):
                     ))
                     text_parts.append(seg.text.strip())
                 flat = " ".join(t for t in text_parts if t).strip()
-                if not flat:
-                    return None
+                heard = getattr(info, "duration", None)
+                if not flat and heard is not None and float(heard) <= 0.0:
+                    # Nothing was decoded: a file cut off after its header decodes to no audio
+                    # at all, and an empty transcript of it read as a recording with no speech.
+                    raise SttError(_NO_AUDIO)
+                # No speech (silence, music): an empty transcript, which is the answer.
                 return TranscriptResult(
                     text=flat,
                     language=getattr(info, "language", "") or (lang or ""),
-                    duration=float(getattr(info, "duration", 0.0) or 0.0),
-                    segments=segments,
+                    duration=float(heard or 0.0),
+                    segments=segments if flat else [],
                 )
-            except Exception:
-                return None
+            except SttError:
+                raise
+            except Exception as exc:
+                logger.warning("faster-whisper could not transcribe %s", audio_path, exc_info=True)
+                raise SttError(sentence_with_detail(
+                    "Faster Whisper could not transcribe this audio.", _said(exc, audio_path),
+                )) from exc
 
-        loop = asyncio.get_running_loop()
-        try:
-            return await asyncio.wait_for(loop.run_in_executor(None, _run), timeout=300)
-        except asyncio.TimeoutError:
-            return None
+        return await asyncio.get_running_loop().run_in_executor(None, _run)

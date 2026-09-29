@@ -30,6 +30,10 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 |---|---|---|
 | `max_speakers` | Max speakers | Upper bound on distinct speakers (0 = auto-cluster). |
 
+## Requirements
+
+Reads every recording through `ffmpeg` (a voice memo's `.m4a`, an `.mp3`, a video's audio), resampled to what the model hears, so `ffmpeg` must be installed. Settings → Models says so when it is not, and a recording it cannot read fails its diarization step with ffmpeg's own words.
+
 ## Network
 
 Downloads its two models from `github.com` (the sherpa-onnx releases) when you download them; diarizing runs on this machine.

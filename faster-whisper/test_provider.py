@@ -358,6 +358,153 @@ def test_a_call_that_names_no_model_is_refused_and_loads_nothing(monkeypatch):
     assert loaded == []
 
 
+# ── what a transcription answers: its text, "" for no speech, or SttError saying why ──
+
+
+class _Word:
+    start = 0.0; end = 0.5; word = " Mika"; probability = 0.9
+
+
+class _Seg:
+    start = 0.0; end = 0.5; text = " Mika"; words = [_Word()]
+
+
+def _model_that(transcribe):
+    """A stub ``WhisperModel`` class whose ``transcribe`` is *transcribe*."""
+
+    class _Model:
+        def __init__(self, *a, **k):
+            pass
+
+        def transcribe(self, path, **kwargs):
+            return transcribe(path, **kwargs)
+
+    return _Model
+
+
+class _Info:
+    language = "en"
+    duration = 360.0
+
+
+def test_a_recording_with_no_speech_is_an_empty_transcript_not_none(monkeypatch):
+    """🔴 Red before: ``None``, which core read as a failure it could not explain (and, before
+    that, every caller read as silence whatever had happened)."""
+    import faster_whisper
+
+    monkeypatch.setattr(
+        faster_whisper, "WhisperModel", _model_that(lambda p, **k: (iter([]), _Info())),
+        raising=False,
+    )
+    provider = prov.create_provider({})
+    r = _run(provider.transcribe_detailed("/tmp/room-tone.wav", model="small"))
+    assert (r.text, r.segments, r.duration) == ("", [], 360.0)
+    assert _run(provider.transcribe("/tmp/room-tone.wav", model="small")) == ""
+
+
+def test_a_recording_that_decodes_to_no_audio_is_not_one_with_no_speech(monkeypatch):
+    """🔴 Red before: a voice memo cut off after its header decodes to no audio at all (faster-
+    whisper reports a duration of 0), and its empty transcript read "No speech found", as if
+    the memo had been heard and was silent."""
+    import faster_whisper
+    import pytest
+
+    from personalclaw.sdk.stt import SttError
+
+    class _NothingDecoded(_Info):
+        duration = 0.0
+
+    monkeypatch.setattr(
+        faster_whisper, "WhisperModel", _model_that(lambda p, **k: (iter([]), _NothingDecoded())),
+        raising=False,
+    )
+    with pytest.raises(SttError) as raised:
+        _run(prov.create_provider({}).transcribe_detailed("/tmp/cut-off.m4a", model="small"))
+    assert str(raised.value) == prov._NO_AUDIO
+
+
+def test_a_transcription_that_cannot_run_says_why(monkeypatch):
+    """🔴 Red before: every failure inside the decode was swallowed into ``None``."""
+    import faster_whisper
+    import pytest
+
+    from personalclaw.sdk.stt import SttError
+
+    def _broken(path, **kwargs):
+        raise RuntimeError("Invalid data found when processing input")
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", _model_that(_broken), raising=False)
+    with pytest.raises(SttError) as raised:
+        _run(prov.create_provider({}).transcribe_detailed("/tmp/x.wav", model="small"))
+    assert str(raised.value) == (
+        "Faster Whisper could not transcribe this audio. Details: Invalid data found when "
+        "processing input"
+    )
+
+
+def test_a_decoder_error_is_told_in_its_own_words_without_the_storage_path(monkeypatch):
+    """PyAV's error carries an error number, its sentence and the recording's path; the status
+    line gets the sentence."""
+    import faster_whisper
+    import pytest
+
+    from personalclaw.sdk.stt import SttError
+
+    path = "/srv/knowledge/files/0b1c.m4a"
+
+    def _undecodable(p, **kwargs):
+        raise OSError(1094995529, "Invalid data found when processing input", p)
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", _model_that(_undecodable), raising=False)
+    with pytest.raises(SttError) as raised:
+        _run(prov.create_provider({}).transcribe_detailed(path, model="small"))
+    assert str(raised.value) == (
+        "Faster Whisper could not transcribe this audio. Details: Invalid data found when "
+        "processing input"
+    )
+
+
+def test_a_long_recording_is_not_cut_off_by_a_clock_of_its_own(monkeypatch):
+    """🔴 Red before: the decode ran under a fixed five-minute ``wait_for`` and answered
+    ``None`` when it fired, so a six-minute screen recording's narration was never transcribed
+    although its caller had given it fourteen minutes. Here every ``wait_for`` gives up at
+    once, which is what that timer did to a long recording on a slow machine: the provider must
+    not be using one."""
+    import faster_whisper
+
+    async def _out_of_time(awaitable, timeout):
+        if hasattr(awaitable, "cancel"):
+            awaitable.cancel()
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(
+        faster_whisper, "WhisperModel", _model_that(lambda p, **k: (iter([_Seg()]), _Info())),
+        raising=False,
+    )
+    monkeypatch.setattr(asyncio, "wait_for", _out_of_time)
+    r = _run(prov.create_provider({}).transcribe_detailed("/tmp/screencast.wav", model="small"))
+    assert r.text == "Mika"
+
+
+def test_without_faster_whisper_a_transcription_says_what_to_install(monkeypatch):
+    import builtins
+
+    import pytest
+
+    from personalclaw.sdk.stt import SttError
+
+    real_import = builtins.__import__
+
+    def _no_fw(name, *a, **k):
+        if name == "faster_whisper":
+            raise ImportError("not installed")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", _no_fw)
+    with pytest.raises(SttError, match="personalclaw\\[stt\\]"):
+        _run(prov.create_provider({}).transcribe_detailed("/tmp/x.wav", model="small"))
+
+
 def test_availability_reason_without_faster_whisper(monkeypatch):
     import builtins
     real_import = builtins.__import__

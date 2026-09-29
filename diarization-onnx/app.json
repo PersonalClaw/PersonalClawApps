@@ -1,6 +1,6 @@
 {
   "name": "diarization-onnx",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "displayName": "Diarization (ONNX)",
   "description": "Non-gated speaker diarization (\"who spoke when\") \u2014 no HuggingFace token. Runs a sherpa-onnx segmentation + speaker-embedding pipeline, install-and-go. Provides a model for the diarization use-case; bind it in Settings \u2192 Models.",
   "icon": "Users",
@@ -14,7 +14,6 @@
   "dependencies": {
     "pythonDependencies": [
       "sherpa-onnx>=1.10",
-      "soundfile>=0.12",
       "numpy>=1.24"
     ]
   },

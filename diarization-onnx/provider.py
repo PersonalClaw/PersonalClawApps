@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import shutil
+import subprocess
 import tarfile
 import urllib.request
 from pathlib import Path
@@ -17,6 +20,7 @@ from typing import Any
 
 from personalclaw.sdk.availability import missing_modules
 from personalclaw.sdk.diarization import (
+    DiarizationError,
     DiarizationModel,
     DiarizationProvider,
     LocalModelProvider,
@@ -24,7 +28,8 @@ from personalclaw.sdk.diarization import (
     ensure_ffmpeg_in_path,
 )
 from personalclaw.sdk.model import ProviderResolutionError, require_model
-from personalclaw.sdk.util import config_dir
+from personalclaw.sdk.net import sentence_with_detail
+from personalclaw.sdk.util import child_process_env, config_dir
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +50,17 @@ _EMB_REL = Path("embed.onnx")
 #: What the pipeline runs on: each module, by the package that installs it. sherpa-onnx carries
 #: an ONNX Runtime build of its own, so the ``onnxruntime`` package is neither declared nor
 #: loaded: loading it started its maker's telemetry, a device identifier kept in the user's home.
-_RUNTIME = {"sherpa_onnx": "sherpa-onnx", "soundfile": "soundfile"}
+_RUNTIME = {"sherpa_onnx": "sherpa-onnx", "numpy": "numpy"}
+
+#: Why nothing can be diarized without ffmpeg, which decodes every recording (below).
+_NEEDS_FFMPEG = (
+    "ONNX diarization needs ffmpeg to read recordings, and it isn't installed here. Install "
+    "ffmpeg (for example with your system's package manager), then try again."
+)
+_NO_AUDIO = (
+    "ONNX diarization found no audio it could read in this recording. The file may be cut off "
+    "or damaged."
+)
 
 
 def _models_dir() -> Path:
@@ -69,17 +84,64 @@ def create_provider(config: dict[str, Any] | None = None) -> "OnnxDiarizationPro
 
 
 def availability() -> tuple[bool, str]:
-    """Whether ONNX diarization can run here: sherpa-onnx and soundfile are installed. Found
-    without importing either, as the SDK's availability contract asks: an import runs the
-    library, and this is asked on every Models page."""
+    """Whether ONNX diarization can run here: sherpa-onnx and numpy are installed, and ffmpeg
+    is there to read recordings. Found without importing either package, as the SDK's
+    availability contract asks: an import runs the library, and this is asked on every Models
+    page."""
     missing = [_RUNTIME[module] for module in missing_modules(*_RUNTIME)]
-    if not missing:
-        return True, ""
-    ships = "ships" if len(missing) == 1 else "ship"
-    return False, (
-        f"ONNX diarization needs {' and '.join(missing)}, which {ships} with this app, not with "
-        "PersonalClaw itself. Reinstall Diarization (ONNX) from the Store."
+    if missing:
+        ships = "ships" if len(missing) == 1 else "ship"
+        return False, (
+            f"ONNX diarization needs {' and '.join(missing)}, which {ships} with this app, not "
+            "with PersonalClaw itself. Reinstall Diarization (ONNX) from the Store."
+        )
+    ensure_ffmpeg_in_path()
+    if shutil.which("ffmpeg") is None:
+        return False, _NEEDS_FFMPEG
+    return True, ""
+
+
+def _decode(audio_path: str, sample_rate: int):
+    """The recording as mono float32 samples at *sample_rate*, decoded by ffmpeg.
+
+    A recording arrives in whatever format was uploaded (``.m4a``, ``.mp3``, ``.webm``, a
+    video's extracted ``.wav``). This app used to read it with soundfile, whose libsndfile
+    cannot open AAC, so every ``.m4a`` voice memo failed before diarization began, and the
+    failure was swallowed into "no speakers". It also never checked the rate: the model hears
+    only its own (``sample_rate``), and a 22.05 kHz file handed over as-is is heard slowed and
+    lower. ffmpeg reads every format the product accepts and resamples on the way."""
+    import numpy as np
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise DiarizationError(_NEEDS_FFMPEG)
+    decoded = subprocess.run(
+        [ffmpeg, "-nostdin", "-v", "error", "-i", audio_path, "-vn", "-ac", "1",
+         "-ar", str(int(sample_rate)), "-f", "f32le", "-"],
+        capture_output=True,
+        check=False,
+        env=child_process_env(),
     )
+    if decoded.returncode != 0:
+        raise DiarizationError(sentence_with_detail(
+            "ONNX diarization could not read this recording.",
+            _ffmpeg_said(decoded.stderr, decoded.returncode),
+        ))
+    if not decoded.stdout:
+        # ffmpeg succeeds on a file cut off after its header (it warns "partial file") and
+        # hands back no audio at all. Diarizing nothing found no speakers and read "done".
+        raise DiarizationError(_NO_AUDIO)
+    return np.frombuffer(decoded.stdout, dtype=np.float32)
+
+
+def _ffmpeg_said(stderr: bytes, status: int) -> str:
+    """ffmpeg's last word on a failed decode, for the item's status line: its closing summary
+    line, without the ``[in#0 @ 0x…]`` tags it starts lines with. The raw text ran several lines,
+    named the recording's storage path, and pushed the other steps' reasons past the line's end."""
+    lines = [re.sub(r"^(\[[^\]]*\]\s*)+", "", line).strip()
+             for line in stderr.decode("utf-8", "replace").splitlines()]
+    lines = [line for line in lines if line]
+    return lines[-1] if lines else f"ffmpeg exited with status {status}"
 
 
 def _downloaded() -> bool:
@@ -172,11 +234,13 @@ class OnnxDiarizationProvider(DiarizationProvider, LocalModelProvider):
         maxs = max_speakers or num_speakers or (self._config.get("max_speakers") or None)
 
         def _run():
+            if not _downloaded():
+                raise DiarizationError(
+                    f"The diarization model {_MODEL} isn't downloaded. Download it under Speaker "
+                    "diarization in Settings → Models, then try again."
+                )
             try:
                 import sherpa_onnx
-                import soundfile as sf
-                if not _downloaded():
-                    return None
                 root = _models_dir()
                 seg_path, emb_path = root / _SEG_REL, root / _EMB_REL
                 clustering = (sherpa_onnx.FastClusteringConfig(num_clusters=int(maxs))
@@ -188,17 +252,18 @@ class OnnxDiarizationProvider(DiarizationProvider, LocalModelProvider):
                     clustering=clustering, min_duration_on=0.3,
                 )
                 sd = sherpa_onnx.OfflineSpeakerDiarization(cfg)
-                samples, _sr = sf.read(audio_path, dtype="float32", always_2d=False)
-                if getattr(samples, "ndim", 1) > 1:
-                    samples = samples[:, 0]
+                samples = _decode(audio_path, sd.sample_rate)
                 res = sd.process(samples).sort_by_start_time()
                 return [SpeakerTurn(start=float(r.start), end=float(r.end),
                                     speaker=f"SPEAKER_{r.speaker:02d}") for r in res]
-            except Exception:
-                return None
+            except DiarizationError:
+                raise
+            except Exception as exc:
+                logger.warning("diarization-onnx could not diarize %s", audio_path, exc_info=True)
+                raise DiarizationError(sentence_with_detail(
+                    "ONNX diarization could not tell the speakers apart in this recording.", exc,
+                )) from exc
 
-        try:
-            return await asyncio.wait_for(
-                asyncio.get_running_loop().run_in_executor(None, _run), timeout=600)
-        except asyncio.TimeoutError:
-            return None
+        # No clock of its own: the caller's budget grows with the recording's length, and a
+        # timer here could only throw a finished result away (a thread cannot be cancelled).
+        return await asyncio.get_running_loop().run_in_executor(None, _run)

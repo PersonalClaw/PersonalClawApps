@@ -89,9 +89,64 @@ async def test_download_refused_without_token():
 
 
 @pytest.mark.asyncio
-async def test_diarize_none_without_token(tmp_path):
+async def test_diarize_without_a_token_says_so(tmp_path):
+    """🔴 Red before: ``None``, read as a recording with no speakers."""
+    from personalclaw.sdk.diarization import DiarizationError
+
     f = tmp_path / "a.wav"; f.write_bytes(b"\x00" * 32)
-    assert await P.create_provider({}).diarize(str(f), model=P._MODEL) is None  # no token
+    with pytest.raises(DiarizationError, match="needs a Hugging Face token"):
+        await P.create_provider({}).diarize(str(f), model=P._MODEL)
+
+
+def _pipeline_that(behaviour, monkeypatch):
+    import sys
+    import types
+
+    class _PipelineFactory:
+        @staticmethod
+        def from_pretrained(model, **kwargs):
+            return behaviour(model)
+
+    fake_mod = types.ModuleType("pyannote.audio")
+    fake_mod.Pipeline = _PipelineFactory
+    monkeypatch.setitem(sys.modules, "pyannote.audio", fake_mod)
+    monkeypatch.setattr(P, "ensure_ffmpeg_in_path", lambda: None)
+
+
+@pytest.mark.asyncio
+async def test_a_licence_not_accepted_says_where_to_accept_it(monkeypatch, tmp_path):
+    from personalclaw.sdk.diarization import DiarizationError
+
+    def _gated(model):
+        raise RuntimeError(
+            "403 Client Error. Cannot access gated repo pyannote/speaker-diarization-community-1"
+        )
+
+    _pipeline_that(_gated, monkeypatch)
+    with pytest.raises(DiarizationError) as raised:
+        await P.create_provider({"hf_token": "fake-hf-token"}).diarize(
+            str(tmp_path / "a.wav"), model=P._MODEL
+        )
+    assert "https://hf.co/pyannote/speaker-diarization-community-1" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_a_pipeline_that_fails_says_why(monkeypatch, tmp_path):
+    from personalclaw.sdk.diarization import DiarizationError
+
+    class _Pipeline:
+        def __call__(self, audio_path, **kwargs):
+            raise RuntimeError("could not decode audio")
+
+    _pipeline_that(lambda model: _Pipeline(), monkeypatch)
+    with pytest.raises(DiarizationError) as raised:
+        await P.create_provider({"hf_token": "fake-hf-token"}).diarize(
+            str(tmp_path / "a.wav"), model=P._MODEL
+        )
+    assert str(raised.value) == (
+        "Diarization (pyannote) could not tell the speakers apart in this recording. Details: "
+        "could not decode audio"
+    )
 
 
 @pytest.mark.asyncio
@@ -123,8 +178,11 @@ async def test_a_model_this_app_does_not_have_is_refused_before_the_pipeline(
         assert await provider.diarize(str(f), model="fake/other-diarizer") is None
     assert fetched == []
     assert "fake/other-diarizer" in caplog.text and P._MODEL in caplog.text
-    # The control: its own model is fetched.
-    assert await provider.diarize(str(f), model=P._MODEL) is None
+    # The control: its own model is fetched (and, refused by Hugging Face here, says so).
+    from personalclaw.sdk.diarization import DiarizationError
+
+    with pytest.raises(DiarizationError, match="Accept its user conditions"):
+        await provider.diarize(str(f), model=P._MODEL)
     assert fetched == [P._MODEL]
 
 

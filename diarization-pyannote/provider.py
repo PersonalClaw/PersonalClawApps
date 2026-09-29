@@ -16,6 +16,7 @@ from typing import Any
 
 from personalclaw.sdk.credentials import resolve_token
 from personalclaw.sdk.diarization import (
+    DiarizationError,
     DiarizationModel,
     DiarizationProvider,
     LocalModelProvider,
@@ -23,6 +24,7 @@ from personalclaw.sdk.diarization import (
     ensure_ffmpeg_in_path,
 )
 from personalclaw.sdk.model import ProviderResolutionError, require_model
+from personalclaw.sdk.net import sentence_with_detail
 from personalclaw.sdk.util import config_dir
 
 logger = logging.getLogger(__name__)
@@ -168,7 +170,11 @@ class PyannoteDiarizationProvider(DiarizationProvider, LocalModelProvider):
         ensure_ffmpeg_in_path()
         token = self._hf_token()
         if not token:
-            return None
+            # Said, not answered with ``None``: that read as a recording with no speakers.
+            raise DiarizationError(
+                "Diarization (pyannote) needs a Hugging Face token, and none was found. Set its "
+                "HuggingFace Token in the app's settings, then try again."
+            )
 
         def _run():
             try:
@@ -185,9 +191,11 @@ class PyannoteDiarizationProvider(DiarizationProvider, LocalModelProvider):
                         _MODEL, use_auth_token=token, cache_dir=cache
                     )
                 if pipeline is None:
-                    logger.warning("pyannote from_pretrained returned None — accept the "
-                                   "%s license on HuggingFace with this token.", _MODEL)
-                    return None
+                    raise DiarizationError(
+                        f"Hugging Face would not give this token {_MODEL}. Accept its user "
+                        f"conditions at https://hf.co/{_MODEL} with the same account, then try "
+                        "again."
+                    )
                 kwargs: dict = {}
                 if num_speakers:
                     kwargs["num_speakers"] = int(num_speakers)
@@ -203,28 +211,32 @@ class PyannoteDiarizationProvider(DiarizationProvider, LocalModelProvider):
                 annotation = getattr(diarization, "speaker_diarization", diarization)
                 return [SpeakerTurn(start=float(t.start), end=float(t.end), speaker=str(spk))
                         for t, _, spk in annotation.itertracks(yield_label=True)]
+            except DiarizationError:
+                raise
             except Exception as exc:
                 # A GATED-repo error is actionable + distinct from a real failure: pyannote.audio
                 # 4.x pulls a nested embedding model (speaker-diarization-community-1) that needs
                 # its OWN license-acceptance click on HuggingFace — the token alone isn't enough.
-                # Surface the exact repo + URL so the operator knows to accept conditions, rather
+                # Name the exact repo + URL so the operator knows to accept conditions, rather
                 # than burying it in a generic stack trace (the diarize just returned None before).
                 msg = str(exc)
                 if "gated" in msg.lower() or "403" in msg or "accept" in msg.lower():
                     import re as _re
                     m = _re.search(r"(pyannote/[\w.-]+)", msg)
                     repo = m.group(1) if m else "the pyannote model"
-                    logger.warning(
-                        "pyannote diarize blocked: the HF token can't download %s — accept its "
-                        "user conditions at https://hf.co/%s (a one-time click on the HF website), "
-                        "then retry. pyannote.audio 4.x needs the embedding sub-model's license too.",
-                        repo, repo)
-                else:
-                    logger.warning("pyannote diarize failed", exc_info=True)
-                return None
+                    logger.warning("pyannote diarize blocked: the HF token can't download %s", repo)
+                    raise DiarizationError(
+                        f"This Hugging Face token can't download {repo}. Accept its user "
+                        f"conditions at https://hf.co/{repo} (a one-time click on the Hugging Face "
+                        "website), then try again: pyannote.audio 4.x needs the embedding model's "
+                        "conditions accepted too."
+                    ) from exc
+                logger.warning("pyannote diarize failed", exc_info=True)
+                raise DiarizationError(sentence_with_detail(
+                    "Diarization (pyannote) could not tell the speakers apart in this recording.",
+                    exc,
+                )) from exc
 
-        try:
-            return await asyncio.wait_for(
-                asyncio.get_running_loop().run_in_executor(None, _run), timeout=900)
-        except asyncio.TimeoutError:
-            return None
+        # No clock of its own: the caller's budget grows with the recording's length, and a
+        # timer here could only throw a finished result away (a thread cannot be cancelled).
+        return await asyncio.get_running_loop().run_in_executor(None, _run)
