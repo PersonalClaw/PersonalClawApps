@@ -10,21 +10,33 @@ already present is a no-op (skipped, never overwritten), so the sync cycle can r
 freely after a CAS race. A synced folder has no cross-process atomic compare-and-swap, so
 ``cas_registry`` degrades to a rename-based lock (``os.mkdir`` on a lock directory, which
 is atomic on POSIX and on the network filesystems people sync through).
+
+Nothing outside the sync folder is read or written. Whoever else writes the folder can put a
+link in it to any file on this machine: read through, that file would come in as another
+machine's object, and written through, an object would land on it. So a key is taken only as a
+path of plain names that stays inside the folder with every link on the way followed
+(``personalclaw.sdk.sync.is_path_in_store``), a link at the key itself is never followed, and a
+listing follows none; anything else is refused, named, before anything of the call is read or
+written (``KeysRefused``), and the sync report says which.
 """
 
 import errno
 import hashlib
 import os
 import tempfile
+from pathlib import Path
 from typing import Any
 
 from personalclaw.sdk.net import sentence_with_detail
 from personalclaw.sdk.sync import (
     ConnectionResult,
+    KeysRefused,
     PushResult,
     RemoteRef,
     SyncObject,
     SyncTransportProvider,
+    is_path_in_store,
+    is_safe_relative_path,
 )
 
 #: Where this transport's own setting (Sync folder) is set.
@@ -41,6 +53,14 @@ _LOCK_DIR = ".registry.lock"
 
 # The single shared registry object every machine compare-and-swaps.
 _REGISTRY_KEY = "registry.json"
+
+#: Why a key is refused (``KeysRefused``), as the sync report says it after the key.
+_NOT_A_PATH = "is not a path a sync may use in the sync folder"
+_LEADS_OUT = "leads out of the sync folder through a link"
+_A_LINK = "is a link in the sync folder, which Folder Sync doesn't follow"
+
+#: Opens a file without following a link there: one put there since the key was looked at.
+_NO_FOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
 
 class DirSyncProvider(SyncTransportProvider):
@@ -93,11 +113,54 @@ class DirSyncProvider(SyncTransportProvider):
             f"or set Sync folder {_ON_CARD} to another folder."
         )
 
-    def _resolve(self, key: str) -> str:
-        """Map a remote-relative posix key to an absolute path under the root."""
+    def _path(self, key: str) -> tuple[str, str]:
+        """``(path, "")``: where *key* is in the sync folder; or ``("", why)`` when Folder Sync
+        won't read or write there — a key that is not a path of plain names, one that leads out
+        of the folder through a link, or a link itself."""
+        if not is_safe_relative_path(key):
+            return "", _NOT_A_PATH
+        if not is_path_in_store(Path(self._root), key):
+            return "", _LEADS_OUT
         # Split on "/" and rejoin with the OS separator so nested keys land in real
         # subdirectories regardless of platform.
-        return os.path.join(self._root, *key.split("/"))
+        path = os.path.join(self._root, *key.split("/"))
+        if os.path.islink(path):
+            return "", _A_LINK
+        return path, ""
+
+    def _paths(self, keys: list[str], doing: str) -> dict[str, str]:
+        """Each of *keys*' path in the sync folder, or :class:`KeysRefused` naming every one
+        Folder Sync won't read or write, before anything is: for *doing* them (``"read"``)."""
+        paths: dict[str, str] = {}
+        refused: dict[str, str] = {}
+        for key in keys:
+            path, why = self._path(key)
+            if why:
+                refused[key] = why
+            else:
+                paths[key] = path
+        if refused:
+            raise self._refusal(refused, doing)
+        return paths
+
+    def _refusal(self, refused: dict[str, str], doing: str) -> KeysRefused:
+        """*refused*, each key with why, as the refusal to *doing* them, said with what to do."""
+        named = "; ".join(f"{key} {why}" for key, why in sorted(refused.items())[:3])
+        more = f"; and {len(refused) - 3} more" if len(refused) > 3 else ""
+        what = "a key" if len(refused) == 1 else f"{len(refused)} keys"
+        step = ""
+        if any(why != _NOT_A_PATH for why in refused.values()):
+            step = " Take the link out of the sync folder: Folder Sync follows none out of it."
+        return KeysRefused(
+            f"Folder Sync won't {doing} {what} in {self._root}: {named}{more}.{step}", refused
+        )
+
+    @staticmethod
+    def _read(path: str) -> bytes:
+        """The bytes of the file at *path*, opened without following a link there: a link put
+        there since its key was looked at raises ``OSError`` (``ELOOP``)."""
+        with os.fdopen(os.open(path, os.O_RDONLY | _NO_FOLLOW), "rb") as fh:
+            return fh.read()
 
     def _atomic_write(self, target: str, data: bytes) -> None:
         """Write ``data`` to ``target`` atomically via a temp file in the same dir."""
@@ -123,10 +186,11 @@ class DirSyncProvider(SyncTransportProvider):
     def push(self, objects: list[SyncObject]) -> PushResult:
         if not self._root:
             return PushResult(outcome="transient", detail="no sync folder configured")
+        paths = self._paths([obj.key for obj in objects], "write")
         pushed = skipped = 0
         try:
             for obj in objects:
-                target = self._resolve(obj.key)
+                target = paths[obj.key]
                 # Insert-only: an object whose key already exists is skipped, not
                 # overwritten, so a retried push is free and never duplicates bytes.
                 if os.path.exists(target):
@@ -150,42 +214,60 @@ class DirSyncProvider(SyncTransportProvider):
         if not self._root or not os.path.isdir(self._root):
             return []
         refs: list[RemoteRef] = []
-        for dirpath, _dirnames, filenames in os.walk(self._root):
+        links: dict[str, str] = {}
+        # os.walk follows no link to a folder; one to anything is named here, and never listed.
+        for dirpath, dirnames, filenames in os.walk(self._root):
+            for name in [*dirnames, *filenames]:
+                full = os.path.join(dirpath, name)
+                if not os.path.islink(full):
+                    continue
+                key = os.path.relpath(full, self._root).replace(os.sep, "/")
+                # One under the prefix, or one on the way to it, which hides what is under it.
+                if key.startswith(prefix) or prefix.startswith(f"{key}/"):
+                    links[key] = _A_LINK
             for fn in filenames:
                 if fn.startswith(_TMP_PREFIX):
                     continue  # our own half-written object — not a real remote entry
                 full = os.path.join(dirpath, fn)
                 # Key is the path relative to the root, always in posix form.
                 key = os.path.relpath(full, self._root).replace(os.sep, "/")
-                if not key.startswith(prefix):
+                if not key.startswith(prefix) or key in links:
                     continue
                 try:
-                    st = os.stat(full)
+                    st = os.lstat(full)
                 except OSError:
                     continue  # vanished between walk and stat — skip it
                 # mtime is a cheap change fingerprint; the cycle compares it, never parses.
                 refs.append(
                     RemoteRef(key=key, size=st.st_size, fingerprint=str(int(st.st_mtime)))
                 )
+        if links:
+            raise self._refusal(links, "list")
         return refs
 
     def pull(self, refs: list[RemoteRef]) -> list[SyncObject]:
         if not self._root:
             return []
+        paths = self._paths([ref.key for ref in refs], "read")
         out: list[SyncObject] = []
+        links: dict[str, str] = {}
         for ref in refs:
             try:
-                with open(self._resolve(ref.key), "rb") as fh:
-                    out.append(SyncObject(key=ref.key, data=fh.read()))
-            except OSError:
+                out.append(SyncObject(key=ref.key, data=self._read(paths[ref.key])))
+            except OSError as e:
+                if e.errno == errno.ELOOP:
+                    links[ref.key] = _A_LINK  # made a link since it was looked at
                 # A ref the folder no longer has (or can't read) is dropped, not raised —
                 # the caller reconciles against what it asked for.
                 continue
+        if links:
+            raise self._refusal(links, "read")
         return out
 
     def cas_registry(self, expected_sha: str | None, data: bytes) -> bool:
         if not self._root:
             return False
+        target = self._paths([_REGISTRY_KEY], "swap")[_REGISTRY_KEY]
         try:
             os.makedirs(self._root, exist_ok=True)
         except OSError:
@@ -201,12 +283,12 @@ class DirSyncProvider(SyncTransportProvider):
         except OSError:
             return False
         try:
-            target = os.path.join(self._root, _REGISTRY_KEY)
-            if os.path.exists(target):
+            if os.path.lexists(target):
                 try:
-                    with open(target, "rb") as fh:
-                        current = fh.read()
-                except OSError:
+                    current = self._read(target)
+                except OSError as e:
+                    if e.errno == errno.ELOOP:  # made a link since it was looked at
+                        raise self._refusal({_REGISTRY_KEY: _A_LINK}, "swap") from None
                     return False
                 # Present: swap only if the caller's expected sha matches what's there
                 # (a None expectation means "expected absent", which a present file fails).

@@ -670,9 +670,10 @@ export function mount(el, ctx) {
   And every test's git runs with none of the machine's git configuration: no system
   file, a global file of the test's own (`GIT_CONFIG_GLOBAL`, where a test puts a setting
   it needs, such as an ssh stand-in), and an empty `credential.helper`
-  (`apps_testkit.git_neutral`). A git that could still sign in with a credential helper of
-  the machine's own, which on a Mac is the owner's real keychain, is refused before it
-  starts, and the test fails by name.
+  (`personalclaw.sdk.testing.neutral_git_env`). A git that could still sign in with a
+  credential helper of the machine's own, which on a Mac is the owner's real keychain, is
+  refused before it starts, and the test fails by name (`refuse_git_helpers`, the guard
+  core's own suite installs).
 - **Fake keys look like no key.** A test that hands your provider an API key, a bot token or an
   access key id uses a neutral fake (`fake-anthropic-test`, `fake-bot-token-saved`), never a
   provider's format: the repository is public and secret scanners read it. A masking test that

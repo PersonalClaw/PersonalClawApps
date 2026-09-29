@@ -32,9 +32,13 @@ without it stops the run too. What it cannot see: a connection a child process m
 And so is the machine's git configuration, and with it its credential helpers: on a Mac, the one
 Apple's git bundles hands credentials to the owner's real keychain. Every test's git runs with no
 system configuration, a global file of the test's own, and an empty ``credential.helper`` on its
-command line (``apps_testkit.git_neutral``), and a git that could still sign in with a helper of
-the machine's own is refused before it starts, and the test that started it fails by name. Core's
-git reads the same files; a core whose git would still name the machine's helper stops the run.
+command line (``personalclaw.sdk.testing.neutral_git_env``), and a git that could still sign in
+with a helper of the machine's own is refused before it starts, and the test that started it fails
+by name (``refuse_git_helpers``, the guard core's own suite installs). Core's git reads the same
+files; a core whose git would still name the machine's helper stops the run.
+
+All three guards are core's. A bare environment without core installs none of them: nothing
+there reads a keychain, and every test here that signs git in needs core to run at all.
 
 ``pytest.ini`` beside this file makes pytest load it however it is started, including by core's
 quality verifier, which runs each bundle with the bundle as its working directory.
@@ -51,8 +55,6 @@ from pathlib import Path
 
 import pytest
 
-from apps_testkit.git_neutral import GitGuard, neutral_env
-
 ROOT = Path(__file__).resolve().parent
 
 _patch = pytest.MonkeyPatch()
@@ -60,7 +62,7 @@ _base: list[Path] = []
 _restore: list[Callable[[], None]] = []
 _serial = itertools.count()
 _refused_ports: list = []
-_git_guards: list[GitGuard] = []
+_git_guards: list = []
 
 #: The default ports of the local model servers the apps speak to: Ollama (11434), vLLM (8000)
 #: and ComfyUI (8188).
@@ -78,19 +80,25 @@ def pytest_configure(config):
     base = Path(tempfile.mkdtemp(prefix="pclaw-apps-tests-"))
     _base.append(base)
     _patch.setenv("PERSONALCLAW_HOME", str(base / "collect"))
-    for name, value in neutral_env(base / "collect.gitconfig").items():
-        _patch.setenv(name, value)
-    git = GitGuard(real_home=REAL_HOME, own=[str(base), str(ROOT)])
-    git.install()
-    _git_guards.append(git)
-    _restore.append(git.undo)
     try:
         from personalclaw.sdk.git import git_argv, git_env
-        from personalclaw.sdk.testing import keychain_off, refuse_ports
+        from personalclaw.sdk.testing import (
+            keychain_off,
+            neutral_git_env,
+            refuse_git_helpers,
+            refuse_ports,
+        )
     except ModuleNotFoundError as missing:
         if missing.name != "personalclaw":
-            raise  # a core without the switches: this run would reach the real keychain
-        return  # a bare environment without core: nothing reads a keychain
+            raise  # a core without the guards: this run would reach the real keychain
+        # A bare environment without core, as the per-bundle runner's own rail makes: nothing
+        # there reads a keychain, and every test here that signs git in needs core to run at all.
+        return
+    for name, value in neutral_git_env(base / "collect.gitconfig").items():
+        _patch.setenv(name, value)
+    git = refuse_git_helpers(real_home=REAL_HOME, own=[str(base), str(ROOT)])
+    _git_guards.append(git)
+    _restore.append(git.undo)
     _restore.append(keychain_off())
     guard = refuse_ports(LOCAL_MODEL_PORTS, what="a local model server's port")
     _refused_ports.append(guard)
@@ -124,7 +132,7 @@ def _no_test_reaches_a_real_local_model_server():
 @pytest.fixture(autouse=True)
 def _no_test_signs_git_in_with_the_machines_helper():
     """Fail the test that started a git that could sign in with a credential helper of the
-    machine's own. The git itself was refused before it started (``GitGuard``)."""
+    machine's own. The git itself was refused before it started (``refuse_git_helpers``)."""
     yield
     for guard in _git_guards:
         refused = guard.take()

@@ -3,7 +3,7 @@
 Every case drives a ``tmp_path`` root so nothing touches a real sync folder. Covers the
 insert-only push contract, list_remote prefix filtering + temp-file exclusion, pull's
 drop-on-vanish, the rename-locked registry CAS (present/absent/mismatch + round-trip),
-and the reachability probe.
+the reachability probe, and that no key reads or writes outside the sync folder.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import pytest
 
 import provider as dir_sync
 from provider import DirSyncProvider, create_provider
-from personalclaw.sdk.sync import RemoteRef, SyncObject
+from personalclaw.sdk.sync import KeysRefused, RemoteRef, SyncObject
 
 
 def _sha(data: bytes) -> str:
@@ -356,3 +356,148 @@ def test_a_probe_that_cannot_create_the_folder_says_why(tmp_path, monkeypatch):
 
     assert res.ok is False
     assert res.detail == f"{NOT_THERE.format(root=root)} Details: {error}"
+
+
+# ── a key that leaves the sync folder ────────────────────────────────────────────────────
+#
+# Whoever else writes the sync folder can put a link in it to any file on this machine. A key was
+# joined onto the folder and opened as it came, following whatever was there: a link planted in
+# another machine's folder read a file of this machine's as that machine's object, a folder on the
+# way that is a link took this machine's objects anywhere its user may write, and a key with
+# ``../`` in it read or wrote anywhere at all.
+
+#: A file of this machine's, outside the sync folder.
+OUTSIDE = b"a file of this machine's, outside the sync folder\n"
+NOT_A_PATH = "is not a path a sync may use in the sync folder"
+LEADS_OUT = "leads out of the sync folder through a link"
+A_LINK = "is a link in the sync folder, which Folder Sync doesn't follow"
+PEERS = "machines/b/seq-0001/"
+
+
+@pytest.fixture
+def folder(tmp_path):
+    """The sync folder, and beside it, outside it, a file of this machine's and a folder."""
+    root = tmp_path / "sync"
+    root.mkdir()
+    (tmp_path / "outside.txt").write_bytes(OUTSIDE)
+    (tmp_path / "elsewhere").mkdir()
+    return root
+
+
+def _plant(root, key: str, target) -> None:
+    """A link at *key* in the sync folder, to *target*, as whoever else writes the folder can
+    put one there."""
+    path = root.joinpath(*key.split("/"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.symlink_to(target)
+
+
+def _refused(call) -> dict[str, str]:
+    """What *call* refused (``KeysRefused.refused``); fails when it refused nothing."""
+    with pytest.raises(KeysRefused) as refusal:
+        call()
+    assert OUTSIDE.decode().strip() not in str(refusal.value)
+    return refusal.value.refused
+
+
+def test_a_link_planted_in_another_machines_folder_is_not_read(folder, tmp_path):
+    key = f"{PEERS}tasks/entities.jsonl"
+    _plant(folder, key, tmp_path / "outside.txt")
+    p = DirSyncProvider(str(folder))
+
+    assert _refused(lambda: p.pull([RemoteRef(key)])) == {key: LEADS_OUT}
+    assert _refused(lambda: p.list_remote(PEERS)) == {key: A_LINK}
+
+
+def test_a_link_to_a_file_inside_the_folder_is_not_followed_either(folder):
+    key = f"{PEERS}tasks/entities.jsonl"
+    (folder / "other.jsonl").write_bytes(b"{}\n")
+    _plant(folder, key, folder / "other.jsonl")
+    p = DirSyncProvider(str(folder))
+
+    assert _refused(lambda: p.pull([RemoteRef(key)])) == {key: A_LINK}
+
+
+def test_a_folder_on_the_way_that_is_a_link_is_refused_not_walked_into(folder, tmp_path):
+    (tmp_path / "elsewhere" / "seq-0001").mkdir()
+    (tmp_path / "elsewhere" / "seq-0001" / "x.jsonl").write_bytes(OUTSIDE)
+    _plant(folder, "machines/b", tmp_path / "elsewhere")
+    p = DirSyncProvider(str(folder))
+
+    assert _refused(lambda: p.list_remote(PEERS)) == {"machines/b": A_LINK}
+    assert _refused(lambda: p.pull([RemoteRef(f"{PEERS}x.jsonl")])) == {
+        f"{PEERS}x.jsonl": LEADS_OUT
+    }
+
+
+def test_a_listing_elsewhere_in_the_folder_is_not_held_up_by_a_link(folder, tmp_path):
+    """A control: a link under another prefix is none of this listing's business."""
+    _plant(folder, f"{PEERS}x.jsonl", tmp_path / "outside.txt")
+    (folder / "machines" / "c" / "seq-0001").mkdir(parents=True)
+    (folder / "machines" / "c" / "seq-0001" / "x.jsonl").write_bytes(b"c")
+    p = DirSyncProvider(str(folder))
+
+    assert [r.key for r in p.list_remote("machines/c/")] == ["machines/c/seq-0001/x.jsonl"]
+
+
+def test_a_push_through_a_folder_that_is_a_link_writes_nothing_outside(folder, tmp_path):
+    key = "machines/a/seq-0001/x.jsonl"
+    _plant(folder, "machines/a", tmp_path / "elsewhere")
+    p = DirSyncProvider(str(folder))
+
+    assert _refused(lambda: p.push([SyncObject("k", b"mine"), SyncObject(key, b"mine")])) == {
+        key: LEADS_OUT
+    }
+    assert list((tmp_path / "elsewhere").iterdir()) == [], "an object was written through it"
+    assert not (folder / "k").exists(), "part of a refused push was written"
+
+
+def test_a_key_that_climbs_out_is_neither_read_nor_written(folder, tmp_path):
+    p = DirSyncProvider(str(folder))
+
+    assert _refused(lambda: p.pull([RemoteRef("../outside.txt")])) == {
+        "../outside.txt": NOT_A_PATH
+    }
+    assert _refused(lambda: p.push([SyncObject("../planted.txt", b"x")])) == {
+        "../planted.txt": NOT_A_PATH
+    }
+    assert _refused(lambda: p.push([SyncObject(str(tmp_path / "abs.txt"), b"x")])) == {
+        str(tmp_path / "abs.txt"): NOT_A_PATH
+    }
+    assert not (tmp_path / "planted.txt").exists() and not (tmp_path / "abs.txt").exists()
+
+
+def test_a_registry_that_is_a_link_is_neither_read_nor_swapped(folder, tmp_path):
+    _plant(folder, "registry.json", tmp_path / "outside.txt")
+    p = DirSyncProvider(str(folder))
+
+    assert _refused(lambda: p.cas_registry(_sha(OUTSIDE), b"{}")) == {"registry.json": LEADS_OUT}
+    assert (tmp_path / "outside.txt").read_bytes() == OUTSIDE
+    assert (folder / "registry.json").is_symlink(), "the swap went ahead"
+    assert not (folder / ".registry.lock").exists()
+
+
+def test_a_link_made_after_the_key_was_looked_at_is_not_followed(folder, tmp_path, monkeypatch):
+    """The key is looked at, then opened: a link put there in between is still not followed.
+    Played by a look that finds nothing wrong with it."""
+    key = f"{PEERS}x.jsonl"
+    _plant(folder, key, tmp_path / "outside.txt")
+    monkeypatch.setattr(
+        DirSyncProvider, "_path", lambda self, k: (os.path.join(self._root, *k.split("/")), "")
+    )
+    p = DirSyncProvider(str(folder))
+
+    assert _refused(lambda: p.pull([RemoteRef(key)])) == {key: A_LINK}
+
+
+def test_the_refusal_says_which_key_why_and_what_to_do(folder, tmp_path):
+    key = f"{PEERS}tasks/entities.jsonl"
+    _plant(folder, key, tmp_path / "outside.txt")
+
+    with pytest.raises(KeysRefused) as refusal:
+        DirSyncProvider(str(folder)).pull([RemoteRef(key)])
+
+    assert str(refusal.value) == (
+        f"Folder Sync won't read a key in {folder}: {key} {LEADS_OUT}. Take the link out of the "
+        "sync folder: Folder Sync follows none out of it."
+    )

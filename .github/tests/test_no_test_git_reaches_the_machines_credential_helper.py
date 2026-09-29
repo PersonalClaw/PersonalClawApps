@@ -1,12 +1,14 @@
 """No test in this repository can sign git in with a credential helper of the machine's own.
 
 The repository's ``conftest.py`` gives every test's git a neutral environment
-(``apps_testkit.git_neutral``): no system configuration, a global file of the test's own, and an
-empty ``credential.helper`` on git's command line. Core's git reads the same files. A git that
-could still sign in with a helper of the machine's own is refused before it starts, and the test
-that started it fails by name: on a Mac the file Apple's git bundles names ``osxkeychain``, and on
-2026-09-28 a test's own ``git clone`` handed a token to it and waited ten minutes on the owner's
-real keychain.
+(``personalclaw.sdk.testing.neutral_git_env``): no system configuration, a global file of the
+test's own, and an empty ``credential.helper`` on git's command line. Core's git reads the same
+files. A git that could still sign in with a helper of the machine's own is refused before it
+starts, and the test that started it fails by name (``refuse_git_helpers``): on a Mac the file
+Apple's git bundles names ``osxkeychain``, and on 2026-09-28 a test's own ``git clone`` handed a
+token to it and waited ten minutes on the owner's real keychain. The guard is the one core's own
+suite installs, and core's rail holds it to every way a git could reach the machine's helper;
+this one holds this repository's run to it.
 
 Nothing here reaches a remote or a real helper. The refusals are asked of the guard, the one git
 that is refused would only have dialed a port on this machine that nothing listens on, the one
@@ -138,73 +140,10 @@ def test_a_git_that_is_allowed_really_runs_and_no_helper_answers(tmp_path):
     assert _guard().take() == []
 
 
-_NEUTRAL = {
-    "GIT_CONFIG_NOSYSTEM": "1",
-    "GIT_CONFIG_GLOBAL": "/tmp/pc-fixture/gitconfig",
-    "GIT_CONFIG_COUNT": "1",
-    "GIT_CONFIG_KEY_0": "credential.helper",
-    "GIT_CONFIG_VALUE_0": "",
-}
-_OWN_HELPER = "/tmp/pc-fixture/helper.sh"
-_TOKEN_HELPER = "!f() { test \"$1\" = get || exit 0; printf 'password=%s\\n' \"$T\"; }; f"
+def test_the_guard_is_the_one_cores_own_suite_installs():
+    from personalclaw.sdk.testing import GitGuard
 
-
-def _without(*names: str) -> dict[str, str]:
-    return {k: v for k, v in _NEUTRAL.items() if k not in names}
-
-
-@pytest.mark.parametrize(
-    ("argv", "env", "says"),
-    [
-        (["git", "fetch"], _without("GIT_CONFIG_NOSYSTEM"), "system git configuration"),
-        (["git", "fetch"], {**_NEUTRAL, "GIT_CONFIG_NOSYSTEM": "0"}, "system git configuration"),
-        (["git", "push"], {**_NEUTRAL, "GIT_CONFIG_GLOBAL": "~/.gitconfig"}, "global git"),
-        (["git", "clone", "x"], {**_without("GIT_CONFIG_GLOBAL"), "HOME": "~"}, "global git"),
-        (["git", "fetch"], _without("GIT_CONFIG_COUNT"), "nothing on its command line clears"),
-        (["git", "-c", "credential.helper=", "-c", "credential.helper=osxkeychain", "fetch"],
-         _NEUTRAL, "(osxkeychain)"),
-        (["git", "-c", "credential.helper=/usr/local/bin/git-credential-manager", "pull"],
-         _NEUTRAL, "machine's own (/usr/local/bin/git-credential-manager)"),
-        (["git", "-c", "credential.https://example.invalid.helper=store", "fetch"], _NEUTRAL,
-         "(store)"),
-        (["git", "--config-env=credential.helper=PC_FIXTURE_HELPER", "fetch"],
-         {**_NEUTRAL, "PC_FIXTURE_HELPER": "cache"}, "(cache)"),
-        (["/usr/bin/env", "GIT_CONFIG_NOSYSTEM=0", "git", "fetch"], _NEUTRAL, "system git"),
-        (["/usr/bin/env", "-i", "PATH=/usr/bin", "git", "ls-remote", "x"], _NEUTRAL, "system"),
-        (["git", "credential-osxkeychain", "get"], _NEUTRAL, "credential helper itself"),
-        (["/usr/bin/git", "-C", "/tmp/x", "submodule", "update"], _without("GIT_CONFIG_COUNT"),
-         "nothing on its command line clears"),
-    ],
-    ids=[
-        "no-nosystem", "nosystem-off", "real-global", "real-home", "no-reset", "bare-helper",
-        "helper-outside-own-folders", "url-helper", "config-env-helper", "env-undoes-it",
-        "env-empties-it", "helper-run-directly", "remote-subcommand-past-options",
-    ],
-)
-def test_each_way_a_git_could_reach_the_machines_helper_is_refused(argv, env, says):
-    env = {k: os.path.expanduser(v) if k in ("HOME", "GIT_CONFIG_GLOBAL") else v
-           for k, v in env.items()}
-    why = _guard().refusal(argv, env)
-    assert says in why, why
-
-
-@pytest.mark.parametrize(
-    ("argv", "env"),
-    [
-        (["git", "fetch"], _NEUTRAL),
-        (["git", "-c", "credential.helper=", "-c", f"credential.helper={_OWN_HELPER}", "push"],
-         _without("GIT_CONFIG_COUNT")),
-        (["git", "-c", f"credential.helper={_TOKEN_HELPER}", "clone", "x"], _NEUTRAL),
-        (["git", "commit", "-m", "x"], {}),
-        (["git", "http-backend"], {"HOME": "/tmp/pc-fixture"}),
-        (["git", "version"], {}),
-        (["rsync", "-a", "src/", "dst/"], {}),
-    ],
-    ids=["neutral", "own-helper", "token-helper", "no-sign-in", "server-side", "version",
-         "not-git"],
-)
-def test_a_git_that_cannot_reach_the_machines_helper_is_let_through(argv, env):
-    assert _guard().refusal(argv, env) == ""
+    assert isinstance(_guard(), GitGuard)
 
 
 def test_a_core_whose_git_would_name_the_machines_helper_stops_the_run(tmp_path):
@@ -222,7 +161,7 @@ def test_a_core_whose_git_would_name_the_machines_helper_stops_the_run(tmp_path)
     path = os.pathsep.join(p for p in (str(plant), os.environ.get("PYTHONPATH", "")) if p)
     env = {**os.environ, "PYTHONPATH": path}
     env.pop("PYTEST_CURRENT_TEST", None)
-    one = f"{Path(__file__)}::test_a_git_that_cannot_reach_the_machines_helper_is_let_through"
+    one = f"{Path(__file__)}::test_the_guard_is_the_one_cores_own_suite_installs"
 
     ran = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", one],

@@ -23,6 +23,14 @@ up — fetching the remote and replaying this machine's unpushed commits on top 
 push the remote turns away because another machine pushed first catches up again and pushes
 once more, so it lands in the same call. A registry write the remote turned away is dropped
 from the clone rather than kept: it lost its swap, and the caller re-reads the remote's.
+
+Nothing outside the working clone is read or written. git checks out a link another machine
+committed as a link, to any file on this machine: read through, that file would come in as
+another machine's object, and written through, an object would land on it. So a key is taken
+only as a path of plain names that stays inside the clone with every link on the way followed
+(``personalclaw.sdk.sync.is_path_in_store``), a link at the key itself is never followed, and a
+listing follows none; anything else is refused, named, before anything of the call is read or
+written (``KeysRefused``), and the sync report says which.
 """
 
 import contextlib
@@ -35,6 +43,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -49,10 +58,13 @@ from personalclaw.sdk.git import (
 from personalclaw.sdk.net import sentence_with_detail
 from personalclaw.sdk.sync import (
     ConnectionResult,
+    KeysRefused,
     PushResult,
     RemoteRef,
     SyncObject,
     SyncTransportProvider,
+    is_path_in_store,
+    is_safe_relative_path,
 )
 
 # The single shared registry object every machine compare-and-swaps.
@@ -65,6 +77,14 @@ _SYNC_ROOT = frozenset({_REGISTRY_KEY, "encryption-salt", "machines"})
 # ``list_remote`` skips any file whose basename starts with this — git-sync writes objects
 # in place and never leaves such files, but a stray one is never advertised as a real ref.
 _TMP_PREFIX = ".tmp-"
+
+#: Why a key is refused (``KeysRefused``), as the sync report says it after the key.
+_NOT_A_PATH = "is not a path a sync may use in the working clone"
+_LEADS_OUT = "leads out of the working clone through a link"
+_A_LINK = "is a link in the working clone, which Git Sync doesn't follow"
+
+#: Opens a file without following a link there: one put there since the key was looked at.
+_NO_FOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
 # Ceiling for any single git invocation. A clone/pull that blows past this is treated as a
 # transient failure by the caller, never a hang.
@@ -202,6 +222,9 @@ _NO_BRANCH_YET = "couldn't find remote ref"
 _WALKED: dict[tuple[str, bool], tuple[str, bool]] = {}
 #: A URL's authority up to its last ``@``: the ``user:password@``, or ``token@``, it can carry.
 _USERINFO = re.compile(r"://[^/?#]*@")
+#: An scp-like address with a password written into it, ``user:password@host:path``: its user name
+#: and its password, then a host and the ``:`` before its path.
+_SCP_PASSWORD = re.compile(r"^([^:/@]*):([^/@]*)@[^:/@]+:")
 #: The user name Access token signs in with when User name is empty. git asks for one along
 #: with a token, and fails without one, since nobody is there to type it. Hosts differ in what
 #: they want: GitHub takes this name with any token and needs it with an app's, and a host that
@@ -351,11 +374,25 @@ def _ssh_url(url: str) -> bool:
     return _scheme(url) in ("ssh", "git+ssh", "ssh+git")
 
 
+def _scp_like(url: str) -> bool:
+    """Whether git reaches ``url``, written scp-like (``[user@]host:path``), over ssh: no scheme,
+    and no ``/`` before its first ``:``."""
+    head, colon, _ = url.partition(":")
+    return bool(colon) and "://" not in url and "/" not in head
+
+
 def _credential(url: str) -> tuple[str, str]:
     """``(copy, in its place)``: the credential written into ``url``'s address and what that part
     of it becomes without it, or ``("", "")`` when it carries none. An http(s) URL's is its whole
     ``user:password@`` or ``token@``; an ssh URL's is the password after its user name, which git
-    hands to ssh as part of the login name, so only the user name is kept."""
+    hands to ssh as part of the login name, so only the user name is kept; and so is an scp-like
+    address's, ``user:password@host:path``, whose password git hands to ssh as part of the path."""
+    if _scp_like(url):
+        scp = _SCP_PASSWORD.match(url)
+        if not scp:
+            return "", ""
+        user = scp.group(1)
+        return url[: scp.end(2) + 1], f"{user}@" if user else ""
     found = _USERINFO.search(url)
     if not found:
         return "", ""
@@ -489,8 +526,9 @@ class GitSyncProvider(SyncTransportProvider):
     def _refused(self) -> str:
         """Why these settings can't be used, and what to set instead; ``""`` when they can. The
         configured remote may be one PersonalClaw's git doesn't reach (a local path, ``ext::``,
-        ``git://``), an http one with a user name or token written into it, or one Access token
-        can't be handed to, or the Branch one git won't take as a branch name. Said before git
+        ``git://``), an http one with a user name or token written into it, an ssh one — written
+        as a URL or scp-like — with a password written into it, or one Access token can't be
+        handed to, or the Branch one git won't take as a branch name. Said before git
         runs, so the owner reads it beside the setting rather than as git's ``transport 'file'
         not allowed`` or ``invalid refspec``."""
         return (
@@ -517,17 +555,31 @@ class GitSyncProvider(SyncTransportProvider):
 
     def _password_in_ssh_url(self) -> str:
         """Why Git Sync won't use an ssh Git remote URL with a password written into it, or
-        ``""``. git would keep it in the working clone's ``.git/config`` and hand it to ssh as
-        part of the login name, on ssh's command line, where anyone on this machine can read it;
-        ssh never signs in with it."""
-        if not _ssh_url(self._repo_url) or not _credential(self._repo_url)[0]:
+        ``""``. git would keep it in the working clone's ``.git/config`` and hand it to ssh on
+        ssh's command line, where anyone on this machine can read it: as part of the login name,
+        which ssh never signs in with, or, written scp-like (``user:password@host:path``), as part
+        of the path, since git reads that address from its first ``:`` and takes the user name
+        for the host, which the password is then sent to."""
+        url = self._repo_url
+        if not (_ssh_url(url) or _scp_like(url)) or not _credential(url)[0]:
             return ""
+        if _scp_like(url):
+            how = (
+                "git keeps it in the working clone's .git/config, and it reads "
+                "user:password@host:path as a host named after the user name, so it hands the "
+                "password to ssh on its command line, where anyone on this machine can read it, to "
+                "send to that host"
+            )
+        else:
+            how = (
+                "git keeps it in the working clone's .git/config and hands it to ssh on its "
+                "command line, where anyone on this machine can read it, and ssh never signs in "
+                "with it"
+            )
         return (
-            "Git Sync won't use a password written into Git remote URL: git keeps it in the "
-            "working clone's .git/config and hands it to ssh on its command line, where anyone on "
-            "this machine can read it, and ssh never signs in with it. Take the password out of "
-            f"Git remote URL {_ON_CARD}: leave the user name before the @, or nothing before the "
-            f"host ({_shown(self._repo_url)}), and sign in with your ssh key."
+            f"Git Sync won't use a password written into Git remote URL: {how}. Take the password "
+            f"out of Git remote URL {_ON_CARD}: leave the user name before the @, or nothing "
+            f"before the host ({_shown(url)}), and sign in with your ssh key."
         )
 
     def _token_refused(self) -> str:
@@ -564,18 +616,65 @@ class GitSyncProvider(SyncTransportProvider):
         here. Git remote URL can carry a credential, and git's words can carry the URL: a failed
         clone or probe names its whole command line. The detail is redacted on its way out, but
         that finds a credential in a URL only after ``://``, so first any copy of the URL in the
-        words is replaced by the URL as :func:`_shown` shows it — an scp-like
-        ``user:password@host:path`` included."""
+        words is replaced by the URL as :func:`_shown` shows it — a token in its query
+        included."""
         url = self._repo_url
         if url and url in words:
             words = words.replace(url, _shown(url))
         return sentence_with_detail(sentence, words)
 
-    def _resolve(self, key: str) -> str:
-        """Map a remote-relative posix key to an absolute path inside the working clone."""
+    def _path(self, key: str) -> tuple[str, str]:
+        """``(path, "")``: where *key* is in the working clone; or ``("", why)`` when Git Sync
+        won't read or write there — a key that is not a path of plain names, one that leads out
+        of the clone through a link, or a link itself. Asked once the clone has caught up, since
+        a catch-up checks out whatever the remote's branch holds."""
+        if not is_safe_relative_path(key):
+            return "", _NOT_A_PATH
+        if not is_path_in_store(Path(self._clone), key):
+            return "", _LEADS_OUT
         # Split on "/" and rejoin with the OS separator so nested keys land in real
         # subdirectories regardless of platform.
-        return os.path.join(self._clone, *key.split("/"))
+        path = os.path.join(self._clone, *key.split("/"))
+        if os.path.islink(path):
+            return "", _A_LINK
+        return path, ""
+
+    def _paths(self, keys: list[str], doing: str) -> dict[str, str]:
+        """Each of *keys*' path in the working clone, or :class:`KeysRefused` naming every one
+        Git Sync won't read or write, before anything is: for *doing* them (``"read"``)."""
+        paths: dict[str, str] = {}
+        refused: dict[str, str] = {}
+        for key in keys:
+            path, why = self._path(key)
+            if why:
+                refused[key] = why
+            else:
+                paths[key] = path
+        if refused:
+            raise self._keys_refused(refused, doing)
+        return paths
+
+    def _keys_refused(self, refused: dict[str, str], doing: str) -> KeysRefused:
+        """*refused*, each key with why, as the refusal to *doing* them, said with what to do."""
+        named = "; ".join(f"{key} {why}" for key, why in sorted(refused.items())[:3])
+        more = f"; and {len(refused) - 3} more" if len(refused) > 3 else ""
+        what = "a key" if len(refused) == 1 else f"{len(refused)} keys"
+        step = ""
+        if any(why != _NOT_A_PATH for why in refused.values()):
+            step = (
+                " Remove the link from the git remote's branch: git checks it out as a link, and "
+                "Git Sync follows none out of the clone."
+            )
+        return KeysRefused(
+            f"Git Sync won't {doing} {what} in {self._clone}: {named}{more}.{step}", refused
+        )
+
+    @staticmethod
+    def _read(path: str) -> bytes:
+        """The bytes of the file at *path*, opened without following a link there: a link put
+        there since its key was looked at raises ``OSError`` (``ELOOP``)."""
+        with os.fdopen(os.open(path, os.O_RDONLY | _NO_FOLLOW), "rb") as fh:
+            return fh.read()
 
     def _run(self, args: list[str], check: bool = True) -> subprocess.CompletedProcess:
         """Run ``git <args>`` with output captured and a hard timeout. Not scoped to the
@@ -819,14 +918,14 @@ class GitSyncProvider(SyncTransportProvider):
         self._git("update-ref", "-d", f"refs/heads/{self._branch}", check=False)
         self._git("read-tree", "--empty", check=False)
         with contextlib.suppress(OSError):
-            os.remove(self._resolve(_REGISTRY_KEY))
+            os.remove(os.path.join(self._clone, _REGISTRY_KEY))
 
     def _restore_registry(self) -> None:
         """Put ``registry.json`` back as the clone's last commit has it — or gone, if none has."""
         if self._git("checkout", "HEAD", "--", _REGISTRY_KEY, check=False).returncode != 0:
             self._git("rm", "-q", "--cached", "--ignore-unmatch", "--", _REGISTRY_KEY, check=False)
             with contextlib.suppress(OSError):
-                os.remove(self._resolve(_REGISTRY_KEY))
+                os.remove(os.path.join(self._clone, _REGISTRY_KEY))
 
     def _clone_config(self) -> list[tuple[str, str]]:
         """The working clone's own settings that say where its fetches and pushes go, and whether
@@ -888,10 +987,10 @@ class GitSyncProvider(SyncTransportProvider):
     def _leaked(self, where: list[tuple[str, str]]) -> bool:
         """Whether the clone's origin — and its push URL, if it has one — is Git remote URL with
         a credential written into it (:func:`_credential`: an http(s) URL's user name or token,
-        an ssh URL's password), and nothing else sends its fetches or pushes anywhere: a clone
-        made from such a URL, before Git Sync refused one."""
+        an ssh URL's or an scp-like address's password), and nothing else sends its fetches or
+        pushes anywhere: a clone made from such a URL, before Git Sync refused one."""
         return (
-            (_web(self._repo_url) or _ssh_url(self._repo_url))
+            (_web(self._repo_url) or _ssh_url(self._repo_url) or _scp_like(self._repo_url))
             and any(key == "remote.origin.url" for key, _ in where)
             and any(_credential(value)[0] for _, value in where)
             and all(
@@ -1048,7 +1147,10 @@ class GitSyncProvider(SyncTransportProvider):
         self._git("read-tree", "--empty")
         root = os.path.normpath(self._clone)
         for path in tracked:
-            full = self._resolve(path)
+            # A removal takes a link at the path as itself, but none on the way to it.
+            if not is_path_in_store(Path(root), path, follow_last=False):
+                continue
+            full = os.path.join(root, *path.split("/"))
             with contextlib.suppress(FileNotFoundError):
                 os.remove(full)
             folder = os.path.dirname(full)
@@ -1406,15 +1508,25 @@ class GitSyncProvider(SyncTransportProvider):
             conflict = self._catch_up(pushing=True)
             if conflict:
                 return PushResult(outcome="permanent", detail=conflict)
+            paths = self._paths([obj.key for obj in objects], "write")
             for obj in objects:
-                target = self._resolve(obj.key)
+                target = paths[obj.key]
                 # Insert-only: a key already present is skipped, never overwritten, so a
                 # retried push is free and the git history stays append-only per object.
-                if os.path.exists(target):
+                if os.path.lexists(target) and not os.path.islink(target):
                     skipped += 1
                     continue
                 os.makedirs(os.path.dirname(target) or self._clone, exist_ok=True)
-                with open(target, "wb") as fh:
+                try:
+                    made = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NO_FOLLOW, 0o666)
+                except FileExistsError:
+                    if not os.path.islink(target):
+                        skipped += 1  # another write got there first: insert-only
+                        continue
+                    for key in written:  # a link made there since it was looked at
+                        os.remove(paths[key])
+                    raise self._keys_refused({obj.key: _A_LINK}, "write") from None
+                with os.fdopen(made, "wb") as fh:
                     fh.write(obj.data)
                 written.append(obj.key)
             pushed = len(written)
@@ -1476,11 +1588,21 @@ class GitSyncProvider(SyncTransportProvider):
             raise GitSyncFailed(self._cycle_stopped(e)) from None
         self._level()
         refs: list[RemoteRef] = []
+        links: dict[str, str] = {}
         try:
+            # os.walk follows no link to a folder; one to anything is named, and never listed.
             for dirpath, dirnames, filenames in os.walk(self._clone, onerror=_reraise):
                 # Prune the entire .git tree — its objects are git's bookkeeping, never a shard.
                 if ".git" in dirnames:
                     dirnames.remove(".git")
+                for name in [*dirnames, *filenames]:
+                    full = os.path.join(dirpath, name)
+                    if not os.path.islink(full):
+                        continue
+                    key = os.path.relpath(full, self._clone).replace(os.sep, "/")
+                    # One under the prefix, or one on the way to it, which hides what is under it.
+                    if key.startswith(prefix) or prefix.startswith(f"{key}/"):
+                        links[key] = _A_LINK
                 for fn in filenames:
                     if fn.startswith(_TMP_PREFIX):
                         continue
@@ -1489,10 +1611,10 @@ class GitSyncProvider(SyncTransportProvider):
                     key = os.path.relpath(full, self._clone).replace(os.sep, "/")
                     if key == ".git" or key.startswith(".git/"):
                         continue  # defensive — pruned above, but never advertise git internals
-                    if not key.startswith(prefix):
+                    if not key.startswith(prefix) or key in links:
                         continue
                     try:
-                        st = os.stat(full)
+                        st = os.lstat(full)
                     except FileNotFoundError:
                         continue  # vanished between walk and stat — skip it
                     # mtime is a cheap change fingerprint; the cycle only compares it, never
@@ -1503,6 +1625,8 @@ class GitSyncProvider(SyncTransportProvider):
         except OSError as e:
             # A folder the walk couldn't read would leave its objects out of the listing.
             raise GitSyncFailed(self._cannot_read(e)) from None
+        if links:
+            raise self._keys_refused(links, "list")
         return refs
 
     def pull(self, refs: list[RemoteRef]) -> list[SyncObject]:
@@ -1523,17 +1647,23 @@ class GitSyncProvider(SyncTransportProvider):
         except (subprocess.SubprocessError, OSError) as e:
             raise GitSyncFailed(self._cycle_stopped(e)) from None
         self._level()
+        paths = self._paths([ref.key for ref in refs], "read")
         out: list[SyncObject] = []
+        links: dict[str, str] = {}
         for ref in refs:
             try:
-                with open(self._resolve(ref.key), "rb") as fh:
-                    out.append(SyncObject(key=ref.key, data=fh.read()))
+                out.append(SyncObject(key=ref.key, data=self._read(paths[ref.key])))
             except (FileNotFoundError, NotADirectoryError, IsADirectoryError):
                 # A ref the clone doesn't have is dropped, not raised — the caller reconciles
                 # against what it asked for.
                 continue
             except OSError as e:
+                if e.errno == errno.ELOOP:
+                    links[ref.key] = _A_LINK  # made a link since it was looked at
+                    continue
                 raise GitSyncFailed(self._cannot_read(e)) from None
+        if links:
+            raise self._keys_refused(links, "read")
         return out
 
     def cas_registry(self, expected_sha: str | None, data: bytes) -> bool:
@@ -1556,10 +1686,9 @@ class GitSyncProvider(SyncTransportProvider):
         try:
             self._ensure_clone()
             self._level()
-            target = self._resolve(_REGISTRY_KEY)
-            if os.path.exists(target):
-                with open(target, "rb") as fh:
-                    current = fh.read()
+            target = self._paths([_REGISTRY_KEY], "swap")[_REGISTRY_KEY]
+            if os.path.lexists(target):
+                current = self._read(target)
                 # Present: swap only if the caller's expected sha matches what's there (a
                 # None expectation means "expected absent", which a present file fails).
                 if expected_sha != hashlib.sha256(current).hexdigest():
@@ -1570,7 +1699,8 @@ class GitSyncProvider(SyncTransportProvider):
             before = self._rev("HEAD")
             os.makedirs(os.path.dirname(target) or self._clone, exist_ok=True)
             wrote = True
-            with open(target, "wb") as fh:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _NO_FOLLOW
+            with os.fdopen(os.open(target, flags, 0o666), "wb") as fh:
                 fh.write(data)
             self._git("add", _REGISTRY_KEY)
             if self._git("status", "--porcelain").stdout.strip():

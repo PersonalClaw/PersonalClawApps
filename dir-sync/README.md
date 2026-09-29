@@ -76,6 +76,13 @@ convergence criterion (two machines sharing one folder reach the same merged sta
   transport only reads and writes files in the folder you choose. Whatever protects that
   folder (your disk, your cloud-sync account, your network share) is the only trust
   boundary.
+- **Nothing outside the folder is read or written.** Whoever else writes the folder can put
+  a link in it to any file on this machine, so Folder Sync follows none out of it: a key whose
+  path leaves the folder, through a link or with `..`, is refused before anything is read or
+  written; a link at the key itself is refused even when it points inside the folder; and a
+  listing follows no link, and names each one where it looks. The sync report names each
+  refused key, and a change from another machine that holds one is not taken in. Take any link
+  out of the folder.
 - **The folder holds shard objects only.** Secrets are excluded upstream by the durability
   layer before anything reaches a transport, so this app never sees `.env`, API keys, or
   the credential store — it cannot sync what it is never handed.

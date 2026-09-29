@@ -41,7 +41,7 @@ other app. (Or [install it from a shell](../docs/third-party-install.md#installi
 
 | Key | Label | Notes |
 |---|---|---|
-| `repo_url` | Git remote URL | The ssh or https URL of a git remote you own (both machines point at the same one). A remote at a local path is refused, and so is an https URL with a user name or token written into it (put the token in Access token), or an ssh one with a password (ssh signs in with your key). Leave empty to configure later — the transport stays idle until set. |
+| `repo_url` | Git remote URL | The ssh or https URL of a git remote you own (both machines point at the same one). A remote at a local path is refused, and so is an https URL with a user name or token written into it (put the token in Access token), or an ssh one — written as a URL or scp-like — with a password (ssh signs in with your key). Leave empty to configure later — the transport stays idle until set. |
 | `local_clone` | Local working clone | Where the working clone lives on this machine (default `~/.personalclaw/sync/git-sync`). Supports `~` and `$VARS`. Cloned on first use, reused after. |
 | `branch` | Branch | The branch to sync on (default `main`). Both machines must use the same branch. A branch the remote doesn't have yet starts empty. |
 | `token` | Access token | For an https remote that needs a token to sign in (sensitive: kept in PersonalClaw's credential store). Handed to git by its own credential helper, never written into the working clone or onto a command line; only an https remote is given it, or an http one on this machine. Leave empty for ssh. |
@@ -146,9 +146,10 @@ clone of an empty repo succeeds and the first push publishes the branch.
 - **A password in an ssh Git remote URL is refused too.** git would keep
   `ssh://user:password@host/…` in `.git/config` and hand the password to ssh on its command line
   as part of the login name, where anyone on this machine can read it, and ssh never signs in
-  with it. Take the password out and sign in with your ssh key; a working clone made from such a
-  URL has its origin rewritten with only the user name, and every copy of the password taken out
-  of its `.git`.
+  with it. Written scp-like, `user:password@host:path`, git reads the user name as the host and
+  hands the password to ssh as part of the path, to send to that host. Take the password out and
+  sign in with your ssh key; a working clone made from such a URL has its origin rewritten with
+  only the user name, and every copy of the password taken out of its `.git`.
 - **A credential in Git remote URL is never shown.** A URL can carry a user name and password,
   or a token (`https://<token>@host/…`). **Test connection**'s success, and every failure's detail
   and error, name the URL without it — and without any query or fragment, or anything written
@@ -171,6 +172,13 @@ clone of an empty repo succeeds and the first push publishes the branch.
   send a push anywhere but Git remote URL: an origin, push URL, second URL or url rewrite set
   there gets the clone replaced by a fresh clone of Git remote URL — or, when it holds work Git
   Sync didn't make, left alone and not synced through.
+- **Nothing outside the working clone is read or written.** git checks out a link another
+  machine committed as a link, to any file on this machine, so Git Sync follows none out of the
+  clone: a key whose path leaves it, through a link or with `..`, is refused before anything is
+  read or written; a link at the key itself is refused even when it points inside the clone; and
+  a listing follows no link, and names each one where it looks. The sync report names each
+  refused key, and a change from another machine that holds one is not taken in. Remove the link
+  from the remote's branch.
 - **The repo holds shard objects only.** Secrets are excluded upstream by the durability
   layer before anything reaches a transport, so this app never sees `.env`, API keys, or the
   credential store — it cannot sync what it is never handed.

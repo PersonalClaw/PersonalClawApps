@@ -10,13 +10,14 @@ Covers the insert-only push contract (verified by cloning the remote fresh), the
 first-machine case, list_remote's .git exclusion + prefix filtering + temp-file exclusion,
 pull's drop-on-vanish, the registry compare-and-swap (present/absent/mismatch + round-trip),
 lost push races (a second clone pushing between the first's catch-up and its push) and the real
-conflicts no rule settles, two-machine convergence at the transport level, and the reachability
-probe.
+conflicts no rule settles, two-machine convergence at the transport level, the reachability
+probe, and that no key reads or writes outside the working clone.
 """
 
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import logging
 import os
@@ -33,7 +34,7 @@ import pytest
 import provider as git_sync
 from provider import GitSyncProvider, create_provider
 from personalclaw.sdk.net import sentence_with_detail
-from personalclaw.sdk.sync import RemoteRef, SyncObject
+from personalclaw.sdk.sync import KeysRefused, RemoteRef, SyncObject
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the repo root: apps_testkit
 from apps_testkit.git_too_old import REFUSAL_START, put_old_git_on_path  # noqa: E402
@@ -1843,12 +1844,8 @@ def test_a_working_clone_whose_own_settings_send_pushes_elsewhere_is_replaced(
 # reaches the sync job's result and its audit row, which are not masked the way the logs are.
 
 TOKEN = "pc-fixture-sync-token-5d1e"
-_TOKEN_URLS = {
-    "user-and-token": f"https://sync-user:{TOKEN}@git.example.com/owner/state.git",
-    "token-only": f"https://{TOKEN}@git.example.com/owner/state.git",
-    "ssh": f"ssh://sync-user:{TOKEN}@git.example.com:2222/owner/state.git",
-    "scp-like": f"sync-user:{TOKEN}@git.example.com:owner/state.git",
-}
+#: A token in Git remote URL that git is still handed: in its query, which a host can read one from.
+_QUERY_TOKEN_URL = f"https://git.example.com/owner/state.git?access_token={TOKEN}"
 
 
 def _answering(returncode: int = 0, stderr: str = "", *, hangs: bool = False):
@@ -1871,23 +1868,19 @@ def _answering(returncode: int = 0, stderr: str = "", *, hangs: bool = False):
     [
         ("ssh://sync-user@git.example.com:2222/owner/state.git",
          "ssh://git.example.com:2222/owner/state.git"),
-        (_TOKEN_URLS["scp-like"], "git.example.com:owner/state.git"),
-        (
-            f"https://git.example.com/owner/state.git?access_token={TOKEN}",
-            "https://git.example.com/owner/state.git",
-        ),
+        (_QUERY_TOKEN_URL, "https://git.example.com/owner/state.git"),
         ("git@git.example.com:owner/state.git", "git.example.com:owner/state.git"),
         ("https://git.example.com/owner/state.git", "https://git.example.com/owner/state.git"),
     ],
-    ids=["ssh", "scp-like", "query", "scp-user", "plain"],
+    ids=["ssh", "query", "scp-user", "plain"],
 )
 def test_a_reachable_remote_is_named_without_the_credential_its_url_carries(
     tmp_path, monkeypatch, url, shown
 ):
     """"git remote reachable: <the URL>" said Git remote URL whole, token included. The last
     case, a URL with nothing before its host, is a control: it reads as it is written. (An
-    https URL with a credential written into it, and an ssh one with a password, are refused
-    before git runs — see
+    https URL with a credential written into it, and an ssh one with a password, written as a
+    URL or scp-like, are refused before git runs — see
     ``test_an_http_url_with_a_credential_written_into_it_is_refused_without_showing_it`` and
     ``test_an_ssh_url_with_a_password_written_into_it_is_refused_without_showing_it``.)"""
     monkeypatch.setattr(GitSyncProvider, "_run", _answering(0))
@@ -1900,10 +1893,10 @@ def test_a_reachable_remote_is_named_without_the_credential_its_url_carries(
 @pytest.mark.parametrize(
     ("url", "token"),
     [
-        (_TOKEN_URLS["scp-like"], ""),
+        (_QUERY_TOKEN_URL, ""),
         ("https://git.example.com/owner/state.git", TOKEN),
     ],
-    ids=["scp-like", "access-token"],
+    ids=["in-the-query", "access-token"],
 )
 def test_the_credential_in_git_remote_url_appears_in_nothing_git_sync_says(
     tmp_path, ssh_url, monkeypatch, caplog, url, token
@@ -1912,8 +1905,8 @@ def test_the_credential_in_git_remote_url_appears_in_nothing_git_sync_says(
     listing, a read or a registry swap returns or raises — for a remote that answers, one whose
     error names the URL whole (as an older git's does), one that fails without a word (so the
     failure names its command line), one that never answers, a clone that fails, and a working
-    clone Git Sync won't sync through. The token is in the URL, or in Access token. (A URL that
-    is refused before git runs says only its refusal: see the refusal tests.)"""
+    clone Git Sync won't sync through. The token is in the URL's query, or in Access token. (A
+    URL that is refused before git runs says only its refusal: see the refusal tests.)"""
     real_run = GitSyncProvider._run
     surfaces: list[str] = []
     signs_in = {"token": token} if token else {}
@@ -2762,12 +2755,22 @@ SSH_PASS = "pc-fixture-ssh-pass-7c2a"
 
 
 def _password_refusal(url: str) -> str:
+    if "://" in url:
+        how = (
+            "git keeps it in the working clone's .git/config and hands it to ssh on its command "
+            "line, where anyone on this machine can read it, and ssh never signs in with it"
+        )
+    else:
+        how = (
+            "git keeps it in the working clone's .git/config, and it reads "
+            "user:password@host:path as a host named after the user name, so it hands the "
+            "password to ssh on its command line, where anyone on this machine can read it, to "
+            "send to that host"
+        )
     return (
-        "Git Sync won't use a password written into Git remote URL: git keeps it in the working "
-        "clone's .git/config and hands it to ssh on its command line, where anyone on this "
-        "machine can read it, and ssh never signs in with it. Take the password out of Git "
-        f"remote URL {ON_CARD}: leave the user name before the @, or nothing before the host "
-        f"({git_sync._shown(url)}), and sign in with your ssh key."
+        f"Git Sync won't use a password written into Git remote URL: {how}. Take the password out "
+        f"of Git remote URL {ON_CARD}: leave the user name before the @, or nothing before the "
+        f"host ({git_sync._shown(url)}), and sign in with your ssh key."
     )
 
 
@@ -2777,16 +2780,23 @@ def _password_refusal(url: str) -> str:
         f"ssh://{SIGN_IN}:{SSH_PASS}@git.example.com/owner/state.git",
         f"git+ssh://{SIGN_IN}:{SSH_PASS}@git.example.com:2222/owner/state.git",
         f"ssh+git://:{SSH_PASS}@git.example.com/owner/state.git",
+        f"{SIGN_IN}:{SSH_PASS}@git.example.com:owner/state.git",
+        f"{SIGN_IN}:{SSH_PASS}@git.example.com:/srv/git/state.git",
+        f":{SSH_PASS}@git.example.com:owner/state.git",
     ],
-    ids=["ssh", "git+ssh-with-a-port", "no-user-name"],
+    ids=[
+        "ssh", "git+ssh-with-a-port", "no-user-name", "scp-like", "scp-like-absolute-path",
+        "scp-like-no-user-name",
+    ],
 )
 def test_an_ssh_url_with_a_password_written_into_it_is_refused_without_showing_it(
     tmp_path, monkeypatch, caplog, url
 ):
     """git kept a password written into an ssh Git remote URL in the working clone's
-    .git/config, and handed it to ssh on its command line as part of the login name, where
-    anyone on this machine can read it and ssh never signs in with it. Refused before git runs,
-    at every entry point, as an https URL with a credential in it is."""
+    .git/config, and handed it to ssh on its command line, where anyone on this machine can read
+    it: as part of the login name, which ssh never signs in with, or, written scp-like, as part
+    of the path it asked a host named after the user name for. Refused before git runs, at every
+    entry point, as an https URL with a credential in it is."""
     started = _no_git(monkeypatch)
     p = _provider(url, tmp_path)
     says = _password_refusal(url)
@@ -2802,10 +2812,22 @@ def test_an_ssh_url_with_a_password_written_into_it_is_refused_without_showing_i
     assert not (tmp_path / "clone").exists()
 
 
-def test_an_ssh_url_with_only_a_user_name_is_not_refused(remote, tmp_path, c_locale):
-    """A control: ``ssh://user@host/…`` is how an ssh remote names its login, and nothing in it
-    is a credential."""
-    url = remote.replace("ssh://", f"ssh://{SIGN_IN}@", 1)
+def _scp_like(bare) -> str:
+    """The scp-like address, ``user@host:path``, that reaches the repository *bare* through the
+    ssh stand-in (``ssh_url``), which runs what git asks the host for on this machine."""
+    return f"{SIGN_IN}@example.invalid:{os.path.realpath(bare)}"
+
+
+@pytest.mark.parametrize("written", ["ssh", "scp-like"])
+def test_an_ssh_url_with_only_a_user_name_is_not_refused(
+    remote, tmp_path, c_locale, written
+):
+    """A control: ``ssh://user@host/…``, or ``user@host:path``, is how an ssh remote names its
+    login, and nothing in it is a credential."""
+    if written == "ssh":
+        url = remote.replace("ssh://", f"ssh://{SIGN_IN}@", 1)
+    else:
+        url = _scp_like(tmp_path / "remote.git")
 
     r = _provider(url, tmp_path).push([SyncObject("k", b"v")])
 
@@ -2814,19 +2836,28 @@ def test_an_ssh_url_with_only_a_user_name_is_not_refused(remote, tmp_path, c_loc
     assert origin == url
 
 
+@pytest.mark.parametrize("written", ["ssh", "scp-like"])
 @pytest.mark.parametrize("marked", [True, False], ids=["marked", "unmarked"])
 def test_a_clone_made_from_an_ssh_url_with_a_password_is_rewritten_without_it(
-    remote, tmp_path, c_locale, marked
+    remote, tmp_path, c_locale, marked, written
 ):
     """Git remote URL set again without the password. The clone's origin still carried it, so
     the clone read as one of another remote and was replaced, and a copy of the password in it
     was only as safe as the folder's removal. Now its origin is rewritten, every copy taken out,
-    and the clone kept."""
-    clean = remote.replace("ssh://", f"ssh://{SIGN_IN}@", 1)
-    leaky = remote.replace("ssh://", f"ssh://{SIGN_IN}:{SSH_PASS}@", 1)
+    and the clone kept. An scp-like clone is made from the address without the password and then
+    given it, as the clone of an owner who once wrote it there would hold it: git would take
+    ``user:password@host:path`` for a host named ``user``, which nothing here answers."""
     clone = tmp_path / "clone"
     mark = ["-c", f"{MARK}=true"] if marked else []
-    subprocess.run(["git", "clone", "-q", *mark, leaky, str(clone)], check=True,
+    if written == "ssh":
+        clean = remote.replace("ssh://", f"ssh://{SIGN_IN}@", 1)
+        leaky = remote.replace("ssh://", f"ssh://{SIGN_IN}:{SSH_PASS}@", 1)
+        made_from = leaky
+    else:
+        clean = _scp_like(tmp_path / "remote.git")
+        leaky = clean.replace(f"{SIGN_IN}@", f"{SIGN_IN}:{SSH_PASS}@", 1)
+        made_from = clean
+    subprocess.run(["git", "clone", "-q", *mark, made_from, str(clone)], check=True,
                    capture_output=True, timeout=60)
     (clone / "machines" / "a").mkdir(parents=True)
     (clone / "machines" / "a" / "x.jsonl").write_bytes(b"1")
@@ -2837,6 +2868,7 @@ def test_a_clone_made_from_an_ssh_url_with_a_password_is_rewritten_without_it(
         [*identity, "commit", "-qm", "sync: 1 objects"],
         ["push", "-q", "origin", "main"],
         ["fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main"],
+        ["remote", "set-url", "origin", leaky],
     ):
         subprocess.run(["git", "-C", str(clone), *step], check=True, capture_output=True,
                        timeout=60)
@@ -2923,6 +2955,49 @@ def test_a_branch_the_remote_lacks_starts_empty_on_a_git_without_switch(
     _starts_empty(tmp_path, ssh_url)
 
 
+def test_starting_a_branch_on_a_git_without_switch_removes_nothing_through_a_link(
+    tmp_path, ssh_url, monkeypatch, c_locale
+):
+    """The older way takes the files the clone came with out of its working tree by their paths
+    in git's index. A folder on the way made a link since the checkout led the removal out of the
+    clone: played by a link put in its place just before the files are taken out."""
+    bare = tmp_path / "remote.git"
+    url = ssh_url(_bare(bare))
+    seed = tmp_path / "seed"
+    subprocess.run(["git", "clone", url, str(seed)], check=True, capture_output=True, text=True)
+    (seed / "docs").mkdir()
+    (seed / "docs" / "guide.md").write_text("# a guide\n", encoding="utf-8")
+    _git(str(seed), "add", "-A")
+    _git(str(seed), "commit", "-m", "a guide")
+    _git(str(seed), "push", "-q", "origin", "HEAD:main")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "guide.md").write_text("a file of this machine's\n", encoding="utf-8")
+    clone = tmp_path / "clone"
+    real_run = GitSyncProvider._run
+
+    def _no_switch_and_a_link(self, args, check=True):
+        if git_sync._subcommand(args) == "switch":
+            return subprocess.CompletedProcess(
+                ["git", *args], 1, stdout="",
+                stderr="git: 'switch' is not a git command. See 'git --help'.",
+            )
+        ran = real_run(self, args, check=check)
+        if git_sync._subcommand(args) == "read-tree":
+            shutil.rmtree(clone / "docs")
+            (clone / "docs").symlink_to(elsewhere, target_is_directory=True)
+        return ran
+
+    monkeypatch.setattr(GitSyncProvider, "_run", _no_switch_and_a_link)
+    p = GitSyncProvider(repo_url=url, local_clone=str(clone), branch="sync")
+
+    # What the listing says of the link is another test's; this one is about what was removed.
+    with contextlib.suppress(KeysRefused, git_sync.GitSyncFailed):
+        p.list_remote()
+
+    assert (elsewhere / "guide.md").exists(), "a file outside the clone was removed through a link"
+
+
 # ── the ownership look, once per state of the clone ──────────────────────────────────────
 
 
@@ -2981,3 +3056,168 @@ def test_the_ownership_look_sees_a_new_file_and_a_config_change_without_a_new_wa
     assert p._standing() == "replace"
 
     assert len(walks) == 1, walks
+
+
+# ── a key that leaves the working clone ──────────────────────────────────────────────────
+#
+# git checks out a link another machine committed as a link, to any file on this machine. A key
+# was joined onto the clone and opened as it came, following whatever was there: a link another
+# machine committed read a file of this machine's as that machine's object, a registry that is a
+# link had the swap written over the file it names, a folder on the way that is a link took this
+# machine's objects anywhere its user may write, and a key with ``../`` in it read or wrote
+# anywhere at all.
+
+#: A file of this machine's, outside the working clone.
+OUTSIDE = b"a file of this machine's, outside the working clone\n"
+NOT_A_PATH = "is not a path a sync may use in the working clone"
+LEADS_OUT = "leads out of the working clone through a link"
+A_LINK = "is a link in the working clone, which Git Sync doesn't follow"
+PEERS = "machines/b/seq-0001/"
+
+
+@pytest.fixture
+def outside(tmp_path):
+    """A file of this machine's and a folder, beside the working clone, outside it."""
+    (tmp_path / "outside.txt").write_bytes(OUTSIDE)
+    (tmp_path / "elsewhere").mkdir()
+    return tmp_path
+
+
+def _a_peer_commits(remote: str, tmp_path, links: dict[str, Path]) -> None:
+    """Another machine's commit on the remote's main, as its Git Sync makes one: one object of
+    its own, and a link at each of *links*, to where it names."""
+    peer = tmp_path / "peer"
+    subprocess.run(["git", "clone", "-q", remote, str(peer)], check=True, capture_output=True,
+                   timeout=60)
+    (peer / "machines" / "b").mkdir(parents=True, exist_ok=True)
+    (peer / "machines" / "b" / "own.jsonl").write_bytes(b"b's own\n")
+    for rel, target in links.items():
+        path = peer.joinpath(*rel.split("/"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.symlink_to(target)
+    identity = ["-c", "user.name=PersonalClaw Sync", "-c", "user.email=sync@personalclaw.local"]
+    for step in (
+        ["checkout", "-q", "-B", "main"],
+        ["add", "-A"],
+        [*identity, "commit", "-qm", "sync: peer"],
+        ["push", "-q", "origin", "main"],
+    ):
+        subprocess.run(["git", "-C", str(peer), *step], check=True, capture_output=True,
+                       timeout=60)
+
+
+def _cloned(p: GitSyncProvider) -> GitSyncProvider:
+    """*p*, once its working clone is made and caught up: a read never makes one, so a read of a
+    transport that hasn't listed yet reads nothing at all. Listed where no link is."""
+    assert [ref.key for ref in p.list_remote("machines/b/own")] == ["machines/b/own.jsonl"]
+    return p
+
+
+def _keys_refused(call) -> dict[str, str]:
+    """What *call* refused (``KeysRefused.refused``); fails when it refused nothing."""
+    with pytest.raises(KeysRefused) as refusal:
+        call()
+    assert OUTSIDE.decode().strip() not in str(refusal.value)
+    return refusal.value.refused
+
+
+def test_a_link_another_machine_committed_is_not_read(remote, outside, c_locale):
+    key = f"{PEERS}tasks/entities.jsonl"
+    _a_peer_commits(remote, outside, {key: outside / "outside.txt"})
+    p = _provider(remote, outside)
+
+    assert _keys_refused(lambda: p.list_remote(PEERS)) == {key: A_LINK}
+    assert (outside / "clone" / PEERS / "tasks" / "entities.jsonl").is_symlink(), (
+        "the catch-up never checked the link out: the refusals are vacuous"
+    )
+    assert _keys_refused(lambda: p.pull([RemoteRef(key)])) == {key: LEADS_OUT}
+
+
+def test_a_committed_link_to_a_file_inside_the_clone_is_not_followed_either(
+    remote, outside, c_locale
+):
+    key = f"{PEERS}x.jsonl"
+    _a_peer_commits(remote, outside, {key: Path("..") / ".." / "b" / "own.jsonl"})
+    p = _cloned(_provider(remote, outside))
+
+    assert _keys_refused(lambda: p.pull([RemoteRef(key)])) == {key: A_LINK}
+
+
+def test_a_folder_on_the_way_that_is_a_committed_link_is_refused(remote, outside, c_locale):
+    _a_peer_commits(remote, outside, {"machines/c": outside / "elsewhere"})
+    p = _provider(remote, outside)
+
+    assert _keys_refused(lambda: p.list_remote("machines/c/seq-0001/")) == {"machines/c": A_LINK}
+    assert [r.key for r in p.list_remote("machines/b/")] == ["machines/b/own.jsonl"], (
+        "a listing elsewhere is held up by the link"
+    )
+
+
+def test_a_push_through_a_committed_link_writes_nothing_outside(remote, outside, c_locale):
+    key = "machines/a/seq-0001/x.jsonl"
+    _a_peer_commits(remote, outside, {"machines/a": outside / "elsewhere"})
+    p = _provider(remote, outside)
+    before = _refs(outside / "remote.git")
+
+    assert _keys_refused(lambda: p.push([SyncObject(key, b"mine")])) == {key: LEADS_OUT}
+    assert list((outside / "elsewhere").iterdir()) == [], "an object was written through it"
+    assert _refs(outside / "remote.git") == before, "a refused push reached the remote"
+
+
+def test_a_registry_that_is_a_committed_link_is_neither_read_nor_swapped(
+    remote, outside, c_locale
+):
+    _a_peer_commits(remote, outside, {"registry.json": outside / "outside.txt"})
+    p = _provider(remote, outside)
+
+    assert _keys_refused(lambda: p.cas_registry(_sha(OUTSIDE), b"{}")) == {
+        "registry.json": LEADS_OUT
+    }
+    assert (outside / "outside.txt").read_bytes() == OUTSIDE, "the swap wrote over the file"
+
+
+def test_a_key_that_climbs_out_of_the_clone_is_neither_read_nor_written(
+    remote, outside, c_locale
+):
+    p = _provider(remote, outside)
+    assert p.push([SyncObject("machines/a/seq-0001/x.jsonl", b"1")]).outcome == "delivered"
+
+    assert _keys_refused(lambda: p.pull([RemoteRef("../outside.txt")])) == {
+        "../outside.txt": NOT_A_PATH
+    }
+    assert _keys_refused(lambda: p.push([SyncObject("../planted.txt", b"x")])) == {
+        "../planted.txt": NOT_A_PATH
+    }
+    assert not (outside / "planted.txt").exists()
+
+
+def test_a_link_made_after_the_key_was_looked_at_is_not_followed(
+    remote, outside, c_locale, monkeypatch
+):
+    """The key is looked at, then opened: a link put there in between is still not followed.
+    Played by a look that finds nothing wrong with it."""
+    read, written = f"{PEERS}x.jsonl", "machines/a/seq-0001/x.jsonl"
+    links = {read: outside / "outside.txt", written: outside / "planted.txt"}
+    _a_peer_commits(remote, outside, links)
+    monkeypatch.setattr(
+        GitSyncProvider, "_path", lambda self, k: (os.path.join(self._clone, *k.split("/")), "")
+    )
+    p = _cloned(_provider(remote, outside))
+
+    assert _keys_refused(lambda: p.pull([RemoteRef(read)])) == {read: A_LINK}
+    assert _keys_refused(lambda: p.push([SyncObject(written, b"mine")])) == {written: A_LINK}
+    assert not (outside / "planted.txt").exists(), "the push wrote through the link"
+
+
+def test_the_refusal_says_which_key_why_and_what_to_do(remote, outside, c_locale):
+    key = f"{PEERS}tasks/entities.jsonl"
+    _a_peer_commits(remote, outside, {key: outside / "outside.txt"})
+
+    with pytest.raises(KeysRefused) as refusal:
+        _cloned(_provider(remote, outside)).pull([RemoteRef(key)])
+
+    assert str(refusal.value) == (
+        f"Git Sync won't read a key in {outside / 'clone'}: {key} {LEADS_OUT}. Remove the link "
+        "from the git remote's branch: git checks it out as a link, and Git Sync follows none "
+        "out of the clone."
+    )
