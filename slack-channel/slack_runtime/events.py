@@ -107,6 +107,21 @@ class SocketModeReceiver(WSSocketModeClient):
             raise
         self.connect_error = ""
 
+    async def close(self) -> None:
+        """Stop reading the socket, then close it.
+
+        The SDK closes the socket first and cancels the task reading it after, so that task woke to
+        the orderly close (``sent 1000 (OK); then received 1000 (OK)``) and logged it as an ERROR,
+        "Failed to receive or enqueue a message", on every stop and restart of the gateway.
+        """
+        self.closed = True
+        self.auto_reconnect_enabled = False
+        readers = [t for t in (self.message_receiver, self.current_session_monitor) if t is not None]
+        for task in readers:
+            task.cancel()
+        await asyncio.gather(*readers, return_exceptions=True)
+        await super().close()
+
 
 _skills_loader: SkillsLoader | None = None
 
