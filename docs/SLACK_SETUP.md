@@ -87,9 +87,9 @@ Key settings (Configure form):
 
 | Setting | Meaning |
 |---|---|
-| `tracking_channels` | Channels the bot monitors (`{channel_id, name}` entries). |
+| `tracking_channels` | Channels the bot monitors: a row per channel, its channel ID with a name to know it by. |
 | `open_channels` | Channel IDs where ALL users may interact without the allowlist. |
-| `allowed_users` | Users allowed to interact (`{slack_id, name}`). |
+| `allowed_users` | Users allowed to interact: a row per person, their Slack member ID with a name to know them by. |
 | `dm_activation` | DM response mode: `always` (default) / `mention` / `observe` / `review` / `off`. |
 | `channels` | Per-channel overrides: `{channel_id: {activation, agent}}`. |
 | `command` | The slash-command trigger word (default `personalclaw`). |

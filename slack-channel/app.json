@@ -1,6 +1,6 @@
 {
   "name": "slack-channel",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "displayName": "Slack Channel",
   "description": "Slack workspace integration. Monitor channels, respond to mentions, and interact via Slack.",
   "icon": "Slack",
@@ -57,22 +57,76 @@
         "allowed_users": {
           "type": "array",
           "default": [],
+          "items": {
+            "type": "object",
+            "properties": {
+              "slack_id": {
+                "type": "string",
+                "x-meta": {
+                  "label": "Slack member ID",
+                  "placeholder": "U0123456789"
+                }
+              },
+              "name": {
+                "type": "string",
+                "x-meta": {
+                  "label": "Name"
+                }
+              }
+            },
+            "required": [
+              "slack_id"
+            ],
+            "x-meta": {
+              "label": "user"
+            }
+          },
           "x-meta": {
             "label": "Allowed Users",
-            "help": "Slack users allowed to interact. Each entry: {slack_id, name}."
+            "help": "Slack users allowed to interact, each by member ID, with a name to know them by."
           }
         },
         "tracking_channels": {
           "type": "array",
           "default": [],
+          "items": {
+            "type": "object",
+            "properties": {
+              "channel_id": {
+                "type": "string",
+                "x-meta": {
+                  "label": "Channel ID",
+                  "placeholder": "C0123456789"
+                }
+              },
+              "name": {
+                "type": "string",
+                "x-meta": {
+                  "label": "Name"
+                }
+              }
+            },
+            "required": [
+              "channel_id"
+            ],
+            "x-meta": {
+              "label": "channel"
+            }
+          },
           "x-meta": {
             "label": "Tracking Channels",
-            "help": "Slack channels to monitor. Each entry: {channel_id, name}."
+            "help": "Slack channels to monitor, each by channel ID, with a name to know it by."
           }
         },
         "open_channels": {
           "type": "array",
           "default": [],
+          "items": {
+            "type": "string",
+            "x-meta": {
+              "placeholder": "C0123456789"
+            }
+          },
           "x-meta": {
             "label": "Open Channels",
             "help": "Channel IDs where all users are authorized without allowlist."
@@ -89,6 +143,12 @@
         "trusted_bot_ids": {
           "type": "array",
           "default": [],
+          "items": {
+            "type": "string",
+            "x-meta": {
+              "placeholder": "B0123456789"
+            }
+          },
           "x-meta": {
             "label": "Trusted Bot IDs",
             "help": "Bot IDs allowed to bypass the bot filter for multi-node mesh."
@@ -97,6 +157,12 @@
         "allowed_enterprise_ids": {
           "type": "array",
           "default": [],
+          "items": {
+            "type": "string",
+            "x-meta": {
+              "placeholder": "E0123456789"
+            }
+          },
           "x-meta": {
             "label": "Allowed Enterprise IDs",
             "help": "Slack Enterprise Grid org IDs to allow for workspace validation."

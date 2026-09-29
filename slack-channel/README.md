@@ -110,7 +110,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 |---|---|---|
 | `bot_token` | Bot Token | Slack Bot User OAuth Token (xoxb-...). Outbound only needs this one. |
 | `app_token` | App Token | Slack App-Level Token for Socket Mode (xapp-...). **Inbound needs both.** |
-| `allowed_users` | Allowed Users | Who may talk to the bot, besides the owner: `{slack_id, name}` per entry. Empty means owner-only; with no owner set either, nobody is authorized. |
+| `allowed_users` | Allowed Users | Who may talk to the bot, besides the owner: one row per person, with their Slack member ID and a name to know them by. Empty means owner-only; with no owner set either, nobody is authorized. |
 
 Both tokens are **write-only**: once saved, the form shows `••••••••` and the value never
 leaves the gateway. Saving other fields keeps the stored tokens; typing a new value
