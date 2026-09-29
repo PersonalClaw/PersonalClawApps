@@ -131,6 +131,10 @@ jobs:
         # conftest.py gives every test's git no system or global configuration and an empty
         # credential.helper, and refuses a git that could still sign in with the machine's helper.
         run: python -m pytest .github/tests/test_no_test_git_reaches_the_machines_credential_helper.py -q
+      - name: No test's model library writes outside its home or reports on its use
+        # conftest.py tells the libraries a model app's tests load what every personalclaw
+        # command tells them, before anything is collected.
+        run: python -m pytest .github/tests/test_the_libraries_a_test_loads_stay_inside_the_home.py -q
       - name: The publication-hygiene rail reds on a planted defect
         # Drives the rail's own script against seeded repos: one control per rule and field.
         run: python -m pytest .github/tests/test_publication_hygiene.py -q

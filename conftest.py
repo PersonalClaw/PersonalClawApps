@@ -14,7 +14,9 @@ the home. One home shared by the whole session is not enough: ``spec-builder``'s
 ``test_doctor_counts_an_unreadable_record`` isolates itself with a ``Path.home`` patch, which a
 set ``PERSONALCLAW_HOME`` overrides, and it failed on files an earlier test had left in the
 shared home (core rejected a global home for its suite for the same reason). A bundle's
-own per-test home still wins inside its test.
+own per-test home still wins inside its test. A test that takes the home away, to see what the
+default is, resolves ``~/.personalclaw`` under the real ``HOME``, and core makes it: the test
+during which the real one appears fails by name.
 
 The OS keychain is kept out as well: core reads it, and an uninstall's purge deletes from it,
 whenever ``keyring`` is importable, and one keychain serves every home on the machine. The switch
@@ -37,8 +39,17 @@ with a helper of the machine's own is refused before it starts, and the test tha
 by name (``refuse_git_helpers``, the guard core's own suite installs). Core's git reads the same
 files; a core whose git would still name the machine's helper stops the run.
 
-All three guards are core's. A bare environment without core installs none of them: nothing
-there reads a keychain, and every test here that signs git in needs core to run at all.
+And so are the libraries a model app's tests load. Some write outside any home by themselves, or
+report on their use to the people who make them: loading onnxruntime (``rapidocr``'s tests load it
+for real) starts its maker's telemetry, a device identifier and a queue of events about the
+machine kept under the real ``HOME``, and huggingface_hub keeps a list it fetches in the Hugging
+Face folder other tools share. Every ``personalclaw`` command tells each library not to with its
+own setting, and so does this file, before anything is collected
+(``personalclaw.sdk.testing.library_env``), so a test loads them the way PersonalClaw does. A core
+without that switch stops the run.
+
+All four are core's. A bare environment without core installs none of them: nothing there reads a
+keychain, and every test here that signs git in needs core to run at all.
 
 ``pytest.ini`` beside this file makes pytest load it however it is started, including by core's
 quality verifier, which runs each bundle with the bundle as its working directory.
@@ -71,6 +82,8 @@ LOCAL_MODEL_PORTS = frozenset({11434, 8000, 8188})
 #: The home of whoever runs the tests, read before any test can point ``HOME`` elsewhere: its
 #: ``~/.gitconfig`` is theirs.
 REAL_HOME = os.path.realpath(os.path.expanduser("~"))
+#: The PersonalClaw home core resolves when nothing names one: theirs too, so no test makes it.
+DEFAULT_HOME = Path(REAL_HOME) / ".personalclaw"
 
 #: A remote no git in the check below reaches: nothing is started for it.
 _NOWHERE = "https://example.invalid/state.git"
@@ -84,6 +97,7 @@ def pytest_configure(config):
         from personalclaw.sdk.git import git_argv, git_env
         from personalclaw.sdk.testing import (
             keychain_off,
+            library_env,
             neutral_git_env,
             refuse_git_helpers,
             refuse_ports,
@@ -95,6 +109,8 @@ def pytest_configure(config):
         # there reads a keychain, and every test here that signs git in needs core to run at all.
         return
     for name, value in neutral_git_env(base / "collect.gitconfig").items():
+        _patch.setenv(name, value)
+    for name, value in library_env().items():
         _patch.setenv(name, value)
     git = refuse_git_helpers(real_home=REAL_HOME, own=[str(base), str(ROOT)])
     _git_guards.append(git)
@@ -144,6 +160,25 @@ def _no_test_signs_git_in_with_the_machines_helper():
                 "own in the file GIT_CONFIG_GLOBAL names.",
                 pytrace=False,
             )
+
+
+@pytest.fixture(autouse=True)
+def _no_test_makes_the_default_home():
+    """Fail the test during which the real ``~/.personalclaw`` appeared. Core makes the home the
+    first time it resolves it, so a test that takes this file's home away, to see what the
+    default is, makes the real one unless its ``HOME`` is a folder of its own too: two did, and
+    every run left an empty real home behind. A child process the test started may have made it,
+    or a process outside this run. The folder is left as it was found."""
+    there = os.path.lexists(DEFAULT_HOME)
+    yield
+    if not there and os.path.lexists(DEFAULT_HOME):
+        pytest.fail(
+            f"{DEFAULT_HOME} did not exist as this test started, and it does now: the test, or a "
+            "process it started, resolved the default home under the real HOME (unless a process "
+            "outside this run made it). Point HOME at a folder of the test's own before taking "
+            "PERSONALCLAW_HOME away (conftest.py). The folder is left as it was found.",
+            pytrace=False,
+        )
 
 
 @pytest.fixture(autouse=True)

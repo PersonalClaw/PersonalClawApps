@@ -15,6 +15,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from personalclaw.sdk.availability import missing_modules
 from personalclaw.sdk.diarization import (
     DiarizationModel,
     DiarizationProvider,
@@ -41,6 +42,11 @@ _EMB_URL = ("https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-rec
 _SEG_REL = Path("sherpa-onnx-pyannote-segmentation-3-0") / "model.onnx"
 _EMB_REL = Path("embed.onnx")
 
+#: What the pipeline runs on: each module, by the package that installs it. sherpa-onnx carries
+#: an ONNX Runtime build of its own, so the ``onnxruntime`` package is neither declared nor
+#: loaded: loading it started its maker's telemetry, a device identifier kept in the user's home.
+_RUNTIME = {"sherpa_onnx": "sherpa-onnx", "soundfile": "soundfile"}
+
 
 def _models_dir() -> Path:
     """Where the pair is downloaded to and read from: the PersonalClaw home
@@ -63,15 +69,17 @@ def create_provider(config: dict[str, Any] | None = None) -> "OnnxDiarizationPro
 
 
 def availability() -> tuple[bool, str]:
-    """Whether ONNX diarization can run here (needs onnxruntime + sherpa-onnx + soundfile)."""
-    try:
-        import onnxruntime  # noqa: F401
-        import sherpa_onnx  # noqa: F401
-        import soundfile  # noqa: F401
+    """Whether ONNX diarization can run here: sherpa-onnx and soundfile are installed. Found
+    without importing either, as the SDK's availability contract asks: an import runs the
+    library, and this is asked on every Models page."""
+    missing = [_RUNTIME[module] for module in missing_modules(*_RUNTIME)]
+    if not missing:
         return True, ""
-    except ImportError:
-        return False, ("ONNX diarization needs personalclaw[diarization-onnx] "
-                       "(onnxruntime + sherpa-onnx + soundfile) — server/container build.")
+    ships = "ships" if len(missing) == 1 else "ship"
+    return False, (
+        f"ONNX diarization needs {' and '.join(missing)}, which {ships} with this app, not with "
+        "PersonalClaw itself. Reinstall Diarization (ONNX) from the Store."
+    )
 
 
 def _downloaded() -> bool:

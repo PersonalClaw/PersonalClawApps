@@ -90,11 +90,14 @@ def test_write_root_is_under_personalclaw_home(monkeypatch, tmp_path):
     assert Path(prov.create_provider({}).cache_dir()) == root
 
 
-def test_write_root_defaults_to_dot_personalclaw_not_dot_cache(monkeypatch):
+def test_write_root_defaults_to_dot_personalclaw_not_dot_cache(monkeypatch, tmp_path):
     """Unset, the root is the default home, ``~/.personalclaw``, NOT the host's ``~/.cache``,
-    which is what this app used to fall back to and is why an isolated home leaked."""
+    which is what this app used to fall back to and is why an isolated home leaked. The ``~`` is
+    this test's own: core makes the home as it resolves it, and this made the real one."""
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("PERSONALCLAW_HOME", raising=False)
     root = prov._models_dir()
+    assert Path.home() == tmp_path, "control: the default home is resolved under this HOME"
     assert Path.home() / ".personalclaw" in root.parents
     assert Path.home() / ".cache" not in root.parents
 

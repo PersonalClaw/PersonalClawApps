@@ -170,6 +170,10 @@ _ROLE_OPERATIONS = frozenset({"AssumeRole", "AssumeRoleWithWebIdentity", "Assume
 #: Advanced disclosure, so a step that names it says so.
 _ON_INSTANCE = "on this Amazon Bedrock instance in Settings → Providers"
 _SET_PROFILE = f"set AWS Profile {_ON_INSTANCE} (under Advanced)"
+#: How a sentence ends when nothing here recognised the failure: the rest of it is in the gateway
+#: log, so :func:`_warn_once` puts the traceback there. A sentence that names the cause and the
+#: fix never says it.
+_SEE_THE_LOG = "Try again; if it keeps failing, check the gateway log."
 
 
 def _aws_error_code(error: Exception) -> str:
@@ -1415,10 +1419,7 @@ def _discovery_failure(error: Exception, *, region: str, profile: str | None) ->
             "try again."
         )
     else:
-        sentence = (
-            f"No model list came back from Amazon Bedrock in {region}. Try again; if it keeps "
-            "failing, check the gateway log."
-        )
+        sentence = f"No model list came back from Amazon Bedrock in {region}. {_SEE_THE_LOG}"
     return ModelDiscoveryError(sentence_with_detail(sentence, error))
 
 
@@ -1641,9 +1642,7 @@ async def _creds_problem(region: str, profile: str | None) -> str:
             problem = _aws_setup_problem(exc, region=region, profile=profile)
             if problem is None:
                 problem = sentence_with_detail(
-                    "Amazon Bedrock couldn't check its AWS credentials. Try again; if it keeps "
-                    "failing, check the gateway log.",
-                    exc,
+                    f"Amazon Bedrock couldn't check its AWS credentials. {_SEE_THE_LOG}", exc
                 )
                 _warn_once("Checking the AWS credentials", problem, exc)
             return problem
@@ -1677,9 +1676,7 @@ def _media_failure(
     friendly = _friendly_bedrock_error(error, model_id, region=region, profile=profile)
     if friendly is not error:
         return str(friendly)
-    return sentence_with_detail(
-        f"Bedrock {what} failed. Try again; if it keeps failing, check the gateway log.", error
-    )
+    return sentence_with_detail(f"Bedrock {what} failed. {_SEE_THE_LOG}", error)
 
 
 def _needs_bucket(purpose: str) -> str:
@@ -1700,21 +1697,22 @@ _STT_NEEDS_BUCKET = (
 
 #: When each failure was last logged at WARNING, by what failed and the sentence saying why. A
 #: failure repeats with every call that meets it (the Models page lists models on every read), so
-#: the gateway log says it once every ``_WARN_EVERY`` seconds, with its traceback, and at DEBUG in
-#: between.
+#: the gateway log says it once every ``_WARN_EVERY`` seconds, and at DEBUG in between.
 _WARNED_AT: dict[tuple[str, str], float] = {}
 _WARN_EVERY = 300.0
 
 
 def _warn_once(what: str, sentence: str, error: BaseException) -> None:
-    """Log that ``what`` failed: ``sentence``, then ``error``'s traceback, redacted as the
-    sentence's detail is, since what a credential command printed is in it. At WARNING the first
-    time in ``_WARN_EVERY`` seconds, else at DEBUG. The sentence's own words, not its SDK detail,
-    are what makes it the same failure."""
-    import traceback  # noqa: PLC0415 — failure path only
+    """Log that ``what`` failed: ``sentence``, at WARNING the first time in ``_WARN_EVERY``
+    seconds, else at DEBUG. The sentence's own words, not its SDK detail, are what makes it the
+    same failure.
 
-    from personalclaw.sdk.channel import redact_credentials  # noqa: PLC0415
-
+    A sentence that names the cause and the fix (no AWS credentials, a permission the identity
+    lacks, a bucket that isn't there) is the whole of it: one line. The traceback of a condition
+    this app recognises says nothing the sentence does not, and it buried that sentence under
+    sixty lines of botocore. A sentence that could name no cause sends the reader to the gateway
+    log (:data:`_SEE_THE_LOG`), so ``error``'s traceback follows it there, redacted as the
+    sentence's detail is, since what a credential command printed is in it."""
     key = (what, sentence.split(" Details: ", 1)[0])
     now = _time.monotonic()
     at = _WARNED_AT.get(key)
@@ -1723,8 +1721,15 @@ def _warn_once(what: str, sentence: str, error: BaseException) -> None:
         if len(_WARNED_AT) > 64:
             _WARNED_AT.clear()
         _WARNED_AT[key] = now
-    trace, _ = redact_credentials("".join(traceback.format_exception(error)).rstrip())
     level = logging.DEBUG if repeat else logging.WARNING
+    if _SEE_THE_LOG not in sentence:
+        logger.log(level, "%s failed: %s", what, sentence)
+        return
+    import traceback  # noqa: PLC0415 — failure path only
+
+    from personalclaw.sdk.channel import redact_credentials  # noqa: PLC0415
+
+    trace, _ = redact_credentials("".join(traceback.format_exception(error)).rstrip())
     logger.log(level, "%s failed: %s\n%s", what, sentence, trace)
 
 
@@ -2311,10 +2316,7 @@ def _stt_failure(error: Exception, *, bucket: str, region: str, profile: str | N
             "again."
         )
     else:
-        sentence = (
-            "Amazon Transcribe couldn't transcribe this audio. Try again; if it keeps failing, "
-            "check the gateway log."
-        )
+        sentence = f"Amazon Transcribe couldn't transcribe this audio. {_SEE_THE_LOG}"
     return sentence_with_detail(sentence, error)
 
 

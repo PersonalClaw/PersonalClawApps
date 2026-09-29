@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,12 @@ from personalclaw.sdk.model import ProviderResolutionError, require_model
 from personalclaw.sdk.util import config_dir
 
 logger = logging.getLogger(__name__)
+
+#: pyannote.audio (from 4.0) reports each model and pipeline it loads, and each file it diarizes
+#: (how long it is, how many speakers), to its makers unless this says otherwise. It reads the
+#: setting at every report, and turns it on as it loads when nothing has set it, so it is set here,
+#: before the library can load, and over an inherited value: PersonalClaw sends no telemetry.
+os.environ["PYANNOTE_METRICS_ENABLED"] = "false"
 
 _MODEL = "pyannote/speaker-diarization-3.1"
 

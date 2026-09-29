@@ -23,6 +23,33 @@ def _no_ambient_hf_token(monkeypatch):
     monkeypatch.setattr(P, "resolve_token", lambda: "")
 
 
+def test_loading_the_app_turns_pyannotes_usage_reports_off(tmp_path):
+    """pyannote.audio (from 4.0) reports each pipeline it loads and each file it diarizes to its
+    makers unless ``PYANNOTE_METRICS_ENABLED`` says otherwise; it counts ``true`` and ``1`` as on,
+    and reads the setting at every report. Loading the app sets it off, in a fresh process, over
+    an inherited on."""
+    import os
+    import subprocess
+    import sys
+
+    env = {
+        **os.environ,
+        "PYANNOTE_METRICS_ENABLED": "true",
+        "PERSONALCLAW_HOME": str(tmp_path / "home"),
+    }
+    done = subprocess.run(
+        [sys.executable, "-c", "import os, provider; print(os.environ['PYANNOTE_METRICS_ENABLED'])"],
+        cwd=Path(__file__).parent,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+    )
+
+    assert done.stdout.strip().splitlines()[-1] == "false"
+
+
 def test_hf_token_delegates_to_the_shared_cascade(monkeypatch):
     """With no app-level setting, the token comes from the shared SDK cascade.
 

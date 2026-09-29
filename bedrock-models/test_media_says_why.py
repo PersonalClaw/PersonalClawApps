@@ -323,7 +323,11 @@ def test_a_refused_call_names_its_fix(aws_stt, caplog, where, refusal, said):
     ]
     assert [r.getMessage().split("\n", 1)[0] for r in warned] == [
         f"Amazon Transcribe on 'my-bedrock' failed: {failed.value}"
-    ], "said once, with its traceback after it"
+    ], "said once"
+    # A refusal the sentence names the fix of is that one line; one it could not name sends the
+    # reader to the gateway log, where its traceback is.
+    sends_to_the_log = "check the gateway log" in str(failed.value)
+    assert ("\nTraceback (most recent call last):" in warned[0].getMessage()) is sends_to_the_log
 
 
 def test_a_refusal_that_names_no_action_names_every_one_speech_to_text_needs():

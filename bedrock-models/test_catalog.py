@@ -216,6 +216,40 @@ def test_a_listing_that_fails_is_logged_once_with_its_traceback(monkeypatch, cap
     assert "AKIA" not in trace, "the traceback is redacted as the detail is"
 
 
+def test_a_listing_with_no_aws_credentials_is_logged_as_one_line(monkeypatch, caplog):
+    """No AWS credentials is a condition this app recognises, and its sentence names the fix. The
+    log says that sentence and nothing after it: botocore's traceback of a missing credential said
+    nothing the sentence did not, in sixty lines under it."""
+    import logging
+
+    from botocore import exceptions as aws_errors
+
+    def _unsigned(region, profile):
+        raise aws_errors.NoCredentialsError()
+
+    monkeypatch.setattr(prov, "_list_bedrock_models_sync", _unsigned)
+    monkeypatch.setattr(prov, "_WARNED_AT", {})
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_PROFILE", raising=False)
+    caplog.set_level(logging.DEBUG, logger="bedrock_models")
+
+    with pytest.raises(prov.ModelDiscoveryError):
+        _run(_list(region="us-east-1"))
+
+    said = [
+        r for r in caplog.records if r.name == "bedrock_models" and r.levelno >= logging.WARNING
+    ]
+    assert [r.getMessage() for r in said] == [
+        "Listing Amazon Bedrock's models failed: No AWS credentials were found: this Amazon "
+        "Bedrock instance names no AWS profile, and the default credential chain has none. Sign "
+        "in with your AWS tool (for example `aws sso login`, or `aws configure` to enter access "
+        "keys), then try again, or set AWS Profile on this Amazon Bedrock instance in Settings → "
+        "Providers (under Advanced) to a profile that has credentials. Details: Unable to locate "
+        "credentials"
+    ]
+    assert said[0].exc_info is None, "no traceback rides on the record either"
+
+
 def test_an_instance_that_names_no_region_uses_one_region_for_everything(monkeypatch):
     """Chat and the media calls went to us-west-2 while the model list came from us-east-1, so a
     listed model could be one the call's own region does not serve."""

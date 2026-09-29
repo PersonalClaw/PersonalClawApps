@@ -43,6 +43,54 @@ def test_create_provider():
     assert p.name == "diarization-onnx" and p.display_name
 
 
+def test_asking_whether_it_can_run_loads_no_library(monkeypatch):
+    """Binding the diarization model asks this, and asking used to import onnxruntime, sherpa-onnx
+    and soundfile. onnxruntime runs nothing here (sherpa-onnx carries an ONNX Runtime of its own),
+    and loading it started its maker's telemetry: a device identifier left in the user's home."""
+    import sys
+
+    runtimes = ("onnxruntime", "sherpa_onnx", "soundfile")
+    for name in runtimes:
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    P.availability()
+
+    assert [name for name in runtimes if name in sys.modules] == [], "the check loaded a library"
+
+
+def test_a_missing_package_is_named_with_the_way_to_get_it(monkeypatch):
+    """Found missing without importing anything (a module ``None`` in ``sys.modules`` is one the
+    import system reports absent). The packages ship with this app, so the fix is its reinstall."""
+    import importlib.machinery
+    import sys
+    import types
+
+    present = types.ModuleType("soundfile")
+    present.__spec__ = importlib.machinery.ModuleSpec("soundfile", None)
+    monkeypatch.setitem(sys.modules, "soundfile", present)
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", None)
+
+    assert P.availability() == (
+        False,
+        "ONNX diarization needs sherpa-onnx, which ships with this app, not with PersonalClaw "
+        "itself. Reinstall Diarization (ONNX) from the Store.",
+    )
+
+    monkeypatch.setitem(sys.modules, "soundfile", None)
+    assert P.availability()[1].startswith("ONNX diarization needs sherpa-onnx and soundfile, which ship")
+
+
+def test_it_declares_no_runtime_it_does_not_run():
+    """The install's consent lists what the app installs: onnxruntime is not among what it runs."""
+    import json
+
+    manifest = json.loads((Path(__file__).parent / "app.json").read_text(encoding="utf-8"))
+
+    declared = [d.split(">")[0].split("=")[0] for d in manifest["dependencies"]["pythonDependencies"]]
+    assert "onnxruntime" not in declared, declared
+    assert {"sherpa-onnx", "soundfile"} <= set(declared), declared
+
+
 @pytest.mark.asyncio
 async def test_catalog_single_nongated_model():
     models = await P.create_provider({}).list_models()
@@ -113,11 +161,14 @@ def test_write_root_is_under_personalclaw_home(monkeypatch, tmp_path):
     assert Path(P.create_provider({}).cache_dir()) == root
 
 
-def test_write_root_defaults_to_dot_personalclaw_not_dot_cache(monkeypatch):
+def test_write_root_defaults_to_dot_personalclaw_not_dot_cache(monkeypatch, tmp_path):
     """Unset, the root is the default home, ``~/.personalclaw``, NOT the host's ``~/.cache``,
-    which is what this app used to fall back to and is why an isolated home leaked."""
+    which is what this app used to fall back to and is why an isolated home leaked. The ``~`` is
+    this test's own: core makes the home as it resolves it, and this made the real one."""
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("PERSONALCLAW_HOME", raising=False)
     root = P._models_dir()
+    assert Path.home() == tmp_path, "control: the default home is resolved under this HOME"
     assert Path.home() / ".personalclaw" in root.parents
     assert Path.home() / ".cache" not in root.parents
 
