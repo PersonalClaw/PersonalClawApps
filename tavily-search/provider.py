@@ -89,7 +89,13 @@ class TavilyProvider(SearchProvider):
     ) -> SearchResult:
         import json
 
-        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, egress_policy_for, fetch
+        from personalclaw.sdk.net import (
+            CONNECTOR,
+            EgressBlocked,
+            egress_policy_for,
+            egress_refusal,
+            fetch,
+        )
 
         if not self._api_key:
             raise RuntimeError(
@@ -124,7 +130,7 @@ class TavilyProvider(SearchProvider):
                 data=json.dumps(body).encode(),
             )
         except EgressBlocked as e:
-            raise RuntimeError(f"Tavily search blocked by egress guard: {e}") from e
+            raise RuntimeError(egress_refusal(f"{_API}/search", e.decision)) from e
         if resp.status != 200:
             raise RuntimeError(_refusal(resp.status))
         data = json.loads(resp.text)
@@ -152,7 +158,7 @@ class TavilyProvider(SearchProvider):
     async def fetch(self, url: str, *, max_tokens: int = 0, start_index: int = 0) -> FetchResult:
         import json
 
-        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, egress_policy_for
+        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, egress_policy_for, egress_refusal
         from personalclaw.sdk.net import fetch as net_fetch
 
         if not self._api_key:
@@ -168,7 +174,7 @@ class TavilyProvider(SearchProvider):
                 data=json.dumps({"urls": [url]}).encode(),
             )
         except EgressBlocked as e:
-            raise RuntimeError(f"Tavily extract blocked by egress guard: {e}") from e
+            raise RuntimeError(egress_refusal(f"{_API}/extract", e.decision)) from e
         if resp.status != 200:
             raise RuntimeError(_refusal(resp.status, "extract the page"))
         data = json.loads(resp.text)

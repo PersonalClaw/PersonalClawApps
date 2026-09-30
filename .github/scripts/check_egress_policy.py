@@ -25,9 +25,14 @@ where its policy comes from:
   the rail until it is; a stale entry fails it too;
 * anything the reader cannot place fails the rail by name.
 
+The check itself can fail too. A synchronous surface asks ``evaluate`` and then makes its own
+request, so a handler around that ``evaluate`` which lets the code go on (``except Exception:
+pass``) sends the request the check never judged. Every handler of a ``try`` that holds an
+``evaluate`` must leave: end in ``raise``, or ``return`` without the request.
+
 **Vacuity floor.** A rail that matches nothing reads as clean, so the reader is checked against the
-shapes it tells apart before anything is read, and each app in :data:`KNOWN_LAYERED` must be seen
-making a layered request.
+shapes it tells apart before anything is read (the handlers it passes and fails included), and
+each app in :data:`KNOWN_LAYERED` must be seen making a layered request.
 
 Run locally exactly as CI does:
 
@@ -48,6 +53,10 @@ EGRESS_MODULES = frozenset({"personalclaw.sdk.net", "personalclaw.sdk.sync"})
 
 #: The SDK's calls that take an egress policy: ``fetch`` by keyword, ``evaluate`` second.
 GUARDED = frozenset({"fetch", "evaluate"})
+
+#: The SDK's check that comes before a request the app makes itself. A handler that swallows its
+#: failure lets that request go ahead unchecked.
+CHECKS = frozenset({"evaluate"})
 
 #: The SDK's builders whose policy carries the owner's settings: ``egress_policy_for`` itself,
 #: ``sync_egress_policy`` (the sync profile layered, then pinned to the configured endpoint) and
@@ -114,6 +123,19 @@ def _parameters(func: ast.AST) -> set[str]:
     return names
 
 
+def _leaves(body: list[ast.stmt]) -> bool:
+    """Whether a block never lets the code after it run: it ends in ``raise`` or ``return``, or
+    in an ``if`` whose every branch does."""
+    if not body:
+        return False
+    last = body[-1]
+    if isinstance(last, (ast.Raise, ast.Return)):
+        return True
+    if isinstance(last, ast.If):
+        return _leaves(last.body) and _leaves(last.orelse)
+    return False
+
+
 def _bound(func: ast.AST, name: str) -> list[ast.expr]:
     """What the function assigns to ``name``."""
     values: list[ast.expr] = []
@@ -168,6 +190,8 @@ class _Reader(ast.NodeVisitor):
                     if isinstance(target, ast.Name):
                         self.module_bound.setdefault(target.id, []).append(node.value)
         self.sites: list[tuple[str, int, str, str]] = []
+        #: ``(key, handler line, check line)`` for each handler that lets a failed check go on.
+        self.fall_throughs: list[tuple[str, int, int]] = []
         self._qualname: list[str] = []
         self._funcs: list[ast.AST] = []
         self._classes: list[str] = []
@@ -307,6 +331,23 @@ class _Reader(ast.NodeVisitor):
         self._classes.pop()
         self._qualname.pop()
 
+    def visit_Try(self, node: ast.Try) -> None:  # noqa: N802
+        checks = [
+            n
+            for stmt in node.body
+            for n in ast.walk(stmt)
+            if isinstance(n, ast.Call) and self.sdk_name(n.func) in CHECKS
+        ]
+        if checks:
+            where = ".".join(self._qualname) or "<module>"
+            key = f"{self.rel}::{where}::{self.sdk_name(checks[0].func)}"
+            for handler in node.handlers:
+                if not _leaves(handler.body):
+                    self.fall_throughs.append((key, handler.lineno, checks[0].lineno))
+        self.generic_visit(node)
+
+    visit_TryStar = visit_Try  # type: ignore[assignment]
+
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         called = self.sdk_name(node.func)
         if called in GUARDED:
@@ -326,10 +367,14 @@ def _is_bundle_code(path: pathlib.Path, bundle: pathlib.Path) -> bool:
     )
 
 
-def census(root: pathlib.Path = ROOT) -> tuple[list[tuple[str, int, str, str]], list[str]]:
-    """Every guarded call in a bundle's code as ``(key, line, kind, what)``, and the files that
-    could not be read."""
+def census(
+    root: pathlib.Path = ROOT,
+) -> tuple[list[tuple[str, int, str, str]], list[tuple[str, int, int]], list[str]]:
+    """Every guarded call in a bundle's code as ``(key, line, kind, what)``, every handler that
+    lets a failed check go on as ``(key, handler line, check line)``, and the files that could not
+    be read."""
     sites: list[tuple[str, int, str, str]] = []
+    fall_throughs: list[tuple[str, int, int]] = []
     unreadable: list[str] = []
     for manifest in sorted(root.glob("*/app.json")):
         bundle = manifest.parent
@@ -342,8 +387,10 @@ def census(root: pathlib.Path = ROOT) -> tuple[list[tuple[str, int, str, str]], 
             except (OSError, SyntaxError, UnicodeDecodeError) as error:
                 unreadable.append(f"cannot read {rel}: {error}")
                 continue
-            sites.extend(_Reader(tree, rel).sites)
-    return sites, unreadable
+            reader = _Reader(tree, rel)
+            sites.extend(reader.sites)
+            fall_throughs.extend(reader.fall_throughs)
+    return sites, fall_throughs, unreadable
 
 
 #: The positive control: every shape the reader tells apart, and what it must read.
@@ -393,18 +440,79 @@ class Client:
 _CONTROL_READS = [BARE_KIND] * 8 + [LAYERED_KIND] * 7 + [PASS_THROUGH_KIND] * 3 + [UNKNOWN_KIND]
 
 
+#: The positive control for a failed check: the handlers that let the code go on, and those that
+#: leave. Each ``# goes on`` handler must be found, and no other.
+_HANDLER_CONTROL = '''
+from personalclaw.sdk.net import CONNECTOR, egress_policy_for, evaluate
+
+
+def checks(url):
+    try:
+        evaluate(url, egress_policy_for(CONNECTOR))
+    except Exception:  # goes on
+        pass
+    try:
+        evaluate(url, egress_policy_for(CONNECTOR))
+    except:  # goes on
+        log(url)
+    try:
+        evaluate(url, egress_policy_for(CONNECTOR))
+    except (ImportError, OSError):  # goes on
+        decided = None
+    try:
+        evaluate(url, egress_policy_for(CONNECTOR))
+    except Exception:  # goes on
+        if url:
+            raise
+    try:
+        evaluate(url, egress_policy_for(CONNECTOR))
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(url) from exc
+    try:
+        evaluate(url, egress_policy_for(CONNECTOR))
+    except Exception:
+        return False
+    try:
+        evaluate(url, egress_policy_for(CONNECTOR))
+    except Exception:
+        if url:
+            raise
+        else:
+            return None
+    try:
+        send(url)
+    except Exception:
+        pass
+'''
+
+
 def _reader_problems() -> list[str]:
+    found: list[str] = []
     sites = _Reader(ast.parse(_CONTROL), "control.py").sites
     got = [kind for _key, _line, kind, _what in sorted(sites, key=lambda site: site[1])]
-    if got == _CONTROL_READS:
-        return []
-    return [f"the reader read {got}, expected {_CONTROL_READS}"]
+    if got != _CONTROL_READS:
+        found.append(f"the reader read {got}, expected {_CONTROL_READS}")
+    lines = _HANDLER_CONTROL.splitlines()
+    want = [n for n, text in enumerate(lines, start=1) if text.endswith("# goes on")]
+    reader = _Reader(ast.parse(_HANDLER_CONTROL), "control.py")
+    handlers = sorted(line for _key, line, _check in reader.fall_throughs)
+    if handlers != want:
+        found.append(f"the handler reader found lines {handlers}, expected {want}")
+    return found
 
 
 def problems(root: pathlib.Path = ROOT) -> list[str]:
     found = _reader_problems()
-    sites, unreadable = census(root)
+    sites, fall_throughs, unreadable = census(root)
     found.extend(unreadable)
+    for key, line, check in fall_throughs:
+        found.append(
+            f"{key.split('::')[0]}:{line}: a failure of the egress check at line {check} is caught "
+            f"here and the code goes on, so the request goes ahead unchecked ({key}). Refuse "
+            "instead: end the handler with raise, or return without making the request"
+        )
     seen = {key for key, _line, _kind, _what in sites}
     for key, line, kind, what in sites:
         where = f"{key.split('::')[0]}:{line}"
@@ -444,7 +552,7 @@ def main() -> int:
         for line in found:
             print(f"  {line}")
         return 1
-    sites, _unreadable = census()
+    sites, _fall_throughs, _unreadable = census()
     passed = sum(1 for _key, _line, kind, _what in sites if kind == PASS_THROUGH_KIND)
     print(
         f"OK: {len(sites)} request site(s) through the SDK's egress guard, every one under the "

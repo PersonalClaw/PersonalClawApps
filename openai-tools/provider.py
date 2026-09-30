@@ -74,10 +74,10 @@ class OpenAIToolProvider(ToolProvider):
             # can reach a private/LAN tool server. Default stays public-only.
             if not evaluate(self._endpoint, egress_policy_for(CONNECTOR)).allow:
                 return False
-        except Exception:
-            # Guard indeterminate (e.g. DNS failure) — fall through to the probe;
-            # never silently skip the guard on a decision it actually returned.
-            pass
+        except Exception:  # noqa: BLE001 — a check that could not run judged nothing
+            # So the endpoint is reported not connected rather than probed unchecked.
+            logger.warning("egress check for %s could not run; not probing it", self._endpoint)
+            return False
         try:
             import urllib.request
 

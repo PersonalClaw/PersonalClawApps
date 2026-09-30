@@ -29,12 +29,10 @@ _ANSWER = {
     "results": [{"url": "https://docs.example.com/a", "title": "A", "raw_content": "The page."}],
 }
 
-#: Each call the app makes, and what it says when the guard refuses it.
+#: Each call the app makes, and the endpoint it asks.
 _CALLS = {
-    "search": (lambda p: p.search("rust async"), "Tavily search blocked by egress guard"),
-    "extract": (
-        lambda p: p.fetch("https://docs.example.com/a"), "Tavily extract blocked by egress guard",
-    ),
+    "search": (lambda p: p.search("rust async"), "/search"),
+    "extract": (lambda p: p.fetch("https://docs.example.com/a"), "/extract"),
 }
 
 
@@ -58,13 +56,13 @@ async def test_a_host_the_owner_allowed_is_searched_and_extracted(tavily_api):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("call", sorted(_CALLS))
-@pytest.mark.parametrize(("allow", "deny", "reason"), REFUSALS, ids=REFUSAL_IDS)
+@pytest.mark.parametrize(("allow", "deny", "refusal"), REFUSALS, ids=REFUSAL_IDS)
 async def test_a_host_the_owners_settings_refuse_is_never_asked(
-    tavily_api, call, allow, deny, reason
+    tavily_api, call, allow, deny, refusal
 ):
     owner_egress(allow_hosts=allow, deny_hosts=deny)
-    make, said = _CALLS[call]
+    make, path = _CALLS[call]
     with pytest.raises(RuntimeError) as refused:
         await make(provider.TavilyProvider("k"))
-    assert str(refused.value) == f"{said}: {reason}"
+    assert str(refused.value) == refusal.said(f"{tavily_api.url}{path}")
     assert tavily_api.requests == []

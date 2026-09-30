@@ -46,11 +46,11 @@ async def test_a_host_the_owner_allowed_is_asked(fal_queue):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("allow", "deny", "reason"), REFUSALS, ids=REFUSAL_IDS)
-async def test_a_host_the_owners_settings_refuse_is_never_asked(fal_queue, allow, deny, reason):
+@pytest.mark.parametrize(("allow", "deny", "refusal"), REFUSALS, ids=REFUSAL_IDS)
+async def test_a_host_the_owners_settings_refuse_is_never_asked(fal_queue, allow, deny, refusal):
     owner_egress(allow_hosts=allow, deny_hosts=deny)
     with pytest.raises(EgressBlocked) as refused:
         await provider._submit_and_poll("fal-ai/flux/schnell", {"prompt": "a bicycle"},
                                         api_key="k")
-    assert str(refused.value) == reason
+    assert str(refused.value) == refusal.reason
     assert fal_queue.requests == []

@@ -1,6 +1,6 @@
 {
   "name": "openai-tools",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "OpenAI Tool Servers",
   "description": "Connect OpenAI-compatible tool servers that expose tools via REST API.",
   "icon": "Wrench",

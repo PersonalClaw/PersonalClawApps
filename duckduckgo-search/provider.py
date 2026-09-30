@@ -135,7 +135,13 @@ class DuckDuckGoProvider(SearchProvider):
     ) -> SearchResult:
         from urllib.parse import urlencode
 
-        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, egress_policy_for, fetch
+        from personalclaw.sdk.net import (
+            CONNECTOR,
+            EgressBlocked,
+            egress_policy_for,
+            egress_refusal,
+            fetch,
+        )
 
         params: dict[str, Any] = {"q": query}
         df = _RECENCY_TO_DF.get((recency or "").strip().lower())
@@ -154,7 +160,7 @@ class DuckDuckGoProvider(SearchProvider):
                 url, policy=egress_policy_for(CONNECTOR), method="GET", headers={"User-Agent": _UA}
             )
         except EgressBlocked as e:
-            raise RuntimeError(f"DuckDuckGo search blocked by egress guard: {e}") from e
+            raise RuntimeError(egress_refusal(_API, e.decision)) from e
         if resp.status != 200:
             raise RuntimeError(f"DuckDuckGo search failed (HTTP {resp.status})")
         # DDG's HTML endpoint returns server-rendered result markup (not JSON);

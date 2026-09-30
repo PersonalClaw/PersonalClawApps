@@ -96,7 +96,13 @@ class ExaProvider(SearchProvider):
     ) -> SearchResult:
         import json
 
-        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, egress_policy_for, fetch
+        from personalclaw.sdk.net import (
+            CONNECTOR,
+            EgressBlocked,
+            egress_policy_for,
+            egress_refusal,
+            fetch,
+        )
 
         if not self._api_key:
             raise RuntimeError(
@@ -128,7 +134,7 @@ class ExaProvider(SearchProvider):
                 headers=self._headers(), data=json.dumps(body).encode(),
             )
         except EgressBlocked as e:
-            raise RuntimeError(f"Exa search blocked by egress guard: {e}") from e
+            raise RuntimeError(egress_refusal(f"{_API}/search", e.decision)) from e
         if resp.status != 200:
             raise RuntimeError(_refusal(resp.status))
         data = json.loads(resp.text)
@@ -156,7 +162,7 @@ class ExaProvider(SearchProvider):
     async def fetch(self, url: str, *, max_tokens: int = 0, start_index: int = 0) -> FetchResult:
         import json
 
-        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, egress_policy_for
+        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, egress_policy_for, egress_refusal
         from personalclaw.sdk.net import fetch as net_fetch
 
         if not self._api_key:
@@ -171,7 +177,7 @@ class ExaProvider(SearchProvider):
                 data=json.dumps({"urls": [url], "text": True}).encode(),
             )
         except EgressBlocked as e:
-            raise RuntimeError(f"Exa fetch blocked by egress guard: {e}") from e
+            raise RuntimeError(egress_refusal(f"{_API}/contents", e.decision)) from e
         if resp.status != 200:
             raise RuntimeError(_refusal(resp.status, "fetch the page"))
         data = json.loads(resp.text)

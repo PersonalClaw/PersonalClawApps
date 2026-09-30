@@ -96,7 +96,13 @@ class PerplexityProvider(SearchProvider):
     ) -> SearchResult:
         import json
 
-        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, egress_policy_for, fetch
+        from personalclaw.sdk.net import (
+            CONNECTOR,
+            EgressBlocked,
+            egress_policy_for,
+            egress_refusal,
+            fetch,
+        )
 
         if not self._api_key:
             raise RuntimeError(
@@ -126,7 +132,7 @@ class PerplexityProvider(SearchProvider):
                 data=json.dumps(body).encode(),
             )
         except EgressBlocked as e:
-            raise RuntimeError(f"Perplexity search blocked by egress guard: {e}") from e
+            raise RuntimeError(egress_refusal(_API, e.decision)) from e
         if resp.status != 200:
             raise RuntimeError(_refusal(resp.status))
         data = json.loads(resp.text)

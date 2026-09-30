@@ -144,8 +144,9 @@ jobs:
         run: python -m pytest .github/tests/test_network_declared.py -q
       - name: The egress-policy rail reds on a planted defect
         # Drives the rail's own script against seeded trees: each shape of a request the owner's
-        # network settings do not reach, an unnamed pass-through, a stale entry, an unreadable file
-        # and a lost floor app each red it; a clean tree is green.
+        # network settings do not reach, a failed check that lets the request go ahead, an unnamed
+        # pass-through, a stale entry, an unreadable file and a lost floor app each red it; a clean
+        # tree is green.
         run: python -m pytest .github/tests/test_egress_policy.py -q
       - name: Run each bundle's tests (per-bundle)
         # The repository runner is the single definition shared by CI and local use:
@@ -340,8 +341,8 @@ jobs:
   egress-policy:
     # Every request an app makes through the SDK's egress guard runs under a policy built with
     # egress_policy_for, so the owner's Settings → Security → Network egress (Denied hosts,
-    # Allowed hosts) applies to it. Pure-stdlib AST rail, no core install, the same script run
-    # locally.
+    # Allowed hosts) applies to it, and a failed check refuses rather than letting the request go
+    # ahead. Pure-stdlib AST rail, no core install, the same script run locally.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

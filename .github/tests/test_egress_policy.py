@@ -264,3 +264,59 @@ def test_a_file_the_rail_cannot_parse_reds(tmp_path):
     run = _with(tmp_path, "broken-app", "def (:\n")
     assert run.returncode == 1, run.stdout
     assert "cannot read broken-app/provider.py" in run.stdout, run.stdout
+
+
+def test_a_failed_check_that_lets_the_request_go_ahead_reds(tmp_path):
+    """The planted defect: a synchronous surface asks the guard, swallows its failure and makes
+    its own request anyway, which the check never judged."""
+    source = (
+        "import urllib.request\n\n"
+        "from personalclaw.sdk.net import CONNECTOR, egress_policy_for, evaluate\n\n\n"
+        "class Market:\n"
+        "    def get(self, url):\n"
+        "        try:\n"
+        "            decision = evaluate(url, egress_policy_for(CONNECTOR))\n"
+        "            if not decision.allow:\n"
+        "                raise RuntimeError(decision.reason)\n"
+        "        except RuntimeError:\n"
+        "            raise\n"
+        "        except Exception:\n"
+        "            pass\n"
+        "        return urllib.request.urlopen(url)\n"
+    )
+    run = _with(tmp_path, "sync-app", source)
+    assert run.returncode == 1, run.stdout
+    assert (
+        "sync-app/provider.py:14: a failure of the egress check at line 9 is caught here and the "
+        "code goes on, so the request goes ahead unchecked "
+        "(sync-app/provider.py::Market.get::evaluate)"
+    ) in run.stdout, run.stdout
+    assert "provider.py:12:" not in run.stdout, run.stdout
+
+
+def test_a_failed_check_that_refuses_is_green(tmp_path):
+    """A handler that raises, or returns without the request, refuses as a denied host is."""
+    source = (
+        "import urllib.request\n\n"
+        "from personalclaw.sdk.net import CONNECTOR, egress_policy_for, evaluate\n\n\n"
+        "def get(url):\n"
+        "    try:\n"
+        "        decision = evaluate(url, egress_policy_for(CONNECTOR))\n"
+        "    except Exception as exc:\n"
+        "        raise RuntimeError(f'{url} was not reached: {exc}') from exc\n"
+        "    if not decision.allow:\n"
+        "        raise RuntimeError(decision.reason)\n"
+        "    return urllib.request.urlopen(url)\n\n\n"
+        "def connected(url):\n"
+        "    try:\n"
+        "        if not evaluate(url, egress_policy_for(CONNECTOR)).allow:\n"
+        "            return False\n"
+        "    except Exception:\n"
+        "        return False\n"
+        "    return True\n"
+    )
+    apps = _known()
+    apps["refusing-app"] = {"provider.py": source}
+    run = _check(_seeded(tmp_path, apps))
+    assert run.returncode == 0, run.stdout
+    assert run.stdout.splitlines() == [_CLEAN.replace("OK: 8 ", "OK: 10 ")], run.stdout

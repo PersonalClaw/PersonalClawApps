@@ -72,7 +72,13 @@ class SearxngProvider(SearchProvider):
         import json
         from urllib.parse import urlencode
 
-        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, egress_policy_for, fetch
+        from personalclaw.sdk.net import (
+            CONNECTOR,
+            EgressBlocked,
+            egress_policy_for,
+            egress_refusal,
+            fetch,
+        )
 
         if not self._endpoint:
             raise RuntimeError("SearXNG endpoint is not configured (Settings → Search)")
@@ -103,7 +109,7 @@ class SearxngProvider(SearchProvider):
             resp = await fetch(url, policy=policy, method="GET",
                                headers={"Accept": "application/json"})
         except EgressBlocked as e:
-            raise RuntimeError(f"SearXNG search blocked by egress guard: {e}") from e
+            raise RuntimeError(egress_refusal(f"{self._endpoint}/search", e.decision)) from e
         if resp.status != 200:
             raise RuntimeError(f"SearXNG search failed (HTTP {resp.status})")
         data = json.loads(resp.text)

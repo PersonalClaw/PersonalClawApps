@@ -28,7 +28,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 | Key | Label | Notes |
 |---|---|---|
-| `lang` | Language | Wikipedia language edition to search (e.g. en, de, fr, ja). |
+| `lang` | Language | The language code of the Wikipedia edition to search, such as en, de, fr, ja or pt-br. Anything else is refused when you save it, and a search with one says so. |
 | `timeout_secs` | Request Timeout | Maximum seconds to wait for a search response. |
 
 ## Network

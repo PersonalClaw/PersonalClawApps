@@ -35,7 +35,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 ## Network
 
-Reaches `skills.sh`, clones a skill's repository from `github.com`, and runs the `skills` CLI through `npx`, which fetches it from the npm registry. A request to the skills.sh API is checked first by PersonalClaw's egress guard under your **Settings → Security → Network egress** rules, so it is refused when you put `skills.sh` on Denied hosts.
+Reaches `skills.sh`, clones a skill's repository from `github.com`, and runs the `skills` CLI through `npx`, which fetches it from the npm registry. A request to the skills.sh API is checked first by PersonalClaw's egress guard under your **Settings → Security → Network egress** rules, so it is refused when you put `skills.sh` on Denied hosts, and when the check itself cannot run. A search refused there is not tried again through the `skills` CLI.
 
 ## License
 

@@ -23,7 +23,7 @@ import json
 import threading
 from collections.abc import Iterable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, NamedTuple
 
 #: The stand-in's address, as the owner names it in Allowed hosts or Denied hosts.
 HOST = "127.0.0.1"
@@ -31,19 +31,42 @@ HOST = "127.0.0.1"
 #: A host the owner allowed that is not the stand-in.
 OTHER_HOST = "search.example.org"
 
-#: The guard's reason for refusing the stand-in when the owner denied it.
-DENIED = f"host '{HOST}' is on the egress deny list"
+class Refusal(NamedTuple):
+    """One way the guard refuses the stand-in: its own reason (``str(EgressBlocked)``), and the
+    sentence an app says for it (``personalclaw.sdk.net.egress_refusal``), which names the setting
+    that lifts it. ``{url}`` in the sentence is the endpoint the app asked."""
 
-#: The guard's reason for refusing the stand-in when the owner did not allow it: an address on
-#: this machine, which the guard refuses by default.
-NOT_ALLOWED = (
-    f"host '{HOST}' resolves to a non-public address ({HOST}, loopback); egress guard blocks "
-    "loopback, private, link-local, multicast, and reserved IPs"
+    reason: str
+    sentence: str
+
+    def said(self, url: str) -> str:
+        return self.sentence.format(url=url)
+
+
+#: The owner denied the stand-in.
+DENIED = Refusal(
+    reason=f"host '{HOST}' is on the egress deny list",
+    sentence=f"{{url}} was not reached: {HOST} is on Denied hosts in Settings → Security → Network "
+    "egress.",
 )
 
-#: ``(allow_hosts, deny_hosts, reason)``: each setting that refuses the stand-in, and the guard's
-#: reason for it. The owner denied it (and allowed it, which a deny outranks); the owner allowed
-#: another host only; and the owner set nothing.
+#: The owner did not allow the stand-in: an address on this machine, which the guard refuses by
+#: default.
+NOT_ALLOWED = Refusal(
+    reason=(
+        f"host '{HOST}' resolves to a non-public address ({HOST}, loopback); egress guard blocks "
+        "loopback, private, link-local, multicast, and reserved IPs"
+    ),
+    sentence=(
+        f"PersonalClaw's network settings refused {{url}}, which is on this computer ({HOST}). If "
+        f"this endpoint is yours, add {HOST} to Allowed hosts in Settings → Security → Network "
+        "egress, then test again."
+    ),
+)
+
+#: ``(allow_hosts, deny_hosts, refusal)``: each setting that refuses the stand-in. The owner
+#: denied it (and allowed it, which a deny outranks); the owner allowed another host only; and
+#: the owner set nothing.
 REFUSALS = [
     ((HOST,), (HOST,), DENIED),
     ((OTHER_HOST,), (), NOT_ALLOWED),
@@ -114,12 +137,16 @@ def _handler_for(server: ProviderHost) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", str(len(server.body)))
             self.send_header("Connection", "close")
             self.end_headers()
-            self.wfile.write(server.body)
+            if method != "HEAD":
+                self.wfile.write(server.body)
 
         def do_GET(self) -> None:  # noqa: N802 — the http.server hook name
             self._answer("GET")
 
         def do_POST(self) -> None:  # noqa: N802
             self._answer("POST")
+
+        def do_HEAD(self) -> None:  # noqa: N802
+            self._answer("HEAD")
 
     return _Handler

@@ -47,12 +47,12 @@ async def test_a_host_the_owner_allowed_is_searched(perplexity_api):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("allow", "deny", "reason"), REFUSALS, ids=REFUSAL_IDS)
+@pytest.mark.parametrize(("allow", "deny", "refusal"), REFUSALS, ids=REFUSAL_IDS)
 async def test_a_host_the_owners_settings_refuse_is_never_asked(
-    perplexity_api, allow, deny, reason
+    perplexity_api, allow, deny, refusal
 ):
     owner_egress(allow_hosts=allow, deny_hosts=deny)
     with pytest.raises(RuntimeError) as refused:
         await provider.PerplexityProvider("k").search("rust async")
-    assert str(refused.value) == f"Perplexity search blocked by egress guard: {reason}"
+    assert str(refused.value) == refusal.said(provider._API)
     assert perplexity_api.requests == []

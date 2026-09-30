@@ -39,6 +39,12 @@ _CRED_NAME = "skills_sh_api_key"
 _TIMEOUT = 15
 
 
+class _EgressRefused(RuntimeError):
+    """The owner's network settings refused a request to the skills.sh API, or could not be
+    checked. Final: a search refused here is not tried again through the ``skills`` CLI, which
+    reaches skills.sh from a child process the guard never sees."""
+
+
 class SkillsShMarketplace(SkillsMarketplace):
     """skills.sh marketplace client.
 
@@ -85,24 +91,25 @@ class SkillsShMarketplace(SkillsMarketplace):
 
     def _get(self, path: str) -> dict:
         url = f"{_API_BASE}{path}"
+        endpoint = url.split("?", 1)[0]
         # Classify the target host through the egress guard BEFORE the raw request
         # (#41). The SkillsMarketplace ABC is SYNCHRONOUS, so the async net.fetch
         # can't be used here — ``evaluate`` is the sync egress decision (resolve +
         # host-classify + scheme check) that net.fetch runs internally. This gives
         # skills.sh the same SSRF/private-IP + scheme guard the async callers get, under the
         # owner's Settings → Security → Network egress (a host they denied is never reached).
+        # A check that raises has judged nothing, so the request is refused as a denied host is.
         try:
-            from personalclaw.sdk.net import CONNECTOR, egress_policy_for, evaluate
+            from personalclaw.sdk.net import CONNECTOR, egress_policy_for, egress_refusal, evaluate
 
             decision = evaluate(url, egress_policy_for(CONNECTOR))
-            if not decision.allow:
-                raise RuntimeError(
-                    f"skills.sh request to {path} blocked by egress guard: {decision.reason}"
-                )
-        except RuntimeError:
-            raise
-        except Exception:
-            pass  # guard indeterminate (e.g. import/DNS) — proceed to the request
+        except Exception as exc:  # noqa: BLE001 — every failure of the check refuses
+            raise _EgressRefused(
+                f"{endpoint} was not reached: PersonalClaw could not check it against "
+                f"Settings → Security → Network egress ({type(exc).__name__}: {exc})."
+            ) from exc
+        if not decision.allow:
+            raise _EgressRefused(egress_refusal(endpoint, decision))
         headers: dict[str, str] = {"Accept": "application/json"}
         api_key = self._api_key()
         if api_key:
@@ -120,6 +127,8 @@ class SkillsShMarketplace(SkillsMarketplace):
         if self._api_key():
             try:
                 data = self._get(f"/skills/search?q={urllib.request.quote(query)}&limit={limit}")
+            except _EgressRefused:
+                raise
             except Exception as exc:
                 logger.warning("skills.sh API search failed: %s", exc)
                 return self._search_via_cli(query, limit)

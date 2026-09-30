@@ -26,10 +26,10 @@ from apps_testkit.egress import (  # noqa: E402
 
 _ANSWER = {"results": [{"url": "https://docs.example.com/a", "title": "A", "text": "The answer."}]}
 
-#: Each call the app makes, and what it says when the guard refuses it.
+#: Each call the app makes, and the endpoint it asks.
 _CALLS = {
-    "search": (lambda p: p.search("rust async"), "Exa search blocked by egress guard"),
-    "fetch": (lambda p: p.fetch("https://docs.example.com/a"), "Exa fetch blocked by egress guard"),
+    "search": (lambda p: p.search("rust async"), "/search"),
+    "fetch": (lambda p: p.fetch("https://docs.example.com/a"), "/contents"),
 }
 
 
@@ -52,13 +52,13 @@ async def test_a_host_the_owner_allowed_is_searched_and_fetched(exa_api):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("call", sorted(_CALLS))
-@pytest.mark.parametrize(("allow", "deny", "reason"), REFUSALS, ids=REFUSAL_IDS)
+@pytest.mark.parametrize(("allow", "deny", "refusal"), REFUSALS, ids=REFUSAL_IDS)
 async def test_a_host_the_owners_settings_refuse_is_never_asked(
-    exa_api, call, allow, deny, reason
+    exa_api, call, allow, deny, refusal
 ):
     owner_egress(allow_hosts=allow, deny_hosts=deny)
-    make, said = _CALLS[call]
+    make, path = _CALLS[call]
     with pytest.raises(RuntimeError) as refused:
         await make(provider.ExaProvider("k"))
-    assert str(refused.value) == f"{said}: {reason}"
+    assert str(refused.value) == refusal.said(f"{exa_api.url}{path}")
     assert exa_api.requests == []

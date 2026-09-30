@@ -14,6 +14,7 @@ response text.
 """
 
 import logging
+import re
 from typing import Any
 from urllib.parse import quote
 
@@ -32,10 +33,16 @@ _UA = "Mozilla/5.0 (compatible; PersonalClaw/1.0; +https://github.com/personalcl
 #: The MediaWiki API of the wiki for ``lang``.
 _API = "https://{lang}.wikipedia.org/w/api.php"
 
+#: A Wikipedia language code, the name of one edition (``en``, ``pt-br``, ``zh-min-nan``), or
+#: nothing, which is English. Letters and hyphens only, so the code cannot name another host: it
+#: goes into the hostname. ``app.json`` gives the settings schema the same pattern, so a value
+#: that is not one is refused when it is saved as well as when a search would use it.
+_LANGUAGE_CODE = re.compile(r"^\s*(?:[A-Za-z]{2,12}(?:-[A-Za-z]{2,12}){0,2})?\s*$")
+
 
 class WikipediaProvider(SearchProvider):
     def __init__(self, *, lang: str = "en", timeout_secs: int = 20) -> None:
-        self._lang = (lang or "en").strip() or "en"
+        self._lang = (lang or "").strip() or "en"
         self._timeout = max(1, int(timeout_secs or 20))
 
     @property
@@ -73,14 +80,27 @@ class WikipediaProvider(SearchProvider):
         import json
         from urllib.parse import urlencode
 
-        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, egress_policy_for, fetch
+        from personalclaw.sdk.net import (
+            CONNECTOR,
+            EgressBlocked,
+            egress_policy_for,
+            egress_refusal,
+            fetch,
+        )
 
+        if not _LANGUAGE_CODE.fullmatch(self._lang):
+            shown = self._lang if len(self._lang) <= 60 else self._lang[:60] + "…"
+            raise RuntimeError(
+                f"Wikipedia Search's Language is {shown!r}, which is not a Wikipedia language code "
+                "such as en, de or pt-br. Change it in Settings → Providers → Wikipedia Search."
+            )
+        code = self._lang.lower()
         q = (query or "").strip()
         if not q:
             return SearchResult(results=[], provider=self.name, query=query,
                                 depth=self.normalize_depth(depth))
         limit = max(1, min(int(max_results or 10), 20))
-        api = _API.format(lang=self._lang)
+        api = _API.format(lang=code)
         # generator=search feeds matching pages into a prop=extracts query so each
         # hit carries an intro snippet; pithumbnail/info give us the canonical URL.
         params: dict[str, Any] = {
@@ -107,7 +127,7 @@ class WikipediaProvider(SearchProvider):
                 url, policy=egress_policy_for(CONNECTOR), method="GET", headers={"User-Agent": _UA}
             )
         except EgressBlocked as e:
-            raise RuntimeError(f"Wikipedia search blocked by egress guard: {e}") from e
+            raise RuntimeError(egress_refusal(api, e.decision)) from e
         if resp.status != 200:
             raise RuntimeError(f"Wikipedia search failed (HTTP {resp.status})")
         data = json.loads(resp.text)
@@ -122,7 +142,7 @@ class WikipediaProvider(SearchProvider):
         for p in ranked[:limit]:
             title = p.get("title", "")
             url = p.get("fullurl") or (
-                f"https://{self._lang}.wikipedia.org/wiki/{quote(title.replace(' ', '_'))}"
+                f"https://{code}.wikipedia.org/wiki/{quote(title.replace(' ', '_'))}"
                 if title else ""
             )
             if not url:
