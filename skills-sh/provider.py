@@ -89,11 +89,12 @@ class SkillsShMarketplace(SkillsMarketplace):
         # (#41). The SkillsMarketplace ABC is SYNCHRONOUS, so the async net.fetch
         # can't be used here — ``evaluate`` is the sync egress decision (resolve +
         # host-classify + scheme check) that net.fetch runs internally. This gives
-        # skills.sh the same SSRF/private-IP + scheme guard the async callers get.
+        # skills.sh the same SSRF/private-IP + scheme guard the async callers get, under the
+        # owner's Settings → Security → Network egress (a host they denied is never reached).
         try:
-            from personalclaw.sdk.net import CONNECTOR, evaluate
+            from personalclaw.sdk.net import CONNECTOR, egress_policy_for, evaluate
 
-            decision = evaluate(url, CONNECTOR)
+            decision = evaluate(url, egress_policy_for(CONNECTOR))
             if not decision.allow:
                 raise RuntimeError(
                     f"skills.sh request to {path} blocked by egress guard: {decision.reason}"

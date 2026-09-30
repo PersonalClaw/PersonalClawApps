@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 
 _UA = "Mozilla/5.0 (compatible; PersonalClaw/1.0; +https://github.com/personalclaw/personalclaw)"
 
+#: The MediaWiki API of the wiki for ``lang``.
+_API = "https://{lang}.wikipedia.org/w/api.php"
+
 
 class WikipediaProvider(SearchProvider):
     def __init__(self, *, lang: str = "en", timeout_secs: int = 20) -> None:
@@ -70,14 +73,14 @@ class WikipediaProvider(SearchProvider):
         import json
         from urllib.parse import urlencode
 
-        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, fetch
+        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, egress_policy_for, fetch
 
         q = (query or "").strip()
         if not q:
             return SearchResult(results=[], provider=self.name, query=query,
                                 depth=self.normalize_depth(depth))
         limit = max(1, min(int(max_results or 10), 20))
-        api = f"https://{self._lang}.wikipedia.org/w/api.php"
+        api = _API.format(lang=self._lang)
         # generator=search feeds matching pages into a prop=extracts query so each
         # hit carries an intro snippet; pithumbnail/info give us the canonical URL.
         params: dict[str, Any] = {
@@ -96,9 +99,13 @@ class WikipediaProvider(SearchProvider):
         # takes no params kwarg, so the query string is built into the URL. The
         # chokepoint re-checks every redirect hop internally, so follow_redirects is
         # both unnecessary and unsafe to bypass here.
+        # egress_policy_for layers the owner's Settings → Security → Network egress
+        # onto CONNECTOR, so a host they denied is never reached.
         url = f"{api}?{urlencode(params)}"
         try:
-            resp = await fetch(url, policy=CONNECTOR, method="GET", headers={"User-Agent": _UA})
+            resp = await fetch(
+                url, policy=egress_policy_for(CONNECTOR), method="GET", headers={"User-Agent": _UA}
+            )
         except EgressBlocked as e:
             raise RuntimeError(f"Wikipedia search blocked by egress guard: {e}") from e
         if resp.status != 200:

@@ -33,7 +33,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 ## Network
 
-Reaches `<language>.wikipedia.org` for the language you set in **Language** (`en.wikipedia.org` by default).
+Reaches `<language>.wikipedia.org` for the language you set in **Language** (`en.wikipedia.org` by default). Every request goes through PersonalClaw's egress guard under your **Settings → Security → Network egress** rules, so a host you put on Denied hosts is never reached.
 
 ## License
 

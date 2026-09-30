@@ -93,7 +93,9 @@ through.
 - **Loopback-only egress.** The endpoint comes out of user config, so every request
   is made under a `loopback_only` egress policy with the resolved IP pinned and
   redirects disallowed. A local backend pointed at a public host would be an SSRF
-  primitive wearing a local backend's name; this one refuses.
+  primitive wearing a local backend's name; this one refuses. Your **Settings →
+  Security → Network egress** rules apply on top: a host on Denied hosts is never
+  reached, and nothing on Allowed hosts widens the policy past this machine.
 - **Calm when the model is missing.** A declared backend whose weights are not
   downloaded yet answers with a sentence saying what to pull — it never raises into
   the surface.

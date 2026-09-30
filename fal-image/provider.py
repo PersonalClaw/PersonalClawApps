@@ -200,16 +200,19 @@ async def _submit_and_poll(
       - Result: ``{QUEUE_BASE}/{model_id}/requests/{request_id}``
     We construct these ourselves to avoid the broken shortened URLs.
     """
-    from personalclaw.sdk.net import CONNECTOR, fetch
+    from personalclaw.sdk.net import CONNECTOR, egress_policy_for, fetch
 
     key, refusal = (api_key, "") if api_key else _resolve_fal_key()
     if not key:
         raise ImageGenError(_no_key_message(refusal))
     auth = {"Authorization": f"Key {key}", "Content-Type": "application/json"}
     body = json.dumps(payload).encode()
+    # The owner's Settings → Security → Network egress, layered onto CONNECTOR: a host they
+    # denied is never reached.
+    policy = egress_policy_for(CONNECTOR)
 
     submit = await fetch(
-        f"{_QUEUE_BASE}/{model_id}", policy=CONNECTOR, method="POST", headers=auth, data=body,
+        f"{_QUEUE_BASE}/{model_id}", policy=policy, method="POST", headers=auth, data=body,
     )
     if submit.status not in (200, 201):
         detail = ""
@@ -234,7 +237,7 @@ async def _submit_and_poll(
 
     elapsed = 0.0
     while elapsed < timeout_s:
-        st = await fetch(status_url, policy=CONNECTOR, headers=auth)
+        st = await fetch(status_url, policy=policy, headers=auth)
         if st.status == 200:
             try:
                 sd = json.loads(st.text)
@@ -250,7 +253,7 @@ async def _submit_and_poll(
     else:
         raise ImageGenError("FAL job timed out.")
 
-    result = await fetch(response_url, policy=CONNECTOR, headers=auth)
+    result = await fetch(response_url, policy=policy, headers=auth)
     if result.status != 200:
         raise ImageGenError(f"FAL result fetch failed (HTTP {result.status}).")
     try:

@@ -42,7 +42,7 @@ from personalclaw.sdk.image import (
     ImageResult,
 )
 from personalclaw.sdk.model import ProviderResolutionError, require_model
-from personalclaw.sdk.net import EgressPolicy, fetch
+from personalclaw.sdk.net import EgressPolicy, egress_policy_for, fetch
 
 logger = logging.getLogger(__name__)
 
@@ -759,16 +759,25 @@ class _AddressRefused(ImageGenError):
 
 
 async def _guarded_fetch(url: str, **kw: Any) -> Any:
-    """``fetch`` under :data:`_LOCAL_ONLY`, with egress refusals explained.
+    """``fetch`` under :data:`_LOCAL_ONLY` and the owner's network settings, with egress
+    refusals explained.
 
     Every outbound request this app makes goes through here, so there is exactly
-    one place the policy is applied and no path that can skip it.
+    one place the policy is applied and no path that can skip it. ``egress_policy_for``
+    layers the owner's Settings → Security → Network egress onto it: a host they denied is
+    never reached, and nothing they allowed widens it, because a loopback-only policy
+    reaches a loopback address alone whatever the allow-list says.
     """
     from personalclaw.sdk.net import EgressBlocked
 
     try:
-        return await fetch(url, policy=_LOCAL_ONLY, **kw)
+        return await fetch(url, policy=egress_policy_for(_LOCAL_ONLY), **kw)
     except EgressBlocked as e:
+        if e.decision.category == "deny_list":
+            raise _AddressRefused(
+                f"Refused to reach {url!r}: {e.decision.host} is on Denied hosts in "
+                "Settings → Security → Network egress."
+            ) from e
         raise _AddressRefused(
             f"Refused to reach {url!r}: this app only talks to ComfyUI on this machine, at "
             f"a loopback address such as http://127.0.0.1:8188. ({e})"

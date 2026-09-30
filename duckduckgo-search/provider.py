@@ -135,7 +135,7 @@ class DuckDuckGoProvider(SearchProvider):
     ) -> SearchResult:
         from urllib.parse import urlencode
 
-        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, fetch
+        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, egress_policy_for, fetch
 
         params: dict[str, Any] = {"q": query}
         df = _RECENCY_TO_DF.get((recency or "").strip().lower())
@@ -146,9 +146,13 @@ class DuckDuckGoProvider(SearchProvider):
         # cap, timeout, redirect-hop re-check, SEL audit) instead of raw httpx —
         # fetch takes no params kwarg, so the query string is built into the URL,
         # and it re-checks each redirect hop internally (safer than follow_redirects).
+        # egress_policy_for layers the owner's Settings → Security → Network egress
+        # onto CONNECTOR, so a host they denied is never reached.
         url = f"{_API}?{urlencode(params)}"
         try:
-            resp = await fetch(url, policy=CONNECTOR, method="GET", headers={"User-Agent": _UA})
+            resp = await fetch(
+                url, policy=egress_policy_for(CONNECTOR), method="GET", headers={"User-Agent": _UA}
+            )
         except EgressBlocked as e:
             raise RuntimeError(f"DuckDuckGo search blocked by egress guard: {e}") from e
         if resp.status != 200:

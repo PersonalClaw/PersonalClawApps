@@ -261,6 +261,15 @@ which is declaration-only by design (a backend subprocess has its own OS network
 stack; the flag discloses intent to the user rather than fencing it). See the
 [permission enforcement table](platform-architecture.md#permission-enforcement).
 
+A request your provider makes goes through `personalclaw.sdk.net.fetch` under a policy built
+with `egress_policy_for(<profile>)`: `CONNECTOR` for a vendor's API, `WEBHOOK` for a POST to an
+address the owner configured. That layers the owner's **Settings → Security → Network egress**
+onto the profile, so a host they put on Denied hosts is never reached, and one on Allowed hosts
+is reached even when it is on their own network. A synchronous surface asks
+`evaluate(url, egress_policy_for(CONNECTOR))` before its own request. The bare profile, or no
+policy at all, leaves the owner's settings out, and `.github/scripts/check_egress_policy.py`
+holds every request in this repository to the layered form.
+
 ### Crons
 
 ```json

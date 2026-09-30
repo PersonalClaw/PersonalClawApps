@@ -96,7 +96,7 @@ class ExaProvider(SearchProvider):
     ) -> SearchResult:
         import json
 
-        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, fetch
+        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, egress_policy_for, fetch
 
         if not self._api_key:
             raise RuntimeError(
@@ -120,9 +120,11 @@ class ExaProvider(SearchProvider):
 
         # Route through the net.fetch egress chokepoint (host/redirect guard, byte
         # cap, timeout, SEL audit) instead of raw httpx.
+        # egress_policy_for layers the owner's Settings → Security → Network egress
+        # onto CONNECTOR, so a host they denied is never reached.
         try:
             resp = await fetch(
-                f"{_API}/search", policy=CONNECTOR, method="POST",
+                f"{_API}/search", policy=egress_policy_for(CONNECTOR), method="POST",
                 headers=self._headers(), data=json.dumps(body).encode(),
             )
         except EgressBlocked as e:
@@ -154,7 +156,7 @@ class ExaProvider(SearchProvider):
     async def fetch(self, url: str, *, max_tokens: int = 0, start_index: int = 0) -> FetchResult:
         import json
 
-        from personalclaw.sdk.net import CONNECTOR, EgressBlocked
+        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, egress_policy_for
         from personalclaw.sdk.net import fetch as net_fetch
 
         if not self._api_key:
@@ -164,7 +166,7 @@ class ExaProvider(SearchProvider):
 
         try:
             resp = await net_fetch(
-                f"{_API}/contents", policy=CONNECTOR, method="POST",
+                f"{_API}/contents", policy=egress_policy_for(CONNECTOR), method="POST",
                 headers=self._headers(),
                 data=json.dumps({"urls": [url], "text": True}).encode(),
             )

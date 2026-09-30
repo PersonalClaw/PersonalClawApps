@@ -726,8 +726,9 @@ class TestEgressPosture:
         # `code_only` normalises to space-separated tokens, so the call reads `fetch (`
         calls = re.findall(r"(?<![\w_])fetch\s*\(", src)
         assert len(calls) == 1, f"expected one fetch() call site, found {len(calls)}"
-        # and that one site passes the narrow policy rather than defaulting
-        assert "policy = _LOCAL_ONLY" in src
+        # and that one site passes the narrow policy, under the owner's network settings,
+        # rather than defaulting
+        assert "policy = egress_policy_for ( _LOCAL_ONLY )" in src
 
 
 # ══ Graph + size plumbing ════════════════════════════════════════════════════

@@ -33,7 +33,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 ## Network
 
-Reaches `api.perplexity.ai` only.
+Reaches `api.perplexity.ai` only. Every request goes through PersonalClaw's egress guard under your **Settings → Security → Network egress** rules, so a host you put on Denied hosts is never reached.
 
 ## License
 

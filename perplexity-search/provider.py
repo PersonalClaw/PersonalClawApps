@@ -96,7 +96,7 @@ class PerplexityProvider(SearchProvider):
     ) -> SearchResult:
         import json
 
-        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, fetch
+        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, egress_policy_for, fetch
 
         if not self._api_key:
             raise RuntimeError(
@@ -118,8 +118,13 @@ class PerplexityProvider(SearchProvider):
              "Content-Type": "application/json"}
         # Route through the net.fetch egress chokepoint (host/redirect guard, byte
         # cap, timeout, SEL audit) instead of raw httpx.
+        # egress_policy_for layers the owner's Settings → Security → Network egress
+        # onto CONNECTOR, so a host they denied is never reached.
         try:
-            resp = await fetch(_API, policy=CONNECTOR, method="POST", headers=H, data=json.dumps(body).encode())
+            resp = await fetch(
+                _API, policy=egress_policy_for(CONNECTOR), method="POST", headers=H,
+                data=json.dumps(body).encode(),
+            )
         except EgressBlocked as e:
             raise RuntimeError(f"Perplexity search blocked by egress guard: {e}") from e
         if resp.status != 200:

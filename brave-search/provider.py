@@ -94,7 +94,7 @@ class BraveProvider(SearchProvider):
         import json
         from urllib.parse import urlencode
 
-        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, fetch
+        from personalclaw.sdk.net import CONNECTOR, EgressBlocked, egress_policy_for, fetch
 
         if not self._api_key:
             raise RuntimeError(
@@ -109,10 +109,12 @@ class BraveProvider(SearchProvider):
         # Route through the net.fetch egress chokepoint (host classification, byte
         # cap, timeout, redirect-hop re-check, SEL audit) instead of raw httpx —
         # fetch takes no params kwarg, so the query string is built into the URL.
+        # egress_policy_for layers the owner's Settings → Security → Network egress
+        # onto CONNECTOR, so a host they denied is never reached.
         url = f"{_API}?{urlencode(params)}"
         try:
             resp = await fetch(
-                url, policy=CONNECTOR, method="GET",
+                url, policy=egress_policy_for(CONNECTOR), method="GET",
                 headers={"X-Subscription-Token": self._api_key,
                          "Accept": "application/json"},
             )
