@@ -249,13 +249,14 @@ async def test_start_inbound_hands_the_store_to_the_runtime(store_only_home, mon
     other test in this file green, because they all construct ``SlackRuntime`` directly. The
     seam between the two halves needs its own coverage or the wiring is untested.
 
-    Kept offline by failing workspace validation, which is the earliest network call on the
+    Kept offline by a refused workspace validation, which is the earliest network call on the
     path; the runtime is already built and attached by then, which is what this asserts.
     """
     store = _write_store(
         store_only_home, bot_token="fake-bot-token-fake-store-bot", app_token="fake-app-token-1"
     )
-    monkeypatch.setattr("slack_runtime.events.validate_enterprise", lambda *a, **k: False)
+    refused = enterprise.WorkspaceCheck(enterprise.REJECTED, "Slack refused the Bot Token (invalid_auth).")
+    monkeypatch.setattr("slack_runtime.events.validate_enterprise", lambda *a, **k: refused)
 
     transport = SlackTransport(store)
     await transport.start_inbound(_Services())
@@ -266,7 +267,7 @@ async def test_start_inbound_hands_the_store_to_the_runtime(store_only_home, mon
     )
     assert transport._runtime._bot_token == store["bot_token"]
     assert transport._runtime._app_token == store["app_token"]
-    assert "auth.test" in transport._inbound_offline_reason
+    assert transport._inbound_offline_reason == refused.reason
 
 
 @pytest.mark.asyncio

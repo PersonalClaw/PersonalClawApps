@@ -31,6 +31,7 @@ from personalclaw.sdk.cli import SetupContext
 import cli_doctor
 import cli_setup
 import slack_runtime.events as events_mod
+from slack_runtime.enterprise import VALIDATED, WorkspaceCheck
 import slack_runtime.handler as H
 import slack_runtime.interactions as interactions_mod
 import slack_runtime.settings as settings_mod
@@ -147,7 +148,9 @@ def slack_offline(monkeypatch):
     monkeypatch.setenv(CRED_SLACK_BOT_TOKEN, BOT)
     monkeypatch.setenv(CRED_SLACK_APP_TOKEN, APP_TOKEN)
     monkeypatch.setattr(transport_mod, "RealSlackClient", lambda token: SimpleNamespace())
-    monkeypatch.setattr(events_mod, "validate_enterprise", lambda *a, **k: True)
+    monkeypatch.setattr(
+        events_mod, "validate_enterprise", lambda *a, **k: WorkspaceCheck(VALIDATED)
+    )
     monkeypatch.setattr(events_mod, "AsyncWebClient", lambda **kw: SimpleNamespace())
     monkeypatch.setattr(events_mod, "SocketModeReceiver", _FakeSocketClient)
     for name in ("_gateway_services", "_orch_cfg"):

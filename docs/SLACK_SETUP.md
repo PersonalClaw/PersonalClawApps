@@ -69,6 +69,10 @@ Verify:
 - The startup banner reports the connected channel transport (an install
   without tokens logs "no tokens — inbound stays offline" and the channel
   simply stays disabled — nothing breaks).
+- If Slack cannot be reached when the gateway starts (the network is not up
+  yet, or Slack is busy), the channel's card says so and when it tries again;
+  inbound starts on its own once Slack answers. Only Slack refusing a token
+  turns inbound off, and the card then names the token to re-check.
 - `personalclaw doctor` checks the credential pair.
 - DM your bot in Slack. **The first person to DM the bot is auto-claimed as the
   owner** — do this from your own account.

@@ -6,14 +6,18 @@ Outbound + health/test are always available (token-gated). Inbound is driven by
 channel's receiver — at boot, and when the channel is turned on, updated or its
 settings are saved (it stops the previous instance's receiver first): the transport
 builds a :class:`SlackRuntime`, wires the Socket-Mode receiver + interactive
-handlers (which live in this bundle), and connects — with the same
-retry/degrade-gracefully behavior the gateway used to inline.
+handlers (which live in this bundle), and connects. A Slack it cannot reach as it
+starts (the network not up yet, Slack busy) is tried again with backoff for as long
+as the receiver runs; only Slack refusing a token turns inbound off, and the card
+says which token.
 """
 
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
+import math
 import re
 import sys as _sys
 from pathlib import Path as _Path
@@ -43,7 +47,8 @@ from personalclaw.sdk.channel import (
 # during exec, captures them for the life of the transport instance.
 from slack_runtime.client import RealSlackClient
 from slack_runtime.delivery import SlackDelivery
-from slack_runtime.events import SeenCache, init_socket_mode
+from slack_runtime.enterprise import REJECTED, UNREACHABLE
+from slack_runtime.events import SeenCache, bind_workspace, check_workspace, init_socket_mode
 from slack_runtime.handler import get_owner_id
 from slack_runtime.interactions import init as init_interactions
 from slack_runtime.runtime import SlackRuntime
@@ -53,6 +58,13 @@ from slack_runtime.writes import SendRefused, live_writes_disabled
 #: A Slack conversation id: C (channel), D (DM), G (private group) or W (enterprise channel), then
 #: upper-case letters and digits.
 _CONVERSATION_RE = re.compile(r"[CDGW][A-Z0-9]+")
+
+#: Seconds inbound waits before trying again after Slack could not be reached as it started:
+#: doubling from five seconds to five minutes, then every five minutes while the gateway runs.
+_RETRY_DELAYS = (5, 10, 20, 40, 80, 160, 300)
+
+#: What one Socket Mode connect concluded, beside ``enterprise``'s REJECTED / UNREACHABLE.
+_CONNECTED = "connected"
 
 # NOT ``__name__``: the app loader execs this ENTRY module under a synthetic name
 # (``_pclaw_app_slack_channel__slack_runtime_transport``), so ``__name__`` produced a
@@ -112,6 +124,10 @@ class SlackTransport(ChannelTransportProvider):
         #: ``health()``/``test()`` report it, so the provider row can no longer show a
         #: green "Tokens configured" over a receiver that never started (#952).
         self._inbound_offline_reason: str = ""
+        #: The task still trying to bring inbound online after Slack could not be reached as it
+        #: started, and the loop time of its next try (both ``None`` while nothing is waiting).
+        self._retry: asyncio.Task | None = None
+        self._retry_at: float | None = None
 
     def capabilities(self) -> ChannelCapabilities:
         return ChannelCapabilities(
@@ -152,7 +168,7 @@ class SlackTransport(ChannelTransportProvider):
 
     # ── Inbound: the gateway starts and stops this with the channel ──
     async def start_inbound(self, services: Any) -> None:
-        """Build the Slack runtime, wire the socket receiver, connect (retry/degrade)."""
+        """Build the Slack runtime, wire the socket receiver, connect (or keep trying)."""
         # Before the runtime reads its owner, and before the token check, so a Slack given its
         # tokens later keeps its owner too instead of starting in first-contact claim mode.
         adopt_owner_id()
@@ -178,25 +194,36 @@ class SlackTransport(ChannelTransportProvider):
         self._runtime = runtime
 
         init_interactions(runtime)
-        init_socket_mode(runtime, SeenCache())
+        seen = SeenCache()
+        check = init_socket_mode(runtime, seen)
 
         if runtime._socket_client is None:
-            # enterprise validation failed inside init_socket_mode (which logs the why)
-            # Not "…or add the org to Allowed Enterprise IDs": that list no longer gates
-            # acceptance (see validate_enterprise), so auth.test is the only thing that can
-            # have failed here. Pointing at an inert setting is worse than saying nothing.
-            self._inbound_offline_reason = (
-                "Slack workspace validation failed — auth.test rejected the Bot Token. "
-                "Re-check it in Settings → Providers → Slack Channel."
-            )
+            # The workspace check did not validate (init_socket_mode logs why). A refused token
+            # stays refused. A Slack that could not be reached, because the network is not up yet
+            # or Slack is busy, says nothing about the token, so it is asked again, with backoff,
+            # for as long as this receiver runs; no message is accepted meanwhile.
+            self._inbound_offline_reason = check.reason if check is not None else ""
+            if check is not None and check.outcome == UNREACHABLE:
+                self._retry_later(runtime, seen, services)
             return
 
-        # Register outbound delivery on the gateway + the dashboard. Core delivers
-        # through this ONE provider-agnostic ChannelDelivery handle (text, attachments,
-        # streaming, identity lookups, approvals) — it never sees the Slack client. Filed under
-        # "slack", the name core reads this channel's owner by (``owner_id_for("slack")``). The
-        # delivery reads the owner each time it asks (``get_owner_id``), so one claimed by the
-        # first person to message a fresh install is the one it prompts, before any restart.
+        self._attach_delivery(runtime, services)
+        if await self._connect(runtime) == UNREACHABLE:
+            self._retry_later(runtime, seen, services)
+
+    def _retry_later(self, runtime: SlackRuntime, seen: SeenCache, services: Any) -> None:
+        """Start :meth:`_keep_trying`, with the time of its first try already known to health."""
+        self._retry_at = asyncio.get_running_loop().time() + _RETRY_DELAYS[0]
+        self._retry = asyncio.create_task(self._keep_trying(runtime, seen, services))
+
+    def _attach_delivery(self, runtime: SlackRuntime, services: Any) -> None:
+        """Hand core this channel's outbound delivery, once the workspace is validated."""
+        # Core delivers through this ONE provider-agnostic ChannelDelivery handle (text,
+        # attachments, streaming, identity lookups, approvals) — it never sees the Slack client.
+        # Filed under "slack", the name core reads this channel's owner by
+        # (``owner_id_for("slack")``). The delivery reads the owner each time it asks
+        # (``get_owner_id``), so one claimed by the first person to message a fresh install is
+        # the one it prompts, before any restart.
         delivery = SlackDelivery(runtime.slack, get_owner_id)
         if hasattr(services, "register_channel_delivery"):
             services.register_channel_delivery(delivery, provider="slack")
@@ -216,26 +243,77 @@ class SlackTransport(ChannelTransportProvider):
         except Exception:
             logger.debug("observe-channel registration failed", exc_info=True)
 
-        for attempt in range(1, 4):
-            try:
-                await runtime._socket_client.connect()
-                logger.info("SlackTransport: Socket-Mode connected")
-                self._inbound_offline_reason = ""
-                self._inbound_started = True
-                return
-            except Exception as e:  # noqa: BLE001 — resilience: never crash the gateway
-                if attempt < 3:
-                    logger.warning("Slack Socket-Mode connect failed (%s/3): %s — retrying", attempt, e)
-                    await asyncio.sleep(2 * attempt)
-                else:
-                    logger.error(
-                        "Slack Socket-Mode connect failed after 3 attempts (%s) — "
-                        "Slack offline; the rest of the gateway is unaffected.", e,
+    async def _connect(self, runtime: SlackRuntime) -> str:
+        """Connect Socket Mode once: ``_CONNECTED``, ``REJECTED`` (Slack refuses the App Token)
+        or ``UNREACHABLE`` (anything else, which is tried again)."""
+        socket = runtime._socket_client
+        try:
+            await socket.connect()
+        except Exception as e:  # noqa: BLE001 — resilience: never crash the gateway
+            # Slack's own error code when it refused, else the failure's type — never the
+            # exception's text, which can carry the socket URL and its one-time ticket.
+            error = str(getattr(socket, "connect_error", "") or "") or type(e).__name__
+            if error in _APP_TOKEN_REFUSALS:
+                logger.error("Slack Socket-Mode connect refused (%s) — Slack offline", error)
+                runtime._slack_enabled = False
+                self._inbound_offline_reason = (
+                    f"Slack refuses the App Token ({error}). Save a working App Token in "
+                    "Configure; that connects it again."
+                )
+                return REJECTED
+            logger.warning("Slack Socket-Mode connect failed (%s) — trying again", error)
+            self._inbound_offline_reason = f"Socket Mode could not connect ({error})."
+            return UNREACHABLE
+        logger.info("SlackTransport: Socket-Mode connected")
+        self._inbound_offline_reason = ""
+        self._inbound_started = True
+        return _CONNECTED
+
+    async def _keep_trying(self, runtime: SlackRuntime, seen: SeenCache, services: Any) -> None:
+        """Bring inbound online after Slack could not be reached as it started.
+
+        Asks again after each of :data:`_RETRY_DELAYS`: the workspace check first, while the
+        workspace is not validated, then the Socket Mode connect. Stops at the first success,
+        and at a refusal, which asking again would not change. Cancelled by ``stop_inbound``.
+        """
+        loop = asyncio.get_running_loop()
+        try:
+            for delay in itertools.chain(_RETRY_DELAYS, itertools.repeat(_RETRY_DELAYS[-1])):
+                self._retry_at = loop.time() + delay
+                await asyncio.sleep(delay)
+                self._retry_at = None
+                if runtime._socket_client is None:
+                    # ``auth.test`` blocks for as long as the network takes to fail, so it runs
+                    # off the event loop the rest of the gateway shares.
+                    check = bind_workspace(
+                        runtime, seen, await asyncio.to_thread(check_workspace, runtime)
                     )
-                    runtime._slack_enabled = False
-                    self._inbound_offline_reason = f"Socket-Mode connect failed after 3 attempts: {e}"
+                    if check.outcome == REJECTED:
+                        self._inbound_offline_reason = check.reason
+                        return
+                    if runtime._socket_client is None:
+                        self._inbound_offline_reason = check.reason
+                        continue
+                    self._attach_delivery(runtime, services)
+                if await self._connect(runtime) != UNREACHABLE:
+                    return
+        finally:
+            self._retry_at = None
+
+    def _next_try(self) -> str:
+        """When inbound tries again, for the channel card: "Trying again in 20 seconds." """
+        if self._retry_at is None:
+            return "Trying again now."
+        wait = math.ceil(self._retry_at - asyncio.get_running_loop().time())
+        if wait <= 0:
+            return "Trying again now."
+        return f"Trying again in {wait} second{'s' if wait != 1 else ''}."
 
     async def stop_inbound(self) -> None:
+        retry, self._retry = self._retry, None
+        if retry is not None and not retry.done():
+            retry.cancel()
+            await asyncio.gather(retry, return_exceptions=True)
         rt = self._runtime
         if rt is not None and rt._socket_client is not None:
             try:
@@ -333,10 +411,10 @@ class SlackTransport(ChannelTransportProvider):
                 return {"state": "error", "detail": _socket_down(socket)}
             return {"state": "ready", "detail": "Tokens configured, Socket-Mode connected"}
         if self._inbound_offline_reason:
-            return {
-                "state": "error",
-                "detail": f"Outbound ready, inbound OFFLINE — {self._inbound_offline_reason}",
-            }
+            detail = f"Outbound ready, inbound OFFLINE — {self._inbound_offline_reason}"
+            if self._retry is not None and not self._retry.done():
+                detail = f"{detail} {self._next_try()}"
+            return {"state": "error", "detail": detail}
         return {
             "state": "error",
             "detail": (

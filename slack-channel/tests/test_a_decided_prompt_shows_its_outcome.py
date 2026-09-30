@@ -251,6 +251,7 @@ async def test_an_owner_claimed_after_the_start_is_prompted(monkeypatch):
     import slack_runtime.events as events_mod
     import slack_runtime.interactions as interactions_mod
     import slack_runtime.transport as transport_mod
+    from slack_runtime.enterprise import VALIDATED, WorkspaceCheck
     from personalclaw.sdk.channel import (
         CRED_SLACK_APP_TOKEN,
         CRED_SLACK_BOT_TOKEN,
@@ -265,7 +266,9 @@ async def test_an_owner_claimed_after_the_start_is_prompted(monkeypatch):
     monkeypatch.setenv(CRED_SLACK_APP_TOKEN, "fake-app-token-claim")
     slack = MockSlackClient()
     monkeypatch.setattr(transport_mod, "RealSlackClient", lambda token: slack)
-    monkeypatch.setattr(events_mod, "validate_enterprise", lambda *a, **k: True)
+    monkeypatch.setattr(
+        events_mod, "validate_enterprise", lambda *a, **k: WorkspaceCheck(VALIDATED)
+    )
     monkeypatch.setattr(events_mod, "AsyncWebClient", lambda **kw: SimpleNamespace())
     monkeypatch.setattr(events_mod, "SocketModeReceiver", _Socket)
     for name in ("_gateway_services", "_orch_cfg"):

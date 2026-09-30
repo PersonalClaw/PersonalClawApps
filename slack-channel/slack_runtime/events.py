@@ -44,7 +44,12 @@ from personalclaw.sdk.channel import redact_credentials, redact_exfiltration_url
 from personalclaw.sdk.channel import sel
 from personalclaw.sdk.channel import SkillsLoader
 from slack_runtime.allowlist import prompt_track_channel, send_dashboard_link, sync_channel_trust
-from slack_runtime.enterprise import check_message_origin, validate_enterprise
+from slack_runtime.enterprise import (
+    REJECTED,
+    WorkspaceCheck,
+    check_message_origin,
+    validate_enterprise,
+)
 from slack_runtime.files import process_slack_files
 from slack_runtime.handler import (
     APPROVAL_INTERACTIVE,
@@ -687,16 +692,17 @@ register_slash_command("status", _handle_status, "show runtime stats")
 # ---------------------------------------------------------------------------
 
 
-def init_socket_mode(orch: "GatewayServices", seen: SeenCache) -> None:
-    """Wire up the Socket Mode client and attach the event listener.
+def init_socket_mode(orch: "GatewayServices", seen: SeenCache) -> WorkspaceCheck | None:
+    """Wire up the Socket Mode client and attach the event listener, once the workspace checks.
 
-    Does nothing when Slack is disabled (either token missing). An EMPTY allowlist does
-    not stop the socket — it starts so a first DM can arrive and claim ownership, and
-    every message is then refused by ``is_allowed_user`` until someone is authorized.
-    Mutates ``orch._socket_client`` in place.
+    Does nothing when Slack is disabled (either token missing), and returns None. An EMPTY
+    allowlist does not stop the socket — it starts so a first DM can arrive and claim
+    ownership, and every message is then refused by ``is_allowed_user`` until someone is
+    authorized. Returns the workspace check, which :func:`bind_workspace` has acted on: the
+    caller tries an ``UNREACHABLE`` one again. Mutates ``orch._socket_client`` in place.
     """
     if not orch._slack_enabled:
-        return
+        return None
 
     # No preset owner → run in trust-on-first-use bootstrap: the socket still
     # starts (so an inbound DM can arrive), and the first human to DM the bot is
@@ -724,14 +730,33 @@ def init_socket_mode(orch: "GatewayServices", seen: SeenCache) -> None:
     if orch.dashboard_state:
         set_dashboard_state(orch.dashboard_state)
 
-    # ── Enterprise Grid workspace validation ──
-    # Blocks data exfiltration via personal/external Slack workspaces.
-    extra_ids = orch.settings.enterprise_ids()
-    if not validate_enterprise(orch._bot_token, extra_ids=extra_ids):
+    return bind_workspace(orch, seen, check_workspace(orch))
+
+
+def check_workspace(orch: "GatewayServices") -> WorkspaceCheck:
+    """``auth.test`` for this runtime's Bot Token (:func:`validate_enterprise`). Blocking: the
+    transport runs its retries in a thread."""
+    # Binds the gateway to the token's workspace, so a hot-swapped token cannot point the bot
+    # at another workspace; until a check succeeds, no message is accepted.
+    return validate_enterprise(orch._bot_token, extra_ids=orch.settings.enterprise_ids())
+
+
+def bind_workspace(
+    orch: "GatewayServices", seen: SeenCache, check: WorkspaceCheck
+) -> WorkspaceCheck:
+    """Act on one workspace check, and return it.
+
+    A refusal turns Slack off for this runtime: asking again gets the same answer. A Slack that
+    could not be asked changes nothing, and the caller asks again. A validated workspace gets its
+    Socket Mode receiver, with the event listener attached (not connected yet).
+    """
+    if check.outcome == REJECTED:
         logger.error("Slack workspace validation failed (auth.test) — Slack disabled")
         orch._slack_enabled = False
         orch.slack = None
-        return
+        return check
+    if not check.ok:
+        return check
 
     web_client = AsyncWebClient(token=orch._bot_token)
     orch._socket_client = SocketModeReceiver(
@@ -923,6 +948,7 @@ def init_socket_mode(orch: "GatewayServices", seen: SeenCache) -> None:
         )
 
     orch._socket_client.socket_mode_request_listeners.append(_on_event)  # type: ignore[arg-type]
+    return check
 
 
 # ---------------------------------------------------------------------------
