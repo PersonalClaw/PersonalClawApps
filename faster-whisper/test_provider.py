@@ -531,3 +531,21 @@ def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
     adapters = media_adapters(Path(__file__).parent, prov.create_provider)
     report = asyncio.run(media_refusal_report(adapters))
     assert report == media_refusal_expected(adapters)
+
+
+def test_the_manifest_keeps_pyav_below_the_release_its_decoder_cannot_call():
+    """A Store install pip-installs what ``pythonDependencies`` says, and faster-whisper's own
+    ``av>=11`` admits PyAV 19, which removed the ``metadata_errors`` keyword faster-whisper's
+    decoder passes to ``av.open``: every transcription then fails. So the manifest carries the
+    ceiling beside faster-whisper, as core's ``personalclaw[stt]`` extra does."""
+    from packaging.requirements import Requirement
+
+    manifest = json.loads((Path(__file__).parent / "app.json").read_text(encoding="utf-8"))
+    reqs = {
+        Requirement(spec).name: Requirement(spec)
+        for spec in manifest["dependencies"]["pythonDependencies"]
+    }
+    assert "faster-whisper" in reqs, reqs
+    assert "av" in reqs, "faster-whisper is declared without a PyAV ceiling"
+    assert reqs["av"].specifier.contains("18.1.0"), reqs["av"]
+    assert not reqs["av"].specifier.contains("19.0.0"), reqs["av"]

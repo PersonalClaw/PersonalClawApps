@@ -1,6 +1,6 @@
 {
   "name": "faster-whisper",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "displayName": "Faster Whisper",
   "description": "Speech-to-text using CTranslate2-optimized Whisper models. Download and manage STT models for voice input.",
   "icon": "Mic",
@@ -12,7 +12,8 @@
   ],
   "dependencies": {
     "pythonDependencies": [
-      "faster-whisper>=1.0"
+      "faster-whisper>=1.0",
+      "av<19"
     ]
   },
   "permissions": {
