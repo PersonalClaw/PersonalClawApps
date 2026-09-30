@@ -127,6 +127,10 @@ VLLM_CAPABILITY = ProviderCapability(
         "vLLM OpenAI-compatible server; capabilities are model-dependent — "
         "entries should declare only what the deployment supports."
     ),
+    # A vLLM server runs the models it serves on the machine it runs on: an instance at an
+    # endpoint on this machine runs its model here (free, local-first, and a prompt that never
+    # leaves the machine), while one elsewhere is a remote model.
+    hosts_model=True,
 )
 
 

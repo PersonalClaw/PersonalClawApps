@@ -38,6 +38,14 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 Reaches only the vLLM server you set in **vLLM Base URL** (by default `localhost:8000`, on this machine).
 
+## Cost
+
+A vLLM server runs the models it serves on its own machine, and this app says so. An instance on
+this machine is a local model: its calls cost a known $0, the daily dollar cap does not limit them,
+local-first routing tries it first, and its prompts never leave the machine. An instance on another
+machine is a remote model: give its models a price in **Settings → Usage → Model prices** if the
+daily dollar cap should count them.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

@@ -38,6 +38,15 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 Reaches only the endpoint you set in **Base URL**.
 
+## Cost
+
+An instance is never taken as a free local model, even at an address on this machine, since a
+proxy there can front a paid cloud API. Its calls are priced by the model's id when PersonalClaw
+knows that model's price, and otherwise have no price: Settings → Usage shows them as unpriced, and
+a daily dollar cap refuses them until you set a price in **Settings → Usage → Model prices**. For an
+endpoint that costs nothing, such as a model runtime on this machine, set the instance's price to
+$0 (`<instance>:*`). Its prompts get the outbound scan Settings → Guardrails asks for.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

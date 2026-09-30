@@ -202,6 +202,29 @@ def test_vllm_capability_descriptor() -> None:
     assert VLLM_CAPABILITY.supports_vision is True
 
 
+def test_a_vllm_instance_on_this_machine_is_a_local_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A vLLM server runs the models it serves on the machine it runs on, and the app says so
+    (``hosts_model``): core takes an instance at an endpoint on this machine as a model that runs
+    here, free and never sending its prompt off the machine, and one elsewhere as a remote model.
+    An endpoint on this machine alone would not say so, since a proxy there can front a paid API."""
+    from provider import VLLM_CAPABILITY, _factory
+
+    from personalclaw.llm import registry as core_registry
+
+    reg = ProviderRegistry()
+    reg.register_type(VLLM_CAPABILITY, _factory)
+    for name, url in (
+        ("gpu-here", "http://localhost:8000/v1"),
+        ("gpu-there", "http://192.0.2.10:8000/v1"),
+    ):
+        reg.register_entry(ProviderEntry(name=name, type="vllm", model="", options={"endpoint": url}))
+    monkeypatch.setattr(core_registry, "get_default_registry", lambda: reg)
+
+    assert VLLM_CAPABILITY.hosts_model is True
+    assert core_registry.served_on_this_machine("gpu-here") is True
+    assert core_registry.served_on_this_machine("gpu-there") is False
+
+
 def test_vllm_registers_with_default_registry() -> None:
     import provider  # noqa: F401  (app-local; registers the vllm type on import)
     cap = get_default_registry().capability_of("vllm")
