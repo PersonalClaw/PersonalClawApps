@@ -65,6 +65,7 @@ if _APP_DIR not in _sys.path:
 from personalclaw.sdk.trigger_source import SourceEvent, TriggerSourceProvider
 
 from email_runtime.inbound_tap import subscribe, unsubscribe
+from email_runtime.mime import listing
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,11 @@ class EmailTriggerSource(TriggerSourceProvider):
         if emit is None:
             return
         body = str(text or "")
+        files = list(getattr(message, "files", None) or [])
+        if files and body.strip():
+            # What the mail came with, by name, type and size, inside the one fenced field: an
+            # automation run for this mail is told of each file. Its bytes stay with core.
+            body = f"{body}\n\nAttached:\n{listing(files)}"
         if not body.strip():
             # The transport already drops these, but a caller that stopped doing so must not
             # start firing every content-matching trigger's catch-all with an empty payload.

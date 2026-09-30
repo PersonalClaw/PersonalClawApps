@@ -1,15 +1,16 @@
-"""MIME body + attachment text extraction for the mail-inbox provider.
-
-The plan's T2.3 contract:
+"""A mail's body and its attachments, for the mail-inbox provider.
 
 - **prefer ``text/plain``** — a multipart/alternative mail carries the same content
   as plain and HTML; the plain part is the safest to read and needs no sanitization;
 - **HTML-only mail is sanitized** — when there is no plain part we strip tags (and
   drop ``<script>``/``<style>`` bodies wholesale) down to visible text with a small
   stdlib parser, never rendering or executing anything;
-- **attachment text via the platform's existing readers** — a PDF/DOCX/PPTX attachment
-  is written to a temp file and run through ``personalclaw.sdk.channel.extract_text``
-  (core's ``doc_parser``), the SAME reader core uses; no new parsing here.
+- **attachments are files, not body text** — each attached part is handed to core as it
+  came (:func:`attachments`, ``personalclaw.sdk.inbox.Attachment``: its name, its type,
+  its bytes). Core keeps them with the Inbox row, lists them there with a download, and
+  gives an agent reading the message each one's text inside a fence. An attachment's text
+  was once appended to the body, so a PDF quote read as the message and no attachment was
+  listed anywhere.
 
 Everything extracted is RAW: fencing happens downstream at prompt time
 (``fence_untrusted``), never here — so text is never double-fenced.
@@ -18,12 +19,11 @@ Everything extracted is RAW: fencing happens downstream at prompt time
 from __future__ import annotations
 
 import logging
-import os
-import tempfile
+import mimetypes
 from email.message import Message
 from html.parser import HTMLParser
 
-from personalclaw.sdk.channel import extract_text, is_parseable_document
+from personalclaw.sdk.inbox import Attachment
 
 logger = logging.getLogger(__name__)
 
@@ -95,57 +95,46 @@ def _decode_part(part: Message) -> str:
         return payload.decode("utf-8", errors="replace")
 
 
-def _attachment_text(part: Message, filename: str) -> str:
-    """Extract text from a document attachment via core's reader. Empty on anything else."""
-    ctype = part.get_content_type()
-    if not is_parseable_document(ctype, filename):
-        return ""
-    payload = part.get_payload(decode=True)
-    if not payload:
-        return ""
-    suffix = os.path.splitext(filename)[1] or ""
-    tmp_path = ""
-    try:
-        with tempfile.NamedTemporaryFile(prefix="mailatt_", suffix=suffix, delete=False) as fh:
-            fh.write(payload)
-            tmp_path = fh.name
-        return extract_text(tmp_path, mimetype=ctype, filename=filename)
-    except OSError:
-        logger.debug("mail-inbox: attachment temp-file write failed", exc_info=True)
-        return ""
-    finally:
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+def _is_attachment(part: Message) -> bool:
+    """A part is an attachment when it says so or names a file; the body is what is left."""
+    disposition = str(part.get("Content-Disposition", "")).lower()
+    return "attachment" in disposition or bool(part.get_filename())
+
+
+def attachments(msg: Message) -> list[Attachment]:
+    """The files a parsed email came with, in the order it carries them.
+
+    Each is its part's file name (or ``attachment-<n>`` with the extension its type suggests,
+    for a part that names none), its declared type and its decoded bytes. What size or count
+    is kept is core's decision (``personalclaw.attachments``), made the same way for every
+    source, so nothing is dropped here."""
+    found: list[Attachment] = []
+    for part in msg.walk():
+        if part.is_multipart() or not _is_attachment(part):
+            continue
+        payload = part.get_payload(decode=True)
+        data = payload if isinstance(payload, bytes) else b""
+        ctype = part.get_content_type()
+        name = (part.get_filename() or "").strip()
+        if not name:
+            name = f"attachment-{len(found) + 1}{mimetypes.guess_extension(ctype) or ''}"
+        found.append(Attachment(name=name, mimetype=ctype, data=data))
+    return found
 
 
 def extract_body(msg: Message) -> str:
-    """Return the readable body text of a parsed email, per the T2.3 contract.
+    """Return the readable body text of a parsed email.
 
-    Prefers ``text/plain``; falls back to sanitized ``text/html``; then appends the
-    extracted text of any parseable document attachment (PDF/DOCX/PPTX). Non-multipart
-    mail is handled by its single content type.
+    Prefers ``text/plain``; falls back to sanitized ``text/html``. An attachment is not
+    body text (:func:`attachments`). Non-multipart mail is handled by its single content type.
     """
     plain_parts: list[str] = []
     html_parts: list[str] = []
-    attachment_texts: list[str] = []
 
     for part in msg.walk():
-        if part.is_multipart():
+        if part.is_multipart() or _is_attachment(part):
             continue
         ctype = part.get_content_type()
-        filename = part.get_filename() or ""
-        disposition = str(part.get("Content-Disposition", "")).lower()
-        is_attachment = "attachment" in disposition or bool(filename)
-
-        if is_attachment:
-            text = _attachment_text(part, filename)
-            if text.strip():
-                attachment_texts.append(text.strip())
-            continue
-
         if ctype == "text/plain":
             plain_parts.append(_decode_part(part))
         elif ctype == "text/html":
@@ -157,9 +146,4 @@ def extract_body(msg: Message) -> str:
         body = html_to_text("\n".join(html_parts))
     else:
         body = ""
-
-    if attachment_texts:
-        joined_attachments = "\n\n".join(attachment_texts)
-        body = f"{body}\n\n{joined_attachments}".strip() if body else joined_attachments
-
     return body[:_MAX_TEXT]

@@ -436,6 +436,29 @@ def test_meta_carries_IDENTIFIERS_ONLY_never_prose_and_the_SUBJECT_IS_ABSENT(reg
     assert "ignore your instructions" not in blob
 
 
+def test_the_event_names_the_files_the_mail_came_with_inside_its_one_fenced_field(
+    registered_source,
+):
+    """An automation run for a mail is told what it came with: each file by name, type and
+    size, in ``text`` (the field core fences), never in ``meta``. The bytes stay with core."""
+    from dataclasses import replace
+
+    from personalclaw.sdk.channel import Attachment
+
+    seen: list = []
+    registered_source._emit = seen.append
+    message = replace(
+        _channel_message(), files=[Attachment("quote.pdf", "application/pdf", b"x" * 2048)]
+    )
+    registered_source._on_inbound(message, text="The revised quote is attached.")
+
+    [event] = seen
+    assert event.text == (
+        "The revised quote is attached.\n\nAttached:\n- quote.pdf (application/pdf, 2.0 KB)"
+    )
+    assert "quote.pdf" not in " ".join(str(v) for v in event.meta.values())
+
+
 def test_an_EMPTY_body_emits_nothing(registered_source):
     """The transport already drops these; a caller that stopped doing so must not start
     firing every content-matching trigger's catch-all with an empty payload."""

@@ -180,7 +180,8 @@ class TestBodyExtraction:
         mail = parse_inbound(raw, 1)
         assert mail is not None
         assert "attached text" not in mail.body
-        assert mail.attachments == ["notes.txt"]
+        [notes] = mail.attachments
+        assert (notes.name, notes.mimetype, notes.data) == ("notes.txt", "text/plain", b"attached text")
 
     def test_body_is_capped(self):
         import email

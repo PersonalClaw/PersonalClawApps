@@ -193,11 +193,15 @@ class FakeSession:
         self.task = None
         self.appended: list[tuple] = []
         self.queued: list[str] = []
+        #: The ``meta`` of each append that carried one (a turn's attached files).
+        self.metas: list[dict] = []
 
-    def append(self, role, text, cls) -> None:
+    def append(self, role, text, cls, *, meta=None) -> None:
         self.appended.append((role, text, cls))
+        if meta is not None:
+            self.metas.append(meta)
 
-    def queue_append(self, text, *, channel: str = "") -> None:
+    def queue_append(self, text, *, channel: str = "", files=None) -> None:
         self.queued.append(text)
 
 

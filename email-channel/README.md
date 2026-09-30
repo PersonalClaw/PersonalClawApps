@@ -80,7 +80,8 @@ This bundle also registers a **`trigger_source`** provider
 
 Author a trigger with pattern `AppEvent` and an `event_glob` matching one of those (or
 `app:email-channel:*` for any of them). The quote-stripped new prose of the mail arrives as
-the payload, **fenced at origin** by core; `meta` carries identifiers only
+the payload, **fenced at origin** by core, followed by an `Attached:` list naming each file
+the mail came with (name, type and size); `meta` carries identifiers only
 (`channel_id`, `sender`, `is_dm`).
 
 Three things this deliberately does *not* do:
@@ -214,6 +215,14 @@ the mailbox's own address can never be the owner (its mail is dropped unread).
 Trust is keyed on the address parsed out of `From`, never on the display name. A message
 whose display name reads `allowed@example.com` but whose actual address is
 `evil@attacker.test` is denied.
+
+## Attachments
+
+A mail's attachments reach PersonalClaw as the files they are, never as body text. From
+someone PersonalClaw does not know yet, the Inbox row that holds the mail lists each file by
+name, type and size, with a download. From an allowed correspondent, the files ride with the
+mail's turn as that turn's attached files, the way a file you attach in the chat does. A mail
+that is only its attachments is still a turn: it names what came.
 
 ## Capabilities
 

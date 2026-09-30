@@ -8,7 +8,10 @@ mail-inbox app proved:
 - **HTML-only mail is stripped to visible text** with a small stdlib parser
   (``<script>``/``<style>`` bodies dropped wholesale), never rendered or executed;
 - **headers are RFC-2047 decoded** (``=?utf-8?B?…?=``) so a non-ASCII subject reads as
-  text, not as an encoded word.
+  text, not as an encoded word;
+- **attachments are files, not body text** (:func:`attachments`): each is handed to core as
+  it came (``personalclaw.sdk.channel.Attachment``), which keeps them with what the mail
+  becomes, a held stranger's Inbox row or a turn in the linked chat.
 
 Two things this module does that a read-only inbox source does not have to:
 
@@ -41,8 +44,11 @@ import email.policy
 import email.utils
 import logging
 import re
+import mimetypes
 from email.message import EmailMessage, Message
 from html.parser import HTMLParser
+
+from personalclaw.sdk.channel import Attachment
 
 logger = logging.getLogger(__name__)
 
@@ -195,9 +201,7 @@ def _decode_part(part: Message) -> str:
 def extract_body(msg: Message) -> str:
     """The readable body text: prefer ``text/plain``, else stripped ``text/html``.
 
-    Attachments are skipped here — :func:`parse_inbound` reports their names separately
-    so the transport can mention them without this app growing a document-extraction
-    path a channel does not need (the mail-inbox app owns that concern)."""
+    Attachments are not body text: :func:`attachments` hands each one to core as a file."""
     plain_parts: list[str] = []
     html_parts: list[str] = []
 
@@ -247,17 +251,42 @@ def automated_reason(msg: Message, from_addr: str) -> str:
     return ""
 
 
-def attachment_names(msg: Message) -> list[str]:
-    """Filenames of the message's attachment parts (decoded), in order."""
-    names: list[str] = []
+def attachments(msg: Message) -> list[Attachment]:
+    """The files the message came with, in order: each part's decoded file name (or
+    ``attachment-<n>`` with the extension its type suggests), its declared type and its
+    decoded bytes. What size or count is kept is core's decision, made the same way for
+    every channel, so nothing is dropped here."""
+    found: list[Attachment] = []
     for part in msg.walk():
         if part.is_multipart():
             continue
         filename = part.get_filename() or ""
         disposition = str(part.get("Content-Disposition", "")).lower()
-        if filename or "attachment" in disposition:
-            names.append(decode_header_value(filename) or "(unnamed)")
-    return names
+        if not (filename or "attachment" in disposition):
+            continue
+        ctype = part.get_content_type()
+        payload = part.get_payload(decode=True)
+        name = decode_header_value(filename).strip()
+        if not name:
+            name = f"attachment-{len(found) + 1}{mimetypes.guess_extension(ctype) or ''}"
+        data = payload if isinstance(payload, bytes) else b""
+        found.append(Attachment(name=name, mimetype=ctype, data=data))
+    return found
+
+
+def _size(n: int) -> str:
+    for unit, step in (("MB", 1024 * 1024), ("KB", 1024)):
+        if n >= step:
+            return f"{n / step:.1f} {unit}"
+    return f"{n} bytes"
+
+
+def listing(files: list[Attachment]) -> str:
+    """One line per attachment, ``name (type, size)``: how the text a mail becomes names the
+    files it came with. Its names are the sender's, and are data wherever this lands."""
+    return "\n".join(
+        f"- {f.name} ({f.mimetype or 'type not given'}, {_size(len(f.data))})" for f in files
+    )
 
 
 def strip_quoted_reply(body: str) -> str:
@@ -307,7 +336,8 @@ class InboundMail:
     def __init__(
         self, *, uid: int = 0, message_id: str = "", from_addr: str = "", from_name: str = "",
         subject: str = "", body: str = "", in_reply_to: str = "", references: str = "",
-        to_addrs: list[str] | None = None, attachments: list[str] | None = None, ts: float = 0.0,
+        to_addrs: list[str] | None = None, attachments: list[Attachment] | None = None,
+        ts: float = 0.0,
         automated: str = "",
     ) -> None:
         self.uid = uid
@@ -373,7 +403,7 @@ def parse_inbound(raw: bytes, uid: int = 0) -> InboundMail | None:
             in_reply_to=str(msg.get("In-Reply-To", "")).strip(),
             references=str(msg.get("References", "")).strip(),
             to_addrs=to_addrs,
-            attachments=attachment_names(msg),
+            attachments=attachments(msg),
             ts=_parse_date(msg),
             automated=automated_reason(msg, from_addr),
         )

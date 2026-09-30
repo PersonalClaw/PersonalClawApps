@@ -575,6 +575,23 @@ class TestTrustSeamIntegration:
         await asyncio.sleep(0)
         assert "text" not in captured
 
+    @pytest.mark.asyncio
+    async def test_a_mail_that_is_only_its_attachments_is_a_turn_carrying_them(self, wired):
+        """An empty body used to mean "nothing to act on", attachments or not: a quote sent
+        with no words never reached the chat. It is a turn now, naming what came, and the
+        files ride with it as the turn's attached files."""
+        transport, imap, _, state, captured = wired
+        allow_sender("email", BOB)
+        _mail(1, imap, plain="", attachments=[("quote.pdf", "application/pdf", b"%PDF-1.4")])
+        await transport._poll_once(transport._settings())
+        await asyncio.sleep(0)
+        assert "It came with:" in captured["text"] and "quote.pdf (application/pdf" in captured["text"]
+        [meta] = state.session.metas
+        [path] = meta["files"]
+        assert path.endswith("_quote.pdf")
+        with open(path, "rb") as fh:
+            assert fh.read() == b"%PDF-1.4"
+
 
 class TestPairingByReply:
     """The plan's email pairing UX: a REPLY CONTAINING the code redeems it."""
@@ -846,7 +863,7 @@ class TestChannelMessageMapping:
         assert cm.metadata["subject"] == "Subj"
         assert cm.metadata["uid"] == "33"
 
-    def test_attachment_names_are_carried(self, wired):
+    def test_a_mails_attachments_are_its_files(self, wired):
         from email_runtime.mime import parse_inbound
 
         transport, _, _, _, _ = wired
@@ -855,7 +872,8 @@ class TestChannelMessageMapping:
         )
         assert mail is not None
         cm = transport._to_channel_message(mail)
-        assert cm.attachments == [{"name": "x.pdf"}]
+        [file] = cm.files
+        assert (file.name, file.mimetype, file.data) == ("x.pdf", "application/pdf", b"%PDF")
 
 
 class TestExecutorDiscipline:

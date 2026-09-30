@@ -19,8 +19,9 @@ On each ``poll`` the provider:
 4. drops a message whose ``From`` is not allowlisted (a per-rejection SEL
    ``mail_sender_rejected`` event fires) and a duplicate ``Message-ID`` (a second belt
    over the UID cursor);
-5. extracts the body per T2.3 (prefer text/plain, sanitize HTML, pull attachment text
-   through core's document readers) and maps the mail onto ``IncomingMessage``;
+5. extracts the body (prefer text/plain, sanitize HTML) and maps the mail onto
+   ``IncomingMessage``, its attachments as the message's files (``files``): core keeps them
+   with the Inbox row, which lists each one with a download;
 6. **binds a prompt-bound address** (C4): when the mail was delivered to one of
    the configured ``bound_addresses``, the item text becomes that row's stored,
    user-authored ``default_prompt`` followed by the mail FENCED with
@@ -85,7 +86,7 @@ from mail_inbox_runtime.addresses import (
     sender_matches,
 )
 from mail_inbox_runtime.imap_client import ImapClient, ImapError, Imap4Client
-from mail_inbox_runtime.mime import extract_body
+from mail_inbox_runtime.mime import attachments, extract_body
 from mail_inbox_runtime.outbound import (
     NO_TARGET,
     SEND_FAILED,
@@ -553,6 +554,7 @@ class MailInboxProvider(MessageSourceProvider):
             thread_context=[],
             is_dm=False,
             kind="email",
+            files=attachments(msg),
         )
 
     @staticmethod

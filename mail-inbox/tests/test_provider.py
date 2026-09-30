@@ -74,6 +74,23 @@ def test_poll_surfaces_allowlisted_message():
     assert checkpoints[MailInboxProvider._checkpoint_key(_load_settings())] == "5"
 
 
+def test_a_polled_mail_brings_its_attachments_as_files_beside_its_words():
+    _configure()
+    quote = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n"
+    raw = build_message(
+        subject="Kitchen estimate",
+        plain="The revised quote is attached.",
+        attachments=[("revised-quote.pdf", "application/pdf", quote)],
+    )
+    provider, _ = _provider_with({FOLDER: {5: raw}})
+
+    [m], _ = _poll(provider)
+
+    assert m.text == "Subject: Kitchen estimate\n\nThe revised quote is attached."
+    [file] = m.files
+    assert (file.name, file.mimetype, file.data) == ("revised-quote.pdf", "application/pdf", quote)
+
+
 def test_restart_neither_reprocesses_nor_skips():
     _configure()
     msgs = {FOLDER: {5: build_message(message_id="<a@x>"), 6: build_message(message_id="<b@x>")}}

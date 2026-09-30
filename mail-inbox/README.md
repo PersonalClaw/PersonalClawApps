@@ -39,8 +39,11 @@ mail is irreversible and leaves your machine, so it is off by default. See
   An empty allowlist fails the poll with a sentence that says so, which the Inbox shows,
   and every rejection records a `mail_sender_rejected` security event.
 - **Extracts readable text.** Prefers `text/plain`; sanitizes HTML-only mail to visible
-  text (dropping `<script>`/`<style>`); and pulls text from PDF/DOCX/PPTX attachments
-  through the platform's own document readers.
+  text (dropping `<script>`/`<style>`).
+- **Attachments are files.** Each attachment reaches the Inbox as the file it is: the row
+  lists it by name, type and size, with a download, and an agent reading the message is
+  told of it and given its text (a PDF's, a Word or PowerPoint document's) inside a fence.
+  Its bytes are never part of the message body.
 - **Prompt-bound addresses.** A purpose-specific receiving address can carry a stored
   prompt ("build my itinerary and add calendar entries"). Mail to it becomes that prompt
   followed by the mail wrapped in an `<untrusted_content source="mail:<address>">` fence,
@@ -126,7 +129,7 @@ Mail that binds becomes:
 
 <untrusted_content source="mail:you+travel@gmail.com">
 Subject: Your flight is confirmed
-…the mail body and any attachment text…
+…the mail body…
 </untrusted_content>
 ```
 

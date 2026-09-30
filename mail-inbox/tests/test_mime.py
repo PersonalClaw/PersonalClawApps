@@ -1,7 +1,8 @@
-"""MIME extraction — text/plain preference, HTML sanitization, attachment text.
+"""A mail's body and its attachments.
 
-Covers T2.3: multipart mail extracts text/plain; HTML-only mail is sanitized; a PDF
-attachment contributes extracted text via the platform's existing document readers.
+Multipart mail reads its text/plain part; HTML-only mail is sanitized; an attachment is a
+file handed to core as it came, never text appended to the body. A PDF quote's text once
+read as the message, with no attachment listed anywhere.
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ from __future__ import annotations
 import email
 import email.policy
 
-from mail_inbox_runtime.mime import extract_body, html_to_text
+from mail_inbox_runtime.mime import attachments, extract_body, html_to_text
 
 from _fakes import build_message
 
@@ -45,26 +46,42 @@ def test_html_only_mail_is_sanitized():
     assert "x()" not in body and "<" not in body
 
 
-def test_pdf_attachment_contributes_extracted_text():
-    # A minimal PDF with an uncompressed text stream — core's binary-scan reader pulls it.
-    pdf = (
-        b"%PDF-1.4\n"
-        b"1 0 obj\n<< /Type /Catalog >>\nendobj\n"
-        b"stream\nBT (ATTACHMENT_TEXT_MARKER) Tj ET\nendstream\n"
-        b"%%EOF\n"
-    )
-    raw = build_message(plain="body text", attachments=[("report.pdf", "application/pdf", pdf)])
-    body = extract_body(_parse(raw))
-    assert "body text" in body
-    assert "ATTACHMENT_TEXT_MARKER" in body  # extracted via core doc_parser
+QUOTE_PDF = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n"
 
 
-def test_non_document_attachment_is_ignored():
+def test_an_attachment_is_a_file_and_never_body_text():
     raw = build_message(
-        plain="just the body", attachments=[("photo.png", "image/png", b"\x89PNG\r\n")]
+        plain="The revised quote is attached.",
+        attachments=[("revised-quote.pdf", "application/pdf", QUOTE_PDF)],
     )
-    body = extract_body(_parse(raw))
-    assert body.strip() == "just the body"  # image contributes no text
+    msg = _parse(raw)
+    assert extract_body(msg) == "The revised quote is attached."
+    [quote] = attachments(msg)
+    assert (quote.name, quote.mimetype, quote.data) == (
+        "revised-quote.pdf",
+        "application/pdf",
+        QUOTE_PDF,
+    )
+
+
+def test_every_attachment_is_handed_over_whatever_its_type():
+    raw = build_message(
+        plain="just the body",
+        attachments=[
+            ("photo.png", "image/png", b"\x89PNG\r\n"),
+            ("notes.txt", "text/plain", b"attached text"),
+        ],
+    )
+    msg = _parse(raw)
+    assert extract_body(msg).strip() == "just the body"  # an attached text file is not the body
+    assert [(a.name, a.mimetype) for a in attachments(msg)] == [
+        ("photo.png", "image/png"),
+        ("notes.txt", "text/plain"),
+    ]
+
+
+def test_a_mail_with_no_attachment_hands_over_none():
+    assert attachments(_parse(build_message(plain="hello"))) == []
 
 
 def test_plain_text_charset_is_honored():

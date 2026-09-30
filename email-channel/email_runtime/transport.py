@@ -87,7 +87,7 @@ from email_runtime.delivery import EmailDelivery, ThreadStore
 from email_runtime.imap_client import Imap4Client, ImapClient, ImapError
 from email_runtime.imap_client import probe_login as imap_probe
 from email_runtime.inbound_tap import publish as publish_inbound
-from email_runtime.mime import parse_inbound, strip_quoted_reply
+from email_runtime.mime import listing, parse_inbound, strip_quoted_reply
 from email_runtime.settings import (
     ACTIVATION_OFF,
     EmailSettings,
@@ -518,7 +518,8 @@ class EmailTransport(ChannelTransportProvider):
         """Normalize an :class:`InboundMail` to the canonical inbound shape.
 
         ``channel_id`` is the correspondent's address — that IS how core addresses a
-        reply back — and ``thread_id`` is the chain root, which is the session key."""
+        reply back — and ``thread_id`` is the chain root, which is the session key. The
+        mail's attachments are its ``files``, which core keeps with what the mail becomes."""
         return ChannelMessage(
             channel_id=mail.from_addr,
             text=mail.body,
@@ -526,7 +527,6 @@ class EmailTransport(ChannelTransportProvider):
             thread_id=mail.thread_root,
             message_id=mail.message_id,
             ts=mail.ts,
-            attachments=[{"name": name} for name in mail.attachments],
             metadata={
                 "sender_name": mail.from_name,
                 "subject": mail.subject,
@@ -534,6 +534,7 @@ class EmailTransport(ChannelTransportProvider):
                 "references": mail.references,
                 "in_reply_to": mail.in_reply_to,
             },
+            files=list(mail.attachments),
         )
 
     async def _dispatch(self, raw: bytes, uid: int, settings: EmailSettings) -> None:
@@ -548,8 +549,12 @@ class EmailTransport(ChannelTransportProvider):
         # Only the new text of a reply becomes the turn — the quoted history below it is
         # the previous conversation (often including our own words).
         text = strip_quoted_reply(mail.body).strip()
+        if not text and mail.attachments:
+            # A mail that is only its attachments still says something: that these came. Its
+            # files ride with it (`_to_channel_message`), and this line names them.
+            text = f"(No message text. It came with:)\n{listing(mail.attachments)}"
         if not text:
-            return  # nothing to act on (an empty body, or attachments only)
+            return  # nothing to act on: no text and nothing attached
 
         cm = self._to_channel_message(mail)
 
