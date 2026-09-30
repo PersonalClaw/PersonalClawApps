@@ -1,6 +1,6 @@
 {
   "name": "slack-channel",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "displayName": "Slack Channel",
   "description": "Slack workspace integration. Monitor channels, respond to mentions, and interact via Slack.",
   "icon": "Slack",
@@ -171,9 +171,82 @@
         "reactions": {
           "type": "object",
           "default": {},
+          "properties": {
+            "queued": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-meta": {
+                "label": "Queued",
+                "placeholder": "eyes"
+              }
+            },
+            "thinking": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-meta": {
+                "label": "Thinking",
+                "placeholder": "thinking_face"
+              }
+            },
+            "coding": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-meta": {
+                "label": "Coding",
+                "placeholder": "man_technologist"
+              }
+            },
+            "browsing": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-meta": {
+                "label": "Browsing",
+                "placeholder": "globe_with_meridians"
+              }
+            },
+            "tool": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-meta": {
+                "label": "Using a tool",
+                "placeholder": "wrench"
+              }
+            },
+            "done": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-meta": {
+                "label": "Done",
+                "placeholder": "white_check_mark"
+              }
+            },
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-meta": {
+                "label": "Error",
+                "placeholder": "scream"
+              }
+            }
+          },
+          "additionalProperties": false,
           "x-meta": {
             "label": "Reactions",
-            "help": "Override phase reaction emojis (queued/thinking/coding/browsing/tool/done/error). null suppresses a phase."
+            "help": "The emoji the bot reacts with in each phase of a reply, by its Slack name. Leave one blank for its default, or switch it off for no reaction in that phase."
           }
         },
         "reactions_enabled": {
@@ -187,9 +260,45 @@
         "channels": {
           "type": "object",
           "default": {},
+          "propertyNames": {
+            "type": "string",
+            "x-meta": {
+              "label": "Channel ID",
+              "placeholder": "C0123456789"
+            }
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "activation": {
+                "type": "string",
+                "default": "mention",
+                "enum": [
+                  "always",
+                  "mention",
+                  "observe",
+                  "review",
+                  "off"
+                ],
+                "x-meta": {
+                  "label": "Activation"
+                }
+              },
+              "agent": {
+                "type": "string",
+                "x-meta": {
+                  "label": "Agent",
+                  "placeholder": "the default agent"
+                }
+              }
+            },
+            "x-meta": {
+              "label": "channel"
+            }
+          },
           "x-meta": {
             "label": "Per-channel Config",
-            "help": "Per-channel activation overrides: {channel_id: {activation, agent}}."
+            "help": "How the bot takes part in a channel, in place of the default: its activation there, and the agent that answers."
           }
         },
         "dm_activation": {

@@ -183,8 +183,14 @@ engine packages go in `dependencies.sidecarDependencies` (see
 [Dependencies](#dependencies)). `voice-clone-tts` is the worked example.
 
 `settingsSchema` properties support `x-meta` per field:
-`label`, `help`, `sensitive: true` (secret handling), `tags: ["advanced"]`
-(collapsed by default), and `enum` for dropdowns. Values the user saves land in
+`label`, `help`, `placeholder`, `sensitive: true` (secret handling), `tags: ["advanced"]`
+(collapsed by default), and `enum` for dropdowns. Describe a structured field and
+the form edits it with controls instead of a JSON box: an `array` whose `items`
+are strings is chips, and one whose `items` are an `object` with `properties` is
+a row per entry. An `object` with `properties` is a control per field (a field
+typed `["string", "null"]` gets a switch, off storing `null`); an `object` whose
+entries are keyed is a row per entry, its `additionalProperties` saying what each
+value is and its `propertyNames` `x-meta` naming the key. Values the user saves land in
 `~/.personalclaw/apps/<name>/data/config.json` and are read back via
 `personalclaw.sdk.settings.ProviderSettings`.
 

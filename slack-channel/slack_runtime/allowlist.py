@@ -14,6 +14,7 @@ gateway restarts.
 """
 
 import logging
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from personalclaw.sdk.channel import AppConfig
@@ -31,6 +32,7 @@ from slack_runtime.handler import get_owner_id, is_owner, is_tracked_channel
 
 if TYPE_CHECKING:
     from slack_runtime.client import SlackClientOps
+    from slack_runtime.settings import SlackSettings
 
 logger = logging.getLogger(__name__)
 
@@ -261,27 +263,38 @@ def persist_tracking_channel(channel_id: str, name: str = "", *, remove: bool = 
         )
 
 
-def sync_channel_trust(owner_id: str, tracking_channels: "set[str]") -> None:
+def member_name(
+    user_id: str, settings: "SlackSettings", known: Mapping[str, str] | None = None
+) -> str:
+    """What to call a Slack member on the Sender trust page: the name the owner gave them in
+    Allowed Users, else the display name this app already knows (*known*, member ID → name), else
+    ``""``, and the page shows the ID."""
+    for user in settings.allowed_users:
+        if user.get("slack_id") == user_id and user.get("name"):
+            return str(user["name"])
+    shown = (known or {}).get(user_id, "")
+    return shown if shown and shown != user_id else ""
+
+
+def sync_channel_trust(owner_id: str, settings: "SlackSettings") -> None:
     """Mirror the app store's trust data into core's channel_trust store (EA-7).
 
     The guarded inbound door consults core's per-provider trust store, not this
-    app's SlackSettings. Slack's posture is owner-only, so the mirror is small:
-    the owner is the ONE allowed sender, and each tracked channel is tracked.
-    Writes only what is missing — allow_sender/track emit SEL audit rows, so an
-    unconditional re-write per boot would be audit spam.
+    app's SlackSettings, and the Sender trust page lists it. Slack's posture is
+    owner-only, so the mirror is small: the owner is the ONE allowed sender, and
+    each tracked channel is tracked, each under the name the owner gave it. Run
+    on every start: core writes and audits only what changed, so a name given
+    since the last start reaches the page, and nothing already there is let in
+    again.
     """
-    from personalclaw.sdk.channel import (
-        allow_sender,
-        is_allowed_sender,
-        is_tracked_channel,
-        track,
-    )
+    from personalclaw.sdk.channel import allow_sender, track
 
     try:
-        if owner_id and not is_allowed_sender("slack", owner_id):
-            allow_sender("slack", owner_id, via="owner")
-        for cid in tracking_channels:
-            if cid and not is_tracked_channel("slack", cid):
-                track("slack", cid)
+        if owner_id:
+            allow_sender("slack", owner_id, member_name(owner_id, settings), via="owner")
+        for channel in settings.tracking_channels:
+            cid = str(channel.get("channel_id", "") or "")
+            if cid:
+                track("slack", cid, str(channel.get("name", "") or ""))
     except Exception:
         logger.warning("channel_trust mirror failed", exc_info=True)

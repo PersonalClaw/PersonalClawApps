@@ -135,14 +135,16 @@ async def _handle_config_submission(payload: dict) -> None:
         _orch._tracking_channels = new_channels
         set_tracking_channels(new_channels)
 
-    # Persist to the app's OWN store (SlackSettings home) — not core config.json.
+    # Persist to the app's OWN store (SlackSettings home) — not core config.json. A channel still
+    # picked keeps the name the owner gave it: the panel picks channels, it does not name them.
     try:
+        from slack_runtime.settings import get_settings, reload_settings
+
+        kept = {c.get("channel_id"): c for c in get_settings().tracking_channels}
         ProviderSettings.update(
             "slack-channel",
-            {"tracking_channels": [{"channel_id": cid} for cid in sorted(new_channels)]},
+            {"tracking_channels": [kept.get(cid) or {"channel_id": cid} for cid in sorted(new_channels)]},
         )
-        from slack_runtime.settings import reload_settings
-
         reload_settings()
     except OSError:
         logger.exception("Failed to persist config from modal")

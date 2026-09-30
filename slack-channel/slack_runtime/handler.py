@@ -836,13 +836,14 @@ def get_owner_id() -> str:
     return _owner_id
 
 
-def claim_owner(user_id: str) -> bool:
+def claim_owner(user_id: str, name: str = "") -> bool:
     """First-contact owner claim: when no owner is set yet, adopt *user_id* as the
     owner and persist it (process env + ~/.personalclaw/.env) so it survives restart.
 
     Trust-on-first-use bootstrap for a fresh Slack install with no preset owner —
     the FIRST human to message the bot becomes its sole authorized owner. A no-op
     once an owner exists (returns False), so it can never transfer ownership.
+    *name* is what the Sender trust page calls them (``allowlist.member_name``).
     Returns True iff the claim happened.
     """
     global _owner_id, _allowed_users
@@ -861,7 +862,7 @@ def claim_owner(user_id: str) -> bool:
     try:
         from personalclaw.sdk.channel import allow_sender
 
-        allow_sender("slack", user_id, via="owner")
+        allow_sender("slack", user_id, name, via="owner")
     except Exception:
         logger.warning("Failed to seed channel_trust with claimed Slack owner", exc_info=True)
     return True

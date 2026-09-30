@@ -95,9 +95,9 @@ Key settings (Configure form):
 | `open_channels` | Channel IDs where ALL users may interact without the allowlist. |
 | `allowed_users` | Users allowed to interact: a row per person, their Slack member ID with a name to know them by. |
 | `dm_activation` | DM response mode: `always` (default) / `mention` / `observe` / `review` / `off`. |
-| `channels` | Per-channel overrides: `{channel_id: {activation, agent}}`. |
+| `channels` | Per-channel overrides: a row per channel, its channel ID with the activation mode and the agent that answers there. |
 | `command` | The slash-command trigger word (default `personalclaw`). |
-| `reactions`, `reactions_enabled` | Phase-aware emoji reactions during processing (queued/thinking/coding/…), per-phase overridable. |
+| `reactions`, `reactions_enabled` | Phase-aware emoji reactions during processing: a field per phase (queued, thinking, coding, …) for its emoji's Slack name, blank for the default, or switched off for no reaction in that phase. |
 | `trusted_bot_ids` | Bot IDs allowed past the bot filter (multi-node mesh). |
 | `allowed_enterprise_ids` | Slack Enterprise Grid org IDs allowed for workspace validation. |
 

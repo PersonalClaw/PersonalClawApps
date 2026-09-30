@@ -43,7 +43,12 @@ from personalclaw.sdk.channel import list_servers
 from personalclaw.sdk.channel import redact_credentials, redact_exfiltration_urls
 from personalclaw.sdk.channel import sel
 from personalclaw.sdk.channel import SkillsLoader
-from slack_runtime.allowlist import prompt_track_channel, send_dashboard_link, sync_channel_trust
+from slack_runtime.allowlist import (
+    member_name,
+    prompt_track_channel,
+    send_dashboard_link,
+    sync_channel_trust,
+)
 from slack_runtime.enterprise import (
     REJECTED,
     WorkspaceCheck,
@@ -723,7 +728,7 @@ def init_socket_mode(orch: "GatewayServices", seen: SeenCache) -> WorkspaceCheck
     # Mirror the owner-only posture into core's channel_trust store — the
     # guarded inbound door the linked-thread intercept routes through consults
     # core, not SlackSettings. Idempotent: writes only what is missing.
-    sync_channel_trust(orch._owner_id, orch._tracking_channels)
+    sync_channel_trust(orch._owner_id, orch.settings)
     if orch._cfg.agent.yolo:
         set_yolo_mode(True)
     set_orch_cfg(orch._cfg)
@@ -1461,7 +1466,8 @@ async def _route_message(
         and not event.get("bot_id")
         and (event.get("channel_type") == "im" or is_mention or is_tracked_channel(channel))
     ):
-        if claim_owner(sender_id):
+        known = getattr(orch.channel_history, "_user_names", None) if orch.channel_history else None
+        if claim_owner(sender_id, member_name(sender_id, orch.settings, known)):
             set_allowed_users({sender_id})
 
     # ── Access control: record authorization decision early for SEL audit ──

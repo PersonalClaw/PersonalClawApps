@@ -393,15 +393,25 @@ class TestChannelTrustWriteThrough:
 
     def test_sync_channel_trust_mirrors_owner_and_channels(self):
         import personalclaw.channel_trust as ct
+        from personalclaw.sel import sel
         from slack_runtime.allowlist import sync_channel_trust
+        from slack_runtime.settings import SlackSettings
 
-        sync_channel_trust("UOWNER", {"C1", "C2"})
+        def grants() -> int:
+            ops = ("sender_paired", "channel_tracked")
+            return sum(1 for e in sel().recent(500) if e.get("operation") in ops)
+
+        settings = SlackSettings(tracking_channels=[{"channel_id": "C1"}, {"channel_id": "C2"}])
+        before = grants()
+        sync_channel_trust("UOWNER", settings)
         assert ct.is_allowed_sender("slack", "UOWNER")
         assert ct.is_tracked_channel("slack", "C1")
         assert ct.is_tracked_channel("slack", "C2")
-        # Idempotent: a second boot re-mirror writes nothing new (no assertion on
-        # SEL here — the guard is the is_* checks — but it must not raise).
-        sync_channel_trust("UOWNER", {"C1", "C2"})
+        first = grants()
+        assert first - before == 3
+        # Idempotent: a second boot's re-mirror lets nobody in again, so it audits nothing.
+        sync_channel_trust("UOWNER", settings)
+        assert grants() == first
 
     def test_claim_owner_seeds_channel_trust(self, monkeypatch):
         import personalclaw.channel_trust as ct
