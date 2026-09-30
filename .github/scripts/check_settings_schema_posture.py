@@ -9,7 +9,7 @@ convention this rail pins is the one the catalog already practices by majority
 convention"):
 
 1. **Optional tuning fields fold.** A property whose name marks it as tuning/override
-   class — ``timeout_secs``, an ``endpoint``/``*_endpoint``/``base_url`` override, a
+   class — ``timeout_secs``, an ``endpoint``/``*_endpoint`` override, a
    ``*_bin`` binary path — and which is NOT in the schema's ``required`` array must
    carry ``x-meta.tags: ["advanced"]``. A first-run user never needs it; the Advanced
    fold is where it lives.
@@ -90,7 +90,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # Tuning/override name classes (rule 1). Deliberately narrow: only names whose class
 # the catalog has already voted on. Judgment calls that aren't mechanically decidable
 # (e.g. whether a model picker is advanced) stay prose-only in the style guide.
-ADVANCED_CLASS = re.compile(r"(^timeout(_secs)?$|(^|_)endpoint$|^base_url$|_bin$)")
+ADVANCED_CLASS = re.compile(r"(^timeout(_secs)?$|(^|_)endpoint$|_bin$)")
 
 # Credential-shaped names (rule 4). Anchored at the END of the name deliberately, so a
 # plural or a qualifier cannot match: `max_tokens`, `token_limit`, `api_keys` and

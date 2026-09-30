@@ -152,7 +152,7 @@ def create_provider(config: dict[str, Any] | None = None) -> ModelProvider:
     """
     cfg = dict(config or {})
     options: dict[str, object] = {}
-    endpoint = str(cfg.get("endpoint") or cfg.get("base_url") or "")
+    endpoint = str(cfg.get("endpoint") or "")
     if endpoint:
         options["endpoint"] = endpoint
     # DECLARED in the manifest schema — the config form renders only declared properties. Its

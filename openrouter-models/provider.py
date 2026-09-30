@@ -375,7 +375,7 @@ def create_catalog(options: dict[str, Any] | None = None, *, model: str = "") ->
     """Catalog factory (the shape ``registry.build_catalog`` invokes)."""
     opts = options or {}
     return OpenRouterCatalog(
-        endpoint=str(opts.get("endpoint") or opts.get("base_url") or ""),
+        endpoint=str(opts.get("endpoint") or ""),
         api_key=str(opts.get("api_key") or ""),
         default_model=str(model or opts.get("default_model") or opts.get("model") or ""),
     )

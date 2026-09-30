@@ -412,7 +412,7 @@ def create_provider(config: dict[str, Any] | None = None):
     cfg = config or {}
     endpoint = _resolve_endpoint(cfg)
     cfg_with_endpoint = dict(cfg)
-    cfg_with_endpoint["base_url"] = endpoint
+    cfg_with_endpoint["endpoint"] = endpoint
     return _create_chat_provider(cfg_with_endpoint)
 
 

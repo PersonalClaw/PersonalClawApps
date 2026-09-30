@@ -277,7 +277,7 @@ def test_vllm_constructor_uses_credential_secret_when_provided(
 # ── Factory ────────────────────────────────────────────────────────────
 
 
-def test_vllm_factory_requires_base_url_in_options(
+def test_vllm_factory_requires_an_endpoint_in_options(
     fake_openai: types.ModuleType,
 ) -> None:
     from provider import VLLM_CAPABILITY, _factory
@@ -288,12 +288,12 @@ def test_vllm_factory_requires_base_url_in_options(
         name="vllm-x",
         type="vllm",
         model="meta-llama/Llama-3-8B",
-        options={},  # no base_url
+        options={},  # no endpoint
         declared_capabilities=frozenset({Capability.CHAT, Capability.STREAMING}),
     )
     reg.register_entry(entry)
 
-    with pytest.raises(ProviderResolutionError, match="base_url"):
+    with pytest.raises(ProviderResolutionError, match="options.endpoint"):
         reg.build("vllm-x")
 
 
@@ -307,7 +307,7 @@ def test_vllm_factory_builds_without_credential(fake_openai: types.ModuleType) -
         name="vllm-x",
         type="vllm",
         model="meta-llama/Llama-3-8B",
-        options={"base_url": "http://localhost:8000/v1"},
+        options={"endpoint": "http://localhost:8000/v1"},
         declared_capabilities=frozenset({Capability.CHAT, Capability.STREAMING}),
     )
     reg.register_entry(entry)
@@ -320,9 +320,9 @@ def test_vllm_factory_builds_without_credential(fake_openai: types.ModuleType) -
 
 def test_vllm_factory_accepts_endpoint_key(fake_openai: types.ModuleType) -> None:
     """The Add-instance flow persists the URL under ``options.endpoint`` (the
-    settingsSchema field name), NOT ``base_url``. The factory MUST accept it, or
-    a UI-configured instance fails to build and the chat turn silently falls back
-    to the default provider (regression: 'requires options.base_url' → misroute)."""
+    settingsSchema field name). The factory MUST read it, or a UI-configured
+    instance fails to build and the chat turn silently falls back to the default
+    provider (regression: 'requires options.base_url' → misroute)."""
     from provider import VLLM_CAPABILITY, _factory
 
     reg = ProviderRegistry()
@@ -369,7 +369,6 @@ def test_vllm_factory_default_model_used_and_not_leaked(fake_openai: types.Modul
     # the SDK create() call.
     assert "default_model" not in provider._extra_options
     assert "endpoint" not in provider._extra_options
-    assert "base_url" not in provider._extra_options
 
 
 def test_vllm_factory_resolves_credential_when_declared(
@@ -383,7 +382,7 @@ def test_vllm_factory_resolves_credential_when_declared(
         name="vllm-auth",
         type="vllm",
         model="meta-llama/Llama-3-8B",
-        options={"base_url": "https://vllm.example.com/v1"},
+        options={"endpoint": "https://vllm.example.com/v1"},
         credential="vllm_api_key",
         declared_capabilities=frozenset({Capability.CHAT, Capability.STREAMING}),
     )
@@ -408,7 +407,7 @@ def test_vllm_factory_raises_credential_missing_when_secret_none(
         name="vllm-auth",
         type="vllm",
         model="meta-llama/Llama-3-8B",
-        options={"base_url": "https://vllm.example.com/v1"},
+        options={"endpoint": "https://vllm.example.com/v1"},
         credential="vllm_api_key",
         declared_capabilities=frozenset({Capability.CHAT}),
     )
@@ -430,7 +429,7 @@ def test_vllm_factory_raises_when_credential_declared_but_no_store(
         name="vllm-auth",
         type="vllm",
         model="meta-llama/Llama-3-8B",
-        options={"base_url": "https://vllm.example.com/v1"},
+        options={"endpoint": "https://vllm.example.com/v1"},
         credential="vllm_api_key",
         declared_capabilities=frozenset({Capability.CHAT}),
     )
@@ -489,7 +488,7 @@ def _vllm_registry_with(options: dict) -> ProviderRegistry:
             name="vllm-x",
             type="vllm",
             model="meta-llama/Llama-3.1-8B-Instruct",
-            options={"base_url": "http://localhost:8000/v1", **options},
+            options={"endpoint": "http://localhost:8000/v1", **options},
             declared_capabilities=frozenset({Capability.CHAT, Capability.STREAMING}),
         )
     )

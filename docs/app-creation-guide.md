@@ -196,7 +196,7 @@ identical forms look arbitrary. Three rules, enforced by
 `.github/scripts/check_settings_schema_posture.py` in CI:
 
 1. **Optional tuning fields fold.** A field a first-run user never needs —
-   `timeout_secs`, an optional `endpoint`/`base_url` override on a hosted
+   `timeout_secs`, an optional `endpoint` override on a hosted
    provider, a `*_bin` binary path — carries `tags: ["advanced"]` so it sits
    behind the Advanced disclosure.
 2. **Required fields never fold.** Anything in the schema's `required` array is

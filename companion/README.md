@@ -183,8 +183,8 @@ the local owner's: this is a single-machine personal store, not a team one.
 | `timezone` | Timezone | IANA name. Empty reads `/etc/localtime`, else UTC. An unknown name is refused. |
 
 Nothing folds behind **Advanced**: all four are first-run decisions, and the repo's
-settings-schema rail only asks tuning-class names (`timeout_secs`, `*_endpoint`, `base_url`,
-`*_bin`) to fold. Nothing is `required` either — an app that refused to mount without
+settings-schema rail only asks tuning-class names (`timeout_secs`, `*_endpoint`, `*_bin`) to
+fold. Nothing is `required` either — an app that refused to mount without
 configuration could never be configured.
 
 ## Permissions

@@ -54,9 +54,9 @@ does and where it deliberately stops.
 
 Three more distinctions that each cost a false positive to learn:
 
-* **Loads only.** ``cfg["base_url"] = endpoint`` is the app WRITING its own copy of the
-  mapping (``alibaba-models``), not reading a setting. Flagged as a Store, it reported a
-  field nobody reads.
+* **Loads only.** ``cfg_with_endpoint["endpoint"] = endpoint`` is the app WRITING its own
+  copy of the mapping (``alibaba-models``), not reading a setting. Flagged as a Store, it
+  reported a field nobody reads.
 * **Class A — the tolerant-reader ALIAS.** ``config.get("model") or
   config.get("default_model")`` reads an undeclared name whose fallback IS declared. The
   registry path can legitimately supply the alias, so the schema is right not to offer it as
@@ -120,9 +120,6 @@ ALIAS_EXEMPT: dict[tuple[str, str], str] = {
     ("meta-muse-spark", "model"): "default_model",
     ("openai-models", "model"): "default_model",
     ("vllm-models", "model"): "default_model",
-    # `base_url` is the wire spelling of the same fact the form calls `endpoint`.
-    ("claude-subscription", "base_url"): "endpoint",
-    ("vllm-models", "base_url"): "endpoint",
 }
 
 # ── Entrypoints built by a shared helper rather than `def`-ined ──────────────────────

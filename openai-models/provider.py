@@ -90,13 +90,11 @@ def _factory(
         inline_key = options.pop("api_key", "") or os.environ.get("OPENAI_API_KEY", "")
         if inline_key:
             cred = Credential(name="openai", kind="api_key", secret=inline_key, source="file")
-    # The Add-instance form stores this app's Base URL under ``endpoint`` and its model under
-    # ``default_model`` (the settingsSchema's fields), while a caller may pass ``base_url``. Pop
-    # all three: whatever stays in ``options`` is sent to the SDK as a request keyword, and an
-    # instance saved from the form failed every call with "unexpected keyword argument".
-    _base = options.pop("base_url", None)
-    _endpoint = options.pop("endpoint", None)
-    base_url = str(_base or _endpoint) if (_base or _endpoint) else None
+    # The Add-instance form stores this app's Base URL under ``endpoint`` (the one option an
+    # instance's address is read from) and its model under ``default_model`` (the settingsSchema's
+    # fields). Pop both: whatever stays in ``options`` is sent to the SDK as a request keyword, and
+    # an instance saved from the form failed every call with "unexpected keyword argument".
+    base_url = str(options.pop("endpoint", None) or "") or None
     options.pop("default_model", None)  # read as the entry's own model, below
     # The operator's configured cap, else the budget core derived for this call (the
     # ``max_tokens`` build kwarg), else none: the endpoint's own default.

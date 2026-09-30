@@ -155,8 +155,9 @@ def _factory(
     as for OpenAI — a missing store or unset secret is a config bug and
     raises :class:`CredentialMissing`.
 
-    ``base_url`` is required and read from ``entry.options.base_url``. A
-    missing or empty value raises :class:`ProviderResolutionError`.
+    The server's URL is required and read from ``entry.options.endpoint`` (the settingsSchema
+    field the Add-instance form saves). A missing or empty value raises
+    :class:`ProviderResolutionError`.
     """
     del session_key  # unused — vLLM provider is stateless.
 
@@ -173,20 +174,14 @@ def _factory(
             raise CredentialMissing(f"vllm credential {entry.credential!r} is not configured")
 
     options = dict(entry.options or {})
-    # Accept BOTH keys: the Add-instance flow persists the URL under ``endpoint``
-    # (the settingsSchema field), while callers may also pass ``base_url``. Pop
-    # both unconditionally so whichever is set wins and neither leaks into
-    # extra_options → the SDK client ("unexpected keyword argument"). base_url
-    # wins if both are present. Without accepting ``endpoint``, a UI-configured
-    # instance failed to build and silently fell back to the default provider.
-    _base = options.pop("base_url", None)
-    _endpoint = options.pop("endpoint", None)
-    base_url_value = _base or _endpoint
-    if not base_url_value:
+    # The Add-instance flow persists the URL under ``endpoint`` (the settingsSchema field, and
+    # the one option an instance's address is read from). Popped so it never leaks into
+    # extra_options → the SDK client ("unexpected keyword argument").
+    base_url = str(options.pop("endpoint", None) or "")
+    if not base_url:
         raise ProviderResolutionError(
-            f"vllm provider entry {entry.name!r} requires options.base_url (or options.endpoint)"
+            f"vllm provider entry {entry.name!r} requires options.endpoint (its server's URL)"
         )
-    base_url = str(base_url_value)
 
     # The operator's configured cap, else the budget core derived for this call (the
     # ``max_tokens`` build kwarg), else none: the server's own default.
@@ -229,7 +224,7 @@ def _factory(
 def create_provider(config: dict) -> "VLLMProvider":
     """Build a VLLMProvider from a model-extension instance config (the provider_bridge
     fallback path). vLLM needs a base_url (the local server); auth is optional."""
-    base_url = config.get("endpoint") or config.get("base_url") or "http://localhost:8000"
+    base_url = config.get("endpoint") or "http://localhost:8000"
     return VLLMProvider(
         model=own_model(config.get("model"), config),  # its Default Model, else none: refused
         base_url=base_url,
@@ -267,7 +262,7 @@ def create_catalog(options: dict | None = None, *, model: str = "") -> VLLMCatal
     """Catalog factory (registry contract) — build discovery from entry options."""
     del model
     opts = options or {}
-    endpoint = str(opts.get("endpoint") or opts.get("base_url") or "http://localhost:8000")
+    endpoint = str(opts.get("endpoint") or "http://localhost:8000")
     return VLLMCatalog(endpoint=endpoint, api_key=str(opts.get("api_key") or ""))
 
 

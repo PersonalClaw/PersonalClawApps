@@ -146,10 +146,10 @@ def test_anthropic_forwards_base_url_for_compatible_endpoints(
     )
 
 
-def test_anthropic_factory_reads_base_url_from_options(
+def test_anthropic_factory_reads_the_endpoint_from_options(
     fake_anthropic: types.ModuleType,
 ) -> None:
-    """The factory pulls ``base_url`` from ``entry.options`` and forwards it."""
+    """The factory pulls the instance's ``endpoint`` from ``entry.options`` and forwards it."""
     from provider import ANTHROPIC_CAPABILITY, _factory
 
     reg = ProviderRegistry()
@@ -159,7 +159,7 @@ def test_anthropic_factory_reads_base_url_from_options(
         type="anthropic",
         model="claude-3-5-sonnet-20241022",
         credential="anthropic_api_key",
-        options={"base_url": "https://gateway.internal/anthropic"},
+        options={"endpoint": "https://gateway.example.com/anthropic"},
         declared_capabilities=frozenset({Capability.CHAT, Capability.STREAMING}),
     )
     reg.register_entry(entry)
@@ -170,7 +170,7 @@ def test_anthropic_factory_reads_base_url_from_options(
     assert provider is not None
     assert (
         _FakeAsyncAnthropic.constructed[-1]["base_url"]
-        == "https://gateway.internal/anthropic"
+        == "https://gateway.example.com/anthropic"
     )
 
 
