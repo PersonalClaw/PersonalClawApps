@@ -1267,6 +1267,69 @@ class TestStreamingAPI:
         assert len(stops) == 0
 
 
+class TestReasoningStaysOutOfTheThread:
+    """The model's reasoning is never posted to the channel: the thread gets the answer alone.
+
+    It was posted after every reply as a "Thinking" message of its own, which read as the bot
+    talking to itself in the owner's thread. No other channel posts it, and the dashboard shows it
+    in its own collapsed panel, never as a message.
+    """
+
+    REASONING = "The user said hi. I should keep it short and skip the preamble."
+
+    @pytest.fixture(autouse=True)
+    def _ensure_reactions_enabled(self, monkeypatch):
+        import dataclasses
+
+        import slack_runtime.settings as _settings
+
+        enabled = dataclasses.replace(_settings.get_settings(), reactions_enabled=True)
+        monkeypatch.setattr(_settings, "_current", enabled)
+
+    @staticmethod
+    def _client(streaming: bool) -> MockSlackClient:
+        c = MockSlackClient()
+        c._stream_enabled = streaming
+        return c
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    @pytest.mark.asyncio
+    async def test_streamed_reasoning_is_not_posted(self, streaming):
+        slack = self._client(streaming)
+        provider = FakeProvider(
+            [
+                LLMEvent(kind="thinking_chunk", text=self.REASONING),
+                LLMEvent(kind="text_chunk", text="Hello Noor. How can I help you?"),
+            ]
+        )
+        await handle_message(
+            slack, FakeSessionManager(provider), "D1", "hi", "thread1", "msg1", "U1"
+        )
+
+        said = repr(slack.actions)
+        assert "Hello Noor. How can I help you?" in said
+        assert "keep it short" not in said
+        assert "\U0001f4ad" not in said and "💭" not in said
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    @pytest.mark.asyncio
+    async def test_reasoning_inside_the_reply_text_is_not_posted_either(self, streaming):
+        """A model that writes its reasoning into the reply between tags: the reply the thread
+        keeps is the answer alone, and what the tags held is not posted as a message of its own."""
+        slack = self._client(streaming)
+        provider = FakeProvider(
+            [LLMEvent(kind="text_chunk", text=f"<thinking>{self.REASONING}</thinking>Hello Noor.")]
+        )
+        await handle_message(
+            slack, FakeSessionManager(provider), "D1", "hi", "thread1", "msg1", "U1"
+        )
+
+        kept = [a[1].get("text") for a in slack.actions if a[0] in ("update", "stop_stream")]
+        assert kept and kept[-1] == "Hello Noor."
+        posted = [a for a in slack.actions if a[0] in ("post", "blocks")]
+        assert "keep it short" not in repr(posted)
+
+
 class TestPerThreadAgent:
     """Tests for !ta command — thread-scoped agent switching."""
 

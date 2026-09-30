@@ -2071,7 +2071,6 @@ async def handle_message(
     stream_ts: str | None = None
 
     accumulated = ""
-    thinking_accumulated = ""
     # How much each compaction the agent did on its own during this turn freed, said once the
     # reply is posted (`COMPACTION_AUTOMATIC`).
     compacted_on_its_own: list[str] = []
@@ -2339,9 +2338,10 @@ async def handle_message(
                     last_edit = now
 
             elif event.kind == EVENT_THINKING_CHUNK:
+                # The reasoning moves the status reaction and nothing else: it is the model's own,
+                # and never goes to the channel.
                 status_ctrl.set_phase("thinking")
                 status_ctrl.on_progress()
-                thinking_accumulated += event.text
 
             elif event.kind == EVENT_COMPACTION_STATUS and event.text == COMPACTION_AUTOMATIC:
                 # The agent compacted the conversation on its own between two steps. The answer
@@ -2627,12 +2627,10 @@ async def handle_message(
             )
         return
 
-    # Strip any inline <thinking> tags that leaked into the text
+    # Strip any inline <thinking> tags that leaked into the text; what they hold is not posted.
     if accumulated:
-        accumulated, inline_thinking = strip_thinking_tags(accumulated)
+        accumulated, _ = strip_thinking_tags(accumulated)
         accumulated = accumulated.strip()
-        if inline_thinking:
-            thinking_accumulated += ("\n\n" if thinking_accumulated else "") + inline_thinking
 
     actually_streamed = use_slack_stream and bool(stream_ts)
     final_text = to_slack_mrkdwn(accumulated, keep_tables=actually_streamed) if accumulated else _NO_RESPONSE
@@ -2714,22 +2712,6 @@ async def handle_message(
             await slack.post_message(channel, notice, reply_ts)
         except Exception:
             logger.warning("Failed to post the compaction notice", exc_info=True)
-
-    # Post thinking/reasoning as a thread reply between response and timing footer
-    if thinking_accumulated:
-        thinking_mrkdwn = to_slack_mrkdwn(thinking_accumulated)
-        thinking_mrkdwn, exfil_warnings = redact_exfiltration_urls(thinking_mrkdwn)
-        for w in exfil_warnings:
-            logger.warning("Exfiltration URL redacted in thinking: %s", w)
-        thinking_mrkdwn, cred_warnings = redact_credentials(thinking_mrkdwn)
-        for w in cred_warnings:
-            logger.warning("Credential redacted in thinking: %s", w)
-        thinking_parts = split_message(f"💭 *Thinking*\n\n{thinking_mrkdwn}")
-        for part in thinking_parts:
-            try:
-                await slack.post_message(channel, part, reply_ts)
-            except Exception:
-                logger.warning("Failed to post thinking message", exc_info=True)
 
     # ── Timing footer ──
     elapsed = time.monotonic() - _t0
