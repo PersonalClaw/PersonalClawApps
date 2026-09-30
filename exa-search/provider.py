@@ -36,6 +36,23 @@ _DEPTH_TO_TYPE = {"quick": "fast", "balanced": "auto", "deep": "neural"}
 _RECENCY_DAYS = {"day": 1, "today": 1, "week": 7, "month": 30, "year": 365}
 
 
+def _refusal(status: int, doing: str = "search") -> str:
+    """What a request the API answered with an error says, in words the owner can act on. For a
+    search it is what Settings → Search shows for the provider, and why a search fell back to
+    another engine."""
+    if status in (401, 403):
+        return (
+            f"Exa refused the API key (HTTP {status}). Check the key in "
+            "Settings → Providers → Exa."
+        )
+    if status == 429:
+        return (
+            f"Exa refused the request: the key's rate limit or quota is used up "
+            f"(HTTP {status}). Try again later, or check the key's plan."
+        )
+    return f"Exa could not {doing} (HTTP {status})."
+
+
 class ExaProvider(SearchProvider):
     def __init__(self, api_key: str = "", *, timeout_secs: int = 30) -> None:
         # Explicit key wins; else the conventional env var (parity with the other
@@ -82,7 +99,9 @@ class ExaProvider(SearchProvider):
         from personalclaw.sdk.net import CONNECTOR, EgressBlocked, fetch
 
         if not self._api_key:
-            raise RuntimeError("Exa API key is not configured (Settings → Search)")
+            raise RuntimeError(
+                "Exa has no API key. Enter one in Settings → Providers → Exa."
+            )
 
         d = self.normalize_depth(depth)
         body: dict[str, Any] = {
@@ -109,7 +128,7 @@ class ExaProvider(SearchProvider):
         except EgressBlocked as e:
             raise RuntimeError(f"Exa search blocked by egress guard: {e}") from e
         if resp.status != 200:
-            raise RuntimeError(f"Exa search failed (HTTP {resp.status})")
+            raise RuntimeError(_refusal(resp.status))
         data = json.loads(resp.text)
 
         hits: list[SearchHit] = []
@@ -139,7 +158,9 @@ class ExaProvider(SearchProvider):
         from personalclaw.sdk.net import fetch as net_fetch
 
         if not self._api_key:
-            raise RuntimeError("Exa API key is not configured (Settings → Search)")
+            raise RuntimeError(
+                "Exa has no API key. Enter one in Settings → Providers → Exa."
+            )
 
         try:
             resp = await net_fetch(
@@ -150,7 +171,7 @@ class ExaProvider(SearchProvider):
         except EgressBlocked as e:
             raise RuntimeError(f"Exa fetch blocked by egress guard: {e}") from e
         if resp.status != 200:
-            raise RuntimeError(f"Exa fetch failed (HTTP {resp.status})")
+            raise RuntimeError(_refusal(resp.status, "fetch the page"))
         data = json.loads(resp.text)
 
         results = data.get("results") or []

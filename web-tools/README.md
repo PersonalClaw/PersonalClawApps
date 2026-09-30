@@ -30,7 +30,9 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 ## Tools
 
-- `web_search` — searches over the Search provider you bind in Settings → Search.
+- `web_search` — searches over the Search provider you bind in Settings → Search. When that
+  provider's search fails and a provider that needs no key is installed, the search runs through
+  that one, and the result says so: the agent reads a notice naming both, and the card shows it.
 - `web_fetch` — SSRF-guarded page fetch + extraction.
 - `web_extract` — structured extraction from a page.
 

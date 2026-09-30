@@ -32,6 +32,23 @@ _API = "https://api.tavily.com"
 _DEPTH_TO_TAVILY = {"quick": "basic", "balanced": "basic", "deep": "advanced"}
 
 
+def _refusal(status: int, doing: str = "search") -> str:
+    """What a request the API answered with an error says, in words the owner can act on. For a
+    search it is what Settings → Search shows for the provider, and why a search fell back to
+    another engine."""
+    if status in (401, 403):
+        return (
+            f"Tavily refused the API key (HTTP {status}). Check the key in "
+            "Settings → Providers → Tavily."
+        )
+    if status == 429:
+        return (
+            f"Tavily refused the request: the key's rate limit or quota is used up "
+            f"(HTTP {status}). Try again later, or check the key's plan."
+        )
+    return f"Tavily could not {doing} (HTTP {status})."
+
+
 class TavilyProvider(SearchProvider):
     def __init__(self, api_key: str = "", *, timeout_secs: int = 30) -> None:
         # An explicit key wins; else fall back to the conventional env var so a
@@ -75,7 +92,9 @@ class TavilyProvider(SearchProvider):
         from personalclaw.sdk.net import CONNECTOR, EgressBlocked, fetch
 
         if not self._api_key:
-            raise RuntimeError("Tavily API key is not configured (Settings → Search)")
+            raise RuntimeError(
+                "Tavily has no API key. Enter one in Settings → Providers → Tavily."
+            )
 
         d = self.normalize_depth(depth)
         body: dict[str, Any] = {
@@ -105,7 +124,7 @@ class TavilyProvider(SearchProvider):
         except EgressBlocked as e:
             raise RuntimeError(f"Tavily search blocked by egress guard: {e}") from e
         if resp.status != 200:
-            raise RuntimeError(f"Tavily search failed (HTTP {resp.status})")
+            raise RuntimeError(_refusal(resp.status))
         data = json.loads(resp.text)
 
         hits: list[SearchHit] = []
@@ -135,7 +154,9 @@ class TavilyProvider(SearchProvider):
         from personalclaw.sdk.net import fetch as net_fetch
 
         if not self._api_key:
-            raise RuntimeError("Tavily API key is not configured (Settings → Search)")
+            raise RuntimeError(
+                "Tavily has no API key. Enter one in Settings → Providers → Tavily."
+            )
 
         try:
             resp = await net_fetch(
@@ -147,7 +168,7 @@ class TavilyProvider(SearchProvider):
         except EgressBlocked as e:
             raise RuntimeError(f"Tavily extract blocked by egress guard: {e}") from e
         if resp.status != 200:
-            raise RuntimeError(f"Tavily extract failed (HTTP {resp.status})")
+            raise RuntimeError(_refusal(resp.status, "extract the page"))
         data = json.loads(resp.text)
 
         results = data.get("results") or []

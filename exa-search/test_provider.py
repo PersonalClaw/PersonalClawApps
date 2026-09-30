@@ -140,3 +140,45 @@ async def test_search_raises_without_key(fake_fetch, monkeypatch):
     monkeypatch.delenv("EXA_API_KEY", raising=False)
     with pytest.raises(RuntimeError):
         await ExaProvider("").search("q")
+
+
+# ── a refusal says what happened and what to do ───────────────────────────────────────────────
+#
+# A refused request used to read "Exa search failed (HTTP 401)", and one with no key named
+# Settings → Search, where no key is entered. What a search says is what Settings → Search shows
+# for the provider after a Test or a real search, and why a search fell back to another engine.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [401, 403])
+async def test_a_refused_key_is_said_in_plain_words(fake_fetch, status):
+    fake_fetch.status = status
+    with pytest.raises(RuntimeError) as caught:
+        await ExaProvider("k").search("q")
+    said = str(caught.value)
+    assert "Exa refused the API key" in said and f"HTTP {status}" in said
+    assert "Settings → Providers → Exa" in said
+
+
+@pytest.mark.asyncio
+async def test_a_used_up_quota_is_said_in_plain_words(fake_fetch):
+    fake_fetch.status = 429
+    with pytest.raises(RuntimeError) as caught:
+        await ExaProvider("k").search("q")
+    assert "rate limit or quota" in str(caught.value) and "HTTP 429" in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_a_missing_key_names_where_it_is_entered(fake_fetch, monkeypatch):
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    with pytest.raises(RuntimeError) as caught:
+        await ExaProvider("").search("q")
+    assert "Settings → Providers → Exa" in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_a_refused_key_on_a_page_fetch_is_said_in_plain_words(fake_fetch):
+    fake_fetch.status = 401
+    with pytest.raises(RuntimeError) as caught:
+        await ExaProvider("k").fetch("https://docs.example/a")
+    assert "Exa refused the API key (HTTP 401)" in str(caught.value)

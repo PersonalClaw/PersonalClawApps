@@ -40,6 +40,8 @@ class _Fake(SearchProvider):
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(reg, "_providers", {})
+    monkeypatch.setattr(reg, "_provider_app", {})
+    monkeypatch.setattr(reg, "_checks", {})
     monkeypatch.setattr(uc, "_active_path", lambda: tmp_path / "active_search_providers.json")
     yield
 
@@ -139,3 +141,42 @@ async def test_web_search_surfaces_provider_error():
     assert res.success is False
     assert "upstream 500" in res.error
     assert res.recovery_hints  # offers next steps
+
+
+@pytest.mark.asyncio
+async def test_a_search_that_fell_back_says_so_to_the_agent():
+    """The bound provider refused the search and the keyless engine answered. The result says
+    that, in PersonalClaw's words, and carries the refused provider's own words as data."""
+    class _Refused(_Fake):
+        async def search(self, *a, **k):
+            raise RuntimeError("Brave refused the API key (HTTP 401).")
+
+    class _Keyless(_Fake):
+        def capabilities(self):
+            return SearchCapabilities(keyless=True)
+
+    reg.register_provider(_Refused("brave"))
+    reg.register_provider(_Keyless("duckduckgo"))
+    uc.set_active_search_provider("search-general", "brave")
+
+    res = await WebToolProvider().invoke("web_search", {"query": "q"})
+
+    assert res.success is True, res.error
+    payload = json.loads(res.output)
+    assert payload["provider"] == "duckduckgo"
+    notice = payload["fallback"]["notice"]
+    assert "Brave" in notice and "Duckduckgo" in notice, notice
+    assert "<untrusted_content" not in notice, "the notice is PersonalClaw's own sentence"
+    # The refused provider's words may carry a remote server's text: data, never instructions.
+    assert "<untrusted_content" in payload["fallback"]["reason"]
+    assert "refused the API key" in payload["fallback"]["reason"]
+    assert res.metadata["fallback_from"] == "brave"
+
+
+@pytest.mark.asyncio
+async def test_a_search_that_did_not_fall_back_carries_no_notice():
+    reg.register_provider(_Fake("tavily"))
+    res = await WebToolProvider().invoke("web_search", {"query": "q"})
+    payload = json.loads(res.output)
+    assert "fallback" not in payload
+    assert res.metadata["fallback_from"] == ""

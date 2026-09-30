@@ -1,6 +1,6 @@
 {
   "name": "tavily-search",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Tavily",
   "description": "Agent-optimized web search: a synthesized answer plus scored results. Optional extracted page content and single-URL extraction too. Best out-of-box quality; free-tier API key.",
   "icon": "Search",

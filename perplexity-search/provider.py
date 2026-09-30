@@ -36,6 +36,23 @@ _DEPTH_TO_MODEL = {"quick": "sonar", "balanced": "sonar", "deep": "sonar-pro"}
 _RECENCY_FILTER = {"day": "day", "today": "day", "week": "week", "month": "month", "year": "year"}
 
 
+def _refusal(status: int, doing: str = "search") -> str:
+    """What a request the API answered with an error says, in words the owner can act on. For a
+    search it is what Settings → Search shows for the provider, and why a search fell back to
+    another engine."""
+    if status in (401, 403):
+        return (
+            f"Perplexity Sonar refused the API key (HTTP {status}). Check the key in "
+            "Settings → Providers → Perplexity Sonar."
+        )
+    if status == 429:
+        return (
+            f"Perplexity Sonar refused the request: the key's rate limit or quota is used up "
+            f"(HTTP {status}). Try again later, or check the key's plan."
+        )
+    return f"Perplexity Sonar could not {doing} (HTTP {status})."
+
+
 class PerplexityProvider(SearchProvider):
     def __init__(self, api_key: str = "", *, timeout_secs: int = 40) -> None:
         # Explicit key wins; else the conventional env var (parity with the other
@@ -82,7 +99,9 @@ class PerplexityProvider(SearchProvider):
         from personalclaw.sdk.net import CONNECTOR, EgressBlocked, fetch
 
         if not self._api_key:
-            raise RuntimeError("Perplexity API key is not configured (Settings → Search)")
+            raise RuntimeError(
+                "Perplexity Sonar has no API key. Enter one in Settings → Providers → Perplexity Sonar."
+            )
 
         d = self.normalize_depth(depth)
         body: dict[str, Any] = {
@@ -104,7 +123,7 @@ class PerplexityProvider(SearchProvider):
         except EgressBlocked as e:
             raise RuntimeError(f"Perplexity search blocked by egress guard: {e}") from e
         if resp.status != 200:
-            raise RuntimeError(f"Perplexity search failed (HTTP {resp.status})")
+            raise RuntimeError(_refusal(resp.status))
         data = json.loads(resp.text)
 
         # The answer is the assistant message; the cited sources come back as

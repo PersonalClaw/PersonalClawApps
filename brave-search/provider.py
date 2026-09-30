@@ -35,6 +35,22 @@ _RECENCY_TO_FRESHNESS = {
 }
 
 
+def _refusal(status: int) -> str:
+    """What a search the API answered with an error says, in words the owner can act on. It is
+    what Settings → Search shows for the provider, and why a search fell back to another engine."""
+    if status in (401, 403):
+        return (
+            f"Brave Search refused the API key (HTTP {status}). Check the key in "
+            "Settings → Providers → Brave Search."
+        )
+    if status == 429:
+        return (
+            f"Brave Search refused the request: the key's rate limit or quota is used up "
+            f"(HTTP {status}). Try again later, or check the key's plan."
+        )
+    return f"Brave Search could not search (HTTP {status})."
+
+
 class BraveProvider(SearchProvider):
     def __init__(self, api_key: str = "", *, timeout_secs: int = 20) -> None:
         # Explicit key wins; else the conventional env var, so an exported
@@ -81,7 +97,9 @@ class BraveProvider(SearchProvider):
         from personalclaw.sdk.net import CONNECTOR, EgressBlocked, fetch
 
         if not self._api_key:
-            raise RuntimeError("Brave API key is not configured (Settings → Search)")
+            raise RuntimeError(
+                "Brave Search has no API key. Enter one in Settings → Providers → Brave Search."
+            )
 
         params: dict[str, Any] = {"q": query, "count": max(1, min(max_results, 20))}
         fresh = _RECENCY_TO_FRESHNESS.get((recency or "").strip().lower())
@@ -101,7 +119,7 @@ class BraveProvider(SearchProvider):
         except EgressBlocked as e:
             raise RuntimeError(f"Brave search blocked by egress guard: {e}") from e
         if resp.status != 200:
-            raise RuntimeError(f"Brave search failed (HTTP {resp.status})")
+            raise RuntimeError(_refusal(resp.status))
         data = json.loads(resp.text)
 
         # Web results live under web.results; each carries a description + optional

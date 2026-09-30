@@ -191,7 +191,7 @@ class WebToolProvider(ToolProvider):
         max_results = max(1, min(max_results, 25))
 
         try:
-            result, fell_back = await search_with_fallback(
+            result = await search_with_fallback(
                 use_case, query, depth=depth, recency=recency, domains=domains, max_results=max_results,
             )
         except ValueError as exc:
@@ -212,6 +212,10 @@ class WebToolProvider(ToolProvider):
                 success=False, error=_NO_PROVIDER, recovery_hints=[_NO_PROVIDER_HINT],
             )
 
+        # A search the bound provider failed and another engine answered carries `fallback`: its
+        # `notice` (PersonalClaw's own sentence, naming both) and the failed provider's own words.
+        # It rides in the payload, so the agent can say where its answer came from, and the card
+        # shows the notice above the results.
         payload = result.to_dict()
         # Record the surfaced URLs so a follow-up web_fetch of any result passes the
         # provenance gate (the agent found the link here, didn't fabricate it).
@@ -227,7 +231,7 @@ class WebToolProvider(ToolProvider):
             metadata={
                 "provider": result.provider,
                 "use_case": use_case,
-                "fell_back": fell_back,
+                "fallback_from": result.fallback.provider if result.fallback else "",
                 "depth": result.depth,
                 "result_count": len(result.results),
                 "has_answer": bool(result.answer),
@@ -322,8 +326,8 @@ class WebToolProvider(ToolProvider):
 def _fence_search_payload(payload: dict) -> None:
     """Fence the free-text fields of a search payload IN PLACE so the JSON stays valid
     (the agent/research-loop parses it) while injected text in a title/snippet/answer/
-    body is marked <untrusted_content>. Structural fields (url, score, provider, sources)
-    are trusted and left untouched."""
+    body, or in a failed provider's words, is marked <untrusted_content>. Structural fields
+    (url, score, provider, sources) are trusted and left untouched."""
     from personalclaw.sdk.security import fence_untrusted
 
     def _f(text: str) -> str:
@@ -331,6 +335,11 @@ def _fence_search_payload(payload: dict) -> None:
 
     if isinstance(payload.get("answer"), str):
         payload["answer"] = _f(payload["answer"])
+    # A failed provider's words can carry a remote server's text. The notice beside them is
+    # PersonalClaw's own sentence and stays as it is.
+    fallback = payload.get("fallback")
+    if isinstance(fallback, dict) and isinstance(fallback.get("reason"), str):
+        fallback["reason"] = _f(fallback["reason"])
     for hit in payload.get("results", []) or []:
         if not isinstance(hit, dict):
             continue
