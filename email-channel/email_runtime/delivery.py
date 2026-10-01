@@ -741,7 +741,8 @@ def _approval_text(brief: dict, source: str) -> str:
     tool alone. Every string is already masked; the arguments are indented, as a mail client
     shows code."""
     tool = str(brief.get("tool") or "") or "a tool"
-    parts = [f"PersonalClaw needs your approval for a {source} action: {tool}"]
+    # *source* is where the call came from, in core's words for it: "loop “Fix the README”".
+    parts = [f"PersonalClaw needs your approval for {tool}, from {source}."]
     arguments = str(brief.get("input") or "")
     if arguments:
         indented = "\n".join(f"    {line}" for line in arguments.split("\n"))

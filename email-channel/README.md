@@ -248,7 +248,8 @@ returns `""` with no-op append/stop. Core's mirror path already treats `""` as "
 channel cannot stream". Both halves are asserted together in
 `tests/test_transport.py::TestCapabilities`.
 
-Approvals arrive as a **reply token**. The prompt mail says what will run, as PersonalClaw's
+Approvals arrive as a **reply token**. The prompt mail names where the call came from
+(*from loop “Fix the README”*) and says what will run, as PersonalClaw's
 own approval card does: the tool, its arguments, why the agent is calling it, and what the call
 can touch with its risk (masked by PersonalClaw). It carries `APPROVE <token>` /
 `DENY <token>`. **Only the owner is asked, and only the owner answers.** The owner is the

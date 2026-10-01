@@ -313,6 +313,41 @@ class TestApprovalBriefOnTheNotification:
         assert context == ["clear the old build", "Can: writes files, runs a command · Risk: Destructive"]
 
 
+    @pytest.mark.asyncio
+    async def test_the_source_core_names_is_shown_as_written(self):
+        """Core tags a prompt with the work that asked (``source``), a chat or a loop by the name
+        it was given. A name is text: it notifies no one and links nowhere, on the prompt and on
+        the notification alike."""
+        client = MagicMock()
+        client.open_dm = AsyncMock(return_value="D1")
+        client.post_blocks = AsyncMock(return_value="1.1")
+        client.update_message = AsyncMock()
+        await _delivery(client).request_approval(
+            self._event(self._BRIEF),
+            source="chat “Plans for <!here> & <https://example.com|later>”",
+            on_prompted=lambda pending: pending.future.set_result("approved"),
+        )
+        blocks, fallback = client.post_blocks.call_args[0][1], client.post_blocks.call_args[0][2]
+        shown = "chat “Plans for &lt;!here&gt; &amp; &lt;https://example.com|later&gt;”"
+        assert blocks[0]["text"]["text"] == f"🔐 *[{shown}] Tool approval requested:* `bash`"
+        assert fallback.startswith(f"🔐 [{shown}] Approval needed: bash")
+        assert "<!here>" not in fallback and "<https://" not in fallback
+
+    @pytest.mark.asyncio
+    async def test_a_loop_is_named_on_its_prompt(self):
+        client = MagicMock()
+        client.open_dm = AsyncMock(return_value="D1")
+        client.post_blocks = AsyncMock(return_value="1.1")
+        client.update_message = AsyncMock()
+        await _delivery(client).request_approval(
+            self._event(self._BRIEF),
+            source="loop “Fix the README”",
+            on_prompted=lambda pending: pending.future.set_result("approved"),
+        )
+        blocks = client.post_blocks.call_args[0][1]
+        assert blocks[0]["text"]["text"] == "🔐 *[loop “Fix the README”] Tool approval requested:* `bash`"
+
+
 # ── core masks what it hands this channel ──────────────────────────────────────────────────
 
 #: A key, assembled at runtime so the literal is not in the file, and its tail, which no

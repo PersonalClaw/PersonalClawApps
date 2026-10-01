@@ -460,13 +460,13 @@ class TestApprovalReplyToken:
             "summary": "Can: runs a command · Risk: Destructive",
         }
         task = asyncio.ensure_future(
-            delivery.request_approval(self._Event(brief=brief), source="subagent")
+            delivery.request_approval(self._Event(brief=brief), source="loop “Fix the README”")
         )
         await asyncio.sleep(0)
         token = next(iter(delivery._pending))
         assert smtp.header("Subject") == "[PersonalClaw] Approval needed: execute_bash"
         assert smtp.body_text().strip() == (
-            "PersonalClaw needs your approval for a subagent action: execute_bash\n\n"
+            "PersonalClaw needs your approval for execute_bash, from loop “Fix the README”.\n\n"
             "What will run:\n\n"
             '    {"command": "rm -rf build",\n'
             '     "cwd": "/srv/app"}\n\n'

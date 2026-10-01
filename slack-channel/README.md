@@ -61,8 +61,9 @@ the channel), the Inbox says so under Slack's name, with Slack's own reason for 
 ## Approvals
 
 When an agent asks to run a tool, the prompt says what will run, as PersonalClaw's own
-approval card does: the tool, its arguments, why the agent is calling it, and what the call can
-touch with its risk (*Can: runs a command · Risk: Destructive*). Keys and exfiltration links in
+approval card does: where the call came from (*[loop “Fix the README”]*, *[workflow
+“deep-research” · step “sweep”]*), shown as written, the tool, its arguments, why the agent is
+calling it, and what the call can touch with its risk (*Can: runs a command · Risk: Destructive*). Keys and exfiltration links in
 the arguments are masked by PersonalClaw before they reach Slack. Long arguments are split over
 as many code blocks, and messages, as they take, the buttons on the last.
 

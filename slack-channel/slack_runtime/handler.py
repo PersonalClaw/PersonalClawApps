@@ -3241,7 +3241,9 @@ def _approval_messages(
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"🔐 *{tag}Tool approval requested:* `{escape_mrkdwn(tool)}`",
+                # The source names the work that asked, a chat or loop by the name it was given,
+                # so it is shown as written, like every other string of the brief.
+                "text": f"🔐 *{escape_mrkdwn(tag)}Tool approval requested:* `{escape_mrkdwn(tool)}`",
             },
         },
     ]
@@ -3274,7 +3276,8 @@ def _approval_fallback(event: LLMEvent, source: str = "") -> str:
     (a lock screen shows no blocks). The same words the prompt's summary line says."""
     brief = approval_brief_for(event) or {}
     tool = escape_mrkdwn(str(brief.get("tool") or "") or "a tool")
-    text = f"🔐 [{source}] Approval needed: {tool}" if source else f"🔐 Approval needed: {tool}"
+    tag = f"[{escape_mrkdwn(source)}] " if source else ""
+    text = f"🔐 {tag}Approval needed: {tool}"
     summary = escape_mrkdwn(str(brief.get("summary") or ""))
     return f"{text} — {summary}" if summary else text
 
