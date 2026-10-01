@@ -710,10 +710,24 @@ def test_a_hint_on_a_tool_result_is_a_no_op_and_keeps_the_group_contiguous() -> 
     assert _blocks_with_cache_point(out) == 0
 
 
-def test_the_volatile_turn_note_is_relocated_to_the_tail_not_hoisted_into_system() -> None:
+#: A per-turn note shaped like the one core's native loop writes: fenced as the runtime's.
+_FENCED_NOTE = (
+    "<system-note>\nThe runtime added this note; the user did not write it.\n\n"
+    "[tool catalog] listed tools\n</system-note>"
+)
+
+
+def _turns_that_are_only_the_note(messages: list[dict], note: str) -> list[dict]:
+    """Every turn whose whole content is the note: the note sent as a turn of its own."""
+    return [
+        m for m in messages if m.get("content") and all(b.get("text") == note for b in m["content"])
+    ]
+
+
+def test_the_volatile_turn_note_rides_the_last_user_turn_not_system() -> None:
     """Converse serves ``system`` first, so a note whose content changes every turn must
     not sit in the cacheable head — otherwise the prefix differs every turn and no
-    checkpoint is ever read. The note moves POSITION, never existence."""
+    checkpoint is ever read. It ends the request inside the user's own turn instead."""
     from provider import _translate_messages
 
     system, out = _translate_messages(
@@ -724,9 +738,76 @@ def test_the_volatile_turn_note_is_relocated_to_the_tail_not_hoisted_into_system
         ]
     )
     assert system == [{"text": "stable head"}], "the volatile note must NOT be in system"
-    assert out[-1] == {"role": "user", "content": [{"text": "turn 7 note"}]}
-    # Still reaches the model exactly once — relocated, not dropped.
-    assert sum(1 for m in out for b in m["content"] if b.get("text") == "turn 7 note") == 1
+    assert out == [{"role": "user", "content": [{"text": "go"}, {"text": "turn 7 note"}]}]
+
+
+def test_a_note_after_a_tool_result_rides_that_turn_never_as_a_turn_of_its_own() -> None:
+    """The turn the note was answered in: she asked, the model saved it with a tool, the result
+    came back. Carried as a user turn of its own, the catalog note was the newest thing she had
+    "said", and the model replied to it in her chat. The last user turn is the tool result's, the
+    result first, and the note follows it there."""
+    from provider import _translate_messages
+
+    _system, out = _translate_messages(
+        [
+            {"role": "user", "content": "Remember: the dishwasher goes left of the sink."},
+            {"role": "system", "content": _FENCED_NOTE, "_volatile": True},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "t1", "function": {"name": "remember", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "t1", "content": "Saved."},
+        ]
+    )
+    assert [m["role"] for m in out] == ["user", "assistant", "user"]
+    assert out[-1]["content"] == [
+        {"toolResult": {"toolUseId": "t1", "content": [{"text": "Saved."}]}},
+        {"text": _FENCED_NOTE},
+    ]
+    assert out[0] == {
+        "role": "user",
+        "content": [{"text": "Remember: the dishwasher goes left of the sink."}],
+    }
+    assert _turns_that_are_only_the_note(out, _FENCED_NOTE) == []
+
+
+def test_the_note_follows_the_cache_point_on_the_users_own_turn() -> None:
+    """The first inference of a turn: the checkpoint closes the user's message, and the note,
+    which changes every turn, comes after it — outside the cached prefix."""
+    from personalclaw.sdk.model import CACHE_HINT_KEY
+    from provider import _translate_messages
+
+    _system, out = _translate_messages(
+        [
+            {"role": "user", "content": "go", CACHE_HINT_KEY: {"generation": 0}},
+            {"role": "system", "content": "turn note", "_volatile": True},
+        ]
+    )
+    assert out == [{"role": "user", "content": [{"text": "go"}, _CACHE_POINT, {"text": "turn note"}]}]
+
+
+def test_a_note_rides_the_turn_the_orphan_repair_adds() -> None:
+    """An interrupted tool call is answered by a synthetic result turn at the end; the note rides
+    that turn too, rather than standing alone after it."""
+    from provider import _ORPHAN_TOOL_RESULT_TEXT, _translate_messages
+
+    _system, out = _translate_messages(
+        [
+            {"role": "user", "content": "go"},
+            {"role": "system", "content": "turn note", "_volatile": True},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "t9", "function": {"name": "cat", "arguments": "{}"}}],
+            },
+        ]
+    )
+    assert [m["role"] for m in out] == ["user", "assistant", "user"]
+    assert out[-1]["content"] == [
+        {"toolResult": {"toolUseId": "t9", "content": [{"text": _ORPHAN_TOOL_RESULT_TEXT}]}},
+        {"text": "turn note"},
+    ]
 
 
 def test_multiple_volatile_notes_ship_once_each_in_order() -> None:
@@ -739,7 +820,7 @@ def test_multiple_volatile_notes_ship_once_each_in_order() -> None:
             {"role": "system", "content": "note B", "_volatile": True},
         ]
     )
-    assert [b["text"] for m in out[-2:] for b in m["content"]] == ["note A", "note B"]
+    assert out == [{"role": "user", "content": [{"text": "go"}, {"text": "note A"}, {"text": "note B"}]}]
 
 
 # ── Posture declaration + cache-usage reporting ──────────────────────────────
@@ -810,11 +891,13 @@ async def test_complete_sends_the_cache_point_on_the_wire_and_reports_cache_read
     request = client.last_request
     assert request is not None
     assert _blocks_with_cache_point(request) == 1, "exactly one checkpoint per request"
-    assert request["messages"][-2]["content"][-1] == _CACHE_POINT
-    # The volatile note rides at the tail, AFTER the checkpoint, so it is outside the
+    # The volatile note ends the user's turn, AFTER the checkpoint, so it is outside the
     # cached span — and the system head stayed stable.
     assert request["system"] == [{"text": "stable assembled context"}]
-    assert request["messages"][-1] == {"role": "user", "content": [{"text": "turn 2 note"}]}
+    assert request["messages"][-1] == {
+        "role": "user",
+        "content": [{"text": "second question"}, _CACHE_POINT, {"text": "turn 2 note"}],
+    }
 
     done = [e for e in seen if e.kind == EVENT_COMPLETE]
     assert len(done) == 1

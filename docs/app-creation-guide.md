@@ -696,6 +696,14 @@ export function mount(el, ctx) {
   provider's format: the repository is public and secret scanners read it. A masking test that
   needs core's redactor to see a key uses the AWS documentation's example key id.
   `.github/scripts/check_test_values.py` holds every bundle's tests to that.
+- **The runtime's per-turn note is an instruction, not a message from the user.** Core's native
+  loop sends one `role: "system"` message a turn tagged `personalclaw.sdk.model.VOLATILE_KEY` (the
+  tool catalog, already fenced as the runtime's). A wire that takes a system message anywhere
+  sends it where it is. A wire whose system prompt is out of band (Anthropic Messages, Bedrock
+  Converse) appends it as one text block to the request's last user turn, after its tool results
+  and any cache checkpoint: never as a user turn of its own, which a model answers in the chat,
+  and never in the system prompt, where text that changes every turn defeats the cache.
+  `bedrock-models` is the reference.
 - **A model call names its model.** Core hands every call the model its binding in Settings →
   Models names, and a call whose binding names none is refused with the SDK's sentence
   (`personalclaw.sdk.model.require_model`) before anything is sent or loaded: nothing picks a

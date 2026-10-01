@@ -39,6 +39,7 @@ from personalclaw.sdk.model import (
     ModelProvider,
 )
 from personalclaw.sdk.model import CACHE_HINT_KEY, Capability, PromptCache, ProviderCapability
+from personalclaw.sdk.model import VOLATILE_KEY
 from personalclaw.sdk.model import (
     ModelCatalog,
     ModelDiscoveryError,
@@ -107,15 +108,6 @@ _CACHE_POINT_BLOCK: dict[str, dict[str, str]] = {"cachePoint": {"type": "default
 # unobservable: the marker would ship and nothing would ever report a hit.
 _CACHE_READ_KEY = "cacheReadInputTokens"
 _CACHE_WRITE_KEY = "cacheWriteInputTokens"
-
-# The neutral tag core's native loop stamps on its per-turn VOLATILE note (a
-# ``role: "system"`` message whose content changes EVERY turn —
-# ``agents/native/runtime.py:621``). Re-declared here rather than imported because it is
-# private to core's marker module; core's own Anthropic adapter re-declares it the same
-# way (``llm/anthropic.py``'s ``_VOLATILE_MESSAGE_KEY``). Converse serves ``system``
-# ahead of ``messages[0]``, so hoisting that note into the system block list would make
-# the cacheable prefix differ on every turn and no checkpoint could ever be read.
-_VOLATILE_MESSAGE_KEY = "_volatile"
 
 # Sentinel pushed onto the bridge queue when the worker thread finishes.
 _STREAM_DONE = object()
@@ -524,12 +516,16 @@ def _translate_messages(
       and a checkpoint wedged into a merged toolResult turn would split the group
       Converse requires to stay contiguous. Degrading to "no checkpoint" costs a cache
       hit; splitting the group would cost the whole request.
-    * the per-turn VOLATILE note is relocated to the TAIL rather than hoisted into
-      ``system`` (see :data:`_VOLATILE_MESSAGE_KEY`) — Converse serves ``system``
-      ahead of ``messages[0]``, so a note that changes every turn would make the
-      cacheable prefix differ on every turn and no checkpoint could ever be read.
-      The note moves POSITION, never existence: it still reaches the model, just late.
-      Multiple notes ship once each, in order.
+    * the per-turn VOLATILE note (core's ``role: "system"`` message carrying the SDK's
+      ``VOLATILE_KEY``, whose content changes every turn) is NOT hoisted into ``system``:
+      Converse serves ``system`` ahead of ``messages[0]``, so the cacheable prefix would
+      differ on every turn and no checkpoint could ever be read. Converse has no system
+      turn inside the conversation either, so the note is one text block appended to the
+      request's LAST user turn — after its ``toolResult`` blocks and after any
+      ``cachePoint`` — as core sends it (fenced as the runtime's). Never a user turn of
+      its own: after a tool result, that turn was the newest thing the user had "said",
+      and the model answered the tool catalog in the chat. Multiple notes ship once each,
+      in order, and a request with no user turn gets one carrying only the notes.
     """
     name_map = name_map or {}
     system_blocks: list[dict] = []
@@ -550,7 +546,7 @@ def _translate_messages(
         hinted = CACHE_HINT_KEY in msg
 
         if role == "system":
-            if msg.get(_VOLATILE_MESSAGE_KEY):
+            if msg.get(VOLATILE_KEY):
                 if content:
                     volatile_notes.append(content)
                 continue
@@ -616,12 +612,17 @@ def _translate_messages(
         if hinted:
             out[-1]["content"].append(dict(_CACHE_POINT_BLOCK))
 
-    # The relocated volatile notes ride at the TAIL, after every stable turn —
-    # Converse has no trailing-system concept, so each is carried as a user turn.
-    for note in volatile_notes:
-        out.append({"role": "user", "content": [_text(note)]})
-
-    return system_blocks, _repair_tool_pairs(out)
+    # The volatile notes end the request, on its last user turn — laid after the tool-pair
+    # repair, which can add that turn (a synthetic result for an interrupted call).
+    out = _repair_tool_pairs(out)
+    notes = [_text(note) for note in volatile_notes]
+    if notes:
+        last_user = next((m for m in reversed(out) if m.get("role") == "user"), None)
+        if last_user is None:
+            out.append({"role": "user", "content": notes})
+        else:
+            last_user["content"] = [*last_user["content"], *notes]
+    return system_blocks, out
 
 
 def _read_cache_usage(usage: dict) -> tuple[int, int]:

@@ -62,6 +62,11 @@ itself: PersonalClaw marks one message as the end of the stable prompt prefix, a
 turns that mark into Converse's `cachePoint` content block. PersonalClaw's core never learns
 Bedrock's syntax.
 
+PersonalClaw's per-turn tool note (which tools carry their full schema this turn) changes every
+turn, so it never goes into the system prompt Converse caches first. It ends your latest turn
+instead, after the checkpoint, fenced as PersonalClaw's own note: never as a message from you,
+which the model would answer in the chat.
+
 What you get from the second turn of a conversation onward: the stable part of the prompt is
 read from Bedrock's cache instead of re-processed, which is both cheaper and faster. Bedrock
 reports it as `cacheReadInputTokens`, which this app surfaces as the turn's cache-read token

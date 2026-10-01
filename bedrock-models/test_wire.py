@@ -110,3 +110,103 @@ async def test_no_model_chosen_is_refused_and_the_default_model_is_named(listing
         server=listing,
     )
     assert report == blank_model_expected(APP_DIR)
+
+
+# ── The runtime's per-turn note ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_after_a_tool_result_the_request_ends_on_that_turn_not_on_the_note(server):
+    """The request Converse receives for the turn the note was answered in: she asked, the model
+    saved it with a tool, the result came back, and core's per-turn tool note rides the request.
+    Sent as a user turn of its own, that note was the newest thing she had "said", and the model
+    replied to it in her chat. On the wire the last user turn is the tool result's, the result
+    first, with the note after it, and no turn is the note alone."""
+    from personalclaw.sdk.model import CACHE_HINT_KEY, VOLATILE_KEY
+
+    note = "<system-note>\nThe runtime added this note.\n\n[tool catalog] listed\n</system-note>"
+    built = provider._factory(entry=_entry(server.url), model=MODEL)
+    await built.start()
+    try:
+        messages = [
+            {"role": "user", "content": "Remember: never quote consignee names."},
+            {"role": "system", "content": note, VOLATILE_KEY: True},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "t1", "function": {"name": "remember", "arguments": "{}"}}],
+                CACHE_HINT_KEY: {"generation": 0},
+            },
+            {"role": "tool", "tool_call_id": "t1", "content": "Saved."},
+        ]
+        tools = [
+            {
+                "type": "function",
+                "function": {"name": "remember", "description": "Save a lesson.", "parameters": {}},
+            }
+        ]
+        async for _event in built.complete(messages, tools=tools):
+            pass
+    finally:
+        await built.shutdown()
+
+    [call] = server.calls()
+    sent = call["body"]["messages"]
+    assert [m["role"] for m in sent] == ["user", "assistant", "user"]
+    assert sent[1]["content"][-1] == {"cachePoint": {"type": "default"}}
+    assert sent[2]["content"] == [
+        {"toolResult": {"toolUseId": "t1", "content": [{"text": "Saved."}]}},
+        {"text": note},
+    ]
+    assert not [m for m in sent if all(b.get("text") == note for b in m["content"])]
+    assert "system" not in call["body"] or note not in str(call["body"]["system"])
+
+
+
+# ── A metered agent turn caches its stable prefix ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_two_planner_turns_on_a_metered_call_cache_one_identical_prefix(server):
+    """A Code loop's planner runs its model behind core's spend guard, like every turn nobody is
+    watching. The guard hid this app's explicit cache posture, so no planner request carried a
+    checkpoint and every call re-read its whole prompt: 25 calls, 536,804 input tokens, none read
+    from the cache. Two consecutive planner turns now each carry one ``cachePoint``, and what
+    the first one cached reaches the second byte for byte."""
+    import json
+
+    from personalclaw.agents.native.runtime import NativeAgentRuntime
+    from personalclaw.agents.provider import AgentRuntimeDefinition
+    from personalclaw.guardrails.model_call import ModelCallGuard
+
+    built = provider._factory(entry=_entry(server.url), model=MODEL)
+    guarded = ModelCallGuard(built, use_case="loops", provider_name="wire", model=MODEL)
+    planner = NativeAgentRuntime(
+        definition=AgentRuntimeDefinition(name="planner", provider="native", model=MODEL),
+        model_provider=guarded,
+        tool_providers=[],
+    )
+    await planner.start()
+    for nudge in ("Plan step one for the issue.", "Plan step two."):
+        async for _event in planner.stream(nudge):
+            pass
+
+    first, second = (call["body"] for call in server.calls())
+    point = {"cachePoint": {"type": "default"}}
+
+    def cached_span(body: dict) -> list[dict]:
+        """The messages before the request's one checkpoint, as Converse caches them."""
+        marked = [
+            (i, j)
+            for i, m in enumerate(body["messages"])
+            for j, block in enumerate(m["content"])
+            if block == point
+        ]
+        assert len(marked) == 1, f"one cachePoint a request, got {len(marked)}"
+        i, j = marked[0]
+        return [*body["messages"][:i], {**body["messages"][i], "content": body["messages"][i]["content"][:j]}]
+
+    span = cached_span(first)
+    assert cached_span(second)[: len(span)] == span
+    assert json.dumps(second["messages"][: len(span)], sort_keys=True) == json.dumps(span, sort_keys=True)
+    assert first.get("system") == second.get("system")
