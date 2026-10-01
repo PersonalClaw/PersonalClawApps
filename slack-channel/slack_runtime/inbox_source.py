@@ -61,6 +61,7 @@ if _APP_DIR not in _sys.path:
 from personalclaw.sdk.inbox import IncomingMessage, MessageSourceProvider
 
 from slack_runtime.client import RealSlackClient, SlackClientOps
+from slack_runtime.format import to_slack_mrkdwn
 from slack_runtime.settings import LiveConfig, load_tokens
 
 logger = logging.getLogger(__name__)
@@ -258,9 +259,10 @@ class SlackInboxSource(MessageSourceProvider):
     ) -> "bool | ReplyNotPosted":
         """``True`` once Slack took the reply; otherwise a falsy :class:`ReplyNotPosted`
         whose ``str()`` is Slack's reason, which core's inbox shows the owner who pressed
-        Send (a plain ``False`` told them nothing)."""
+        Send (a plain ``False`` told them nothing). The reply goes as a chat reply does: its
+        markdown as Slack's, and every other character as written."""
         try:
-            await self._client.post_message(channel_id, text, thread_ts)
+            await self._client.post_message(channel_id, to_slack_mrkdwn(text), thread_ts)
             return True
         except Exception as exc:  # noqa: BLE001 - the reason is the owner's answer
             logger.warning("slack inbox: the reply to %s was not posted", channel_id, exc_info=True)

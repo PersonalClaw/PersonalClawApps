@@ -139,7 +139,10 @@ class TestPostEphemeral:
         blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": "hi"}}]
         await client.post_ephemeral("C1", "U1", "fallback", blocks=blocks, thread_ts="ts1")
         mock_web.chat_postEphemeral.assert_awaited_once_with(
-            channel="C1", user="U1", text="fallback", blocks=blocks, thread_ts="ts1",
+            channel="C1", user="U1", text="fallback", thread_ts="ts1",
+            blocks=[{"type": "section", "text": {
+                "type": "mrkdwn", "text": "hi", "verbatim": True,
+            }}],
         )
 
     @pytest.mark.asyncio

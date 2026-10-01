@@ -34,6 +34,8 @@ from slack_runtime.format import (
     OPTIONS_CHECKBOXES_ACTION,
     OPTIONS_SUBMIT_ACTION,
     build_options_selected_blocks,
+    escape_mrkdwn,
+    to_slack_mrkdwn,
 )
 from slack_runtime.handler import (
     APPROVAL_INTERACTIVE,
@@ -708,9 +710,9 @@ def _mark_button_clicked(blocks: list[dict], clicked_action_id: str, label: str)
             result.append(block)
             continue
         # Insert ✓ context block before the (possibly empty) actions block
-        result.append(
-            {"type": "context", "elements": [{"type": "mrkdwn", "text": f"✓ {label}"}]}
-        )
+        result.append({"type": "context", "elements": [
+            {"type": "mrkdwn", "text": f"✓ {escape_mrkdwn(label)}"},
+        ]})
         if remaining:
             result.append({**block, "elements": remaining})
     return result
@@ -801,13 +803,13 @@ async def _route_action_to_session(
     updated_blocks = _mark_button_clicked(blocks, action_id_value, label)
     try:
         await _orch.slack.update_message(
-            channel, msg_ts, text=label, blocks=updated_blocks
+            channel, msg_ts, text=escape_mrkdwn(label), blocks=updated_blocks
         )
     except Exception:
         logger.debug("Failed to update action message", exc_info=True)
 
     # Post display text as visible user message
-    new_ts = await _orch.slack.post_message(channel, label, thread_ts)
+    new_ts = await _orch.slack.post_message(channel, escape_mrkdwn(label), thread_ts)
     if not new_ts:
         logger.warning("Failed to post action label — aborting action routing")
         return
@@ -963,7 +965,7 @@ async def _handle_options_submit(payload: dict, channel: str, msg_ts: str) -> No
     edited = False
     try:
         await _orch.slack.update_message(
-            channel, msg_ts, text=combined, blocks=new_blocks
+            channel, msg_ts, text=escape_mrkdwn(combined), blocks=new_blocks
         )
         edited = True
     except Exception:
@@ -974,7 +976,7 @@ async def _handle_options_submit(payload: dict, channel: str, msg_ts: str) -> No
 
     if not edited:
         posted_ts = await _orch.slack.post_blocks(
-            channel, selected_blocks, combined, thread_ts
+            channel, selected_blocks, escape_mrkdwn(combined), thread_ts
         )
         if not posted_ts:
             logger.warning("Failed to post options choice — aborting")
@@ -1119,7 +1121,7 @@ async def _handle_options(payload: dict, action: dict, channel: str, msg_ts: str
     edited = False
     try:
         await _orch.slack.update_message(
-            channel, msg_ts, text=choice, blocks=new_blocks
+            channel, msg_ts, text=escape_mrkdwn(choice), blocks=new_blocks
         )
         edited = True
     except Exception:
@@ -1130,7 +1132,7 @@ async def _handle_options(payload: dict, action: dict, channel: str, msg_ts: str
 
     if not edited:
         posted_ts = await _orch.slack.post_blocks(
-            channel, selected_blocks, choice, thread_ts
+            channel, selected_blocks, escape_mrkdwn(choice), thread_ts
         )
         if not posted_ts:
             logger.warning("Failed to post options choice — aborting")
@@ -1756,7 +1758,7 @@ async def _handle_session_resume(
             async with aiohttp.ClientSession() as sess:
                 await sess.post(response_url, json={
                     "replace_original": False,
-                    "text": f"Resume {title} \u2014 choose Thread or DM",
+                    "text": f"Resume {escape_mrkdwn(title)} \u2014 choose Thread or DM",
                     "blocks": blocks,
                 })
         except Exception:
@@ -1764,7 +1766,8 @@ async def _handle_session_resume(
     else:
         try:
             await _orch.slack.post_blocks(
-                channel, blocks, f"Resume {title} \u2014 choose Thread or DM"  # type: ignore[arg-type]
+                channel, blocks,  # type: ignore[arg-type]
+                f"Resume {escape_mrkdwn(title)} \u2014 choose Thread or DM",
             )
         except Exception:
             pass
@@ -1917,7 +1920,7 @@ async def _handle_resume_choice(
                     icon = "\U0001f9d1" if role == "user" else "\U0001f916"
                     try:
                         await _orch.slack.post_message(
-                            target_channel, f"{icon} {txt}", thread_ts,
+                            target_channel, f"{icon} {to_slack_mrkdwn(txt)}", thread_ts,
                         )
                     except Exception:
                         logger.debug("Failed to post context message", exc_info=True)

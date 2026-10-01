@@ -115,6 +115,12 @@ long number (with Developer Mode on, right-click the channel and pick Copy Chann
 DMs need Discord to know who you are, its owner. Discord checks the id when you save and says
 what's wrong if it can't send there.
 
+## Who a message notifies
+
+No one. Every message, edit, upload and button answer this app sends tells Discord to parse no
+mentions (`allowed_mentions` with nothing in `parse`), so `@everyone`, `@here`, `<@id>` and
+`<@&role>` in a reply, text a model may only be repeating, show as written and notify nobody.
+
 ## Install
 
 From the App Store, add the `apps/` directory as a **local source**, then install

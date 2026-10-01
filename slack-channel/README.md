@@ -98,6 +98,19 @@ Slack, then **You, in a direct message** or **A chat or channel** with the chann
 are, its owner. Slack checks the id when you save and says what's wrong if it can't send
 there.
 
+## Who a message notifies
+
+Only the people this app means to. Text a model wrote, or a sender, goes to Slack as the
+characters it is: `&`, `<` and `>` are sent as the entities Slack's escaping rules give them, in
+code as well, so a reply, a scheduled result, a notification, an approval prompt or an Inbox reply
+that contains `<!channel>`, `<!here>` or `<@U…>` shows those characters and notifies no one. Text
+streamed while a reply is being written is sent the same way. Every mrkdwn text in a block this
+app sends is verbatim, so Slack does not read a plain `@here` or `#name` as the mention or the
+channel either. A markdown link, a link in Slack's syntax and a bare address become links when
+they point at a web or mail address; a link to anything else is shown as it was written. A rich
+message the agent writes in Block Kit follows the same rules, and a mention element in it shows as
+its words.
+
 ## Install
 
 From the App Store, add the `apps/` directory as a **local source**, then install

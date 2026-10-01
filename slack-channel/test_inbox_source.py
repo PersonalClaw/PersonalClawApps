@@ -318,6 +318,13 @@ def test_send_reply_posts_into_the_thread():
     assert src._client.posts == [("C1", "ack", "1700000000.000000")]
 
 
+def test_a_reply_is_sent_as_the_characters_it_is():
+    """A reply from the Inbox is plain text: Slack shows it as written, and it mentions no one."""
+    src = _source()
+    assert asyncio.run(src.send_reply("C1", "Thanks <@U9>, R&D has it", "1.1")) is True
+    assert src._client.posts == [("C1", "Thanks &lt;@U9&gt;, R&amp;D has it", "1.1")]
+
+
 def test_send_reply_says_why_slack_did_not_take_it():
     """Falsy, and its ``str()`` is what core's inbox shows the owner who pressed Send."""
     src = _source()

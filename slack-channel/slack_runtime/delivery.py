@@ -20,6 +20,8 @@ from slack_runtime.client import RealSlackClient
 from slack_runtime.format import (
     SLACK_BLOCK_SECTION_LIMIT,
     build_cron_ack_block,
+    escape_mrkdwn,
+    model_blocks,
     split_message,
     to_slack_mrkdwn,
 )
@@ -106,9 +108,10 @@ class SlackDelivery:
         thread_ts: str = "", unfurl_links: bool = True, unfurl_media: bool = True,
         reply_broadcast: bool = False,
     ) -> str:
-        # payload is Slack Block Kit, masked by core like every text it hands a channel.
+        # payload is Slack Block Kit, masked by core like every text it hands a channel. A model
+        # wrote it, so its text is shown as written and its mentions notify no one.
         return await self._client.post_blocks(
-            channel, payload, fallback_text,
+            channel, model_blocks(payload), to_slack_mrkdwn(fallback_text),
             thread_ts=thread_ts or None,
             unfurl_links=unfurl_links, unfurl_media=unfurl_media,
             reply_broadcast=reply_broadcast,
@@ -117,7 +120,7 @@ class SlackDelivery:
     async def deliver_cron_result(
         self, channel: str, job_name: str, job_id: str, text: str, thread_ts: str = ""
     ) -> str:
-        post_text = f"⏰ *Cron: {job_name}*\n\n{to_slack_mrkdwn(text)}"
+        post_text = f"⏰ *Cron: {escape_mrkdwn(job_name)}*\n\n{to_slack_mrkdwn(text)}"
         parts = split_message(post_text, limit=_CRON_MSG_LIMIT)
         blocks = [
             {"type": "section", "text": {"type": "mrkdwn", "text": parts[0]}},
@@ -131,7 +134,7 @@ class SlackDelivery:
     async def deliver_notification(
         self, channel: str, title: str, text: str, thread_ts: str = ""
     ) -> str:
-        post = f"💓 *{title}*\n\n{to_slack_mrkdwn(text)}"
+        post = f"💓 *{escape_mrkdwn(title)}*\n\n{to_slack_mrkdwn(text)}"
         return await self._client.post_message(channel, post, thread_ts or None) or ""
 
     async def deliver_chat_mirror(
@@ -140,8 +143,8 @@ class SlackDelivery:
         from slack_runtime.format import build_options_blocks
         from personalclaw.sdk.channel import extract_options
 
-        body, options = extract_options(to_slack_mrkdwn(text))
-        for part in split_message(body):
+        body, options = extract_options(text)
+        for part in split_message(to_slack_mrkdwn(body)):
             await self._client.post_message(channel, part, thread_ts or None)
         if options:
             await self._client.post_blocks(

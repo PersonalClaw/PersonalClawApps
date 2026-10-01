@@ -72,6 +72,12 @@ INTERACTION_CALLBACK_DEFERRED_UPDATE = 6
 INTERACTION_CALLBACK_MESSAGE = 4
 MESSAGE_FLAG_EPHEMERAL = 64
 
+#: Who a message this app sends may notify: no one. Without it Discord reads the content for
+#: mentions, and an ``@everyone``, ``@here``, ``<@id>`` or ``<@&role>`` in a model's reply (text
+#: it may only be repeating) would notify the whole server, a person or a role. The text still
+#: shows as written. No message here means to notify anyone, so every one carries it.
+NO_MENTIONS: dict[str, Any] = {"parse": []}
+
 # Message component types / button styles (Discord "Message Components").
 COMPONENT_ACTION_ROW = 1
 COMPONENT_BUTTON = 2
@@ -417,7 +423,7 @@ class HTTPDiscordAPI(DiscordAPI):
         components: list[dict[str, Any]] | None = None,
         message_reference: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"content": content}
+        payload: dict[str, Any] = {"content": content, "allowed_mentions": NO_MENTIONS}
         if components is not None:
             payload["components"] = components
         if message_reference is not None:
@@ -430,7 +436,7 @@ class HTTPDiscordAPI(DiscordAPI):
         self, channel_id: str, message_id: str, content: str, *,
         components: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"content": content}
+        payload: dict[str, Any] = {"content": content, "allowed_mentions": NO_MENTIONS}
         if components is not None:
             payload["components"] = components
         return self._as_dict(
@@ -458,7 +464,11 @@ class HTTPDiscordAPI(DiscordAPI):
         name = filename or _basename(file_path)
         with open(file_path, "rb") as fh:
             blob = fh.read()
-        payload = {"content": content, "attachments": [{"id": 0, "filename": name}]}
+        payload = {
+            "content": content,
+            "allowed_mentions": NO_MENTIONS,
+            "attachments": [{"id": 0, "filename": name}],
+        }
         return self._as_dict(
             await self._call(
                 "POST", f"/channels/{channel_id}/messages",
@@ -480,7 +490,7 @@ class HTTPDiscordAPI(DiscordAPI):
     ) -> None:
         body: dict[str, Any] = {"type": callback_type}
         if data is not None:
-            body["data"] = data
+            body["data"] = {**data, "allowed_mentions": NO_MENTIONS} if "content" in data else data
         await self._call(
             "POST", f"/interactions/{interaction_id}/{interaction_token}/callback", json=body,
         )

@@ -83,6 +83,10 @@ _ASCII_PUNCT = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
 _MARKUP_START = re.compile(r"[\\`*_~\[\]!]")
 #: The MarkdownV2 marker for each emphasis a line can carry.
 _BOLD, _ITALIC, _STRIKE = "*", "_", "~"
+#: The addresses a link may point at: the web and mail. Telegram reads a link to
+#: ``tg://user?id=…`` as a mention that notifies that person, so a link anywhere else is the
+#: text that was written.
+_LINKABLE_RE = re.compile(r"(?i)(?:https?://|mailto:)\S")
 
 
 def to_markdown_v2(text: str) -> str:
@@ -296,10 +300,11 @@ def _close_bracket(
     line: str, i: int, nodes: list, delims: list[_Delim], brackets: list[_Bracket]
 ) -> int:
     """Read the ``]`` at *i*: the label since the last ``[`` becomes a link when ``(url)``
-    follows; otherwise the ``]`` is text. Returns where reading goes on."""
+    follows and is a web or mail address; otherwise the ``]`` is text. Returns where reading
+    goes on."""
     bracket = brackets.pop() if brackets else None
     target = _link_target(line, i + 1) if bracket is not None and bracket.active else None
-    if bracket is None or target is None:
+    if bracket is None or target is None or not _LINKABLE_RE.match(target[0]):
         _add_text(nodes, "]")
         return i + 1
     url, end = target

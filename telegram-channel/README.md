@@ -42,7 +42,9 @@ ships as a self-contained directory:
     part is MarkdownV2 Telegram accepts and a code block stays code on both sides of a
     cut. A reply is read as CommonMark reads it: code spans and blocks arrive exactly as
     written, wherever they sit, and an underscore inside a word (`list_allowed_directories`)
-    is a character, not italics. A progress line's tool title is shown as written. A part
+    is a character, not italics. A progress line's tool title is shown as written. A link is
+    a link only when it points at a web or mail address: Telegram reads a link to
+    `tg://user?id=…` as a mention that notifies that person, so one is shown as written. A part
     Telegram still refuses goes out as plain text rather than not at all.
   - `settings.py` — the app's own DM-activation config + credential key.
 - `cli_setup.py` / `cli_doctor.py` — the app's `personalclaw setup` / `doctor` hooks.

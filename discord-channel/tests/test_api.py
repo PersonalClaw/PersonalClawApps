@@ -131,7 +131,7 @@ class TestWrappers:
         msg = await api.create_message("500", "hi")
         assert msg["id"] == "42"
         assert rec.route() == "POST /api/v10/channels/500/messages"
-        assert rec.payload() == {"content": "hi"}
+        assert rec.payload() == {"content": "hi", "allowed_mentions": {"parse": []}}
         await api.close()
 
     @pytest.mark.asyncio
@@ -147,7 +147,7 @@ class TestWrappers:
         api, rec, _, _ = _api(lambda r: _ok({"id": "7"}))
         await api.edit_message("500", "7", "new")
         assert rec.route() == "PATCH /api/v10/channels/500/messages/7"
-        assert rec.payload() == {"content": "new"}
+        assert rec.payload() == {"content": "new", "allowed_mentions": {"parse": []}}
         await api.close()
 
     @pytest.mark.asyncio

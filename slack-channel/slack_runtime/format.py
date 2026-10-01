@@ -6,6 +6,7 @@ here for the Slack modules that use them alongside the mrkdwn/Block-Kit builders
 """
 
 import re
+from typing import Any
 
 from personalclaw.sdk.channel import extract_options, strip_thinking_tags
 
@@ -70,9 +71,9 @@ def build_options_selected_blocks(choices: list[str], selected_indices: list[int
     parts = []
     for i, choice in enumerate(choices[:10]):
         if i in selected_set:
-            parts.append(f"*{choice[:72]}*")
+            parts.append(f"*{escape_mrkdwn(choice[:72])}*")
         else:
-            parts.append(f"~{choice[:73]}~")
+            parts.append(f"~{escape_mrkdwn(choice[:73])}~")
     return [
         {
             "type": "context",
@@ -108,8 +109,71 @@ def build_link_dashboard_button() -> dict:
     }
 
 
+def escape_mrkdwn(text: str) -> str:
+    """*text* as Slack shows it, character for character.
+
+    Slack reads ``&``, ``<`` and ``>`` as control characters: ``<…>`` is a mention (``<@U…>``,
+    ``<!here>``, ``<!channel>``, ``<!everyone>``), a channel (``<#C…>``) or a link, and ``&``
+    starts an entity. Each is sent as the entity Slack's escaping rules give it, so text a
+    model or a sender wrote is shown as written and can never notify anyone. Nothing else is
+    encoded: Slack decodes only these three."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+#: The rich-text elements that notify someone: a person, a user group, or everyone in a channel
+#: or the workspace.
+_NOTIFYING_ELEMENTS = {"user": "user_id", "usergroup": "usergroup_id", "broadcast": "range"}
+
+
+def verbatim_blocks(blocks: Any) -> Any:
+    """*blocks* with every mrkdwn text in them sent ``verbatim``.
+
+    Slack reads a mrkdwn text in a block that is not verbatim before it posts it, and turns a
+    plain ``@here``, ``@channel`` or ``@everyone`` into the mention, and a ``#name`` into the
+    channel. Nothing this app sends means one that way: a mention it means is written as Slack's
+    ``<…>`` sequence, which a verbatim text still reads. So every mrkdwn text is verbatim,
+    whoever wrote the blocks."""
+    if isinstance(blocks, list):
+        return [verbatim_blocks(b) for b in blocks]
+    if isinstance(blocks, dict):
+        out = {k: verbatim_blocks(v) for k, v in blocks.items()}
+        if out.get("type") == "mrkdwn":
+            out["verbatim"] = True
+        return out
+    return blocks
+
+
+def model_blocks(blocks: Any) -> Any:
+    """Blocks a model wrote, as Slack shows them with nobody notified.
+
+    A mrkdwn text in them is the model's markdown, converted as a reply is
+    (:func:`to_slack_mrkdwn`): its links to web addresses are links and every other character is
+    text. A markdown block's text is shown as written. A rich-text mention of a person, a user
+    group or a whole channel is text, ``@`` and what it names (``@here``, a person's id), and
+    notifies no one."""
+    if isinstance(blocks, list):
+        return [model_blocks(b) for b in blocks]
+    if not isinstance(blocks, dict):
+        return blocks
+    kind = blocks.get("type")
+    if kind in _NOTIFYING_ELEMENTS:
+        return {"type": "text", "text": f"@{blocks.get(_NOTIFYING_ELEMENTS[kind]) or kind}"}
+    out = {k: model_blocks(v) for k, v in blocks.items()}
+    if isinstance(out.get("text"), str):
+        if kind == "mrkdwn":
+            out["text"] = to_slack_mrkdwn(out["text"])
+        elif kind == "markdown":
+            out["text"] = escape_mrkdwn(out["text"])
+    return out
+
+
 def to_slack_mrkdwn(text: str, *, keep_tables: bool = False) -> str:
-    """Convert LLM markdown to Slack mrkdwn format."""
+    """Convert LLM markdown to Slack mrkdwn format.
+
+    Every character of *text* reaches Slack as a character (:func:`escape_mrkdwn`), in code as
+    well. The only markup that comes out is the formatting markdown asks for, and links: a
+    markdown link, a link written in Slack's own syntax and a bare address become Slack links
+    when they point at a web or mail address, and are text when they point anywhere else."""
     text = _strip_ansi(text)
 
     if len(text) > SLACK_MAX_TEXT:
@@ -126,9 +190,9 @@ def to_slack_mrkdwn(text: str, *, keep_tables: bool = False) -> str:
         stripped = line.strip()
         if stripped.startswith("```"):
             in_code = not in_code
-            out.append(line)
+            out.append(escape_mrkdwn(line))
         elif in_code:
-            out.append(line)
+            out.append(escape_mrkdwn(line))
         else:
             line = _convert_inline(line)
             out.append(line)
@@ -138,13 +202,21 @@ def to_slack_mrkdwn(text: str, *, keep_tables: bool = False) -> str:
 # ── Inline conversions (outside code blocks) ──
 
 #: What a line is read as, left to right: a code span (CommonMark: a run of backticks closed by
-#: a run of exactly as many), which is sent as written, or a markdown link [text](url), which
-#: becomes Slack's <url|text>. Whichever starts first wins, so a link written inside code stays
-#: code, and a code span in a link's text stays in the link.
+#: a run of exactly as many), which is sent as written; a markdown link [text](url); a link in
+#: Slack's own syntax to a web address, <url|text> or <url>; or a bare web address. Whichever
+#: starts first wins, so a link written inside code stays code, and a code span in a link's
+#: text stays in the link.
 _INLINE_RE = re.compile(
     r"(?P<code>(?<!`)(?P<ticks>`+)(?!`).+?(?<!`)(?P=ticks)(?!`))"
     r"|\[(?P<label>[^\]]+)\]\((?P<url>[^)]+)\)"
+    r"|<(?P<slack_url>(?:https?://|mailto:)[^\s<>|]+)(?:\|(?P<slack_label>[^<>]*))?>"
+    r"|(?P<bare>https?://[^\s<>|]+)"
 )
+#: The addresses a link may point at: the web and mail. Slack reads any other <…> as a mention
+#: or a channel, so a link anywhere else is shown as the text that was written.
+_LINKABLE_RE = re.compile(r"(?i)(?:https?://|mailto:)[^\s]")
+#: What ends a sentence or closes emphasis right after an address, and is not part of it.
+_URL_TRAILERS = ".,:;!?'\"*_~"
 # Headings: # text → *text*
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
 # Horizontal rule: --- or *** or ___ (3+ chars)
@@ -154,29 +226,68 @@ _STRIKE_RE = re.compile(r"~~(.+?)~~")
 
 
 def _convert_inline(line: str) -> str:
-    """Convert a single non-code line from markdown to Slack mrkdwn. A code span in it is sent
-    as written."""
+    """Convert a single non-code line from markdown to Slack mrkdwn."""
     # Headings → bold
     m = _HEADING_RE.match(line)
     if m:
-        return f"*{m.group(2).strip()}*"
+        return f"*{_inline(m.group(2).strip())}*"
 
     # Horizontal rule → unicode line
     if _HR_RE.match(line):
         return "─" * 30
 
+    return _inline(line)
+
+
+def _inline(text: str) -> str:
+    """*text* as mrkdwn: its code spans and links as such, and every other character as text."""
     out: list[str] = []
     pos = 0
-    for m in _INLINE_RE.finditer(line):
-        out.append(_convert_emphasis(line[pos:m.start()]))
+    for m in _INLINE_RE.finditer(text):
+        out.append(_text(text[pos:m.start()]))
         if m.group("code"):
-            out.append(m.group("code"))
-        else:
+            out.append(escape_mrkdwn(m.group("code")))
+        elif m.group("url") is not None:
             # [text](url) → <url|text>
-            out.append(f"<{m.group('url')}|{_convert_emphasis(m.group('label'))}>")
+            out.append(_link(m.group("url"), _inline(m.group("label")), m.group(0)))
+        elif m.group("slack_url") is not None:
+            label = m.group("slack_label")
+            out.append(_link(m.group("slack_url"), _inline(label) if label else "", m.group(0)))
+        else:
+            url, trail = _trim_address(m.group("bare"))
+            out.append(_link(url, "", url) + _text(trail))
         pos = m.end()
-    out.append(_convert_emphasis(line[pos:]))
+    out.append(_text(text[pos:]))
     return "".join(out)
+
+
+def _link(url: str, label: str, written: str) -> str:
+    """A Slack link to *url* showing *label* (mrkdwn), or *written* as text when *url* is not a
+    web or mail address. The address is escaped too, and a ``|`` in it, which would end it, is
+    percent-encoded."""
+    url = url.strip()
+    if not _LINKABLE_RE.match(url):
+        return _text(written)
+    target = escape_mrkdwn(url).replace("|", "%7C")
+    return f"<{target}|{label}>" if label else f"<{target}>"
+
+
+def _trim_address(url: str) -> tuple[str, str]:
+    """``(address, rest)``: a bare address without the punctuation after it, and a closing
+    bracket only when the address opened one."""
+    end = len(url)
+    while end > 0:
+        ch = url[end - 1]
+        if ch in _URL_TRAILERS or (ch == ")" and url[:end].count(")") > url[:end].count("(")):
+            end -= 1
+            continue
+        break
+    return url[:end], url[end:]
+
+
+def _text(text: str) -> str:
+    """Text outside code: escaped, and its markdown emphasis as mrkdwn's."""
+    return _convert_emphasis(escape_mrkdwn(text))
 
 
 def _convert_emphasis(text: str) -> str:
@@ -422,9 +533,14 @@ def _reopening(fence: str) -> str:
 
 def _cut(line: str, size: int, *, in_code: bool) -> tuple[str, str]:
     """``(piece, rest)``: the first *size* characters of *line*, ended at the last space in
-    them outside code (the cut drops that space, as a line break is dropped at a cut)."""
+    them outside code (the cut drops that space, as a line break is dropped at a cut). A cut
+    never falls inside an escaped character (:func:`escape_mrkdwn`): half of ``&lt;`` shows as
+    the letters it is made of."""
     prefix = line[:size]
     space = prefix.rfind(" ")
     if not in_code and space > 0 and prefix[:space].strip():
         return prefix[:space], line[space + 1:]
+    amp = prefix.rfind("&", max(0, size - 4))
+    if amp > 0 and ";" not in prefix[amp:]:
+        return prefix[:amp], line[amp:]
     return prefix, line[size:]

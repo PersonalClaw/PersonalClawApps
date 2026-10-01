@@ -13,6 +13,8 @@ import aiohttp
 from slack_sdk.errors import SlackClientError
 from slack_sdk.web.async_client import AsyncWebClient
 
+from slack_runtime.format import escape_mrkdwn, verbatim_blocks
+
 logger = logging.getLogger(__name__)
 
 
@@ -222,7 +224,9 @@ class RealSlackClient(SlackClientOps):
         unfurl_media: bool | None = None,
         reply_broadcast: bool | None = None,
     ) -> str:
-        kwargs: dict[str, Any] = {"channel": channel, "blocks": blocks, "text": text}
+        kwargs: dict[str, Any] = {
+            "channel": channel, "blocks": verbatim_blocks(blocks), "text": text,
+        }
         if thread_ts is not None:
             kwargs["thread_ts"] = thread_ts
         if unfurl_links is not None:
@@ -239,7 +243,7 @@ class RealSlackClient(SlackClientOps):
     ) -> None:
         kwargs: dict[str, Any] = {"channel": channel, "ts": ts, "text": text}
         if blocks:
-            kwargs["blocks"] = blocks
+            kwargs["blocks"] = verbatim_blocks(blocks)
         await self._web.chat_update(**kwargs)
 
     async def delete_message(self, channel: str, ts: str) -> None:
@@ -285,7 +289,7 @@ class RealSlackClient(SlackClientOps):
     ) -> None:
         kwargs: dict = {"channel": channel, "user": user_id, "text": text}
         if blocks:
-            kwargs["blocks"] = blocks
+            kwargs["blocks"] = verbatim_blocks(blocks)
         if thread_ts:
             kwargs["thread_ts"] = thread_ts
         await self._web.chat_postEphemeral(**kwargs)
@@ -363,7 +367,7 @@ class RealSlackClient(SlackClientOps):
                 body["recipient_user_id"] = user_id
             chunks: list[dict[str, Any]] = []
             if initial_text:
-                chunks.append({"type": "markdown_text", "text": initial_text})
+                chunks.append({"type": "markdown_text", "text": escape_mrkdwn(initial_text)})
             if chunks:
                 body["chunks"] = chunks
             resp = await self._web.api_call("chat.startStream", json=body)
@@ -373,14 +377,17 @@ class RealSlackClient(SlackClientOps):
             return None
 
     async def append_stream(self, channel: str, ts: str, text: str) -> bool:
-        """Append markdown text to a streaming message via chat.appendStream."""
+        """Append markdown text to a streaming message via chat.appendStream.
+
+        The text is a model's, so it goes as characters (:func:`escape_mrkdwn`), whatever Slack's
+        markdown makes of a ``<…>`` sequence: what is streamed never mentions anyone."""
         try:
             await self._web.api_call(
                 "chat.appendStream",
                 json={
                     "channel": channel,
                     "ts": ts,
-                    "chunks": [{"type": "markdown_text", "text": text}],
+                    "chunks": [{"type": "markdown_text", "text": escape_mrkdwn(text)}],
                 },
             )
             return True

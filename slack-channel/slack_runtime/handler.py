@@ -67,6 +67,7 @@ from slack_runtime.format import (
     SLACK_BLOCK_SECTION_LIMIT,
     SLACK_MSG_LIMIT,
     TRUNCATION_NOTICE,
+    escape_mrkdwn,
     split_message,
     strip_thinking_tags,
     to_slack_mrkdwn,
@@ -2634,20 +2635,22 @@ async def handle_message(
         accumulated = accumulated.strip()
 
     actually_streamed = use_slack_stream and bool(stream_ts)
-    final_text = to_slack_mrkdwn(accumulated, keep_tables=actually_streamed) if accumulated else _NO_RESPONSE
+    # The OPTIONS tag is read off the reply as the model wrote it, so the buttons show the
+    # choices' own words. The rest is masked and then converted for Slack, last, so what is sent
+    # is exactly what was masked.
+    from slack_runtime.format import extract_options
+
+    body, options = extract_options(accumulated)
 
     # Scan for URL exfiltration before posting to Slack (link previews auto-fetch)
-    final_text, exfil_warnings = redact_exfiltration_urls(final_text)
+    body, exfil_warnings = redact_exfiltration_urls(body)
     for w in exfil_warnings:
         logger.warning("Exfiltration URL redacted in response: %s", w)
-    final_text, cred_warnings = redact_credentials(final_text)
+    body, cred_warnings = redact_credentials(body)
     for w in cred_warnings:
         logger.warning("Credential redacted in response: %s", w)
 
-    # Extract OPTIONS buttons from response and post as Block Kit
-    from slack_runtime.format import extract_options
-
-    clean_text, options = extract_options(final_text)
+    clean_text = to_slack_mrkdwn(body, keep_tables=actually_streamed) if body else ""
 
     # ── Review mode: ephemeral draft instead of public post ──
     if channel_activation == ACTIVATION_REVIEW:
@@ -2767,7 +2770,7 @@ async def handle_message(
                         slack,
                         channel,
                         reply_ts,
-                        final_text,
+                        body,
                     )
                 )
 
@@ -2998,7 +3001,7 @@ async def close_prompt(
     _record_ending(f"{channel}:{ts}", outcome)
     line = outcome_line(outcome)
     blocks = _closed_blocks(_approval_messages(event, is_dm=is_dm, source=source)[-1], line)
-    tool = str((approval_brief_for(event) or {}).get("tool") or "") or "a tool"
+    tool = escape_mrkdwn(str((approval_brief_for(event) or {}).get("tool") or "") or "a tool")
     try:
         await slack.update_message(channel, ts, text=f"🔐 {tool}: {line}", blocks=blocks)
     except Exception:
@@ -3236,18 +3239,24 @@ def _approval_messages(
     blocks: list[dict] = [
         {
             "type": "section",
-            "text": {"type": "mrkdwn", "text": f"🔐 *{tag}Tool approval requested:* `{tool}`"},
+            "text": {
+                "type": "mrkdwn",
+                "text": f"🔐 *{tag}Tool approval requested:* `{escape_mrkdwn(tool)}`",
+            },
         },
     ]
     arguments = str(brief.get("input") or "")
     if arguments:
         unfenced = _FENCE_RUN.sub(lambda m: "\u200b".join(m.group(0)), arguments)
-        for part in split_message(f"```\n{unfenced}\n```", SLACK_BLOCK_SECTION_LIMIT):
+        code = f"```\n{escape_mrkdwn(unfenced)}\n```"
+        for part in split_message(code, SLACK_BLOCK_SECTION_LIMIT):
             blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": part}})
     # Why, and what it can touch, go ABOVE the buttons: they are the reasons to press one, so a
     # reader must meet them before the decision, not after it.
     tail: list[dict] = [
-        {"type": "context", "elements": [{"type": "mrkdwn", "text": str(brief[k])}]}
+        {"type": "context", "elements": [
+            {"type": "mrkdwn", "text": escape_mrkdwn(str(brief[k]))},
+        ]}
         for k in ("purpose", "summary")
         if brief.get(k)
     ]
@@ -3264,9 +3273,9 @@ def _approval_fallback(event: LLMEvent, source: str = "") -> str:
     """The prompt's notification text: the first thing the owner reads, and often the only thing
     (a lock screen shows no blocks). The same words the prompt's summary line says."""
     brief = approval_brief_for(event) or {}
-    tool = str(brief.get("tool") or "") or "a tool"
+    tool = escape_mrkdwn(str(brief.get("tool") or "") or "a tool")
     text = f"🔐 [{source}] Approval needed: {tool}" if source else f"🔐 Approval needed: {tool}"
-    summary = str(brief.get("summary") or "")
+    summary = escape_mrkdwn(str(brief.get("summary") or ""))
     return f"{text} — {summary}" if summary else text
 
 
@@ -3295,10 +3304,10 @@ def _remove_all_jobs(store: TriggerStore) -> str:
     rows = [r for r in store.load() if r.trigger.created_by == "agent"]
     if not rows:
         return "No agent-created automations to remove."
-    lines = [f"- `{r.trigger.id}` — {r.trigger.name}" for r in rows]
+    lines = [f"- `{r.trigger.id}` — {escape_mrkdwn(r.trigger.name)}" for r in rows]
     result = delete_all_automations(store, created_by="agent", confirm=True)
     if not result.ok:
-        return f"⚠️ {result.text}"
+        return f"⚠️ {escape_mrkdwn(result.text)}"
     return f"✅ Removed {len(lines)} automation(s):\n" + "\n".join(lines)
 
 
@@ -3326,13 +3335,13 @@ def _do_spawn(task: str, manager: SubagentManager, session_key: str = "") -> str
         lines = ["*Running subagents:*"]
         for a in running:
             elapsed = int(time.time() - a.started)
-            lines.append(f"🔹 `{a.id}` | {elapsed}s | {a.task[:60]}")
+            lines.append(f"🔹 `{a.id}` | {elapsed}s | {escape_mrkdwn(a.task[:60])}")
         return "\n".join(lines)
 
     info = manager.spawn(task, parent_session_key=session_key)
     if not info:
         return f"⚠️ Subagent capacity reached ({manager.max_concurrent}). Try again later."
-    return f"🚀 Spawned subagent `{info.id}`\n_{task[:100]}_"
+    return f"🚀 Spawned subagent `{info.id}`\n_{escape_mrkdwn(task[:100])}_"
 
 
 def _relative_next_run(nxt: float | None, now: float) -> str:
@@ -3392,7 +3401,7 @@ def _handle_cron_command(
             # "where did my automation go" happens.
             if not row.ok:
                 reason = row.errors[0].message if row.errors else "invalid"
-                lines.append(f"⚠️ `{trigger.id}` | {reason}")
+                lines.append(f"⚠️ `{trigger.id}` | {escape_mrkdwn(reason)}")
                 continue
             view = to_schedule_row(trigger)
             status = "✅" if trigger.enabled else "⏸️"
@@ -3408,7 +3417,7 @@ def _handle_cron_command(
             next_part = _relative_next_run(view.get("next_run_ts"), now)
             lines.append(
                 f"{status} `{trigger.id}` | `{describe_cadence(trigger)}` "
-                f"| {message[:50]}{last}{next_part}"
+                f"| {escape_mrkdwn(message[:50])}{last}{next_part}"
             )
         return "\n".join(lines)
 
@@ -3437,7 +3446,7 @@ def _handle_cron_command(
             return f"▶️ Resumed automation `{job_id}`"
         # `set_paused` REFUSES to resume a row with a parse error and NAMES it — strictly more useful
         # than "not found", and the row does exist, so "not found" was wrong as well as unhelpful.
-        return f"❌ {result.text}"
+        return f"❌ {escape_mrkdwn(result.text)}"
 
     return None
 
@@ -3564,9 +3573,11 @@ async def _safe_update(slack: SlackClientOps, channel: str, ts: str, text: str) 
     """Update a Slack message, truncating if too long.
 
     Used for progressive streaming edits — truncation is fine here since
-    the final message uses _safe_final_update which splits instead.
+    the final message uses _safe_final_update which splits instead. *text* is the reply so far as
+    the model wrote it, converted here as the final one is.
     """
     text, _ = redact_exfiltration_urls(text)
+    text = to_slack_mrkdwn(text)
     if len(text) > SLACK_MSG_LIMIT:
         text = text[:SLACK_MSG_LIMIT] + TRUNCATION_NOTICE
     try:
