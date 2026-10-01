@@ -1,6 +1,6 @@
 {
   "name": "together-models",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "Together AI",
   "description": "Together AI serverless inference (OpenAI-compatible). Bring your own Together API key.",
   "icon": "Boxes",

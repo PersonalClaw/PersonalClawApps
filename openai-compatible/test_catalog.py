@@ -66,3 +66,33 @@ def test_discovery_failure_is_raised_not_swallowed(monkeypatch):
     with pytest.raises(ModelDiscoveryError) as exc:
         _run(cat.list_models())
     assert "500" in str(exc.value)  # the status the user has to act on, not a bare ""
+
+
+# ── Each model is offered for what it is ───────────────────────────────────────────────────
+# A recorded OpenAI-compatible `GET /v1/models` answer from a local server: each model is named
+# and nothing more, and an alias names the model it serves in `root`.
+
+
+def test_each_model_is_offered_for_what_it_is(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    import personalclaw.sdk.net as _net
+
+    listing = {"object": "list", "data": [
+        {"id": "qwen2.5-7b-instruct", "object": "model", "owned_by": "organization_owner"},
+        {"id": "text-embedding-nomic-embed-text-v1.5", "object": "model",
+         "owned_by": "organization_owner"},
+        {"id": "jina-reranker-v2-base-multilingual", "object": "model",
+         "owned_by": "organization_owner"},
+        {"id": "house-sorter", "object": "model", "owned_by": "gateway",
+         "root": "mixedbread-ai/mxbai-rerank-large-v2"},
+    ]}
+    monkeypatch.setattr(_net, "fetch", AsyncMock(return_value=_FetchResp(200, listing)))
+    cat = prov.create_catalog({"api_key": "k", "endpoint": "https://gw/v1"})
+    caps = {m.id: m.capabilities for m in _run(cat.list_models())}
+    assert caps == {
+        "qwen2.5-7b-instruct": ["chat"],
+        "text-embedding-nomic-embed-text-v1.5": ["embedding"],
+        "jina-reranker-v2-base-multilingual": [],
+        "house-sorter": [],
+    }

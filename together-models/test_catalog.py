@@ -62,3 +62,49 @@ def test_test_connection_needs_key(monkeypatch):
     cat = prov.create_catalog({})
     cat._api_key = ""
     assert _run(cat.test_connection()).ok is False
+
+
+# ── Each model is offered for the type Together gives it ───────────────────────────────────
+# A recorded `GET /v1/models` answer: Together answers with a bare JSON array, each record
+# naming its `type`.
+
+
+def _record(model_id, kind, name):
+    return {
+        "id": model_id, "object": "model", "created": 1733443200, "type": kind,
+        "running": False, "display_name": name, "organization": "Example Org",
+        "license": "other", "context_length": 32768,
+        "pricing": {"hourly": 0, "input": 0.2, "output": 0.2, "base": 0, "finetune": 0},
+    }
+
+
+TOGETHER_LISTING = [
+    _record("meta-llama/Llama-3.3-70B-Instruct-Turbo", "chat", "Llama 3.3 70B Instruct Turbo"),
+    _record("Qwen/Qwen2.5-VL-72B-Instruct", "chat", "Qwen2.5-VL 72B Instruct"),
+    _record("meta-llama/Meta-Llama-3-8B", "language", "Llama 3 8B"),
+    _record("codellama/CodeLlama-34b-Python-hf", "code", "Code Llama Python 34B"),
+    _record("BAAI/bge-base-en-v1.5", "embedding", "BGE Base EN v1.5"),
+    _record("black-forest-labs/FLUX.1-schnell", "image", "FLUX.1 Schnell"),
+    _record("meta-llama/Meta-Llama-Guard-3-8B", "moderation", "Llama Guard 3 8B"),
+    _record("Salesforce/Llama-Rank-V1", "rerank", "LlamaRank"),
+    _record("openai/whisper-large-v3", "transcribe", "Whisper large-v3"),
+]
+
+
+def test_each_model_is_offered_for_the_type_together_gives_it(monkeypatch):
+    async def _fake_fetch(url, *, policy=None, method="GET", headers=None, data=None):
+        return _FakeFetchResponse(200, TOGETHER_LISTING)
+    monkeypatch.setattr("personalclaw.sdk.net.fetch", _fake_fetch, raising=False)
+    cat = prov.create_catalog({"api_key": "k"})
+    caps = {m.id: m.capabilities for m in _run(cat.list_models())}
+    assert caps == {
+        "meta-llama/Llama-3.3-70B-Instruct-Turbo": ["chat"],
+        "Qwen/Qwen2.5-VL-72B-Instruct": ["chat", "image_modality"],
+        "meta-llama/Meta-Llama-3-8B": [],
+        "codellama/CodeLlama-34b-Python-hf": [],
+        "BAAI/bge-base-en-v1.5": ["embedding"],
+        "black-forest-labs/FLUX.1-schnell": ["image_gen"],
+        "meta-llama/Meta-Llama-Guard-3-8B": [],
+        "Salesforce/Llama-Rank-V1": [],
+        "openai/whisper-large-v3": ["stt"],
+    }

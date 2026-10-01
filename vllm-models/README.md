@@ -4,6 +4,16 @@ A local vLLM server (OpenAI-compatible). Point it at your vLLM endpoint; capabil
 
 **vLLM** is a **model provider** — it registers models served by your local vLLM server (OpenAI-compatible) under Settings → Models.
 
+## The model list
+
+The OpenAI models list a vLLM server answers with names each model and says nothing about what it
+does, so Settings → Models offers each for what its id says — and, for an alias
+(`--served-model-name`), for what the model it serves says: the list's `root` field names that
+model. A reranker, a moderation or safety classifier, and the other families no job here binds
+are offered for nothing. A model whose name says nothing is offered for chat, the job such a
+server's models are served for; if it is a pooling model (an embedder or a classifier under a
+name that does not say so), its first chat turn reports the server's refusal.
+
 ## What this is
 
 A standalone PersonalClaw app bundle (part of the core/app workspace split). It ships

@@ -11,6 +11,12 @@ Alibaba Cloud Model Studio (DashScope) provider for PersonalClaw.
 - **Embedding** — text-embedding-v3, text-embedding-v2
 - **Image Generation** — qwen-image-2.0, qwen-image-2.0-pro, wan2.7-image, wan2.7-image-pro
 
+Model Studio's model list names each model and says nothing about what it does, so Settings →
+Models offers each for what its id says. Its speech models (ASR such as `qwen3-asr-flash`,
+speech synthesis such as `qwen-tts` and `cosyvoice-v2`), its realtime models, which take a live
+session, and its rerankers (`gte-rerank-v2`) are offered for nothing: this app drives none of
+them.
+
 ## Configuration
 
 Set your API key via the `ALIBABA_API_KEY` environment variable or in the app settings.

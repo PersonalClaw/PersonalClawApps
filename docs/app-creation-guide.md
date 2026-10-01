@@ -568,6 +568,15 @@ Thin branded model apps can use `personalclaw.sdk.provider_helpers`
 (`register_branded_app`) — a few lines wrapping a protocol client core already
 ships (Anthropic Messages, OpenAI-compatible Chat Completions).
 
+Each model a catalog lists carries the jobs it can be bound for (`chat`,
+`image_modality`, `embedding`, `stt`, …, or `[]` for none), and every picker in
+Settings → Models offers a model only for those. When your vendor's `/models`
+records say what a model does (a `type`, a capability record), pass
+`register_branded_app(SPEC, capabilities_of=…)`: it is handed each record as the
+vendor wrote it and returns that model's jobs (references: `mistral-models`,
+`together-models`). Without one, a model is read by its id, which offers a
+model whose name says nothing for chat.
+
 A vendor that bills by **subscription** has no API key to configure: the user
 already signed that vendor's own CLI in, and the token sits in a store the CLI
 owns. Declare a `SubscriptionSource` (its paths, the key walk to the token, the

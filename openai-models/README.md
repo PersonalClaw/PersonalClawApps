@@ -4,6 +4,17 @@ OpenAI chat + embedding models (Chat Completions API). Bring your own OpenAI API
 
 **OpenAI** is a **model provider** — it registers OpenAI chat + embedding models under Settings → Models.
 
+## The model list
+
+OpenAI's `/v1/models` names each model and says nothing about what it does, so Settings → Models
+offers each for what its id says: chat models for chat (and reading images where they do),
+embedding models for Embedding, Whisper and the transcribe models for speech-to-text, the TTS
+models for text-to-speech, and the image models for Image · Generation. This app speaks the Chat
+Completions API, so the models that answer only another API are offered for nothing: the
+moderation models, the completion-only models (`babbage-002`, `davinci-002`,
+`gpt-3.5-turbo-instruct`), the realtime models, and the models only the Responses API serves
+(`o1-pro`, `o3-pro`, `gpt-5-pro`, the Codex, deep-research and computer-use models).
+
 ## What this is
 
 A standalone PersonalClaw app bundle (part of the core/app workspace split). It ships

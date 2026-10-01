@@ -62,3 +62,48 @@ def test_test_connection_needs_key(monkeypatch):
     cat = prov.create_catalog({})
     cat._api_key = ""
     assert _run(cat.test_connection()).ok is False
+
+
+# ── Each model is offered for what its id says (Groq's listing says nothing more) ─────────
+# A recorded `GET /openai/v1/models` answer.
+
+
+def _record(model_id, owner, window=131072):
+    return {
+        "id": model_id, "object": "model", "created": 1733447754, "owned_by": owner,
+        "active": True, "context_window": window, "public_apps": None,
+        "max_completion_tokens": 32768,
+    }
+
+
+GROQ_LISTING = {"object": "list", "data": [
+    _record("llama-3.3-70b-versatile", "Meta"),
+    _record("openai/gpt-oss-120b", "OpenAI"),
+    _record("meta-llama/llama-4-scout-17b-16e-instruct", "Meta"),
+    _record("groq/compound", "Groq"),
+    _record("meta-llama/llama-guard-4-12b", "Meta"),
+    _record("meta-llama/llama-prompt-guard-2-86m", "Meta", window=512),
+    _record("whisper-large-v3", "OpenAI", window=448),
+    _record("playai-tts", "PlayAI", window=8192),
+    _record("canopylabs/orpheus-v1-english", "Canopy Labs", window=4000),
+]}
+
+
+def test_each_model_is_offered_for_what_it_does(monkeypatch):
+    async def _fake_fetch(url, *, policy=None, method="GET", headers=None, data=None):
+        return _FakeFetchResponse(200, GROQ_LISTING)
+    monkeypatch.setattr("personalclaw.sdk.net.fetch", _fake_fetch, raising=False)
+    cat = prov.create_catalog({"api_key": "k"})
+    caps = {m.id: m.capabilities for m in _run(cat.list_models())}
+    assert caps == {
+        "llama-3.3-70b-versatile": ["chat"],
+        "openai/gpt-oss-120b": ["chat"],
+        "meta-llama/llama-4-scout-17b-16e-instruct": ["chat", "image_modality"],
+        "groq/compound": ["chat"],
+        # Safety classifiers answer a verdict, not a conversation.
+        "meta-llama/llama-guard-4-12b": [],
+        "meta-llama/llama-prompt-guard-2-86m": [],
+        "whisper-large-v3": ["stt"],
+        "playai-tts": ["tts"],
+        "canopylabs/orpheus-v1-english": ["tts"],
+    }

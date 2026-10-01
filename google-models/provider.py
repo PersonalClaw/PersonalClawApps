@@ -10,12 +10,16 @@ Provides:
     submit, poll the long-running operation, then fetch the video asset
 
 ALL models are DYNAMICALLY DISCOVERED from ``GET /v1beta/models`` and
-categorized by each model's ``supportedGenerationMethods``:
+categorized by each model's ``supportedGenerationMethods`` (:class:`GeminiCatalog` for
+Settings → Models' chat, embedding and speech rows; the image and video adapters for theirs):
   - ``predictLongRunning``            → video generation (Veo)
   - ``predict``                       → image generation (Imagen)
   - ``generateContent`` + image-output → image generation (gemini-*-image)
+  - ``generateContent`` + speech-output → text-to-speech (gemini-*-tts)
   - ``embedContent``                  → embedding
   - ``generateContent`` (the rest)    → chat
+  - anything else — only ``bidiGenerateContent`` (the Live API), ``generateAnswer`` (AQA)
+                                      → offered for nothing: no adapter here speaks it
 
 Base URLs:
   - OpenAI-compat: https://generativelanguage.googleapis.com/v1beta/openai/
@@ -34,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import dataclasses
 import json
 import logging
 import os
@@ -51,8 +56,12 @@ from personalclaw.sdk.image import (
 from personalclaw.sdk.model import (
     BrandedProviderSpec,
     Capability,
+    ConnectionResult,
+    ModelCatalog,
+    ModelInfo,
     PromptCache,
     ProviderResolutionError,
+    get_default_registry,
     register_branded_app,
     require_model,
 )
@@ -166,7 +175,7 @@ SPEC = BrandedProviderSpec(
     notes="Google Gemini — chat, embedding, image gen, and video gen. Bring your own Gemini API key.",
 )
 
-_factory, _create_chat_provider, create_catalog = register_branded_app(SPEC)
+_factory, _create_chat_provider, _branded_catalog = register_branded_app(SPEC)
 
 def _resolve_api_key(config: dict[str, Any] | None = None) -> str:
     """Resolve the Gemini API key from config or environment."""
@@ -223,6 +232,71 @@ def _model_id(m: dict[str, Any]) -> str:
 def _methods(m: dict[str, Any]) -> list[Any]:
     methods = m.get("supportedGenerationMethods")
     return methods if isinstance(methods, list) else []
+
+
+# ── Chat catalog: each model offered for what its methods say ─────────────────
+
+
+def _offered_for(row: ModelInfo, record: dict[str, Any] | None) -> list[str]:
+    """What ``row`` (a model of the OpenAI-compatible list) can be bound for, by its native
+    record's ``supportedGenerationMethods``. Without a record (the native list did not answer,
+    or does not name it) the row's own tags, read from its id, stand.
+
+    ``embedContent`` embeds. ``generateContent`` makes what its id says: text (chat), an image
+    (``…-image``) or speech (``…-tts``). ``predict`` is Imagen and ``predictLongRunning`` Veo. A
+    model with none of these — one served only through the Live API's ``bidiGenerateContent``,
+    or AQA's ``generateAnswer`` — is offered for nothing: no adapter here speaks those.
+    """
+    if record is None:
+        return list(row.capabilities)
+    methods = _methods(record)
+    if "embedContent" in methods:
+        return ["embedding"]
+    if "generateContent" in methods:
+        return list(row.capabilities)
+    if "predict" in methods:
+        return ["image_gen"]
+    if "predictLongRunning" in methods:
+        return ["video_gen"]
+    return []
+
+
+class GeminiCatalog(ModelCatalog):
+    """The OpenAI-compatible model list, each model offered for what Gemini's own record of it
+    says it does (:func:`_offered_for`). The listing, its failures and the connection test are
+    the branded catalog's; the native records come from :func:`_discover_models`, the list the
+    image and video adapters already read."""
+
+    def __init__(self, branded: ModelCatalog, *, api_key: str) -> None:
+        self._branded = branded
+        self._api_key = api_key
+
+    async def list_models(self) -> list[ModelInfo]:
+        rows = await self._branded.list_models()
+        native = await _discover_models(self._api_key) if self._api_key else []
+        records = {_model_id(m): m for m in native}
+        return [
+            dataclasses.replace(
+                row, capabilities=_offered_for(row, records.get(row.id.removeprefix("models/")))
+            )
+            for row in rows
+        ]
+
+    async def test_connection(self) -> ConnectionResult:
+        return await self._branded.test_connection()
+
+
+def create_catalog(options: dict[str, Any] | None = None, *, model: str = "") -> GeminiCatalog:
+    """Catalog factory (registry contract): the branded catalog, each model offered for what
+    its methods say."""
+    return GeminiCatalog(
+        _branded_catalog(options, model=model), api_key=_resolve_api_key(options or {})
+    )
+
+
+# register_branded_app registered its stock catalog under this type; register_catalog is
+# last-wins by contract, so this swaps in the one that reads each model's methods.
+get_default_registry().register_catalog(SPEC.type, create_catalog)
 
 
 def _is_video_gen(m: dict[str, Any]) -> bool:

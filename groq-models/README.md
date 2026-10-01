@@ -8,6 +8,13 @@ Images: a model that reads images is sent an attached image as the image itself.
 Scout and Maverick (`VISION_MODELS` in `provider.py`, since their ids don't say so) and any model
 whose id carries `vision`. Every other Groq model gets the image's text instead.
 
+## The model list
+
+Groq's `/models` names each model and says nothing about what it does, so each is offered for
+what its id says. A chat model is offered for chat, a Whisper model for speech-to-text, and
+PlayAI and Orpheus voices for text-to-speech. Llama Guard and Prompt Guard are safety
+classifiers that answer a verdict, not a conversation: they are offered for nothing.
+
 ## What this is
 
 A standalone PersonalClaw app bundle (part of the core/app workspace split). It ships

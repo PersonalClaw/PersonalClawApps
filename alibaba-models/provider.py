@@ -116,20 +116,36 @@ def takes_images(model_id: str) -> bool:
     return mid.startswith("qvq-") or "omni" in mid
 
 
-class AlibabaCatalog(ModelCatalog):
-    """DashScope's live model list, with image input stated where :func:`takes_images` says so.
+#: The speech jobs Model Studio's speech models would serve: ASR (``qwen3-asr-flash``,
+#: ``paraformer-v2``) and speech synthesis (``qwen-tts``, ``cosyvoice-v2``).
+_SPEECH = ("stt", "tts")
 
-    Discovery, its fallback and the connection test are the branded catalog's, unchanged.
+
+class AlibabaCatalog(ModelCatalog):
+    """DashScope's live model list, each model offered for what this app can drive.
+
+    DashScope's model list names each model and nothing more, so each is read by its id. Image
+    input is stated where :func:`takes_images` says so. Model Studio's speech models — ASR and
+    speech synthesis — answer through its own speech APIs, which this app does not drive, so
+    they are offered for nothing (:func:`_offered`); so are its realtime models, which take a
+    live session, and its rerankers. Discovery, its fallback and the connection test are the
+    branded catalog's, unchanged.
     """
 
     def __init__(self, branded: ModelCatalog) -> None:
         self._branded = branded
 
     async def list_models(self) -> list[ModelInfo]:
-        return [_declare_vision(row) for row in await self._branded.list_models()]
+        return [_declare_vision(_offered(row)) for row in await self._branded.list_models()]
 
     async def test_connection(self) -> ConnectionResult:
         return await self._branded.test_connection()
+
+
+def _offered(row: ModelInfo) -> ModelInfo:
+    """``row`` with the speech jobs left off: no adapter of this app transcribes or speaks."""
+    caps = [c for c in row.capabilities if c not in _SPEECH]
+    return row if caps == list(row.capabilities) else dataclasses.replace(row, capabilities=caps)
 
 
 def _declare_vision(row: ModelInfo) -> ModelInfo:

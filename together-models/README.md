@@ -35,6 +35,14 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | `default_model` | Default Model | A Together AI model id. The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 | `endpoint` | Base URL | Optional override of the Together AI base URL. Empty uses https://api.together.xyz/v1. |
 
+## The model list
+
+Settings → Models lists the models Together's `/v1/models` names, each offered for the `type`
+Together gives it: a `chat` model for chat (and reading images where it is a vision model), an
+`embedding` model for Embedding, an `image` model for Image · Generation. Base `language` and
+`code` models, which complete a prompt and hold no conversation, and `moderation` and `rerank`
+models are offered for nothing.
+
 ## Network
 
 Reaches `api.together.xyz`, or the endpoint you set in **Base URL**.

@@ -54,3 +54,38 @@ def test_connection_fails_when_unreachable(monkeypatch):
     _stub(monkeypatch, {"data": []})  # server up but no models / unreachable → empty
     res = _run(prov.create_catalog({"endpoint": "http://localhost:8000"}).test_connection())
     assert res.ok is False
+
+
+# ── Each model is offered for what it is, an alias for the model it serves ─────────────────
+# A recorded vLLM `GET /v1/models` answer: `root` names the model an alias
+# (`--served-model-name`) serves.
+
+
+def _record(model_id, root, window):
+    return {
+        "id": model_id, "object": "model", "created": 1745000000, "owned_by": "vllm",
+        "root": root, "parent": None, "max_model_len": window,
+        "permission": [{"id": "modelperm-0", "object": "model_permission", "allow_view": True}],
+    }
+
+
+VLLM_LISTING = {"object": "list", "data": [
+    _record("Qwen/Qwen3-8B", "Qwen/Qwen3-8B", 40960),
+    _record("sorter", "BAAI/bge-reranker-v2-m3", 8194),
+    _record("eyes", "Qwen/Qwen2.5-VL-7B-Instruct", 32768),
+    _record("embedder", "intfloat/e5-mistral-7b-instruct", 4096),
+    _record("guard", "meta-llama/Llama-Guard-3-8B", 131072),
+]}
+
+
+def test_each_model_is_offered_for_what_it_is(monkeypatch):
+    _stub(monkeypatch, VLLM_LISTING)
+    cat = prov.create_catalog({"endpoint": "http://localhost:8000"})
+    caps = {m.id: m.capabilities for m in _run(cat.list_models())}
+    assert caps == {
+        "Qwen/Qwen3-8B": ["chat"],
+        "sorter": [],
+        "eyes": ["chat", "image_modality"],
+        "embedder": ["embedding"],
+        "guard": [],
+    }

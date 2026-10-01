@@ -4,6 +4,15 @@ Google Gemini via its OpenAI-compatibility endpoint. Bring your own Gemini API k
 
 **Google Gemini** is a **model provider** — it registers Google Gemini models (OpenAI-compatibility endpoint) under Settings → Models.
 
+## The model list
+
+Settings → Models lists the models the OpenAI-compatible endpoint names, each offered for what
+Gemini's own record of it says (its `supportedGenerationMethods`): a model that generates content
+is a chat model, or an image or speech model where its id says it makes those; one that embeds
+is an embedding model; Imagen and Veo models make images and video. A model served only through
+the Live API (`bidiGenerateContent`) and AQA (`generateAnswer`) are offered for nothing: nothing
+here speaks those.
+
 ## What this is
 
 A standalone PersonalClaw app bundle (part of the core/app workspace split). It ships

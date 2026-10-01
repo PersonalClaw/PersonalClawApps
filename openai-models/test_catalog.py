@@ -77,3 +77,58 @@ def test_test_connection_ok_when_models_returned(monkeypatch):
     res = _run(cat.test_connection())
     assert res.ok is True
     assert res.model_count == 1
+
+
+# ── Each model is offered for what its id says, and only for an API this app speaks ───────
+# A recorded `GET /v1/models` answer: OpenAI names each model and nothing more.
+
+
+def _record(model_id, owner="system"):
+    return {"id": model_id, "object": "model", "created": 1745000000, "owned_by": owner}
+
+
+OPENAI_LISTING = {"object": "list", "data": [_record(m) for m in (
+    "gpt-4.1",
+    "gpt-5-mini",
+    "o4-mini",
+    "gpt-4o-audio-preview",
+    "text-embedding-3-large",
+    "whisper-1",
+    "gpt-4o-mini-transcribe",
+    "gpt-4o-mini-tts",
+    "gpt-image-1",
+    "omni-moderation-latest",
+    "babbage-002",
+    "davinci-002",
+    "gpt-3.5-turbo-instruct",
+    "gpt-realtime",
+    "gpt-4o-realtime-preview",
+    "o1-pro",
+    "o3-pro",
+    "gpt-5-pro",
+    "gpt-5-codex",
+    "codex-mini-latest",
+    "o3-deep-research",
+    "computer-use-preview",
+)]}
+
+
+def test_each_model_is_offered_for_what_it_does(monkeypatch):
+    _stub_models(monkeypatch, OPENAI_LISTING)
+    caps = {m.id: m.capabilities for m in _run(prov.create_catalog({"api_key": "sk-x"}).list_models())}
+    assert caps["gpt-4.1"] == ["chat", "image_modality"]
+    assert caps["gpt-5-mini"] == ["chat", "image_modality"]
+    assert caps["o4-mini"] == ["chat"]
+    assert caps["gpt-4o-audio-preview"] == ["chat", "image_modality", "audio_modality"]
+    assert caps["text-embedding-3-large"] == ["embedding"]
+    assert caps["whisper-1"] == caps["gpt-4o-mini-transcribe"] == ["stt"]
+    assert caps["gpt-4o-mini-tts"] == ["tts"]
+    assert caps["gpt-image-1"] == ["image_gen"]
+    # Moderation, completion-only, realtime-only and Responses-only models answer no chat
+    # completion, the one API this app's chat speaks: none is offered.
+    for model_id in (
+        "omni-moderation-latest", "babbage-002", "davinci-002", "gpt-3.5-turbo-instruct",
+        "gpt-realtime", "gpt-4o-realtime-preview", "o1-pro", "o3-pro", "gpt-5-pro",
+        "gpt-5-codex", "codex-mini-latest", "o3-deep-research", "computer-use-preview",
+    ):
+        assert caps[model_id] == [], model_id

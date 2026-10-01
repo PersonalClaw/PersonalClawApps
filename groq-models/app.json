@@ -1,6 +1,6 @@
 {
   "name": "groq-models",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "displayName": "Groq",
   "description": "Groq LPU inference (OpenAI-compatible), very low latency. Bring your own Groq API key.",
   "icon": "Zap",

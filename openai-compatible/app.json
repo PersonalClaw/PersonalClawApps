@@ -1,6 +1,6 @@
 {
   "name": "openai-compatible",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "OpenAI-Compatible",
   "description": "Any OpenAI-compatible Chat Completions endpoint. Self-hosted, a proxy, or an unlisted cloud. Supply the base URL + API key.",
   "icon": "Brain",
