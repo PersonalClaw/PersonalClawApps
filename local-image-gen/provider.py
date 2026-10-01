@@ -400,6 +400,11 @@ class LocalComfyImageProvider(ImageGenProvider):
     knows about the ``image_generate`` tool.
     """
 
+    #: ComfyUI runs the checkpoint on the machine it is served from, so at an address on this
+    #: machine (the only kind this app accepts) the model runs here and costs nothing to make an
+    #: image with: core prices it at $0 and a daily dollar cap lets it run.
+    hosts_model = True
+
     def __init__(self, *, endpoint: str = "", steps: int = 4) -> None:
         self._endpoint = _resolve_endpoint(endpoint)
         self._steps = max(1, int(steps or 4))

@@ -594,6 +594,42 @@ class TestClause1AuditedDispatch:
         assert f"/api/artifacts/{slug}/raw?version={art.version}" in out
 
 
+class TestRunsOnThisMachine:
+    """ComfyUI runs the checkpoint on the machine it is served from, and this app serves only
+    from this one, so an image it makes costs nothing: core prices the backend at $0 by what it
+    declares (``hosts_model`` at an address on this machine), not by its name or its kind."""
+
+    def test_it_declares_that_its_runtime_runs_the_model(self):
+        assert LocalComfyImageProvider.hosts_model is True
+        assert ImageGenProvider.hosts_model is False, "premise: the default is a hosted service"
+
+    def test_an_automations_image_runs_under_a_dollar_cap_and_is_counted_at_nothing(
+        self, wired, monkeypatch
+    ):
+        from personalclaw.mcp_artifacts import _call_tool_inner
+        from personalclaw.sdk.util import config_dir
+
+        home = config_dir()
+        (home / "config.json").write_text(
+            json.dumps({"guardrails": {"budgets": {"max_dollars_per_day": 4}}}), encoding="utf-8"
+        )
+        monkeypatch.setattr(
+            "personalclaw.mcp_artifacts._resolve_session_key", lambda: "cron:nightly-cover"
+        )
+
+        out = _call_tool_inner("image_generate", {"prompt": "a lighthouse at dusk"})
+
+        assert "Generated image" in out, out
+        rows = [
+            json.loads(line)
+            for line in (home / "usage" / "turns.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
+        assert [
+            (r["provider"], r["model"], r["unit"], r["quantity"], r["cost_usd"], r["local"])
+            for r in rows
+        ] == [("local-image", "flux.1-schnell", "image", 1, 0.0, True)]
+
+
 # ══ Clause 5 — declared but not pulled degrades calmly ═══════════════════════
 
 
