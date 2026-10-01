@@ -19,14 +19,15 @@ import pytest
 from personalclaw.sdk.channel import ProviderSettings, owner_id_credential
 
 from email_runtime.delivery import (
-    APPROVE_WORD,
-    DENY_WORD,
     MAX_THREADS,
     EmailDelivery,
     ThreadStore,
 )
 from email_runtime.mime import parse_inbound
 from _fakes import FakeSmtpServer, build_message
+
+#: The reply words of the answers an approval with no chat of its own offers (core's brief).
+APPROVE_WORD, DENY_WORD = "APPROVE", "DENY"
 
 AGENT = "agent@example.com"
 BOB = "bob@example.com"
@@ -438,6 +439,21 @@ class TestSendFailure:
         assert state.last_message_id == good_id
 
 
+_THIS_CHAT_PROMISE = "Every tool in this chat runs without asking, until you change it back."
+#: Core's answers as the brief carries them: for an approval with no chat of its own, and for one
+#: asked in its own chat.
+_ONE_CALL = [
+    {"key": "approved", "label": "Allow once", "ends": "approved", "word": "APPROVE", "promise": ""},
+    {"key": "rejected", "label": "Deny", "ends": "rejected", "word": "DENY", "promise": ""},
+]
+_IN_ITS_CHAT = [
+    _ONE_CALL[0],
+    {"key": "trust", "label": "Allow for this chat", "ends": "approved", "word": "TRUST",
+     "promise": _THIS_CHAT_PROMISE},
+    _ONE_CALL[1],
+]
+
+
 class TestApprovalReplyToken:
     class _Event:
         def __init__(self, request_id="req-1", title="Run rm -rf /tmp/x", brief=None):
@@ -458,6 +474,7 @@ class TestApprovalReplyToken:
             "purpose": "clear the old build",
             "risk": "destructive",
             "summary": "Can: runs a command · Risk: Destructive",
+            "answers": _ONE_CALL,
         }
         task = asyncio.ensure_future(
             delivery.request_approval(self._Event(brief=brief), source="loop “Fix the README”")
@@ -473,8 +490,8 @@ class TestApprovalReplyToken:
             "clear the old build\n"
             "Can: runs a command · Risk: Destructive\n\n"
             "Reply to this message with exactly one of:\n"
-            f"    {APPROVE_WORD} {token}\n"
-            f"    {DENY_WORD} {token}\n\n"
+            f"    {APPROVE_WORD} {token} — Allow once\n"
+            f"    {DENY_WORD} {token} — Deny\n\n"
             # How long PersonalClaw waits, from its own setting (two hours unless changed), and
             # what happens then: an approval nobody answered does not run, and is not a Deny.
             "PersonalClaw waits up to 2 hours for your answer. If nobody answers by then, it "
@@ -536,6 +553,79 @@ class TestApprovalReplyToken:
         await asyncio.sleep(0)
         token = next(iter(delivery._pending))
         delivery.resolve_reply_token(f"{APPROVE_WORD} {token}\n> {DENY_WORD} {token}", OWNER)
+        assert await asyncio.wait_for(task, timeout=1.0) is False
+
+    @pytest.mark.asyncio
+    async def test_a_mail_in_its_chat_offers_allow_for_this_chat(self, wired):
+        """A chat's own approval, asked in its mail thread, offers what the dashboard's card
+        offers, each with the word to reply with, and says what the standing one does. Replied
+        with, it answers the approval with that answer and approves this call."""
+        delivery, smtp, _ = wired
+        brief = {
+            "tool": "list_directory",
+            "input": '{"path": "inbox"}',
+            "purpose": "",
+            "risk": "caution",
+            "summary": "Risk: Caution",
+            "answers": _IN_ITS_CHAT,
+        }
+        seen = {}
+        task = asyncio.ensure_future(
+            delivery.request_approval(
+                self._Event(brief=brief), source="chat", on_prompted=lambda p: seen.setdefault("p", p)
+            )
+        )
+        await asyncio.sleep(0)
+        token = next(iter(delivery._pending))
+        assert (
+            "Reply to this message with exactly one of:\n"
+            f"    APPROVE {token} — Allow once\n"
+            f"    TRUST {token} — Allow for this chat: {_THIS_CHAT_PROMISE}\n"
+            f"    DENY {token} — Deny\n"
+        ) in smtp.body_text()
+        assert delivery.resolve_reply_token(f"TRUST {token}", OWNER) is True
+        assert await asyncio.wait_for(task, timeout=1.0) is True, "this call is approved too"
+        assert seen["p"].future.result() == "trust", "core is told which answer was given"
+
+        # A late reply with the same word is told how it ended, and is not a message.
+        assert delivery.resolve_reply_token(f"TRUST {token}", OWNER) is True
+        for sending in list(delivery._answering):
+            await sending
+        assert smtp.body_text().strip() == (
+            "This approval was already approved. Your reply changes nothing."
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_reply_naming_two_answers_gives_the_narrower(self, wired):
+        """A standing answer is only ever given on its own: a reply that names it and Allow once
+        approves this call alone."""
+        delivery, smtp, _ = wired
+        brief = {"tool": "t", "input": "", "purpose": "", "risk": "caution", "summary": "",
+                 "answers": _IN_ITS_CHAT}
+        seen = {}
+        task = asyncio.ensure_future(
+            delivery.request_approval(
+                self._Event(brief=brief), source="chat", on_prompted=lambda p: seen.setdefault("p", p)
+            )
+        )
+        await asyncio.sleep(0)
+        token = next(iter(delivery._pending))
+        delivery.resolve_reply_token(f"TRUST {token}\nAPPROVE {token}", OWNER)
+        assert await asyncio.wait_for(task, timeout=1.0) is True
+        assert seen["p"].future.result() == "approved"
+
+    @pytest.mark.asyncio
+    async def test_a_word_the_mail_did_not_offer_decides_nothing(self, wired):
+        """An approval with no chat of its own offers Allow once and Deny: TRUST answers nothing,
+        and the mail reaches the agent as one."""
+        delivery, smtp, _ = wired
+        task = asyncio.ensure_future(delivery.request_approval(self._Event(), source="tool"))
+        await asyncio.sleep(0)
+        token = next(iter(delivery._pending))
+        assert "TRUST" not in smtp.body_text()
+        assert delivery.resolve_reply_token(f"TRUST {token}", OWNER) is False
+        assert not task.done()
+        delivery.resolve_reply_token(f"{DENY_WORD} {token}", OWNER)
         assert await asyncio.wait_for(task, timeout=1.0) is False
 
     @pytest.mark.asyncio

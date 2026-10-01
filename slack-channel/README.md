@@ -68,7 +68,7 @@ the arguments are masked by PersonalClaw before they reach Slack. Long arguments
 as many code blocks, and messages, as they take, the buttons on the last.
 
 **The prompt shows how its approval ended.** An approval PersonalClaw asks here ends when you
-press Approve or Reject, when you answer it in PersonalClaw, when nobody answers within
+press one of its buttons, when you answer it in PersonalClaw, when nobody answers within
 PersonalClaw's approval wait (*Settings → Agent defaults → Approval wait*, up to a week), or
 when the work that asked for it stops first. The prompt then loses its buttons and says which:
 *✅ Approved*, *🚫 Rejected*, *⌛ Nobody answered in time, so it did not run*, or *⏹️ Cancelled:
@@ -77,9 +77,12 @@ a message only you see, with how it ended; on a prompt left from before a restar
 approval is no longer waiting, and the buttons come off. PersonalClaw decides how long its
 approvals wait; this app keeps no clock of its own for them.
 
-A prompt PersonalClaw asks offers **Approve** and **Reject**. **Trust session** is on the prompts
-of a thread this app runs itself, where it lets the rest of that thread's tool calls run
-without asking. Such a prompt waits as long as PersonalClaw's approval wait, and goes once it
+A prompt PersonalClaw asks offers the answers its approval card offers for that call: **Allow
+once** and **Deny**, and **Allow for this chat** on a prompt in the chat that is asking (never
+for a call that may destroy something), which the prompt explains first, in the card's words.
+That one trusts the chat in PersonalClaw, as the card's *This chat* does: its header shows it and
+you turn it off there. **Trust session** is on the prompts of a thread this app runs itself (in
+a DM), where it lets the rest of that thread's tool calls run without asking. Such a prompt waits as long as PersonalClaw's approval wait, and goes once it
 has ended. If nobody answers in that time, the call does not run and the thread says *⌛ Nobody
 answered in time, so it did not run*: that is not a Reject, and the security log records it as
 decided by nobody.
@@ -144,8 +147,8 @@ stays owner-only. Add people deliberately. `!dashboard` and `/personalclaw dashb
 dashboard link to the owner alone: the link signs in as the owner, so anyone else who asks is
 told *Only this channel's owner can get a dashboard link…* and is sent nothing.
 
-Approvals are the owner's alone. Only the owner's press on **Approve**, **Trust session** or
-**Reject** answers a tool approval, whether it is asked in a DM or in a linked channel thread
+Approvals are the owner's alone. Only the owner's press on one of a prompt's buttons answers a
+tool approval, whether it is asked in a DM or in a linked channel thread
 where everyone in the channel sees the buttons. Anyone else's press, an allowlisted user's
 included, answers nothing. They are told "Only the owner can answer this", and the press is
 logged to the security event log.

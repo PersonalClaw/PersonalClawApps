@@ -173,9 +173,9 @@ async def test_an_owner_paired_while_the_receiver_runs_gets_the_next_approval_pr
             "no approval prompt reached the owner paired after the receiver started"
         )
         buttons = prompt["components"][0]["components"]
-        assert {b["custom_id"] for b in buttons} == {"approve:after", "deny:after"}
+        assert [b["custom_id"] for b in buttons] == ["a0:after", "a1:after"]
         await transport._delivery.resolve_interaction(
-            {"type": INTERACTION_TYPE_COMPONENT, "id": "i1", "token": "t1", "data": {"custom_id": "approve:after"},
+            {"type": INTERACTION_TYPE_COMPONENT, "id": "i1", "token": "t1", "data": {"custom_id": "a0:after"},
              "user": {"id": OWNER}}
         )
         assert await asyncio.wait_for(task, timeout=1.0) is True

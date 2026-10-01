@@ -16,6 +16,8 @@ import asyncio
 import logging
 from typing import Any, Callable
 
+from personalclaw.sdk.channel import approval_brief_for
+
 from slack_runtime.client import RealSlackClient
 from slack_runtime.format import (
     SLACK_BLOCK_SECTION_LIMIT,
@@ -266,10 +268,12 @@ class SlackDelivery:
         self, event: Any, *, source: str, parent_session_key: str = "",
         sessions: Any = None, on_prompted: Any = None,
     ) -> bool | None:
-        """Post the Slack approval prompt and wait for the approval to end.
+        """Post the Slack approval prompt, its buttons the answers the brief offers, and wait for
+        the approval to end.
 
-        Returns approved/rejected, or None when Slack can't prompt (caller falls
-        back to the dashboard). ``on_prompted(pending)`` lets the caller race a dashboard
+        Returns whether it ended approved, or None when Slack can't prompt (caller falls
+        back to the dashboard), or the brief offers nothing. A press resolves the pending record
+        with the pressed answer's key. ``on_prompted(pending)`` lets the caller race a dashboard
         prompt against the Slack one: core resolves ``pending.future`` with how the approval
         ended wherever it ended, so the wait keeps no timer of its own. Once it ends, the prompt
         says how and loses its buttons (:func:`~slack_runtime.handler.close_prompt`), and so it
@@ -286,6 +290,9 @@ class SlackDelivery:
 
         owner = self._owner()
         if not owner:
+            return None
+        answers = list((approval_brief_for(event) or {}).get("answers") or [])
+        if not answers:
             return None
         request_id = str(event.request_id)
         thread_ts: str | None = None
@@ -310,6 +317,7 @@ class SlackDelivery:
 
         pending = _PendingApproval(
             provider=None, request_id=request_id, session_key=parent_session_key,  # type: ignore[arg-type]
+            answers=answers,
         )
         key = f"{channel}:{approval_ts}"
         _pending_approvals[key] = pending
@@ -327,5 +335,10 @@ class SlackDelivery:
         finally:
             _pending_approvals.pop(key, None)
 
-        await close_prompt(self._client, channel, approval_ts, event, outcome=outcome, **closing)
-        return outcome == "approved"
+        pressed = pending.answer(outcome)
+        ending = pressed["ends"] if pressed else outcome
+        await close_prompt(
+            self._client, channel, approval_ts, event, outcome=ending,
+            kept=(pressed or {}).get("promise", ""), **closing,
+        )
+        return ending == "approved"

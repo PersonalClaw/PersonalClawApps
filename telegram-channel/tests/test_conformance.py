@@ -21,7 +21,7 @@ import pytest
 
 from personalclaw.sdk.channel import ChannelContractError, assert_channel_contract
 
-from telegram_runtime.delivery import _APPROVE, _DENY, _EDIT_MIN_INTERVAL, TelegramDelivery
+from telegram_runtime.delivery import _ANSWER, _EDIT_MIN_INTERVAL, TelegramDelivery
 from telegram_runtime.transport import TelegramTransport
 
 from test_delivery import FakeAPI
@@ -30,22 +30,34 @@ OWNER = "42"
 
 
 def _press(delivery: TelegramDelivery, api: FakeAPI):
-    """The owner's Approve or Deny on a prompt, through the handler a button press reaches;
-    returns what the owner's press was answered with."""
+    """The owner's press on one of the prompt's answers, by its key, through the handler a
+    button press reaches, with the callback data the prompt's own button carries; returns what
+    the owner's press was answered with."""
 
-    async def press(pending, approve: bool) -> str:
+    async def press(pending, answer: str) -> str:
         answered = len(api.answers)
-        await delivery.resolve_callback(
-            {
-                "id": f"cq-{answered}",
-                "data": f"{_APPROVE if approve else _DENY}:{pending.request_id}",
-                "from": {"id": OWNER},
-            }
+        prompt = [m for m in api.sent if m["reply_markup"]][-1]
+        buttons = [row[0] for row in prompt["reply_markup"]["inline_keyboard"]]
+        data = next(
+            b["callback_data"]
+            for b, offered in zip(buttons, pending.answers)
+            if offered["key"] == answer
         )
+        assert data.startswith(_ANSWER) and data.endswith(f":{pending.request_id}")
+        await delivery.resolve_callback({"id": f"cq-{answered}", "data": data, "from": {"id": OWNER}})
         told = api.answers[answered:]
         return str(told[-1]["text"] or "") if told else ""
 
     return press
+
+
+def _transport(api: FakeAPI) -> TelegramTransport:
+    """A configured transport that sends through the recording fake: the kit's send clause must
+    reach no real Telegram. A transport sends on the receiver's client while the token it
+    started with is current, so the fake stands in as that client."""
+    transport = TelegramTransport({"bot_token": "123:conformance"})
+    transport._api = api
+    return transport
 
 
 def _wired() -> tuple[TelegramTransport, TelegramDelivery, FakeAPI, object]:
@@ -60,7 +72,7 @@ def _wired() -> tuple[TelegramTransport, TelegramDelivery, FakeAPI, object]:
     delivery = TelegramDelivery(api, lambda: OWNER)
     clock = {"t": 0.0}
     delivery._now = lambda: clock["t"]  # type: ignore[method-assign]
-    return TelegramTransport({"bot_token": "123:conformance"}), delivery, api, clock
+    return _transport(api), delivery, api, clock
 
 
 def test_telegram_transport_meets_the_channel_contract():
@@ -103,7 +115,7 @@ def test_the_kit_is_actually_asserting_something_here():
     delivery._now = lambda: clock["t"]  # type: ignore[method-assign]
     with pytest.raises(ChannelContractError, match=r"\[streaming\]"):
         assert_channel_contract(
-            TelegramTransport({"bot_token": "123:conformance"}),
+            _transport(api),
             delivery=delivery,
             fake_backend=api,
             min_edit_interval=_EDIT_MIN_INTERVAL,
@@ -125,7 +137,7 @@ def test_the_kit_catches_a_late_press_told_nothing_of_how_it_ended():
     delivery = Forgetful(api, lambda: OWNER)
     with pytest.raises(ChannelContractError, match=r"\[approvals\].*answered alike"):
         assert_channel_contract(
-            TelegramTransport({"bot_token": "123:conformance"}),
+            _transport(api),
             delivery=delivery,
             inbound_via="_on_message",
             press=_press(delivery, api),

@@ -65,9 +65,8 @@ _APPROVALS_FILE = "approvals.json"
 #: Bound the persisted thread map so a long-lived mailbox can't grow it without limit.
 #: Oldest entries age out; a thread that falls out simply starts a fresh chain.
 MAX_THREADS = 500
-#: Reply-token vocabulary. The owner replies with either word plus the token.
-APPROVE_WORD = "APPROVE"
-DENY_WORD = "DENY"
+#: The owner replies with the word of one of the answers the prompt offers (core's brief,
+#: ``word``: APPROVE, TRUST, DENY) plus the token.
 _TOKEN_BYTES = 4  # 8 hex chars — short enough to retype, wide enough not to collide
 #: How many ended approvals are remembered, so a reply to one is answered with how it ended.
 _ENDED_KEPT = 256
@@ -214,13 +213,21 @@ class ThreadStore:
 
 
 class _PendingApproval:
-    __slots__ = ("future", "token", "request_id", "channel")
+    __slots__ = ("future", "token", "request_id", "channel", "answers")
 
-    def __init__(self, request_id: str, token: str, channel: str) -> None:
+    def __init__(
+        self, request_id: str, token: str, channel: str, answers: list[dict[str, str]]
+    ) -> None:
         self.future: asyncio.Future = asyncio.get_event_loop().create_future()
         self.token = token
         self.request_id = request_id
         self.channel = channel
+        #: The answers the mail offers, each replied with its word (core's brief).
+        self.answers = answers
+
+    def answer(self, key: str) -> dict[str, str] | None:
+        """The offered answer whose key *key* is, or None."""
+        return next((a for a in self.answers if a.get("key") == key), None)
 
 
 class _EndedApproval(NamedTuple):
@@ -233,6 +240,8 @@ class _EndedApproval(NamedTuple):
     channel: str
     #: the thread's root id: a reply to the prompt, and the answer to it, belong to it
     thread: str
+    #: the reply words the mail offered, which a late reply is recognised by
+    words: tuple[str, ...] = ()
 
 
 class EndedApprovalStore:
@@ -269,11 +278,13 @@ class EndedApprovalStore:
             return records
         for token, entry in data.items():
             if isinstance(entry, dict):
+                words = entry.get("words")
                 records[str(token)] = _EndedApproval(
                     str(entry.get("outcome", "")),
                     str(entry.get("request_id", "")),
                     str(entry.get("channel", "")),
                     str(entry.get("thread", "")),
+                    tuple(str(w) for w in words) if isinstance(words, list) else (),
                 )
         return records
 
@@ -585,14 +596,16 @@ class EmailDelivery:
         self, event: Any, *, source: str, parent_session_key: str = "",
         sessions: Any = None, on_prompted: Any = None,
     ) -> bool | None:
-        """Mail the owner an approve/deny prompt and wait for their reply.
+        """Mail the owner an approval prompt, answered by replying with the word of one of the
+        answers the brief offers, and wait for their reply.
 
         Only the owner is asked, and only the owner answers (:meth:`resolve_reply_token`): the
         token IS the answer, so the prompt goes to the owner's own address and nowhere else. A
         chat linked to a thread with the owner is asked in that thread. One with anyone else,
         a paired correspondent included, is asked in a new mail to the owner. Returns
         approved/rejected, or ``None`` when there is no owner address to ask (the gateway then
-        falls back to the dashboard). ``on_prompted(pending)`` lets core race a dashboard
+        falls back to the dashboard), or the brief offers nothing. A reply resolves the pending
+        record with the answer's key. ``on_prompted(pending)`` lets core race a dashboard
         prompt against this one: core resolves the same future with how the approval ended
         wherever it ended, so the wait keeps no timer of its own, and the mail says how long
         PersonalClaw waits. A reply after it ended is answered with how it ended."""
@@ -610,17 +623,20 @@ class EmailDelivery:
 
         request_id = str(getattr(event, "request_id", ""))
         brief = approval_brief_for(event) or {}
+        answers = list(brief.get("answers") or [])
+        if not answers:
+            return None
         title = str(brief.get("tool") or "") or "a tool"
         token = secrets.token_hex(_TOKEN_BYTES).upper()
-        pending = _PendingApproval(request_id, token, channel)
+        pending = _PendingApproval(request_id, token, channel, answers)
         self._pending[token] = pending
 
         window = _approval_window()
         body = (
             _approval_text(brief, source)
             + "\n\nReply to this message with exactly one of:\n"
-            f"    {APPROVE_WORD} {token}\n"
-            f"    {DENY_WORD} {token}\n\n"
+            + "".join(f"    {_reply_line(a, token)}\n" for a in answers)
+            + "\n"
             + (
                 f"PersonalClaw waits up to {window} for your answer. If nobody answers by "
                 "then, it does not run."
@@ -635,7 +651,10 @@ class EmailDelivery:
             self._pending.pop(token, None)
             return None
         # Written down as soon as the owner can reply to it: a reply after a crash still finds it.
-        self._ended.record(token, _EndedApproval("", request_id, channel, thread_ts or sent))
+        words = tuple(str(a.get("word") or "") for a in answers if a.get("word"))
+        self._ended.record(
+            token, _EndedApproval("", request_id, channel, thread_ts or sent, words)
+        )
 
         if on_prompted:
             try:
@@ -648,10 +667,12 @@ class EmailDelivery:
             outcome = await pending.future
         finally:
             self._pending.pop(token, None)
+            pressed = pending.answer(outcome)
+            ending = pressed["ends"] if pressed else outcome
             self._ended.record(
-                token, _EndedApproval(outcome, request_id, channel, thread_ts or sent)
+                token, _EndedApproval(ending, request_id, channel, thread_ts or sent, words)
             )
-        return outcome == "approved"
+        return ending == "approved"
 
     def _answer_late(self, ended: _EndedApproval) -> None:
         """Mail the owner how the approval they replied to ended, in its thread. Sent on its own,
@@ -690,8 +711,12 @@ class EmailDelivery:
 
         Only the owner answers. A reply from any other address, an allowed correspondent's
         included, decides nothing: it is logged to the SEL and still returns True, because an
-        answer is not a new turn. The token must appear alongside the verb, so an unrelated
-        mail that happens to contain the word "approve" cannot decide anything. Called by the
+        answer is not a new turn. The token must appear alongside the word of an answer the mail
+        offered, so an unrelated mail that happens to contain the word "approve" cannot decide
+        anything. A body that names more than one answer is read as the narrowest it names: a
+        refusal before any approval, an approval of this call alone before a standing one, so a
+        request to stop is never read as consent and a standing answer is only ever given on its
+        own. Called by the
         transport ONLY for a sender the trust seam already allowed — an approval is the
         highest-value thing a channel can carry, so it never rides an unauthenticated
         message."""
@@ -701,20 +726,17 @@ class EmailDelivery:
         for token, pending in list(self._pending.items()):
             if token not in upper:
                 continue
-            approved = f"{APPROVE_WORD} {token}" in upper or f"{APPROVE_WORD}{token}" in upper
-            denied = f"{DENY_WORD} {token}" in upper or f"{DENY_WORD}{token}" in upper
-            if not approved and not denied:
+            named = [a for a in pending.answers if _names(upper, str(a.get("word") or ""), token)]
+            if not named:
                 continue
             if not is_owner:
                 self._refuse(who, pending.request_id)
                 return True
             if not pending.future.done():
-                # An explicit DENY wins over a body that somehow contains both — a
-                # request to stop must never be read as consent.
-                pending.future.set_result("rejected" if denied else "approved")
+                pending.future.set_result(min(named, key=_breadth)["key"])
             return True
         for token, ended in self._ended.items():
-            if not _answers(upper, token):
+            if not any(_names(upper, word, token) for word in ended.words):
                 continue
             # A reply to an approval that has ended decides nothing, and it is not a new message
             # to the agent either: the owner is told how it ended.
@@ -726,12 +748,23 @@ class EmailDelivery:
         return False
 
 
-def _answers(upper: str, token: str) -> bool:
-    """Whether the uppercased body *upper* answers the approval *token* (either word with it)."""
-    return any(
-        f"{word} {token}" in upper or f"{word}{token}" in upper
-        for word in (APPROVE_WORD, DENY_WORD)
-    )
+def _names(upper: str, word: str, token: str) -> bool:
+    """Whether the uppercased body *upper* says *word* with the approval *token*."""
+    return bool(word) and (f"{word} {token}" in upper or f"{word}{token}" in upper)
+
+
+def _breadth(answer: dict[str, str]) -> int:
+    """How far an answer reaches: a refusal least, an approval of this call alone next, a
+    standing one most. The narrowest an ambiguous reply names is the one it gives."""
+    if answer.get("ends") != "approved":
+        return 0
+    return 2 if answer.get("promise") else 1
+
+
+def _reply_line(answer: dict[str, str], token: str) -> str:
+    """The line the mail lists for one answer: what to reply, and what it does."""
+    line = f"{answer['word']} {token} — {answer['label']}"
+    return f"{line}: {answer['promise']}" if answer.get("promise") else line
 
 
 def _approval_text(brief: dict, source: str) -> str:

@@ -25,10 +25,12 @@ from test_transport import FakeServices, _configure, _mail
 
 from personalclaw.sdk.channel import AppConfig, allow_sender, owner_id_credential, sel
 
-from email_runtime.delivery import APPROVE_WORD, DENY_WORD, EmailDelivery, ThreadStore
+from email_runtime.delivery import EmailDelivery, ThreadStore
 from email_runtime.transport import EmailTransport
 from _fakes import FakeImapServer, FakeSmtpServer, FakeState
 
+#: The reply words of the answers an approval with no chat of its own offers (core's brief).
+APPROVE_WORD, DENY_WORD = "APPROVE", "DENY"
 AGENT = "agent@example.com"
 OWNER = "me@example.com"
 BOB = "bob@example.com"

@@ -721,6 +721,12 @@ class TestApprovalBriefLine:
         "purpose": "clear the old build",
         "risk": "destructive",
         "summary": "Can: runs a command · Risk: Destructive",
+        # What a call with no chat of its own offers: core's answers, as the brief carries them.
+        "answers": [
+            {"key": "approved", "label": "Allow once", "ends": "approved", "word": "APPROVE",
+             "promise": ""},
+            {"key": "rejected", "label": "Deny", "ends": "rejected", "word": "DENY", "promise": ""},
+        ],
     }
 
     @staticmethod

@@ -191,6 +191,12 @@ def test_an_approval_prompt_shows_the_call_as_written():
         "input": "echo '<!channel> & done'",
         "purpose": "Tell <@U123> it is done",
         "summary": "Can: writes files under <repo>/build",
+        # What a call with no chat of its own offers: core's answers, as the brief carries them.
+        "answers": [
+            {"key": "approved", "label": "Allow once", "ends": "approved", "word": "APPROVE",
+             "promise": ""},
+            {"key": "rejected", "label": "Deny", "ends": "rejected", "word": "DENY", "promise": ""},
+        ],
     }
     event = LLMEvent(
         kind="permission_request", request_id="req-text", title="bash", options=[],

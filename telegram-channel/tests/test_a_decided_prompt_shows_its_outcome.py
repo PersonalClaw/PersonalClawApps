@@ -64,8 +64,12 @@ class _Asked:
         raise AssertionError("the prompt was never posted")
 
 
+#: The buttons an approval with no chat of its own offers, by their place: Allow once, Deny.
+_BUTTONS = {"approve": "a0", "deny": "a1"}
+
+
 def _press(request_id: str, button: str = "approve", who: str = OWNER) -> dict:
-    return {"id": "cq-1", "data": f"{button}:{request_id}", "from": {"id": who}}
+    return {"id": "cq-1", "data": f"{_BUTTONS[button]}:{request_id}", "from": {"id": who}}
 
 
 @pytest.mark.asyncio

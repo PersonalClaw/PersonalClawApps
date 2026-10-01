@@ -251,8 +251,12 @@ channel cannot stream". Both halves are asserted together in
 Approvals arrive as a **reply token**. The prompt mail names where the call came from
 (*from loop “Fix the README”*) and says what will run, as PersonalClaw's
 own approval card does: the tool, its arguments, why the agent is calling it, and what the call
-can touch with its risk (masked by PersonalClaw). It carries `APPROVE <token>` /
-`DENY <token>`. **Only the owner is asked, and only the owner answers.** The owner is the
+can touch with its risk (masked by PersonalClaw). It lists the answers PersonalClaw's approval
+card offers for that call, each with the word to reply with: `APPROVE <token>` (Allow once) and
+`DENY <token>`, and `TRUST <token>` (Allow for this chat, explained in the card's words) on a mail
+in the chat that is asking, never for a call that may destroy something. That one trusts the chat
+in PersonalClaw, as the card's *This chat* does: its header shows it and you turn it off there.
+**Only the owner is asked, and only the owner answers.** The owner is the
 address paired from Configure → **Pair as owner** (above), which core keeps as this channel's
 owner id. The prompt goes to that address alone, and only a reply from it can resolve one. It
 cannot be the mailbox's own address.
@@ -262,8 +266,8 @@ correspondent included, is asked in a new mail to the owner. A correspondent's r
 token decides nothing and is logged to the security event log. With no owner address, no
 approval is asked by mail, and it waits in PersonalClaw instead.
 
-Both the verb and the token must be present, and an explicit `DENY` wins over a body containing
-both. A chat that started in this mailbox is asked here, whatever the notification rules say.
+Both a word the mail listed and the token must be present. A body naming more than one answer
+gives the narrowest: an explicit `DENY` wins, and `APPROVE` wins over `TRUST`. A chat that started in this mailbox is asked here, whatever the notification rules say.
 Where the rest are asked is up to *Settings → Notifications*: *Send approvals to*, and the
 Approval needed row's Channel DM target.
 

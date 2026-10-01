@@ -25,7 +25,7 @@ from personalclaw.sdk.channel import (
     owner_id_credential,
 )
 
-from email_runtime.delivery import APPROVE_WORD, DENY_WORD, EmailDelivery
+from email_runtime.delivery import EmailDelivery
 from email_runtime.transport import EmailTransport
 
 from _fakes import FakeSmtpServer
@@ -35,12 +35,15 @@ OWNER = "owner@example.org"
 
 
 def _reply(delivery: EmailDelivery, smtp: FakeSmtpServer):
-    """The owner's APPROVE or DENY reply to a prompt, through the handler an inbound reply
-    reaches; returns what the owner was mailed back ("" when nothing was)."""
+    """The owner's reply with one of the prompt's answers, by its key: the word the mail lists
+    for it and the token, through the handler an inbound reply reaches; returns what the owner
+    was mailed back ("" when nothing was)."""
 
-    async def press(pending, approve: bool) -> str:
+    async def press(pending, answer: str) -> str:
         mailed = len(smtp.sent)
-        word = APPROVE_WORD if approve else DENY_WORD
+        (word,) = [a["word"] for a in pending.answers if a["key"] == answer]
+        offered = (f"{word} {pending.token}" in smtp.body_text(i) for i in range(len(smtp.sent)))
+        assert any(offered), "the mail did not offer it"
         assert delivery.resolve_reply_token(f"{word} {pending.token}", OWNER)
         for task in list(delivery._answering):  # the answer to a late reply goes on its own
             await task

@@ -55,10 +55,17 @@ def _owner_and_a_colleague():
     set_allowed_users(set())
 
 
+#: What a turn this app runs itself offers: Allow once and Deny (core's brief for the event).
+_ONE_CALL = [
+    {"key": "approved", "label": "Allow once", "ends": "approved", "word": "APPROVE", "promise": ""},
+    {"key": "rejected", "label": "Deny", "ends": "rejected", "word": "DENY", "promise": ""},
+]
+
+
 def _prompt(session_key: str = "thread-1") -> tuple[_PendingApproval, _Provider]:
     """A turn's approval prompt, pending on ``CHANNEL`` at ``PROMPT_TS``."""
     provider = _Provider()
-    pending = _PendingApproval(provider, "req-1", session_key)  # type: ignore[arg-type]
+    pending = _PendingApproval(provider, "req-1", session_key, answers=_ONE_CALL)  # type: ignore[arg-type]
     _pending_approvals[f"{CHANNEL}:{PROMPT_TS}"] = pending
     return pending, provider
 

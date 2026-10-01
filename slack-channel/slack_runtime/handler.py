@@ -790,13 +790,26 @@ def _persist_channel_config(
 
 
 class _PendingApproval:
-    __slots__ = ("provider", "request_id", "session_key", "future")
+    __slots__ = ("provider", "request_id", "session_key", "future", "answers")
 
-    def __init__(self, provider: ModelProvider, request_id: str | int, session_key: str = "") -> None:
+    def __init__(
+        self,
+        provider: ModelProvider,
+        request_id: str | int,
+        session_key: str = "",
+        *,
+        answers: list[dict[str, str]],
+    ) -> None:
         self.provider = provider
         self.request_id = request_id
         self.session_key = session_key
         self.future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        #: The answers the prompt offers (core's brief); a press answers with one of them only.
+        self.answers = answers
+
+    def answer(self, key: str) -> dict[str, str] | None:
+        """The offered answer whose key *key* is, or None."""
+        return next((a for a in self.answers if a.get("key") == key), None)
 
 
 _OUTCOME_APPROVED = "approved"
@@ -814,10 +827,27 @@ _UNRUN_LINES = {
 # What :func:`handle_interaction` returns for the owner's press on a prompt that has ended.
 LATE_PRESS = "late_press"
 
-# Block Kit action IDs
+# Block Kit action IDs. An answer the brief offers is a button whose action id names its key:
+# Allow once and Deny keep the ids every prompt has had, and any other answer is
+# ``_ACTION_ANSWER`` + its key. "Trust session" is this app's own, for the threads it runs itself.
 _ACTION_APPROVE = "approve_tool"
 _ACTION_TRUST = "trust_tool"
 _ACTION_REJECT = "reject_tool"
+_ACTION_ANSWER = "pc_answer_"
+_ANSWER_ACTIONS = {_OUTCOME_APPROVED: _ACTION_APPROVE, _OUTCOME_REJECTED: _ACTION_REJECT}
+
+
+def _answer_action(key: str) -> str:
+    """The action id of the button for the answer *key*."""
+    return _ANSWER_ACTIONS.get(key) or f"{_ACTION_ANSWER}{key}"
+
+
+def _answer_of_action(action_id: str) -> str:
+    """The answer key a button's *action_id* names, or "" when it names none."""
+    for key, action in _ANSWER_ACTIONS.items():
+        if action_id == action:
+            return key
+    return action_id.removeprefix(_ACTION_ANSWER) if action_id.startswith(_ACTION_ANSWER) else ""
 
 
 def set_allowed_users(user_ids: set[str]) -> None:
@@ -2936,7 +2966,12 @@ async def _request_approval(
     approval_ts = await _post_approval(slack, channel, thread_ts, event, is_dm=is_dm)
 
     key = f"{channel}:{approval_ts}"
-    pending = _PendingApproval(provider, event.request_id, session_key)
+    pending = _PendingApproval(
+        provider,
+        event.request_id,
+        session_key,
+        answers=list((approval_brief_for(event) or {}).get("answers") or []),
+    )
     _pending_approvals[key] = pending
 
     try:
@@ -2990,6 +3025,7 @@ async def close_prompt(
     outcome: str,
     is_dm: bool = True,
     source: str = "",
+    kept: str = "",
 ) -> None:
     """Show how the approval prompted at *ts* ended, on the prompt's last message, and take its
     buttons off.
@@ -2997,9 +3033,10 @@ async def close_prompt(
     The message keeps what it asked, so the conversation shows what was decided. Its blocks are
     replaced, not only its text: an update that sets the text alone keeps the blocks, and so the
     buttons, and a notification or a screen reader then says one thing while the message shows
-    another. A press on it after this is answered with *outcome* (:func:`late_answer`)."""
+    another. *kept* is the promise of the standing answer the owner pressed, which the line then
+    says it kept. A press on it after this is answered with *outcome* (:func:`late_answer`)."""
     _record_ending(f"{channel}:{ts}", outcome)
-    line = outcome_line(outcome)
+    line = outcome_line(outcome) + (f". {escape_mrkdwn(kept)}" if kept else "")
     blocks = _closed_blocks(_approval_messages(event, is_dm=is_dm, source=source)[-1], line)
     tool = escape_mrkdwn(str((approval_brief_for(event) or {}).get("tool") or "") or "a tool")
     try:
@@ -3024,10 +3061,10 @@ def _close_prompt_later(
 async def handle_interaction(channel: str, msg_ts: str, action_id: str, user_id: str = "", thread_ts: str = "", slack: SlackClientOps | None = None) -> str | None:
     """Handle a Block Kit button click for tool approval.
 
-    Supports three actions:
-    - approve_tool: approve this one tool call
-    - trust_tool: auto-approve all tools for this session (thread)
-    - reject_tool: reject this tool call
+    Answers with the button pressed: one of the answers the prompt offers (core's brief, whose
+    action ids :func:`_answer_action` names: ``approve_tool`` for Allow once, ``reject_tool`` for
+    Deny, ``pc_answer_<key>`` for any other), or ``trust_tool``, this app's own "Trust session",
+    which auto-approves all tools for a thread it runs itself.
 
     Only the owner answers: Approve, Trust and Reject alike, and a late Trust too. An allowlisted
     user may talk to the agent, but a press decides what runs with the owner's authority, and a
@@ -3149,7 +3186,22 @@ async def handle_interaction(channel: str, msg_ts: str, action_id: str, user_id:
                     logger.debug("Failed to tell the owner their press came late", exc_info=True)
             return LATE_PRESS
 
-    if action_id in (_ACTION_APPROVE, _ACTION_TRUST):
+    answered = pending.answer(_answer_of_action(action_id))
+    # "Trust session" is offered on a prompt for a thread this app runs itself, and nowhere else.
+    offered = pending.provider is not None if action_id == _ACTION_TRUST else answered is not None
+    if not offered:
+        # A button that names no answer this prompt offers decides nothing.
+        logger.warning("Refusing a press on %s that names no offered answer (%s)", key, action_id)
+        sel().log_api_access(
+            caller=user_id,
+            operation="slack.interactive.approval",
+            outcome="denied",
+            source="slack",
+            resources=key,
+            error="not_an_offered_answer",
+        )
+        return None
+    if action_id == _ACTION_TRUST or (answered or {}).get("ends") == _OUTCOME_APPROVED:
         # Set trust state BEFORE approving (so subsequent tools auto-approve)
         if action_id == _ACTION_TRUST:
             if pending.session_key:
@@ -3160,7 +3212,8 @@ async def handle_interaction(channel: str, msg_ts: str, action_id: str, user_id:
         if pending.provider:
             await pending.provider.approve_tool(pending.request_id)
         if not pending.future.done():
-            pending.future.set_result(_OUTCOME_APPROVED)
+            # The answer pressed, so the one asking can tell a standing answer from Allow once.
+            pending.future.set_result(answered["key"] if answered else _OUTCOME_APPROVED)
         sel().log_api_access(
             caller=user_id,
             operation="slack.interactive.approval",
@@ -3198,25 +3251,22 @@ def _approval_messages(
     message holds, the prompt runs over several messages and the buttons ride the last, where
     the reader ends up. Almost always it is one.
 
-    In DMs: Approve / Trust / Reject. In group channels: Approve / Reject only (Trust excluded
-    to limit blast radius — it escalates permissions for the session). YOLO is owner-only via
-    ``!yolo on`` — no button. A prompt core asks (*offer_trust* off) has no Trust either: the
-    trust it grants is this app's own, for the Slack threads it runs itself, and an approval core
-    asks belongs to a chat that trust never reaches, so the button would approve once and say
-    it trusted.
+    The buttons are the answers the brief offers, in its order (:func:`_answer_action`): Allow
+    once and Deny, and Allow for this chat where core offers it, for an approval core asks in its
+    own chat. In DMs a thread this app runs itself also offers Trust session, before the refusal;
+    group channels do not (Trust excluded to limit blast radius — it escalates permissions for
+    the session). YOLO is owner-only via ``!yolo on`` — no button. A prompt core asks
+    (*offer_trust* off) has no Trust session either: the trust it grants is this app's own, for
+    the Slack threads it runs itself, and an approval core asks belongs to a chat that trust never
+    reaches, so the button would approve once and say it trusted.
     """
     brief = approval_brief_for(event) or {}
     tool = str(brief.get("tool") or "") or "a tool"
     tag = f"[{source}] " if source else ""
-    buttons: list[dict] = [
-        {
-            "type": "button",
-            "text": {"type": "plain_text", "text": "Approve"},
-            "style": "primary",
-            "action_id": _ACTION_APPROVE,
-            "value": event.request_id,
-        },
-    ]
+    answers = list(brief.get("answers") or [])
+    approving = [a for a in answers if a.get("ends") == _OUTCOME_APPROVED]
+    refusing = [a for a in answers if a.get("ends") != _OUTCOME_APPROVED]
+    buttons: list[dict] = [_answer_button(a, event.request_id) for a in approving]
     if is_dm and offer_trust:
         buttons.append(
             {
@@ -3226,15 +3276,7 @@ def _approval_messages(
                 "value": event.request_id,
             },
         )
-    buttons.append(
-        {
-            "type": "button",
-            "text": {"type": "plain_text", "text": "Reject"},
-            "style": "danger",
-            "action_id": _ACTION_REJECT,
-            "value": event.request_id,
-        },
-    )
+    buttons += [_answer_button(a, event.request_id) for a in refusing]
 
     blocks: list[dict] = [
         {
@@ -3254,13 +3296,24 @@ def _approval_messages(
         for part in split_message(code, SLACK_BLOCK_SECTION_LIMIT):
             blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": part}})
     # Why, and what it can touch, go ABOVE the buttons: they are the reasons to press one, so a
-    # reader must meet them before the decision, not after it.
+    # reader must meet them before the decision, not after it. So does what each standing answer
+    # does, in the dashboard card's words.
     tail: list[dict] = [
         {"type": "context", "elements": [
             {"type": "mrkdwn", "text": escape_mrkdwn(str(brief[k]))},
         ]}
         for k in ("purpose", "summary")
         if brief.get(k)
+    ]
+    tail += [
+        {
+            "type": "context",
+            "elements": [
+                {"type": "mrkdwn", "text": escape_mrkdwn(f"{a['label']}: {a['promise']}")}
+            ],
+        }
+        for a in answers
+        if a.get("promise")
     ]
     tail.append({"type": "actions", "elements": buttons})
     messages: list[list[dict]] = []
@@ -3269,6 +3322,22 @@ def _approval_messages(
         blocks = blocks[_MAX_BLOCKS:]
     messages.append(blocks + tail)
     return messages
+
+
+def _answer_button(answer: dict[str, str], request_id: Any) -> dict:
+    """One answer's button: its words, and the action id that names it. Allow once is the
+    primary style it has always had, a refusal the danger style, a standing answer neither."""
+    button: dict = {
+        "type": "button",
+        "text": {"type": "plain_text", "text": answer["label"]},
+        "action_id": _answer_action(answer["key"]),
+        "value": request_id,
+    }
+    if answer.get("ends") != _OUTCOME_APPROVED:
+        button["style"] = "danger"
+    elif not answer.get("promise"):
+        button["style"] = "primary"
+    return button
 
 
 def _approval_fallback(event: LLMEvent, source: str = "") -> str:

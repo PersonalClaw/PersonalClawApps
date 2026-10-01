@@ -43,7 +43,12 @@ ships as a self-contained directory:
     PersonalClaw's own approval card does: the tool, its arguments in a code block, why the
     agent is calling it, and what the call can touch with its risk (from core's brief, already
     masked). One too long for one message is split like a reply, its buttons on the last part.
-    When the approval ends, however it ends (Approve or Deny here, an answer in PersonalClaw,
+    Its buttons are the answers PersonalClaw's approval card offers for that call, in one
+    row: **Allow once** and **Deny**, and **Allow for this chat** on a prompt in the
+    chat that is asking (never for a call that may destroy something), which the prompt explains
+    first, in the card's words. That one trusts the chat in PersonalClaw, as the card's *This
+    chat* does: its header shows it and you turn it off there.
+    When the approval ends, however it ends (an answer here, an answer in PersonalClaw,
     nobody answering within PersonalClaw's approval wait, or the work that asked for it
     stopping first), the buttons come off and how it ended is added under the last part, or
     takes its place when the two would not fit one message, so the chat keeps what happened.

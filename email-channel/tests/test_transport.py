@@ -701,7 +701,7 @@ class TestApprovalRepliesConsumeTheMessage:
 
     @pytest.mark.asyncio
     async def test_the_owners_approval_reply_answers_and_is_not_a_turn(self, wired):
-        from email_runtime.delivery import APPROVE_WORD
+        APPROVE_WORD = "APPROVE"  # the reply word of core's Allow once
 
         transport, imap, smtp, _, captured = wired
         task, token = await _asked(transport, smtp)
@@ -717,7 +717,7 @@ class TestApprovalRepliesConsumeTheMessage:
         """A paired correspondent may converse; an approval is the owner's to answer."""
         from personalclaw.sdk.channel import sel
 
-        from email_runtime.delivery import APPROVE_WORD
+        APPROVE_WORD = "APPROVE"  # the reply word of core's Allow once
 
         rows: list[dict] = []
         monkeypatch.setattr(type(sel()), "log_api_access", lambda _log, **row: rows.append(row))
@@ -740,7 +740,7 @@ class TestApprovalRepliesConsumeTheMessage:
     async def test_an_unknown_senders_approval_reply_is_ignored(self, wired):
         """An approval is the highest-value thing a channel carries — it must never ride
         an unauthenticated message."""
-        from email_runtime.delivery import APPROVE_WORD
+        APPROVE_WORD = "APPROVE"  # the reply word of core's Allow once
 
         transport, imap, smtp, _, _ = wired
         task, token = await _asked(transport, smtp)

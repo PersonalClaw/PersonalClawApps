@@ -85,6 +85,8 @@ _LATE_ANSWERS = {
 }
 # ...and when this process never saw it end (the prompt is older than the gateway's last start).
 _NO_LONGER_WAITING = "This approval is no longer waiting. This press changes nothing."
+# A press naming no answer the prompt offers.
+_NOT_OFFERED = "That is not an answer this approval offers. This press changes nothing."
 _NOT_THE_OWNER = "Only the owner can answer this."
 
 # A progress line for each status core gives a call (``ChannelDelivery.append_stream_task``): its
@@ -105,9 +107,9 @@ def _task_line(title: str, status: str) -> str:
     mark, words = _TASK_LINES.get(status, ("•", status))
     line = f"{mark} {title}".strip()
     return f"{line} ({words})" if words else line
-# custom_id prefixes. Discord caps custom_id at 100 chars; a request id is short.
-_APPROVE = "approve"
-_DENY = "deny"
+# An answer's custom_id: this prefix, the answer's place among those the prompt offers, then the
+# request id ("a1:<id>"). The prompt's pending record says which answer that place is.
+_ANSWER = "a"
 # The component interaction type on INTERACTION_CREATE (3 = MESSAGE_COMPONENT).
 # Slash commands (2) and modals (5) arrive on the same event and are NOT ours.
 INTERACTION_TYPE_COMPONENT = 3
@@ -244,13 +246,21 @@ class _StreamState:
 
 
 class _PendingApproval:
-    __slots__ = ("future", "channel_id", "message_id", "request_id")
+    __slots__ = ("future", "channel_id", "message_id", "request_id", "answers")
 
-    def __init__(self, request_id: str, channel_id: str, message_id: str) -> None:
+    def __init__(
+        self, request_id: str, channel_id: str, message_id: str, answers: list[dict[str, str]]
+    ) -> None:
         self.future: asyncio.Future = asyncio.get_event_loop().create_future()
         self.channel_id = channel_id
         self.message_id = message_id
         self.request_id = request_id
+        #: The answers the prompt offers, in its buttons' order (core's brief).
+        self.answers = answers
+
+    def answer(self, key: str) -> dict[str, str] | None:
+        """The offered answer whose key *key* is, or None."""
+        return next((a for a in self.answers if a.get("key") == key), None)
 
 
 class DiscordDelivery:
@@ -555,10 +565,11 @@ class DiscordDelivery:
         self, event: Any, *, source: str, parent_session_key: str = "",
         sessions: Any = None, on_prompted: Any = None,
     ) -> bool | None:
-        """Post an Approve/Deny button row and wait for the approval to end.
+        """Post a button row of the answers the brief offers and wait for the approval to end.
 
-        Returns approved/rejected, or None when we can't prompt (no owner/channel) so
-        the gateway falls back to the dashboard. ``on_prompted(pending)`` lets core
+        Returns whether it ended approved, or None when we can't prompt (no owner/channel, or a
+        brief that offers nothing) so the gateway falls back to the dashboard. A press resolves
+        the pending record with the pressed answer's key. ``on_prompted(pending)`` lets core
         race a dashboard prompt against this one: core resolves the same future with how
         the approval ended wherever it ended, so the wait keeps no timer of its own. Once
         it ends, the prompt says how and loses its buttons (:meth:`_close`), and so it does
@@ -577,19 +588,25 @@ class DiscordDelivery:
         if not channel_id:
             return None
 
+        brief = approval_brief_for(event) or {}
+        answers = list(brief.get("answers") or [])
+        if not answers:
+            return None
         request_id = str(getattr(event, "request_id", ""))
         # What will run, as the dashboard's card shows it. Split like a reply, the buttons on
         # the last part: the prompt was cut at 2,000 characters, so the owner approved a
         # command whose end they never saw.
-        parts = split_message(_approval_text(approval_brief_for(event) or {}, source))
+        parts = split_message(_approval_text(brief, source))
         msg: dict[str, Any] = {}
         for index, part in enumerate(parts, 1):
             last = index == len(parts)
             msg = await self._api.create_message(
-                channel_id, part, components=_approval_components(request_id) if last else None
+                channel_id,
+                part,
+                components=_approval_components(answers, request_id) if last else None,
             )
         message_id = str(msg.get("id", ""))
-        pending = _PendingApproval(request_id, channel_id, message_id)
+        pending = _PendingApproval(request_id, channel_id, message_id, answers)
         self._pending[f"{channel_id}:{message_id}"] = pending
         # Index by request_id too so resolve_interaction can find it from custom_id.
         self._pending[f"req:{request_id}"] = pending
@@ -608,20 +625,31 @@ class DiscordDelivery:
             self._pending.pop(f"{channel_id}:{message_id}", None)
             self._pending.pop(f"req:{request_id}", None)
 
-        await self._close(channel_id, message_id, parts, request_id, outcome)
-        return outcome == "approved"
+        pressed = pending.answer(outcome)
+        await self._close(channel_id, message_id, parts, request_id, outcome, pressed)
+        return (pressed["ends"] if pressed else outcome) == "approved"
 
     async def _close(
-        self, channel_id: str, message_id: str, parts: list[str], request_id: str, outcome: str
+        self,
+        channel_id: str,
+        message_id: str,
+        parts: list[str],
+        request_id: str,
+        outcome: str,
+        pressed: dict[str, str] | None = None,
     ) -> None:
         """Show how the approval ended under what the prompt asked, and strip its buttons
-        (``components=[]``): an ended approval must not leave a clickable Approve behind. A
-        press after this is answered with *outcome*."""
+        (``components=[]``): an ended approval must not leave a clickable Approve behind.
+        *pressed* is the answer the owner pressed here, whose ending it is and whose promise the
+        prompt then says it kept. A press after this is answered with how it ended."""
+        ending = pressed["ends"] if pressed else outcome
         self._ended.pop(request_id, None)
-        self._ended[request_id] = outcome
+        self._ended[request_id] = ending
         while len(self._ended) > _ENDED_KEPT:
             self._ended.popitem(last=False)
-        line = _OUTCOME_LINES.get(outcome) or f"Ended: {outcome}"
+        line = _OUTCOME_LINES.get(ending) or f"Ended: {ending}"
+        if pressed and pressed.get("promise"):
+            line = f"{line}. {pressed['promise']}"
         try:
             await self._api.edit_message(
                 channel_id, message_id, _answered(parts, line), components=[]
@@ -658,10 +686,13 @@ class DiscordDelivery:
         custom_id = str((interaction.get("data") or {}).get("custom_id", ""))
         action, _, request_id = custom_id.partition(":")
         told = ""
-        if action in (_APPROVE, _DENY) and request_id:
+        place = action[len(_ANSWER):]
+        if action.startswith(_ANSWER) and place.isdigit() and request_id:
             pending = self._pending.get(f"req:{request_id}")
             if pending is None or pending.future.done():
                 told = _LATE_ANSWERS.get(self._ended.get(request_id, "")) or _NO_LONGER_WAITING
+            elif int(place) >= len(pending.answers):
+                told = _NOT_OFFERED
             else:
                 # Only the owner's press answers it. A prompt for a chat linked to a tracked
                 # channel is posted there, where everyone in it sees the buttons, and a member
@@ -671,7 +702,7 @@ class DiscordDelivery:
                 presser = str((member_user or interaction.get("user") or {}).get("id", "") or "")
                 owner = str(self._owner() or "")
                 if owner and presser == owner:
-                    pending.future.set_result("approved" if action == _APPROVE else "rejected")
+                    pending.future.set_result(pending.answers[int(place)]["key"])
                 else:
                     told = _NOT_THE_OWNER
                     logger.warning("discord: refused an approval press from %s, not the owner", presser)
@@ -700,27 +731,26 @@ class DiscordDelivery:
                 logger.debug("discord: interaction ack failed", exc_info=True)
 
 
-def _approval_components(request_id: str) -> list[dict[str, Any]]:
-    """One action row with the Approve (success) / Deny (danger) buttons.
+def _approval_components(answers: list[dict[str, str]], request_id: str) -> list[dict[str, Any]]:
+    """One action row with a button per answer the brief offers, in its order: success for an
+    answer that approves, danger for one that does not.
 
-    The request id rides in each ``custom_id`` — that is the only state Discord
-    hands back on the press, so it is what re-finds the pending future."""
+    The answer's place and the request id ride in each ``custom_id`` (:data:`_ANSWER`) — that is
+    the only state Discord hands back on the press, so it is what re-finds the pending future
+    and the answer pressed."""
     return [
         {
             "type": COMPONENT_ACTION_ROW,
             "components": [
                 {
                     "type": COMPONENT_BUTTON,
-                    "style": BUTTON_STYLE_SUCCESS,
-                    "label": "Approve",
-                    "custom_id": f"{_APPROVE}:{request_id}",
-                },
-                {
-                    "type": COMPONENT_BUTTON,
-                    "style": BUTTON_STYLE_DANGER,
-                    "label": "Deny",
-                    "custom_id": f"{_DENY}:{request_id}",
-                },
+                    "style": (
+                        BUTTON_STYLE_SUCCESS if a.get("ends") == "approved" else BUTTON_STYLE_DANGER
+                    ),
+                    "label": a["label"],
+                    "custom_id": f"{_ANSWER}{place}:{request_id}",
+                }
+                for place, a in enumerate(answers)
             ],
         }
     ]
@@ -747,6 +777,10 @@ def _approval_text(brief: dict, source: str) -> str:
     if arguments:
         lines += ["```", _unfenced(arguments), "```"]
     lines += [str(brief[k]) for k in ("purpose", "summary") if brief.get(k)]
+    # What each standing answer does, in the dashboard card's words, read before it is pressed.
+    lines += [
+        f"{a['label']}: {a['promise']}" for a in brief.get("answers") or [] if a.get("promise")
+    ]
     return "\n".join(lines)
 
 

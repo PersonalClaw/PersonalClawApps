@@ -306,3 +306,78 @@ async def test_an_owner_claimed_after_the_start_is_prompted(monkeypatch):
     assert ("open_dm", {"user_id": "U0CLAIMED"}) in slack.actions
     told["it"].future.set_result("approved")
     assert await asyncio.wait_for(wait, timeout=2) is True
+
+
+# ── what core's prompt offers: the chat's approval card's answers ───────────────────────────
+
+_THIS_CHAT_PROMISE = "Every tool in this chat runs without asking, until you change it back."
+
+#: What core hands a prompt asked in its own chat: Allow once, Allow for this chat and Deny.
+_IN_ITS_CHAT = [
+    {"key": "approved", "label": "Allow once", "ends": "approved", "word": "APPROVE", "promise": ""},
+    {"key": "trust", "label": "Allow for this chat", "ends": "approved", "word": "TRUST",
+     "promise": _THIS_CHAT_PROMISE},
+    {"key": "rejected", "label": "Deny", "ends": "rejected", "word": "DENY", "promise": ""},
+]
+
+
+def _asked_in_its_chat(slack: MockSlackClient) -> "_Asked":
+    asked = _Asked.__new__(_Asked)
+    asked.slack = slack
+    asked.pending = {}
+    event = _event()
+    event.tool_meta["approval_brief"] = {
+        "tool": "bash",
+        "input": '{"command": "make test"}',
+        "purpose": "run the tests",
+        "risk": "caution",
+        "summary": "Can: runs a command · Risk: Caution",
+        "answers": _IN_ITS_CHAT,
+    }
+    asked.wait = asyncio.ensure_future(
+        SlackDelivery(slack, lambda: OWNER).request_approval(
+            event, source="chat", on_prompted=lambda p: asked.pending.setdefault("it", p)
+        )
+    )
+    return asked
+
+
+@pytest.mark.asyncio
+async def test_a_prompt_in_its_chat_offers_allow_for_this_chat():
+    """Core's answers, in the card's words, and what the standing one does, before the buttons."""
+    asked = await _asked_in_its_chat(MockSlackClient()).prompted()
+    blocks = [a[1]["blocks"] for a in asked.slack.actions if a[0] == "blocks"][-1]
+    (actions,) = _buttons(blocks)
+    assert [e["text"]["text"] for e in actions["elements"]] == [
+        "Allow once", "Allow for this chat", "Deny",
+    ]
+    assert asked.posted_buttons() == ["approve_tool", "pc_answer_trust", "reject_tool"]
+    assert [e.get("style") for e in actions["elements"]] == ["primary", None, "danger"]
+    assert f"Allow for this chat: {_THIS_CHAT_PROMISE}" in _says(blocks)
+    asked.wait.cancel()
+
+
+@pytest.mark.asyncio
+async def test_allow_for_this_chat_pressed_here_answers_with_it():
+    """The chat's Trust is core's to set: the press tells core which answer it was, approves this
+    call, and leaves this app's own thread trust alone."""
+    asked = await _asked_in_its_chat(MockSlackClient()).prompted()
+    H._trusted_sessions.clear()
+    with patch("slack_runtime.handler.sel"):
+        assert await H.handle_interaction(asked.channel, asked.ts, "pc_answer_trust", user_id=OWNER)
+    assert await asyncio.wait_for(asked.wait, timeout=2) is True
+    assert asked.pending["it"].future.result() == "trust"
+    assert not H._trusted_sessions, "the app trusted a thread of its own for core's chat"
+    assert f"✅ Approved. {_THIS_CHAT_PROMISE}" in _says(asked.closed_with())
+
+
+@pytest.mark.asyncio
+async def test_a_press_naming_no_offered_answer_answers_nothing():
+    """Core's prompt offers no Trust session; a press on one decides nothing."""
+    asked = await _asked_in_its_chat(MockSlackClient()).prompted()
+    with patch("slack_runtime.handler.sel"):
+        assert await H.handle_interaction(asked.channel, asked.ts, "trust_tool", user_id=OWNER) is None
+        assert await H.handle_interaction(asked.channel, asked.ts, "pc_answer_yolo", user_id=OWNER) is None
+    await asyncio.sleep(0)
+    assert not asked.pending["it"].future.done()
+    asked.wait.cancel()

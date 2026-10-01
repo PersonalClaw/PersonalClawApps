@@ -511,12 +511,26 @@ class _Event:
 
 #: What core stamps on an approval it asks a channel: the call, masked, as the dashboard's card
 #: shows it (``personalclaw.sdk.channel.approval_brief_for``).
+#: What an approval with no chat of its own offers, and one asked in its own chat: core's answers,
+#: as the brief carries them.
+_ONE_CALL = [
+    {"key": "approved", "label": "Allow once", "ends": "approved", "word": "APPROVE", "promise": ""},
+    {"key": "rejected", "label": "Deny", "ends": "rejected", "word": "DENY", "promise": ""},
+]
+_THIS_CHAT_PROMISE = "Every tool in this chat runs without asking, until you change it back."
+_IN_ITS_CHAT = [
+    _ONE_CALL[0],
+    {"key": "trust", "label": "Allow for this chat", "ends": "approved", "word": "TRUST",
+     "promise": _THIS_CHAT_PROMISE},
+    _ONE_CALL[1],
+]
 _BRIEF = {
     "tool": "execute_bash",
     "input": '{"command": "deploy --token [REDACTED: credential] --env staging"}',
     "purpose": "ship the staging build",
     "risk": "destructive",
     "summary": "Can: runs a command · Risk: Destructive",
+    "answers": _ONE_CALL,
 }
 
 
@@ -531,17 +545,19 @@ class TestApprovalRoundTrip:
         await asyncio.sleep(0)  # …and post the prompt
         await asyncio.sleep(0)
 
-        # It prompted the owner's DM (opened, not the raw user id) with two buttons.
+        # It prompted the owner's DM (opened, not the raw user id) with the answers an approval
+        # with no chat of its own offers.
         prompt = d._api.sent[-1]
         assert prompt["channel_id"] == "dm-42"
         buttons = prompt["components"][0]["components"]
-        assert {b["custom_id"] for b in buttons} == {"approve:reqX", "deny:reqX"}
+        assert [b["label"] for b in buttons] == ["Allow once", "Deny"]
+        assert [b["custom_id"] for b in buttons] == ["a0:reqX", "a1:reqX"]
         assert [b["style"] for b in buttons] == [BUTTON_STYLE_SUCCESS, BUTTON_STYLE_DANGER]
 
         # The press arrives as an INTERACTION_CREATE and resolves the same future.
         await d.resolve_interaction({
             "id": "i1", "token": "itok", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "approve:reqX"}, "user": {"id": "42"},
+            "data": {"custom_id": "a0:reqX"}, "user": {"id": "42"},
         })
         assert await asyncio.wait_for(task, timeout=1.0) is True
 
@@ -578,11 +594,86 @@ class TestApprovalRoundTrip:
         assert prompt["content"] == text
         await d.resolve_interaction({
             "id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "approve:reqB"}, "user": {"id": "42"},
+            "data": {"custom_id": "a0:reqB"}, "user": {"id": "42"},
         })
         assert await asyncio.wait_for(task, timeout=1.0) is True
         # Answered, the prompt keeps what was approved, with the outcome under it.
         assert d._api.edits[-1]["content"] == f"{text}\n✅ Approved"
+
+    @pytest.mark.asyncio
+    async def test_a_prompt_in_its_chat_offers_allow_for_this_chat(self):
+        """A chat's own approval, asked in that chat, offers what the dashboard's card offers:
+        Allow once, Allow for this chat and Deny, and says what the standing one does before it
+        is pressed. Pressed, it answers the approval with that answer and approves this call;
+        the prompt then says what it kept, and a late press is told it was approved."""
+        d = _delivery(owner="42")
+        brief = {
+            "tool": "get_file_contents",
+            "input": '{"path": "opml.py"}',
+            "purpose": "read the parser",
+            "risk": "caution",
+            "summary": "Risk: Caution",
+            "answers": _IN_ITS_CHAT,
+        }
+        seen = {}
+        task = asyncio.ensure_future(
+            d.request_approval(
+                _Event("reqT", brief=brief), source="chat", on_prompted=lambda p: seen.setdefault("p", p)
+            )
+        )
+        for _ in range(4):
+            await asyncio.sleep(0)
+        (prompt,) = d._api.sent
+        buttons = prompt["components"][0]["components"]
+        assert [b["label"] for b in buttons] == ["Allow once", "Allow for this chat", "Deny"]
+        assert [b["custom_id"] for b in buttons] == ["a0:reqT", "a1:reqT", "a2:reqT"]
+        assert [b["style"] for b in buttons] == [
+            BUTTON_STYLE_SUCCESS, BUTTON_STYLE_SUCCESS, BUTTON_STYLE_DANGER,
+        ]
+        text = (
+            "🔐 [chat] Approve `get_file_contents`?\n"
+            "```\n"
+            '{"path": "opml.py"}\n'
+            "```\n"
+            "read the parser\n"
+            "Risk: Caution\n"
+            f"Allow for this chat: {_THIS_CHAT_PROMISE}"
+        )
+        assert prompt["content"] == text
+
+        await d.resolve_interaction({
+            "id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
+            "data": {"custom_id": "a1:reqT"}, "user": {"id": "42"},
+        })
+        assert await asyncio.wait_for(task, timeout=1.0) is True, "this call is approved too"
+        assert seen["p"].future.result() == "trust", "core is told which answer was pressed"
+        assert d._api.edits[-1]["content"] == f"{text}\n✅ Approved. {_THIS_CHAT_PROMISE}"
+        assert d._api.edits[-1]["components"] == []
+        await d.resolve_interaction({
+            "id": "late", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
+            "data": {"custom_id": "a0:reqT"}, "user": {"id": "42"},
+        })
+        assert d._api.acks[-1]["data"]["content"] == "Already approved. This press changes nothing."
+
+    @pytest.mark.asyncio
+    async def test_a_press_naming_no_offered_answer_answers_nothing(self):
+        d = _delivery(owner="42")
+        task = asyncio.ensure_future(d.request_approval(_Event("reqN"), source="tool"))
+        for _ in range(4):
+            await asyncio.sleep(0)
+        await d.resolve_interaction({
+            "id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
+            "data": {"custom_id": "a7:reqN"}, "user": {"id": "42"},
+        })
+        assert not task.done()
+        assert d._api.acks[-1]["data"]["content"] == (
+            "That is not an answer this approval offers. This press changes nothing."
+        )
+        await d.resolve_interaction({
+            "id": "o", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
+            "data": {"custom_id": "a1:reqN"}, "user": {"id": "42"},
+        })
+        assert await asyncio.wait_for(task, timeout=1.0) is False
 
     @pytest.mark.asyncio
     async def test_a_long_prompt_is_split_like_a_reply_with_the_buttons_last(self):
@@ -604,7 +695,7 @@ class TestApprovalRoundTrip:
 
         await d.resolve_interaction({
             "id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "approve:reqL"}, "user": {"id": "42"},
+            "data": {"custom_id": "a0:reqL"}, "user": {"id": "42"},
         })
         assert await asyncio.wait_for(task, timeout=1.0) is True
         final = d._api.edits[-1]
@@ -619,7 +710,7 @@ class TestApprovalRoundTrip:
             await asyncio.sleep(0)
         await d.resolve_interaction({
             "id": "i2", "token": "t2", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "deny:reqY"}, "user": {"id": "42"},
+            "data": {"custom_id": "a1:reqY"}, "user": {"id": "42"},
         })
         assert await asyncio.wait_for(task, timeout=1.0) is False
         assert "Rejected" in d._api.edits[-1]["content"]
@@ -656,7 +747,7 @@ class TestApprovalRoundTrip:
         assert d._api.dms == []  # no DM needed
         await d.resolve_interaction({
             "id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "deny:reqL"}, "member": {"user": {"id": "42"}},
+            "data": {"custom_id": "a1:reqL"}, "member": {"user": {"id": "42"}},
         })
         await asyncio.wait_for(task, timeout=1.0)
 
@@ -695,7 +786,7 @@ class TestApprovalRoundTrip:
             await asyncio.sleep(0)
         await d.resolve_interaction({
             "id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "approve:reqB"}, "user": {"id": "42"},
+            "data": {"custom_id": "a0:reqB"}, "user": {"id": "42"},
         })
         assert await asyncio.wait_for(task, timeout=1.0) is True
 
@@ -725,7 +816,7 @@ class TestOnlyTheOwnerAnswers:
         for who in ({"member": {"user": {"id": "5151"}}}, {"user": {"id": "5151"}}, {}):
             await d.resolve_interaction({
                 "id": "im", "token": "tm", "type": INTERACTION_TYPE_COMPONENT,
-                "data": {"custom_id": "approve:reqM"}, **who,
+                "data": {"custom_id": "a0:reqM"}, **who,
             })
         await asyncio.sleep(0)
         assert not task.done(), "a member's press answered the owner's approval"
@@ -734,7 +825,7 @@ class TestOnlyTheOwnerAnswers:
         # Floor: the owner's press, on the same prompt, does answer it.
         await d.resolve_interaction({
             "id": "io", "token": "to", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "approve:reqM"}, "member": {"user": {"id": "42"}},
+            "data": {"custom_id": "a0:reqM"}, "member": {"user": {"id": "42"}},
         })
         assert await asyncio.wait_for(task, timeout=1.0) is True
 
@@ -748,14 +839,14 @@ class TestOnlyTheOwnerAnswers:
         task = await self._linked_prompt(d, "reqS")
         await d.resolve_interaction({
             "id": "im", "token": "tm", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "deny:reqS"}, "member": {"user": {"id": "5151"}},
+            "data": {"custom_id": "a1:reqS"}, "member": {"user": {"id": "5151"}},
         })
         assert [(e["caller"], e["outcome"], e["resources"]) for e in events] == [
             ("discord:5151", "denied", "reqS")
         ]
         await d.resolve_interaction({
             "id": "io", "token": "to", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "deny:reqS"}, "member": {"user": {"id": "42"}},
+            "data": {"custom_id": "a1:reqS"}, "member": {"user": {"id": "42"}},
         })
         assert await asyncio.wait_for(task, timeout=1.0) is False
         assert len(events) == 1, "the owner's press is not an event"
@@ -769,7 +860,7 @@ class TestResolveInteraction:
         d = _delivery()
         await d.resolve_interaction({
             "id": "i9", "token": "t9", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "approve:ghost"},
+            "data": {"custom_id": "a0:ghost"},
         })
         assert d._api.acks[-1]["id"] == "i9"
 
@@ -795,7 +886,7 @@ class TestResolveInteraction:
         d = _delivery(fail={"create_interaction_response"})
         await d.resolve_interaction({
             "id": "i4", "token": "t4", "type": INTERACTION_TYPE_COMPONENT,
-            "data": {"custom_id": "approve:x"},
+            "data": {"custom_id": "a0:x"},
         })  # no raise
 
     @pytest.mark.asyncio
@@ -805,7 +896,7 @@ class TestResolveInteraction:
         for _ in range(4):
             await asyncio.sleep(0)
         payload = {"id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
-                   "data": {"custom_id": "approve:reqD"}, "user": {"id": "42"}}
+                   "data": {"custom_id": "a0:reqD"}, "user": {"id": "42"}}
         await d.resolve_interaction(payload)
         assert await asyncio.wait_for(task, timeout=1.0) is True
         await d.resolve_interaction(payload)  # double press — no InvalidStateError

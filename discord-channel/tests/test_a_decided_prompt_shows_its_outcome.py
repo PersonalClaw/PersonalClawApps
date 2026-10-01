@@ -56,12 +56,16 @@ class _Asked:
         raise AssertionError("the prompt was never posted")
 
 
+#: The buttons an approval with no chat of its own offers, by their place: Allow once, Deny.
+_BUTTONS = {"approve": "a0", "deny": "a1"}
+
+
 def _press(request_id: str, button: str = "approve", who: str = OWNER) -> dict:
     return {
         "id": "i-1",
         "token": "t-1",
         "type": INTERACTION_TYPE_COMPONENT,
-        "data": {"custom_id": f"{button}:{request_id}"},
+        "data": {"custom_id": f"{_BUTTONS[button]}:{request_id}"},
         "user": {"id": who},
     }
 

@@ -59,20 +59,26 @@ def owner():
 
 
 def _press(slack: MockSlackClient):
-    """The owner's Approve or Reject on the prompt the delivery just posted, through the
-    handler a Slack button press reaches; returns what the owner was told there."""
+    """The owner's press on one of the answers of the prompt the delivery just posted, by its
+    key, with the action id the prompt's own button carries, through the handler a Slack button
+    press reaches; returns what the owner was told there."""
 
-    async def press(pending, approve: bool) -> str:
+    async def press(pending, answer: str) -> str:
         prompt = [
             a[1]
             for a in slack.actions
             if a[0] == "blocks" and any(b.get("type") == "actions" for b in a[1]["blocks"])
         ][-1]
+        (actions,) = [b for b in prompt["blocks"] if b.get("type") == "actions"]
+        labels = {a["key"]: a["label"] for a in pending.answers}
+        (action_id,) = [
+            e["action_id"] for e in actions["elements"] if e["text"]["text"] == labels[answer]
+        ]
         told_before = sum(1 for a in slack.actions if a[0] == "ephemeral")
         await H.handle_interaction(
             prompt["channel"],
             prompt["ts"],
-            "approve_tool" if approve else "reject_tool",
+            action_id,
             user_id=OWNER,
             slack=slack,
         )
