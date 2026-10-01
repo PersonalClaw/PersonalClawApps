@@ -41,6 +41,17 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | `max_tokens` | Max Output Tokens | The most tokens Bedrock may generate in one turn. 0 sends the budget PersonalClaw sets for that call, else 8192. A cap is always sent, because Bedrock's own default can be low enough to cut long answers and tool calls short. |
 | `video_s3_bucket` | S3 Bucket | S3 bucket Bedrock's media features stage files in: Nova Reel writes each generated video there, and speech-to-text uploads each recording there for Amazon Transcribe, deleting it afterwards. Required for video generation and speech-to-text; nothing else uses it. Falls back to the BEDROCK_VIDEO_S3_BUCKET env var. |
 
+## The model list
+
+Settings → Models lists the models Bedrock's control plane says the instance's region serves:
+each foundation model callable by its own id, and each inference profile (`us.…`, `global.…`).
+Each is offered for what Bedrock's record of the model says it does. A model that reads and writes
+text and streams its answer is a chat model, and an image or audio one too when it reads images or
+speech; a model that writes embeddings is an embedding model. A profile is offered for what the
+model it routes to does. Rerank, image-editing and video-analysis models are not listed, nor is
+Nova Sonic, which takes only a two-way audio stream: nothing here can use them. Image and video
+generation list their own models (Nova Canvas, Nova Reel).
+
 ## Prompt caching
 
 Bedrock's Converse API needs an explicit cache **checkpoint** — it does not cache a prompt

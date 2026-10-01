@@ -1,8 +1,8 @@
 """BedrockCatalog model discovery is dynamic via the AWS control plane.
 
-``BedrockCatalog.list_models`` queries ``bedrock.list_foundation_models``
-(ON_DEMAND text models) + ``list_inference_profiles`` (the cross-region ``us.*``
-ids), using the entry's region/profile. There is no fallback catalog: when nothing
+``BedrockCatalog.list_models`` queries ``bedrock.list_foundation_models`` (every
+model's record) + ``list_inference_profiles`` (the cross-region ``us.*`` ids), using
+the entry's region/profile, and offers each model for what its record says it does. There is no fallback catalog: when nothing
 could be listed it raises ``ModelDiscoveryError`` naming why, which the connection
 test reports as written. This logic moved out of core into the app during the
 model-catalog-isolation slice; the test moved with it.
@@ -61,23 +61,94 @@ def _fake_boto3(foundation, profiles, *, calls=None):
     return SimpleNamespace(Session=_Session)
 
 
+# The records below have the shape Bedrock's ListFoundationModels and ListInferenceProfiles
+# answer with. An inference profile's record names no modality: it names the model it routes to,
+# by ARN, once per Region it routes to.
+
+
+def _record(model_id, name, provider, inputs, outputs, *, streams, invoked, status="ACTIVE"):
+    return {
+        "modelArn": f"arn:aws:bedrock:us-east-1::foundation-model/{model_id}",
+        "modelId": model_id,
+        "modelName": name,
+        "providerName": provider,
+        "inputModalities": list(inputs),
+        "outputModalities": list(outputs),
+        "responseStreamingSupported": streams,
+        "customizationsSupported": [],
+        "inferenceTypesSupported": list(invoked),
+        "modelLifecycle": {"status": status},
+    }
+
+
+def _routes(profile_id, name, model_id, regions=("us-east-1", "us-east-2", "us-west-2")):
+    return {
+        "inferenceProfileName": name,
+        "inferenceProfileArn": f"arn:aws:bedrock:us-east-1:111122223333:inference-profile/{profile_id}",
+        "inferenceProfileId": profile_id,
+        "models": [
+            {"modelArn": f"arn:aws:bedrock:{region}::foundation-model/{model_id}"} for region in regions
+        ],
+        "status": "ACTIVE",
+        "type": "SYSTEM_DEFINED",
+    }
+
+
+CLAUDE = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+FOUNDATION_MODELS = [
+    _record("amazon.nova-pro-v1:0", "Nova Pro", "Amazon", ["TEXT", "IMAGE", "VIDEO"], ["TEXT"],
+            streams=True, invoked=["ON_DEMAND", "INFERENCE_PROFILE"]),
+    _record(CLAUDE, "Claude Sonnet 4.5", "Anthropic", ["TEXT", "IMAGE"], ["TEXT"],
+            streams=True, invoked=["INFERENCE_PROFILE"]),
+    _record("mistral.voxtral-small-24b-2507", "Voxtral Small 24B 2507", "Mistral AI",
+            ["SPEECH", "TEXT"], ["TEXT"], streams=True, invoked=["ON_DEMAND"]),
+    _record("amazon.nova-sonic-v1:0", "Nova Sonic", "Amazon", ["SPEECH"], ["SPEECH", "TEXT"],
+            streams=True, invoked=["ON_DEMAND"]),
+    _record("amazon.rerank-v1:0", "Rerank 1.0", "Amazon", ["TEXT"], ["TEXT"],
+            streams=False, invoked=["ON_DEMAND"]),
+    _record("cohere.rerank-v3-5:0", "Rerank 3.5", "Cohere", ["TEXT"], ["TEXT"],
+            streams=False, invoked=["ON_DEMAND"]),
+    _record("amazon.titan-embed-text-v2:0", "Titan Text Embeddings V2", "Amazon", ["TEXT"],
+            ["EMBEDDING"], streams=False, invoked=["ON_DEMAND"]),
+    _record("cohere.embed-v4:0", "Embed v4", "Cohere", ["TEXT", "IMAGE"], ["EMBEDDING"],
+            streams=False, invoked=["INFERENCE_PROFILE"]),
+    _record("amazon.nova-canvas-v1:0", "Nova Canvas", "Amazon", ["TEXT", "IMAGE"], ["IMAGE"],
+            streams=False, invoked=["ON_DEMAND"]),
+    _record("stability.stable-image-inpaint-v1:0", "Stable Image Inpaint", "Stability AI",
+            ["TEXT", "IMAGE"], ["IMAGE"], streams=False, invoked=["INFERENCE_PROFILE"]),
+    _record("twelvelabs.pegasus-1-2-v1:0", "Pegasus v1.2", "TwelveLabs", ["TEXT", "VIDEO"],
+            ["TEXT"], streams=True, invoked=["INFERENCE_PROFILE"]),
+]
+PROFILES = [
+    _routes(f"us.{CLAUDE}", "US Anthropic Claude Sonnet 4.5", CLAUDE),
+    _routes(f"global.{CLAUDE}", "Global Anthropic Claude Sonnet 4.5", CLAUDE),
+    _routes("us.amazon.nova-pro-v1:0", "US Nova Pro", "amazon.nova-pro-v1:0"),
+    _routes("us.cohere.embed-v4:0", "US Cohere Embed v4", "cohere.embed-v4:0"),
+    _routes("global.cohere.embed-v4:0", "Global Cohere Embed v4", "cohere.embed-v4:0"),
+    _routes("us.stability.stable-image-inpaint-v1:0", "US Stable Image Inpaint",
+            "stability.stable-image-inpaint-v1:0"),
+    _routes("us.twelvelabs.pegasus-1-2-v1:0", "US TwelveLabs Pegasus v1.2",
+            "twelvelabs.pegasus-1-2-v1:0"),
+    _routes("global.twelvelabs.pegasus-1-2-v1:0", "Global TwelveLabs Pegasus v1.2",
+            "twelvelabs.pegasus-1-2-v1:0"),
+]
+
+
 def test_discovery_combines_foundation_and_profiles(monkeypatch):
     calls: dict = {}
     foundation = [
-        {"modelId": "amazon.nova-pro-v1:0", "modelName": "Nova Pro", "providerName": "Amazon",
-         "inferenceTypesSupported": ["ON_DEMAND"], "inputModalities": ["TEXT", "IMAGE"],
-         "modelLifecycle": {"status": "ACTIVE"}},
+        _record("amazon.nova-pro-v1:0", "Nova Pro", "Amazon", ["TEXT", "IMAGE"], ["TEXT"],
+                streams=True, invoked=["ON_DEMAND"]),
         # No ON_DEMAND → must NOT appear as a foundation model (only via profile).
-        {"modelId": "anthropic.claude-sonnet-4-20250514-v1:0", "modelName": "Claude Sonnet 4",
-         "providerName": "Anthropic", "inferenceTypesSupported": ["INFERENCE_PROFILE"],
-         "inputModalities": ["TEXT"], "modelLifecycle": {"status": "ACTIVE"}},
+        _record("anthropic.claude-sonnet-4-20250514-v1:0", "Claude Sonnet 4", "Anthropic",
+                ["TEXT"], ["TEXT"], streams=True, invoked=["INFERENCE_PROFILE"]),
         # Legacy/withdrawn → skipped.
-        {"modelId": "old.model-v1:0", "modelName": "Old", "inferenceTypesSupported": ["ON_DEMAND"],
-         "modelLifecycle": {"status": "LEGACY"}},
+        _record("old.model-v1:0", "Old", "", ["TEXT"], ["TEXT"], streams=True,
+                invoked=["ON_DEMAND"], status="LEGACY"),
     ]
     profiles = [
-        {"inferenceProfileId": "us.anthropic.claude-sonnet-4-20250514-v1:0",
-         "inferenceProfileName": "Claude Sonnet 4 (US)", "status": "ACTIVE"},
+        _routes("us.anthropic.claude-sonnet-4-20250514-v1:0", "Claude Sonnet 4 (US)",
+                "anthropic.claude-sonnet-4-20250514-v1:0"),
     ]
     monkeypatch.setitem(sys.modules, "boto3", _fake_boto3(foundation, profiles, calls=calls))
 
@@ -99,10 +170,14 @@ def test_discovery_combines_foundation_and_profiles(monkeypatch):
 
 def test_discovery_paginates_profiles(monkeypatch):
     client = MagicMock()
-    client.list_foundation_models.return_value = {"modelSummaries": []}
+    client.list_foundation_models.return_value = {"modelSummaries": [
+        _record(f"example.{name}", name, "Example", ["TEXT"], ["TEXT"], streams=True,
+                invoked=["INFERENCE_PROFILE"])
+        for name in ("a", "b")
+    ]}
     client.list_inference_profiles.side_effect = [
-        {"inferenceProfileSummaries": [{"inferenceProfileId": "us.a", "inferenceProfileName": "A", "status": "ACTIVE"}], "nextToken": "t1"},
-        {"inferenceProfileSummaries": [{"inferenceProfileId": "us.b", "inferenceProfileName": "B", "status": "ACTIVE"}]},
+        {"inferenceProfileSummaries": [_routes("us.a", "A", "example.a")], "nextToken": "t1"},
+        {"inferenceProfileSummaries": [_routes("us.b", "B", "example.b")]},
     ]
     session = MagicMock()
     session.client.return_value = client
@@ -137,9 +212,8 @@ def test_a_listing_that_fails_leaves_out_only_its_own_models(monkeypatch):
     the catalog, and nothing is raised for the part that failed."""
     client = MagicMock()
     client.list_foundation_models.return_value = {"modelSummaries": [
-        {"modelId": "amazon.nova-pro-v1:0", "modelName": "Nova Pro", "providerName": "Amazon",
-         "inferenceTypesSupported": ["ON_DEMAND"], "inputModalities": ["TEXT"],
-         "modelLifecycle": {"status": "ACTIVE"}},
+        _record("amazon.nova-pro-v1:0", "Nova Pro", "Amazon", ["TEXT"], ["TEXT"], streams=True,
+                invoked=["ON_DEMAND"]),
     ]}
     client.list_inference_profiles.side_effect = RuntimeError("listing refused")
     session = MagicMock()
@@ -258,9 +332,8 @@ def test_an_instance_that_names_no_region_uses_one_region_for_everything(monkeyp
 
     calls: dict = {}
     foundation = [
-        {"modelId": "amazon.nova-pro-v1:0", "modelName": "Nova Pro", "providerName": "Amazon",
-         "inferenceTypesSupported": ["ON_DEMAND"], "inputModalities": ["TEXT"],
-         "modelLifecycle": {"status": "ACTIVE"}},
+        _record("amazon.nova-pro-v1:0", "Nova Pro", "Amazon", ["TEXT"], ["TEXT"], streams=True,
+                invoked=["ON_DEMAND"]),
     ]
     monkeypatch.setitem(sys.modules, "boto3", _fake_boto3(foundation, [], calls=calls))
     assert _run(_list())  # the instance names no region
@@ -281,3 +354,92 @@ def test_an_instance_that_names_no_region_uses_one_region_for_everything(monkeyp
     region = manifest["provider"]["settingsSchema"]["properties"]["region"]
     assert region["default"] == prov.DEFAULT_REGION
     assert f"Empty uses {prov.DEFAULT_REGION}," in region["x-meta"]["help"]
+
+
+# ── each model is offered for what it does ──────────────────────────────────────────────────
+
+
+def _offered(monkeypatch, foundation=FOUNDATION_MODELS, profiles=PROFILES):
+    """The catalog's models by id, each with the capabilities it is offered for."""
+    monkeypatch.setitem(sys.modules, "boto3", _fake_boto3(foundation, profiles))
+    return {m["id"]: m["capabilities"] for m in _run(_list(region="us-east-1"))}
+
+
+def _for(offered, capability):
+    return {model_id for model_id, caps in offered.items() if capability in caps}
+
+
+def test_only_the_models_that_can_chat_are_offered_for_chat(monkeypatch):
+    """🔴 Red before: every inference profile was offered for chat whatever its model does, and a
+    rerank model, which writes text, was too: the chat picker listed embedding, rerank,
+    image-editing and video-analysis models beside the ones that chat. A chat turn is a Converse
+    stream of text, so a model chats when it reads and writes text and streams its answer."""
+    offered = _offered(monkeypatch)
+
+    assert _for(offered, "chat") == {
+        "amazon.nova-pro-v1:0",
+        "us.amazon.nova-pro-v1:0",
+        f"us.{CLAUDE}",
+        f"global.{CLAUDE}",
+        "mistral.voxtral-small-24b-2507",
+    }
+
+
+def test_a_profile_is_offered_for_what_its_model_does(monkeypatch):
+    """A profile routes to one model, so it reads and writes what that model does: a Claude
+    profile reads images, and an embedding model's profile embeds."""
+    offered = _offered(monkeypatch)
+
+    assert offered[f"us.{CLAUDE}"] == ["chat", "image_modality"]
+    assert offered["us.amazon.nova-pro-v1:0"] == offered["amazon.nova-pro-v1:0"]
+    assert _for(offered, "image_modality") == {
+        "amazon.nova-pro-v1:0", "us.amazon.nova-pro-v1:0", f"us.{CLAUDE}", f"global.{CLAUDE}",
+    }
+    assert _for(offered, "audio_modality") == {"mistral.voxtral-small-24b-2507"}
+    assert _for(offered, "embedding") == {
+        "amazon.titan-embed-text-v2:0", "us.cohere.embed-v4:0", "global.cohere.embed-v4:0",
+    }
+
+
+def test_a_model_this_catalog_has_no_use_for_is_not_listed(monkeypatch):
+    """Reranking, editing an image and analysing a video are no use case a binding can name here,
+    and Nova Sonic speaks only a two-way stream: listed, each would be a model offered for
+    nothing it can do. Nova Canvas makes images through the image adapter's own list."""
+    offered = _offered(monkeypatch)
+
+    for model_id in (
+        "amazon.rerank-v1:0",
+        "cohere.rerank-v3-5:0",
+        "us.stability.stable-image-inpaint-v1:0",
+        "us.twelvelabs.pegasus-1-2-v1:0",
+        "global.twelvelabs.pegasus-1-2-v1:0",
+        "amazon.nova-sonic-v1:0",
+        "amazon.nova-canvas-v1:0",
+    ):
+        assert model_id not in offered, model_id
+    assert all(caps for caps in offered.values()), "every listed model is offered for something"
+
+
+def test_a_profile_whose_model_is_not_listed_is_not_offered(monkeypatch):
+    """What a profile does is its model's record. One whose model no listing names is offered for
+    nothing rather than guessed to chat."""
+    unknown = _routes("us.example.unlisted-v1:0", "US Unlisted", "example.unlisted-v1:0")
+
+    offered = _offered(monkeypatch, profiles=[*PROFILES, unknown])
+
+    assert "us.example.unlisted-v1:0" not in offered
+    assert f"us.{CLAUDE}" in offered
+
+
+def test_profiles_with_no_model_listing_raise_why_the_models_could_not_be_listed(monkeypatch):
+    """The model listing refused and the profile listing answered: no profile's model is known,
+    so none is offered, and the refusal is the answer rather than a list of guesses."""
+    client = MagicMock()
+    client.list_foundation_models.side_effect = RuntimeError("models refused")
+    client.list_inference_profiles.return_value = {"inferenceProfileSummaries": PROFILES}
+    session = MagicMock()
+    session.client.return_value = client
+    monkeypatch.setitem(sys.modules, "boto3", SimpleNamespace(Session=lambda **k: session))
+
+    with pytest.raises(RuntimeError, match="models refused"):
+        prov._list_bedrock_models_sync("us-east-1", "")

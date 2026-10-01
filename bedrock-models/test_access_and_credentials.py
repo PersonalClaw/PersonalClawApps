@@ -575,7 +575,7 @@ def test_an_image_with_no_credentials_says_what_to_do(aws):
 
 
 def test_a_listing_the_policy_denies_names_the_action(aws, monkeypatch):
-    """A real botocore client with its three listings stubbed to AWS's refusal: nothing is
+    """A real botocore client with its two listings stubbed to AWS's refusal: nothing is
     listed, so the refusal is the answer, and it names the action to add."""
     from botocore.session import get_session
     from botocore.stub import Stubber
@@ -591,7 +591,7 @@ def test_a_listing_the_policy_denies_names_the_action(aws, monkeypatch):
         "bedrock", region_name="eu-west-1", aws_access_key_id="fake", aws_secret_access_key="fake"
     )
     stub = Stubber(client)
-    for operation in ("list_foundation_models", "list_foundation_models", "list_inference_profiles"):
+    for operation in ("list_foundation_models", "list_inference_profiles"):
         stub.add_client_error(operation, "AccessDeniedException", denied, http_status_code=403)
     session = types.SimpleNamespace(client=lambda service, region_name=None: client)
     monkeypatch.setitem(
@@ -600,6 +600,7 @@ def test_a_listing_the_policy_denies_names_the_action(aws, monkeypatch):
 
     with stub, pytest.raises(ModelDiscoveryError) as refused:
         asyncio.run(provider.create_catalog({"region": "eu-west-1"}).list_models())
+    stub.assert_no_pending_responses()
 
     assert str(refused.value).startswith(
         "Your AWS credentials aren't allowed to call bedrock:ListFoundationModels in eu-west-1, "

@@ -1261,16 +1261,72 @@ BEDROCK_CAPABILITY = ProviderCapability(
 # catalog contract — rather than answer ``[]``, which reads as an account that serves
 # no models, or show fake ids that may not be invocable.
 
+
+def _capabilities_of(record: dict[str, Any]) -> list[str]:
+    """What a foundation model can be bound for here, from its ListFoundationModels record:
+    ``[]`` for a model none of this app's adapters can drive through the catalog.
+
+    * **Embedding** — it writes an embedding.
+    * **Chat** — a chat turn is a Converse stream of text (``converse_stream``), so the model
+      reads and writes text and Bedrock says it streams its answer. A rerank model writes text
+      too, and does not stream: it scores documents and holds no conversation. A model that hears
+      and speaks (Nova Sonic) takes only the two-way stream this app does not drive. A model that
+      reads video and no images is a video analyser (TwelveLabs Pegasus), which answers no
+      Converse call; the models that converse about a video read images too. Chat stacks what
+      else the model reads: images (``image_modality``) and speech (``audio_modality``:
+      understanding audio in a conversation, which is not transcription — speech-to-text is
+      Amazon Transcribe).
+
+    A model that writes images or video makes them through the image and video adapters, whose
+    lists name the models they can drive."""
+    reads = set(record.get("inputModalities") or [])
+    writes = set(record.get("outputModalities") or [])
+    if "EMBEDDING" in writes:
+        return ["embedding"]
+    streams = record.get("responseStreamingSupported") is not False
+    hears_and_speaks = "SPEECH" in reads and "SPEECH" in writes
+    analyses_video = "VIDEO" in reads and "IMAGE" not in reads
+    if "TEXT" not in reads or "TEXT" not in writes or not streams or hears_and_speaks or analyses_video:
+        return []
+    caps = ["chat"]
+    if "IMAGE" in reads:
+        caps.append("image_modality")
+    if "SPEECH" in reads:
+        caps.append("audio_modality")
+    return caps
+
+
+def _label(record: dict[str, Any], model_id: str) -> str:
+    """A foundation model's name as the pickers show it: "Nova Pro (Amazon)"."""
+    label = record.get("modelName", model_id)
+    provider = record.get("providerName", "")
+    return f"{label}" + (f" ({provider})" if provider and provider not in label else "")
+
+
+def _routed_model(profile: dict[str, Any], records: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    """The record of the foundation model an inference profile routes to, or ``None`` when no
+    listing named it. A profile's ``models`` names that one model by ARN, once per Region it
+    routes to."""
+    for routed in profile.get("models") or []:
+        model_id = str(routed.get("modelArn") or "").rpartition("/")[2]
+        if model_id in records:
+            return records[model_id]
+    return None
+
+
 def _list_bedrock_models_sync(region: str, profile: str) -> list[dict[str, Any]]:
-    """Query the Bedrock control plane for every text-capable model + inference
-    profile. Blocking boto3 calls — run via ``asyncio.to_thread``.
+    """Query the Bedrock control plane for every model this app can bind, each with what it can
+    be bound for (:func:`_capabilities_of`). Blocking boto3 calls — run via ``asyncio.to_thread``.
 
     Combines two sources so the dropdown shows what's actually invocable:
-      * ``list_foundation_models(byOutputModality="TEXT")`` — base model ids that
-        support ON_DEMAND throughput (direct ``modelId`` invocation).
-      * ``list_inference_profiles()`` — cross-region / system profiles (the
-        ``us.*`` ids) which are the only way to call models that don't offer
-        ON_DEMAND (e.g. newer Claude). Each profile id is directly invocable.
+      * ``list_foundation_models()`` — every foundation model's record: what it reads and writes,
+        whether it streams, how it is invoked. A model listed by its own id supports ON_DEMAND
+        throughput (direct ``modelId`` invocation).
+      * ``list_inference_profiles()`` — cross-region / system profiles (the ``us.*`` / ``global.*``
+        ids), the only way to call models that don't offer ON_DEMAND (e.g. newer Claude). Each
+        profile id is directly invocable, and does what the model it routes to does, so it is
+        bound for that model's capabilities; one whose model no record describes is left out,
+        since nothing says what it can do.
 
     A listing that fails leaves its models out of what the others found. When nothing was
     listed and a listing failed, that failure is raised: it is the answer, not ``[]``.
@@ -1283,74 +1339,29 @@ def _list_bedrock_models_sync(region: str, profile: str) -> list[dict[str, Any]]
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     failed: list[Exception] = []
+    records: dict[str, dict[str, Any]] = {}
 
-    # ── Foundation models (ON_DEMAND text generators) ──
+    # ── Foundation models ──
     try:
-        resp = client.list_foundation_models(byOutputModality="TEXT")
+        resp = client.list_foundation_models()
         for m in resp.get("modelSummaries", []):
-            model_id = m.get("modelId", "")
-            if not model_id or model_id in seen:
-                continue
-            # Only models invocable directly (ON_DEMAND); the rest need a profile
-            # and surface via list_inference_profiles below.
-            if "ON_DEMAND" not in (m.get("inferenceTypesSupported") or []):
-                continue
-            lifecycle = (m.get("modelLifecycle") or {}).get("status", "ACTIVE")
-            if lifecycle != "ACTIVE":
-                continue
-            in_modalities = m.get("inputModalities") or []
-            out_modalities = m.get("outputModalities") or []
-            # Voxtral (SPEECH-input/TEXT-output) is an AUDIO MODALITY model — it
-            # understands audio in a chat context (like vision models understand
-            # images). It is NOT an STT model: STT is Amazon Transcribe (a dedicated
-            # deterministic transcription service, not a chat LLM). Nova Sonic
-            # (SPEECH-in/SPEECH+TEXT-out) is excluded entirely — it requires the
-            # bidirectional-streaming protocol this registry can't drive.
-            if "SPEECH" in in_modalities and "SPEECH" not in out_modalities:
-                caps = ["chat", "audio_modality"]
-            elif "SPEECH" in in_modalities:
-                continue  # Nova Sonic — skip (bidirectional only)
-            else:
-                caps = ["chat"]
-                if "IMAGE" in in_modalities:
-                    caps.append("image_modality")
-            provider = m.get("providerName", "")
-            label = m.get("modelName", model_id)
-            seen.add(model_id)
-            out.append({
-                "id": model_id,
-                "name": f"{label}" + (f" ({provider})" if provider and provider not in label else ""),
-                "capabilities": caps,
-            })
+            records.setdefault(str(m.get("modelId") or ""), m)
     except Exception as exc:
         failed.append(exc)
         logger.debug("Bedrock list_foundation_models failed", exc_info=True)
-
-    # ── Foundation models (EMBEDDING output) ──
-    # Embedding models (Titan Embed, Cohere Embed) have output modality EMBEDDING,
-    # not TEXT, so they're missed by the TEXT query above. Query separately.
-    try:
-        resp = client.list_foundation_models(byOutputModality="EMBEDDING")
-        for m in resp.get("modelSummaries", []):
-            model_id = m.get("modelId", "")
-            if not model_id or model_id in seen:
-                continue
-            if "ON_DEMAND" not in (m.get("inferenceTypesSupported") or []):
-                continue
-            lifecycle = (m.get("modelLifecycle") or {}).get("status", "ACTIVE")
-            if lifecycle != "ACTIVE":
-                continue
-            provider = m.get("providerName", "")
-            label = m.get("modelName", model_id)
-            seen.add(model_id)
-            out.append({
-                "id": model_id,
-                "name": f"{label}" + (f" ({provider})" if provider and provider not in label else ""),
-                "capabilities": ["embedding"],
-            })
-    except Exception as exc:
-        failed.append(exc)
-        logger.debug("Bedrock list_foundation_models(EMBEDDING) failed", exc_info=True)
+    records.pop("", None)
+    for model_id, m in records.items():
+        # Only models invocable directly (ON_DEMAND); the rest need a profile
+        # and surface via list_inference_profiles below.
+        if "ON_DEMAND" not in (m.get("inferenceTypesSupported") or []):
+            continue
+        if (m.get("modelLifecycle") or {}).get("status", "ACTIVE") != "ACTIVE":
+            continue
+        caps = _capabilities_of(m)
+        if not caps:
+            continue
+        seen.add(model_id)
+        out.append({"id": model_id, "name": _label(m, model_id), "capabilities": caps})
 
     # ── Inference profiles (cross-region / system — the us.* invocable ids) ──
     try:
@@ -1363,11 +1374,15 @@ def _list_bedrock_models_sync(region: str, profile: str) -> list[dict[str, Any]]
                     continue
                 if p.get("status", "ACTIVE") != "ACTIVE":
                     continue
+                routed = _routed_model(p, records)
+                caps = _capabilities_of(routed) if routed is not None else []
+                if not caps:
+                    continue
                 seen.add(pid)
                 out.append({
                     "id": pid,
                     "name": p.get("inferenceProfileName", pid),
-                    "capabilities": ["chat"],
+                    "capabilities": caps,
                 })
             token = resp.get("nextToken")
             if not token:
