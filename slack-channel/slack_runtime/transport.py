@@ -67,12 +67,11 @@ _RETRY_DELAYS = (5, 10, 20, 40, 80, 160, 300)
 _CONNECTED = "connected"
 
 # NOT ``__name__``: the app loader execs this ENTRY module under a synthetic name
-# (``_pclaw_app_slack_channel__slack_runtime_transport``), so ``__name__`` produced a
-# logger outside the ``slack_runtime`` root this app declares in ``app.json``
-# ``loggerRoots`` — the level the operator sets never reached the transport, so its
-# diagnostics were unreachable at ANY verbosity. #952 called the offline notice "an INFO
-# line invisible at the default WARNING log level"; measured, it was invisible at DEBUG
-# too. Every other module in this bundle is imported as ``slack_runtime.X`` and is fine.
+# (``_pclaw_app_slack_channel__slack_runtime_transport``), and its lines would carry that
+# name instead of ``slack_runtime.transport``, beside every other module in this bundle
+# (each imported as ``slack_runtime.X``). Which lines reach the gateway's log, and at which
+# level, does not depend on the name: core recognises an app's lines by the code that logs
+# them.
 logger = logging.getLogger("slack_runtime.transport")
 
 

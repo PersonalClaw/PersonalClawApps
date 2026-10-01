@@ -20,9 +20,6 @@
       "boto3>=1.34"
     ]
   },
-  "loggerRoots": [
-    "bedrock_models"
-  ],
   "permissions": {
     "network": true
   },

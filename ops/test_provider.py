@@ -1265,7 +1265,6 @@ def test_the_manifest_declares_the_minimum_permissions_and_round_trips() -> None
     assert raw["provider"]["implementation"] == "provider:create_provider"
     assert raw["provider"]["capabilities"] == ["ops"]
     assert raw["cli"] == {"setup": "app_cli:setup", "doctor": "app_cli:doctor"}
-    assert raw["loggerRoots"] == ["ops"]
     assert (HERE / "LICENSE").is_file()
 
 

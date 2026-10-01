@@ -245,19 +245,6 @@ def test_discovery_empty_when_no_models(monkeypatch):
 # ── the gateway log ─────────────────────────────────────────────────────────────────────────
 
 
-def test_the_apps_log_reaches_the_gateway_log():
-    """🔴 Red before: the module logged under its own name, core loads it under a private one, and
-    no handler reached either, so a failed listing said "check the gateway log" and that log held
-    nothing. Core adds the gateway log's handler to each root an installed app's manifest
-    declares."""
-    import json
-    from pathlib import Path
-
-    manifest = json.loads((Path(__file__).parent / "app.json").read_text(encoding="utf-8"))
-
-    assert prov.logger.name in manifest["loggerRoots"]
-
-
 def test_a_listing_that_fails_is_logged_once_and_its_traceback_at_debug(monkeypatch, caplog):
     """The catalog is asked on every Models page read, so the log says a failure once every few
     minutes, not once per read. The warning is the sentence alone: its traceback is at DEBUG."""

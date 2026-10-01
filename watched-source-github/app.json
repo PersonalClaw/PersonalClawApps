@@ -17,9 +17,6 @@
     "setup": "app_cli:setup",
     "doctor": "app_cli:doctor"
   },
-  "loggerRoots": [
-    "watched_source_github"
-  ],
   "provider": {
     "type": "trigger_source",
     "implementation": "provider:create_provider",

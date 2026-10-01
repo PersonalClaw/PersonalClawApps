@@ -54,9 +54,9 @@ from personalclaw.sdk.model import (
 )
 from personalclaw.sdk.net import sentence_with_detail
 
-#: Named, not ``__name__``: core loads this module under a private name, and a log reaches the
-#: gateway log only under a root the manifest declares (``loggerRoots``). Under its module name
-#: every line here reached no handler, so "check the gateway log" pointed at nothing.
+#: Named, not ``__name__``: core loads this module under a private name, and a line logged under
+#: it would carry that name. Which lines reach the gateway log does not depend on it: core
+#: recognises an app's lines by the code that logs them.
 logger = logging.getLogger("bedrock_models")
 
 # NO model id is chosen here, hardcoded or discovered. A call names its model: the chat binding

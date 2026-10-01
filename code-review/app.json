@@ -16,9 +16,6 @@
     "setup": "app_cli:setup",
     "doctor": "app_cli:doctor"
   },
-  "loggerRoots": [
-    "code_review"
-  ],
   "permissions": {
     "storage": true,
     "network": true

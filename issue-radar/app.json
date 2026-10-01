@@ -17,9 +17,6 @@
     "setup": "app_cli:setup",
     "doctor": "app_cli:doctor"
   },
-  "loggerRoots": [
-    "issue_radar"
-  ],
   "permissions": {
     "storage": true,
     "network": true

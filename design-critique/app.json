@@ -16,9 +16,6 @@
     "setup": "app_cli:setup",
     "doctor": "app_cli:doctor"
   },
-  "loggerRoots": [
-    "design_critique"
-  ],
   "permissions": {
     "storage": false,
     "network": true

@@ -18,9 +18,6 @@
     "setup": "app_cli:setup",
     "doctor": "app_cli:doctor"
   },
-  "loggerRoots": [
-    "docs_slides"
-  ],
   "permissions": {
     "storage": true,
     "network": false

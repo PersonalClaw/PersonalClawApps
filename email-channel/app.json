@@ -15,9 +15,6 @@
     "setup": "cli_setup:run",
     "doctor": "cli_doctor:probe"
   },
-  "loggerRoots": [
-    "email_runtime"
-  ],
   "permissions": {
     "storage": true,
     "network": true

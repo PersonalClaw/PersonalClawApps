@@ -17,9 +17,6 @@
     "setup": "app_cli:setup",
     "doctor": "app_cli:doctor"
   },
-  "loggerRoots": [
-    "inbox_github_notifications"
-  ],
   "provider": {
     "type": "inbox",
     "implementation": "provider:create_provider",

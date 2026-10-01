@@ -14,9 +14,6 @@
     "setup": "cli_setup:run",
     "doctor": "cli_doctor:probe"
   },
-  "loggerRoots": [
-    "slack_runtime"
-  ],
   "dependencies": {
     "pythonDependencies": [
       "slack-sdk>=3.27,<4"

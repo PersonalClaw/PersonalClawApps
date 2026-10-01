@@ -15,9 +15,6 @@
     "setup": "app_cli:setup",
     "doctor": "app_cli:doctor"
   },
-  "loggerRoots": [
-    "research_lab"
-  ],
   "permissions": {
     "storage": true,
     "cron": true,

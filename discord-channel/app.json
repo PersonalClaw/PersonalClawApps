@@ -14,9 +14,6 @@
     "setup": "cli_setup:run",
     "doctor": "cli_doctor:probe"
   },
-  "loggerRoots": [
-    "discord_runtime"
-  ],
   "permissions": {
     "network": true
   },

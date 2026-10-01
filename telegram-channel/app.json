@@ -14,9 +14,6 @@
     "setup": "cli_setup:run",
     "doctor": "cli_doctor:probe"
   },
-  "loggerRoots": [
-    "telegram_runtime"
-  ],
   "permissions": {
     "network": true
   },

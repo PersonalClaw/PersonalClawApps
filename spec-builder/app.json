@@ -16,9 +16,6 @@
     "setup": "app_cli:setup",
     "doctor": "app_cli:doctor"
   },
-  "loggerRoots": [
-    "spec-builder"
-  ],
   "permissions": {
     "storage": true,
     "network": false

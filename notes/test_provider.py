@@ -858,7 +858,6 @@ def test_manifest_parses_and_round_trips() -> None:
     assert raw["provider"]["implementation"] == "provider:create_provider"
     assert raw["permissions"] == {"storage": True, "network": False}
     assert raw["cli"] == {"setup": "app_cli:setup", "doctor": "app_cli:doctor"}
-    assert raw["loggerRoots"] == ["notes"]
 
 
 def test_manifest_settings_follow_the_advanced_convention() -> None:
