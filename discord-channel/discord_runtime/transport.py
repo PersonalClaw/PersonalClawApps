@@ -174,10 +174,12 @@ class DiscordTransport(ChannelTransportProvider):
         #                  Configure page is redeemed; the delivery reads the owner at each use
         # dm_thread_is_channel → a DM message's thread is its channel id (see
         #                  _to_channel_message), so a handed-off chat continues in the DM
+        # groups → a server channel the bot reads crosses the door with is_dm=False
         return ChannelCapabilities(
             inbound=True, threads=True, attachments=True, reactions=True,
             edits=True, rich_text=True, typing_indicator=True,
             max_text_len=DISCORD_MAX_TEXT, owner_pairing=True, dm_thread_is_channel=True,
+            groups=True,
         )
 
     def _token(self) -> str:

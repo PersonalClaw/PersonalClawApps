@@ -130,9 +130,10 @@ class SlackTransport(ChannelTransportProvider):
         self._retry_at: float | None = None
 
     def capabilities(self) -> ChannelCapabilities:
+        # groups: a channel the bot is in crosses the door with is_dm=False (only a D… id is a DM).
         return ChannelCapabilities(
             inbound=True, threads=True, attachments=True, reactions=True,
-            edits=True, rich_text=True, typing_indicator=True, max_text_len=40000,
+            edits=True, rich_text=True, typing_indicator=True, max_text_len=40000, groups=True,
         )
 
     @property

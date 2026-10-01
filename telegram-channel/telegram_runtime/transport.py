@@ -146,10 +146,11 @@ class TelegramTransport(ChannelTransportProvider):
         # page is redeemed, and the delivery reads the owner each time it needs it.
         # dm_thread_is_channel: every DM message carries its chat id as its thread (see
         # _to_channel_message), so a chat handed off to Telegram continues in the DM.
+        # groups: a group or supergroup the bot is in crosses the door with is_dm=False.
         return ChannelCapabilities(
             inbound=True, threads=True, attachments=True, reactions=False,
             edits=True, rich_text=True, typing_indicator=False, max_text_len=4096,
-            owner_pairing=True, dm_thread_is_channel=True,
+            owner_pairing=True, dm_thread_is_channel=True, groups=True,
         )
 
     def _token(self) -> str:

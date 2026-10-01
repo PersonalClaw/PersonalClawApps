@@ -182,6 +182,8 @@ class EmailTransport(ChannelTransportProvider):
         * ``speaks_as_owner`` → a mail from this app goes out from the owner's own mailbox, so
           core hands it no pairing note for a stranger and holds the stranger's mail in the
           Inbox as someone new, for the owner to reply to, pair or ignore.
+        * ``groups`` → **False**: a mail to the mailbox is one person writing to the owner, so
+          every message crosses the door with ``is_dm=True`` and Sender trust shows no group rule.
         """
         return ChannelCapabilities(
             inbound=True, threads=True, attachments=True, reactions=False,
@@ -215,6 +217,15 @@ class EmailTransport(ChannelTransportProvider):
         address = self._settings().mailbox_address or "the mailbox this channel reads"
         return (
             f"Mail this code to {address} from the address that should get your approvals. "
+            "It can be anywhere in the message"
+        )
+
+    def sender_pairing_hint(self) -> str:
+        """How someone the owner pairs sends their code here: a mail to the mailbox from the
+        address being let in (:meth:`_try_pairing` finds it anywhere in the message)."""
+        address = self._settings().mailbox_address or "the mailbox this channel reads"
+        return (
+            f"Have them mail this code from the address you want to let in, to {address}. "
             "It can be anywhere in the message"
         )
 
@@ -635,7 +646,8 @@ class EmailTransport(ChannelTransportProvider):
         mail client's quoting and signature make an exact-match rule unusable.
 
         Two codes, in the gate's order for each code-shaped word: a sender's code
-        (``personalclaw pair email``), for a sender not yet allowed; then the OWNER's code
+        (``personalclaw pair email``), for a sender not yet allowed, which core redeems only while
+        Email's rule for strangers asks for a code (``redeem_pairing_code``); then the OWNER's code
         (Configure → Pair as owner), for anyone, so a correspondent already allowed can
         become the owner. The owner's code makes the sender the channel's owner, the one
         address approvals go to, and a word that matches neither counts against its five

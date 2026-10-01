@@ -33,6 +33,8 @@ def test_slack_capabilities():
     c = SlackTransport().capabilities()
     assert c.inbound and c.threads and c.attachments and c.reactions and c.edits
     assert c.max_text_len == 40000
+    # A channel the bot is in reaches the door as a group: Sender trust shows its group rule.
+    assert c.groups is True
 
 
 def test_connected_derives_from_shared_creds(monkeypatch):

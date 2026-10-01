@@ -39,6 +39,8 @@ def test_telegram_capabilities():
     assert c.inbound and c.threads and c.attachments and c.edits and c.rich_text
     assert c.reactions is False
     assert c.max_text_len == 4096
+    # A group the bot is in reaches the door as one: Sender trust shows its group rule.
+    assert c.groups is True
 
 
 def test_connected_derives_from_shared_creds(monkeypatch):

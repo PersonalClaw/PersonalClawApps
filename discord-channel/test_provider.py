@@ -44,6 +44,8 @@ def test_discord_capabilities():
     assert c.reactions is True
     assert c.typing_indicator is True
     assert c.max_text_len == 2000
+    # A server channel reaches the door as a group: Sender trust shows its group rule.
+    assert c.groups is True
 
 
 def test_connected_derives_from_shared_creds(monkeypatch):

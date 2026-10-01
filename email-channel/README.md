@@ -198,10 +198,12 @@ address, however often it writes. From the Inbox you choose:
 A thread you mute in the Inbox holds nothing more, and nothing in it is announced: you are told
 only of mail that is in your Inbox.
 
-Or pair them with a code:
+Or pair them with a code, while Settings → Sender trust → Email lets a code in (**A code lets
+them in**, the default; under **Only you let them in** a code lets nobody in):
 
-1. Run `personalclaw pair email` for an 8-digit code (TTL 10 min, single use), and give it to
-   them yourself (a reply from the Inbox works).
+1. Press **Pair someone** on Settings → Sender trust → Email, or run `personalclaw pair email`,
+   for an 8-digit code (TTL 10 min, single use), and give it to them yourself (a reply from the
+   Inbox works).
 2. They **reply with the code anywhere in the body** — quoting and signatures are fine. They
    are told they are paired: the one mail this app sends on its own to someone it did not
    know.
@@ -235,6 +237,8 @@ that is only its attachments is still a turn: it names what came.
 | `reactions` | ❌ | email has no reaction concept |
 | `typing_indicator` | ❌ | nothing to show between messages |
 | `edits` | ❌ | **this is how `streaming=false` is declared** — see below |
+| `speaks_as_owner` | ✅ | a mail goes out from your own mailbox, so a stranger is sent nothing and their mail waits in your Inbox |
+| `groups` | ❌ | a mail to the mailbox is one person writing to you, so Sender trust shows no group rule |
 
 **Streaming is deliberately absent** (the plan's C3 table marks the streaming trio
 MUST-NOT for email: a "live-updating message" would mean one mail per token).
