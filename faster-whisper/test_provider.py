@@ -549,3 +549,24 @@ def test_the_manifest_keeps_pyav_below_the_release_its_decoder_cannot_call():
     assert "av" in reqs, "faster-whisper is declared without a PyAV ceiling"
     assert reqs["av"].specifier.contains("18.1.0"), reqs["av"]
     assert not reqs["av"].specifier.contains("19.0.0"), reqs["av"]
+
+
+def test_a_transcription_leaves_the_gateways_path_as_it_was(monkeypatch, tmp_path):
+    """🔴 Red before: each transcription first put the folder holding an ffmpeg in front of the
+    gateway's own PATH, which every program the gateway starts afterwards inherits. faster-whisper
+    decodes with PyAV and runs no ffmpeg, so it now looks for none."""
+    import os
+
+    import faster_whisper
+
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+    before = os.environ["PATH"]
+    monkeypatch.setattr(
+        faster_whisper, "WhisperModel", _model_that(lambda p, **k: (iter([_Seg()]), _Info())),
+        raising=False,
+    )
+
+    r = _run(prov.create_provider({}).transcribe_detailed("/tmp/standup.wav", model="small"))
+
+    assert r.text == "Mika"
+    assert os.environ["PATH"] == before

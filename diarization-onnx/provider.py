@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import shutil
 import subprocess
 import tarfile
 import urllib.request
@@ -25,7 +24,8 @@ from personalclaw.sdk.diarization import (
     DiarizationProvider,
     LocalModelProvider,
     SpeakerTurn,
-    ensure_ffmpeg_in_path,
+    ffmpeg_not_found,
+    find_ffmpeg,
 )
 from personalclaw.sdk.model import ProviderResolutionError, require_model
 from personalclaw.sdk.net import sentence_with_detail
@@ -52,11 +52,6 @@ _EMB_REL = Path("embed.onnx")
 #: loaded: loading it started its maker's telemetry, a device identifier kept in the user's home.
 _RUNTIME = {"sherpa_onnx": "sherpa-onnx", "numpy": "numpy"}
 
-#: Why nothing can be diarized without ffmpeg, which decodes every recording (below).
-_NEEDS_FFMPEG = (
-    "ONNX diarization needs ffmpeg to read recordings, and it isn't installed here. Install "
-    "ffmpeg (for example with your system's package manager), then try again."
-)
 _NO_AUDIO = (
     "ONNX diarization found no audio it could read in this recording. The file may be cut off "
     "or damaged."
@@ -71,6 +66,12 @@ def _models_dir() -> Path:
     through that folder. It is outside the home, so it is neither read nor deleted any more:
     an install that has the pair only there downloads it once (47 MB) into the home."""
     return config_dir() / "models" / "diarization-onnx"
+
+
+def _needs_ffmpeg() -> str:
+    """Why nothing can be diarized without ffmpeg, which decodes every recording (below): where
+    PersonalClaw looked for it, and what to do, in the words core uses for every ffmpeg."""
+    return f"ONNX diarization needs ffmpeg to read recordings. {ffmpeg_not_found()}"
 
 
 def _has_weights(root: Path) -> bool:
@@ -95,9 +96,8 @@ def availability() -> tuple[bool, str]:
             f"ONNX diarization needs {' and '.join(missing)}, which {ships} with this app, not "
             "with PersonalClaw itself. Reinstall Diarization (ONNX) from the Store."
         )
-    ensure_ffmpeg_in_path()
-    if shutil.which("ffmpeg") is None:
-        return False, _NEEDS_FFMPEG
+    if find_ffmpeg() is None:
+        return False, _needs_ffmpeg()
     return True, ""
 
 
@@ -109,12 +109,14 @@ def _decode(audio_path: str, sample_rate: int):
     cannot open AAC, so every ``.m4a`` voice memo failed before diarization began, and the
     failure was swallowed into "no speakers". It also never checked the rate: the model hears
     only its own (``sample_rate``), and a 22.05 kHz file handed over as-is is heard slowed and
-    lower. ffmpeg reads every format the product accepts and resamples on the way."""
+    lower. ffmpeg reads every format the product accepts and resamples on the way. It is run by
+    the absolute path core finds it at (``find_ffmpeg``); the gateway's ``PATH`` is never changed
+    to find it, since every program the gateway starts inherits that ``PATH``."""
     import numpy as np
 
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = find_ffmpeg()
     if ffmpeg is None:
-        raise DiarizationError(_NEEDS_FFMPEG)
+        raise DiarizationError(_needs_ffmpeg())
     decoded = subprocess.run(
         [ffmpeg, "-nostdin", "-v", "error", "-i", audio_path, "-vn", "-ac", "1",
          "-ar", str(int(sample_rate)), "-f", "f32le", "-"],
@@ -178,8 +180,6 @@ class OnnxDiarizationProvider(DiarizationProvider, LocalModelProvider):
         )]
 
     async def download_model(self, model_name: str) -> bool:
-        ensure_ffmpeg_in_path()
-
         def _run() -> bool:
             try:
                 root = _models_dir()
@@ -230,7 +230,6 @@ class OnnxDiarizationProvider(DiarizationProvider, LocalModelProvider):
                 "Choose %s for Diarization in Settings → Models.", _MODEL, model, _MODEL,
             )
             return None
-        ensure_ffmpeg_in_path()
         maxs = max_speakers or num_speakers or (self._config.get("max_speakers") or None)
 
         def _run():

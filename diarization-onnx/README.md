@@ -32,7 +32,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 ## Requirements
 
-Reads every recording through `ffmpeg` (a voice memo's `.m4a`, an `.mp3`, a video's audio), resampled to what the model hears, so `ffmpeg` must be installed. Settings → Models says so when it is not, and a recording it cannot read fails its diarization step with ffmpeg's own words.
+Reads every recording through `ffmpeg` (a voice memo's `.m4a`, an `.mp3`, a video's audio), resampled to what the model hears, so `ffmpeg` must be installed. It runs the one PersonalClaw finds, on the `PATH` the gateway started with or in `~/.local/bin`, `/opt/homebrew/bin` or `/usr/local/bin`, by that path. Settings → Models says so, and where it looked, when there is none, and a recording it cannot read fails its diarization step with ffmpeg's own words.
 
 ## Network
 

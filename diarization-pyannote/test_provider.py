@@ -110,7 +110,6 @@ def _pipeline_that(behaviour, monkeypatch):
     fake_mod = types.ModuleType("pyannote.audio")
     fake_mod.Pipeline = _PipelineFactory
     monkeypatch.setitem(sys.modules, "pyannote.audio", fake_mod)
-    monkeypatch.setattr(P, "ensure_ffmpeg_in_path", lambda: None)
 
 
 @pytest.mark.asyncio
@@ -170,7 +169,6 @@ async def test_a_model_this_app_does_not_have_is_refused_before_the_pipeline(
     fake_mod = types.ModuleType("pyannote.audio")
     fake_mod.Pipeline = _PipelineFactory
     monkeypatch.setitem(sys.modules, "pyannote.audio", fake_mod)
-    monkeypatch.setattr(P, "ensure_ffmpeg_in_path", lambda: None)
 
     f = tmp_path / "a.wav"; f.write_bytes(b"\x00" * 32)
     provider = P.create_provider({"hf_token": "fake-hf-token"})
@@ -350,3 +348,33 @@ def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
     adapters = media_adapters(Path(__file__).parent, P.create_provider)
     report = asyncio.run(media_refusal_report(adapters))
     assert report == media_refusal_expected(adapters)
+
+
+@pytest.mark.asyncio
+async def test_a_diarization_leaves_the_gateways_path_as_it_was(monkeypatch, tmp_path):
+    """🔴 Red before: each diarization first put the folder holding an ffmpeg in front of the
+    gateway's own PATH, which every program the gateway starts afterwards inherits. pyannote
+    decodes recordings itself and runs no ffmpeg, so it now looks for none."""
+    import os
+
+    class _Turn:
+        start, end = 0.0, 1.5
+
+    class _Annotation:
+        def itertracks(self, yield_label=False):
+            return iter([(_Turn(), None, "SPEAKER_00")])
+
+    class _Pipeline:
+        def __call__(self, audio_path, **kwargs):
+            return _Annotation()
+
+    _pipeline_that(lambda model: _Pipeline(), monkeypatch)
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+    before = os.environ["PATH"]
+
+    turns = await P.create_provider({"hf_token": "fake-hf-token"}).diarize(
+        str(tmp_path / "a.wav"), model=P._MODEL
+    )
+
+    assert [(t.start, t.end, t.speaker) for t in turns] == [(0.0, 1.5, "SPEAKER_00")]
+    assert os.environ["PATH"] == before

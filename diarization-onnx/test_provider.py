@@ -77,11 +77,16 @@ def test_a_missing_package_is_named_with_the_way_to_get_it(monkeypatch):
 
 def test_without_ffmpeg_it_says_it_cannot_read_recordings(monkeypatch):
     """ffmpeg decodes every recording now, so a machine without it cannot diarize anything, and
-    the Models page says so before a single recording fails."""
+    the Models page says so before a single recording fails: where PersonalClaw looked for it,
+    and what to do."""
     monkeypatch.setattr(P, "missing_modules", lambda *modules: [])  # both packages installed
-    monkeypatch.setattr(P, "ensure_ffmpeg_in_path", lambda: None)
-    monkeypatch.setattr(P.shutil, "which", lambda name: None)
-    assert P.availability() == (False, P._NEEDS_FFMPEG)
+    monkeypatch.setattr(P, "find_ffmpeg", lambda: None)
+    ok, reason = P.availability()
+    assert (ok, reason) == (False, P._needs_ffmpeg())
+    assert reason.startswith(
+        "ONNX diarization needs ffmpeg to read recordings. ffmpeg isn't installed where "
+        "PersonalClaw looks for it: the folders on the PATH the gateway started with"
+    )
 
 
 def test_it_declares_no_runtime_it_does_not_run():
@@ -123,7 +128,7 @@ async def test_a_model_this_app_does_not_have_is_refused_before_anything_runs(
     import logging
 
     ran: list[str] = []
-    monkeypatch.setattr(P, "ensure_ffmpeg_in_path", lambda: ran.append("ffmpeg"))
+    monkeypatch.setattr(P, "find_ffmpeg", lambda: ran.append("ffmpeg"))
     monkeypatch.setattr(P, "_downloaded", lambda: ran.append("weights") or False)
     f = tmp_path / "a.wav"; f.write_bytes(b"\x00" * 32)
     with caplog.at_level(logging.WARNING):
@@ -136,7 +141,7 @@ async def test_a_model_this_app_does_not_have_is_refused_before_anything_runs(
 
     with pytest.raises(DiarizationError):
         await P.create_provider({}).diarize(str(f), model=P._MODEL)
-    assert ran[0] == "ffmpeg"
+    assert ran == ["weights"]
 
 
 def test_cache_dir_exposed():
@@ -280,7 +285,7 @@ async def test_the_model_hears_the_recording_decoded_at_its_own_rate(monkeypatch
         argv.extend(cmd)
         return P.subprocess.CompletedProcess(cmd, 0, stdout=pcm.tobytes(), stderr=b"")
 
-    monkeypatch.setattr(P.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(P, "find_ffmpeg", lambda: "/usr/bin/ffmpeg")
     monkeypatch.setattr(P.subprocess, "run", _run)
     memo = tmp_path / "team call.m4a"
     memo.write_bytes(b"\x00" * 32)
@@ -290,6 +295,7 @@ async def test_the_model_hears_the_recording_decoded_at_its_own_rate(monkeypatch
     assert [(t.start, t.end, t.speaker) for t in turns] == [
         (0.0, 4.2, "SPEAKER_00"), (4.4, 9.1, "SPEAKER_01"),
     ]
+    assert argv[0] == "/usr/bin/ffmpeg"
     assert argv[argv.index("-i") + 1] == str(memo)
     assert argv[argv.index("-ar") + 1] == "16000" and argv[argv.index("-ac") + 1] == "1"
     assert argv[argv.index("-f") + 1] == "f32le"
@@ -471,3 +477,46 @@ def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
     adapters = media_adapters(Path(__file__).parent, P.create_provider)
     report = asyncio.run(media_refusal_report(adapters))
     assert report == media_refusal_expected(adapters)
+
+
+@pytest.mark.asyncio
+async def test_a_diarization_runs_the_ffmpeg_on_its_path_and_leaves_the_path_alone(
+    monkeypatch, tmp_path
+):
+    """🔴 Red before: a diarization first put the folder holding an ffmpeg in front of the
+    gateway's own PATH, which every program the gateway starts afterwards inherits, and then ran
+    whichever ffmpeg came first on it. Now the ffmpeg on the PATH the gateway started with runs,
+    by its absolute path, and the PATH is as it was."""
+    import os
+
+    import numpy as np
+
+    _home(monkeypatch, tmp_path)
+    _seed_pair(P._models_dir())
+    seen = _fake_sherpa(monkeypatch, turns=[_Segment(0.0, 1.0, 0)])
+    pcm = np.linspace(-0.5, 0.5, 16, dtype=np.float32)
+    (tmp_path / "pcm").write_bytes(pcm.tobytes())
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    stand_in = folder / "ffmpeg"
+    stand_in.write_text(f"#!/bin/sh\ncat '{tmp_path / 'pcm'}'\n", encoding="utf-8")
+    stand_in.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{folder}{os.pathsep}/usr/bin{os.pathsep}/bin")
+    before = os.environ["PATH"]
+    ran: list = []
+    real_run = P.subprocess.run
+
+    def _run(cmd, **kwargs):
+        ran.append(cmd[0])
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(P.subprocess, "run", _run)
+    memo = tmp_path / "memo.m4a"
+    memo.write_bytes(b"\x00" * 32)
+
+    turns = await P.create_provider({}).diarize(str(memo), model=P._MODEL)
+
+    assert [t.speaker for t in turns] == ["SPEAKER_00"]
+    assert ran == [str(stand_in)]
+    assert np.array_equal(seen["samples"], pcm)
+    assert os.environ["PATH"] == before

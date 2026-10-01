@@ -17,7 +17,6 @@ from personalclaw.sdk.stt import (
     TranscriptResult,
     TranscriptSegment,
     TranscriptWord,
-    ensure_ffmpeg_in_path,
 )
 from personalclaw.sdk.util import config_dir, outside_home_path
 
@@ -330,7 +329,6 @@ class FasterWhisperProvider(SttProvider, LocalModelProvider):
         except ImportError as exc:
             raise SttError(availability()[1]) from exc
 
-        ensure_ffmpeg_in_path()
         lang = language.split("-")[0] if language else None
         # Whisper's decoder caps the PROMPT window at max_length//2 = 224 tokens; a bias
         # string that (with the forced decoder tokens) pushes a position >= 448 raises

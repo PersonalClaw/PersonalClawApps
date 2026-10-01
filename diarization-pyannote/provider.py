@@ -21,7 +21,6 @@ from personalclaw.sdk.diarization import (
     DiarizationProvider,
     LocalModelProvider,
     SpeakerTurn,
-    ensure_ffmpeg_in_path,
 )
 from personalclaw.sdk.model import ProviderResolutionError, require_model
 from personalclaw.sdk.net import sentence_with_detail
@@ -167,7 +166,6 @@ class PyannoteDiarizationProvider(DiarizationProvider, LocalModelProvider):
                 "Choose %s for Diarization in Settings → Models.", _MODEL, model, _MODEL,
             )
             return None
-        ensure_ffmpeg_in_path()
         token = self._hf_token()
         if not token:
             # Said, not answered with ``None``: that read as a recording with no speakers.
