@@ -447,6 +447,46 @@ At most 10 entries, each named once. Something PersonalClaw can install is not a
 prerequisite: a Python package goes in `dependencies`. `local-image-gen` is the worked
 example.
 
+### What it starts, installs and writes outside PersonalClaw (`launches`, `npmPackages`, `writes`)
+
+```json
+"launches": [{
+  "program": "claude",                                  // its name as found on this machine (80)
+  "why": "Claude Code does the work of each chat ...",  // what the app uses it for (300)
+  "inherits": ["sign-in", "settings", "auto-approve-rules"],
+  "inheritsWhile": {"setting": "isolated_config", "value": false} // optional
+}],
+"writes": [{
+  "path": "cc-config",                                  // in the PersonalClaw folder, or "~/…" (200)
+  "why": "The Claude config Claude Code runs with ..."  // (300)
+}],
+"dependencies": {
+  "npmPackages": ["@agentclientprotocol/claude-agent-acp"] // installed into <home>/acp-adapters
+}
+```
+
+Install consent lists each of these under what the app runs, and an update that adds one, or
+widens what a program inherits, asks for consent again:
+
+- **`launches`** is each program on the machine your app starts, outside PersonalClaw: an agent
+  CLI, or a tool your code runs. `inherits` says what of the owner's own it runs with, from three
+  words: `sign-in` (the account it is signed in to), `settings` (its own configuration folder)
+  and `auto-approve-rules` (rules there that let it act without asking; consent says that what
+  they allow, it does without asking first). When one of your provider's boolean settings
+  decides that, name it in `inheritsWhile`: consent then says "While Isolated Claude settings is
+  off, …" in the setting's own label, and where it starts.
+- **`dependencies.npmPackages`** is each npm package core may install for the app into
+  `<home>/acp-adapters` when it is installed or switched on (`provision_acp_adapter`), or fetch
+  with `npx` until it is. Names only, no versions.
+- **`writes`** is each place outside your app's folder its code writes.
+
+Core holds what it does for your app to this list. `provision_acp_adapter` installs no package
+the manifest does not list, and `register_acp_cli_entry` refuses a CLI from an app that lists no
+program, whose adapter's engine (`requires_executable`) it does not list, or whose adapter runs
+through `npx` as a package it does not list. The provider's card in Settings → Providers then
+says why. `claude-code-agent`, `codex-agent`, `kiro-cli-agent` and `gemini-cli-agent` are the
+worked examples.
+
 ### Platform
 
 ```json

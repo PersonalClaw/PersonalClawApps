@@ -38,6 +38,13 @@ passes no variable to pick a provider or a region: kiro-cli signs in with its ow
 which keeps the account it runs as and where. No credential is passed either. To hand it a
 variable, add its name under Settings → Security → Child environment passthrough.
 
+## What it starts
+
+Install consent names this before anything installs (the manifest's `launches`): it starts the
+`kiro-cli` program installed on this machine as `kiro-cli acp`, as you and outside PersonalClaw,
+with your own kiro-cli sign-in, settings and auto-approve rules (its agents' allowed tools): what
+those rules allow, it does without asking here first. There is no adapter to install.
+
 ## Capability boundary
 
 kiro-cli speaks the baseline ACP shape, which means several host features are supplied by

@@ -10,6 +10,7 @@ show a Gemini row backed by a real bundle rather than a catalog stub).
 from __future__ import annotations
 
 import importlib
+import json
 import stat
 import sys
 from pathlib import Path
@@ -280,3 +281,18 @@ def test_the_cli_is_handed_the_variables_that_pick_its_provider(monkeypatch, tmp
 def test_the_readme_names_every_variable_the_app_passes():
     readme = (Path(gemini_cli.__file__).parent / "README.md").read_text()
     assert [name for name in gemini_cli.PROVIDER_ENV if f"`{name}`" not in readme] == []
+
+
+def test_install_consent_names_the_program_it_starts():
+    """Install consent names the program this app has core start, from the manifest, and core
+    registers no agent CLI for an app whose manifest does not declare it. So the manifest names
+    the CLI the code resolves, and no npm package: this CLI speaks ACP itself."""
+    from personalclaw.sdk.manifest import AppManifest
+
+    manifest = AppManifest.from_dict(
+        json.loads((Path(gemini_cli.__file__).parent / "app.json").read_text())
+    )
+    assert manifest.validate() == []
+    assert [p.program for p in manifest.launches] == gemini_cli._BIN_NAMES
+    assert manifest.launches[0].inherits == ["sign-in", "settings", "auto-approve-rules"]
+    assert manifest.dependencies.npmPackages == [] and manifest.writes == []

@@ -1,6 +1,6 @@
 {
   "name": "kiro-cli-agent",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "Kiro CLI",
   "description": "Run the kiro-cli agent (acp:kiro-cli) over ACP. This provider activates only when the `kiro-cli` binary is present on the machine, and is unavailable otherwise.",
   "icon": "SquareTerminal",
@@ -15,6 +15,17 @@
   "permissions": {
     "network": true
   },
+  "launches": [
+    {
+      "program": "kiro-cli",
+      "why": "kiro-cli does the work of each chat. PersonalClaw starts it as kiro-cli acp and talks to it over ACP.",
+      "inherits": [
+        "sign-in",
+        "settings",
+        "auto-approve-rules"
+      ]
+    }
+  ],
   "provider": {
     "type": "agent",
     "implementation": "provider:create_provider",

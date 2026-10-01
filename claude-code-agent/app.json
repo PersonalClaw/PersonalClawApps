@@ -1,6 +1,6 @@
 {
   "name": "claude-code-agent",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "displayName": "Claude Code",
   "description": "Run Anthropic's Claude Code as an agent (acp:claude-code) via the Zed ACP adapter. It runs with a Claude config of its own that starts empty, so none of your auto-approve rules come along and every tool asks through PersonalClaw's approval gate. Sign in to Claude once for it (Settings \u2192 Providers \u2192 Claude Code \u2192 Sign in); PersonalClaw stores no key. Turn off Isolated Claude settings to use your own ~/.claude, rules included. Enabling it installs its ACP adapter (@agentclientprotocol/claude-agent-acp) from npm into your PersonalClaw home when no copy is installed; a failed install says why on its card, with Retry.",
   "icon": "SquareTerminal",
@@ -13,6 +13,32 @@
   ],
   "permissions": {
     "network": true
+  },
+  "launches": [
+    {
+      "program": "claude",
+      "why": "Claude Code does the work of each chat. Its ACP adapter starts it and hands it each turn.",
+      "inherits": [
+        "sign-in",
+        "settings",
+        "auto-approve-rules"
+      ],
+      "inheritsWhile": {
+        "setting": "isolated_config",
+        "value": false
+      }
+    }
+  ],
+  "writes": [
+    {
+      "path": "cc-config",
+      "why": "The Claude config Claude Code runs with while Isolated Claude settings is on. It starts empty, and signing in to Claude for this app keeps that sign-in there."
+    }
+  ],
+  "dependencies": {
+    "npmPackages": [
+      "@agentclientprotocol/claude-agent-acp"
+    ]
   },
   "provider": {
     "type": "agent",

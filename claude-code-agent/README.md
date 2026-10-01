@@ -62,6 +62,19 @@ names. Claude Code takes its keys from its own sign-in, or from the AWS or Googl
 its profile names. To hand it one more variable, add its name under Settings → Security → Child
 environment passthrough.
 
+## What it starts and installs
+
+Install consent names each of these before anything installs (the manifest's `launches`,
+`writes` and `dependencies.npmPackages`):
+
+- It starts the `claude` program installed on this machine, as you and outside PersonalClaw.
+  While **Isolated Claude settings** is off, Claude runs with your own Claude sign-in, settings
+  and auto-approve rules, and what those rules allow it does without asking here first.
+- While that setting is on (the default), Claude runs with `cc-config` in your PersonalClaw
+  folder, a config of its own that starts empty and keeps the sign-in you make for this app.
+- Switching it on installs the npm package `@agentclientprotocol/claude-agent-acp` into your
+  PersonalClaw folder (`acp-adapters`) when no copy is on this machine.
+
 ## Capability boundary
 
 Running an agent over ACP is **not** the same as PersonalClaw's native runtime: some host

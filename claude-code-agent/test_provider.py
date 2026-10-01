@@ -169,3 +169,28 @@ def test_the_readme_names_every_variable_the_app_passes():
     readme = (Path(provider.__file__).parent / "README.md").read_text()
     assert provider.PROVIDER_ENV
     assert [name for name in provider.PROVIDER_ENV if f"`{name}`" not in readme] == []
+
+
+def test_install_consent_names_what_it_starts_installs_and_writes():
+    """Install consent names the program this app has core start and the npm package core
+    installs for it, from the manifest, and core does neither for an app whose manifest does
+    not declare it. So the manifest says what the code does: the CLI it resolves, and the
+    adapter package it asks for."""
+    from personalclaw.sdk.manifest import AppManifest
+
+    manifest = AppManifest.from_dict(
+        json.loads((Path(provider.__file__).parent / "app.json").read_text())
+    )
+    assert manifest.validate() == []
+    assert [p.program for p in manifest.launches] == provider._CLAUDE_BIN_NAMES
+    assert manifest.dependencies.npmPackages == [provider._ACP_NPM_PKG]
+    # Your own Claude sign-in, settings and rules come along only with isolation off.
+    [claude] = manifest.launches
+    assert claude.inherits == ["sign-in", "settings", "auto-approve-rules"]
+    assert claude.inheritsWhile is not None
+    assert (claude.inheritsWhile.setting, claude.inheritsWhile.value) == (
+        provider._ISOLATED_SETTING,
+        False,
+    )
+    # The isolated config is the one place outside its own folder the app writes.
+    assert [w.path for w in manifest.writes] == [provider._claude_config_root().name]

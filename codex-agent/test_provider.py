@@ -4,6 +4,7 @@ behavior is covered by the core suite (tests/test_acp_bundles.py)."""
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -66,3 +67,20 @@ def test_the_cli_is_handed_the_folder_that_picks_its_provider(monkeypatch, tmp_p
 def test_the_readme_names_every_variable_the_app_passes():
     readme = (Path(provider.__file__).parent / "README.md").read_text()
     assert [name for name in provider.PROVIDER_ENV if f"`{name}`" not in readme] == []
+
+
+def test_install_consent_names_what_it_starts_and_installs():
+    """Install consent names the program this app has core start and the npm package core
+    installs for it, from the manifest, and core does neither for an app whose manifest does
+    not declare it. So the manifest says what the code does: the CLI it resolves, and the
+    adapter package it asks for."""
+    from personalclaw.sdk.manifest import AppManifest
+
+    manifest = AppManifest.from_dict(
+        json.loads((Path(provider.__file__).parent / "app.json").read_text())
+    )
+    assert manifest.validate() == []
+    assert [p.program for p in manifest.launches] == provider._CODEX_BIN_NAMES
+    assert manifest.dependencies.npmPackages == [provider._ACP_NPM_PKG]
+    assert manifest.launches[0].inherits == ["sign-in", "settings", "auto-approve-rules"]
+    assert manifest.writes == []

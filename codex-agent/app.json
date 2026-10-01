@@ -1,8 +1,8 @@
 {
   "name": "codex-agent",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "displayName": "OpenAI Codex",
-  "description": "Run the OpenAI Codex CLI as an agent (acp:codex) via the Zed ACP adapter. Codex manages its own configuration and authentication; every tool call routes through PersonalClaw's host approval gate. Enabling it installs its ACP adapter (@agentclientprotocol/codex-acp) from npm into your PersonalClaw home when no copy is installed; a failed install says why on its card, with Retry.",
+  "description": "Run the OpenAI Codex CLI as an agent (acp:codex) via the Zed ACP adapter. Codex manages its own configuration and authentication; every tool call it asks about routes through PersonalClaw's host approval gate. Enabling it installs its ACP adapter (@agentclientprotocol/codex-acp) from npm into your PersonalClaw home when no copy is installed; a failed install says why on its card, with Retry.",
   "icon": "SquareTerminal",
   "author": "PersonalClaw",
   "license": "MIT",
@@ -13,6 +13,22 @@
   ],
   "permissions": {
     "network": true
+  },
+  "launches": [
+    {
+      "program": "codex",
+      "why": "The Codex CLI does the work of each chat. Its ACP adapter starts it and hands it each turn.",
+      "inherits": [
+        "sign-in",
+        "settings",
+        "auto-approve-rules"
+      ]
+    }
+  ],
+  "dependencies": {
+    "npmPackages": [
+      "@agentclientprotocol/codex-acp"
+    ]
   },
   "provider": {
     "type": "agent",

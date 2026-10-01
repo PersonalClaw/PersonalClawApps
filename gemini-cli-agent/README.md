@@ -67,6 +67,13 @@ From the App Store, add the `apps/` directory as a **local source**, then instal
 **Gemini CLI** — the install runs through the security scanner and lifecycle exactly
 like any other app. (Or [install it from a shell](../docs/third-party-install.md#installing-from-a-shell).)
 
+## What it starts
+
+Install consent names this before anything installs (the manifest's `launches`): it starts the
+`gemini` program installed on this machine in its ACP mode, as you and outside PersonalClaw,
+with your own Gemini sign-in, settings and auto-approve rules: what those rules allow, it does
+without asking here first. There is no adapter to install.
+
 ## Capability boundary
 
 This bundle registers the provider; it does not change what Gemini CLI can do over ACP. Where ACP

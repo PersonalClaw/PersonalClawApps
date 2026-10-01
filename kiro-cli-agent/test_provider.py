@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import stat
 import sys
 from pathlib import Path
@@ -165,3 +166,18 @@ def test_the_cli_is_handed_no_provider_variable_and_no_credential(monkeypatch, t
     assert kiro_cli.PROVIDER_ENV == () and "env_passthrough" not in entry.options
     handed = handed_env(entry, record, tmp_path / "w")
     assert sorted({"AWS_PROFILE", "AWS_REGION", *PLANTED_SECRETS} & set(handed)) == []
+
+
+def test_install_consent_names_the_program_it_starts():
+    """Install consent names the program this app has core start, from the manifest, and core
+    registers no agent CLI for an app whose manifest does not declare it. So the manifest names
+    the CLI the code resolves, and no npm package: this CLI speaks ACP itself."""
+    from personalclaw.sdk.manifest import AppManifest
+
+    manifest = AppManifest.from_dict(
+        json.loads((Path(kiro_cli.__file__).parent / "app.json").read_text())
+    )
+    assert manifest.validate() == []
+    assert [p.program for p in manifest.launches] == kiro_cli._BIN_NAMES
+    assert manifest.launches[0].inherits == ["sign-in", "settings", "auto-approve-rules"]
+    assert manifest.dependencies.npmPackages == [] and manifest.writes == []

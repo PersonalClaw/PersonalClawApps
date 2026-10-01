@@ -1,6 +1,6 @@
 # OpenAI Codex
 
-Run the OpenAI Codex CLI as an agent (acp:codex) via the Zed ACP adapter. Codex manages its own configuration and authentication; every tool call routes through PersonalClaw's host approval gate. Enabling it installs its ACP adapter (@agentclientprotocol/codex-acp) from npm into your PersonalClaw home when no copy is installed; a failed install says why on its card, with Retry.
+Run the OpenAI Codex CLI as an agent (acp:codex) via the Zed ACP adapter. Codex manages its own configuration and authentication; every tool call it asks about routes through PersonalClaw's host approval gate. Enabling it installs its ACP adapter (@agentclientprotocol/codex-acp) from npm into your PersonalClaw home when no copy is installed; a failed install says why on its card, with Retry.
 
 **OpenAI Codex** is an **ACP agent bundle** — it registers an `acp:codex` agent via `personalclaw.sdk.acp` and appears in the Agents list.
 
@@ -33,7 +33,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 ## Authentication
 
-The Codex CLI manages its own configuration and login. Every tool call routes through PersonalClaw's host approval gate.
+The Codex CLI manages its own configuration and login. Every tool call it asks about routes through PersonalClaw's host approval gate; what its own rules allow, it runs without asking.
 
 ## Environment
 
@@ -45,6 +45,17 @@ environment, so a Codex configured there keeps its provider.
 No credential is passed: not an API key or a token. Codex keeps its sign-in in that folder. To
 hand it one more variable, add its name under Settings → Security → Child environment
 passthrough.
+
+## What it starts and installs
+
+Install consent names each of these before anything installs (the manifest's `launches` and
+`dependencies.npmPackages`):
+
+- It starts the `codex` program installed on this machine, as you and outside PersonalClaw,
+  with your own Codex sign-in, settings and auto-approve rules: what those rules allow, it does
+  without asking here first.
+- Switching it on installs the npm package `@agentclientprotocol/codex-acp` into your
+  PersonalClaw folder (`acp-adapters`) when no copy is on this machine.
 
 ## Capability boundary
 
