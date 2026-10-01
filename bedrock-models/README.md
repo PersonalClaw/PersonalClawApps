@@ -17,6 +17,9 @@ as a self-contained directory:
   a recording endpoint.
 - `test_embedding_models.py` — proves every embedding model offered embeds, each with the request and
   answer AWS documents for it, against a loopback Bedrock that holds each request to its model's schema.
+- `test_image_models.py` — proves every image model offered makes an image from a prompt, each with its
+  own request, and only where the instance's region serves it, against a loopback Bedrock that lists
+  each region's models and holds each request to its model's schema.
 
 It imports only the PersonalClaw **SDK** (never core internals), so core can evolve
 without breaking it:
@@ -52,7 +55,7 @@ text and streams its answer is a chat model, and an image or audio one too when 
 speech; a model that writes embeddings is an embedding model when this app knows how to call it
 ([Embeddings](#embeddings)). A profile is offered for what the model it routes to does. Rerank, image-editing and video-analysis models are not listed, nor is
 Nova Sonic, which takes only a two-way audio stream: nothing here can use them. Image and video
-generation list their own models (Nova Canvas, Nova Reel).
+generation list their own models from the same listing ([Images and video](#images-and-video)).
 
 ## Prompt caching
 
@@ -95,6 +98,36 @@ not offered, and a binding to one is refused with a sentence before anything is 
 takes at most 2,048 characters and Nova 8,192, so a longer text is embedded from its start, as each
 model does with a text past its token limit. When AWS names two models alike, each is shown with its
 id after its name.
+
+## Images and video
+
+Image · Generation offers the models that make an image from a prompt and that the instance's
+region lists, each called with the request AWS documents for it:
+
+| Model | Id | Asked for |
+|---|---|---|
+| Amazon Nova Canvas | `amazon.nova-canvas-v1:0` | a `TEXT_IMAGE` task, at the size the call names (1024×1024 when it names none), up to five images in one request |
+| Stable Diffusion 3.5 Large | `stability.sd3-5-large-v1:0` | a prompt and an aspect ratio, one image a request |
+| Stable Image Core | `stability.stable-image-core-v1:1` | a prompt and an aspect ratio, one image a request |
+| Stable Image Ultra | `stability.stable-image-ultra-v1:1` | a prompt and an aspect ratio, one image a request |
+
+A model Bedrock serves on demand is offered by its own id, and one it serves only through an
+inference profile by the profile's id (`us.…`). Stability AI's models take an aspect ratio, not a
+size, so a size the call names (`1280x720`) asks for the nearest one they make (16:9). Stability AI's
+Image Services (inpaint, outpaint, erase, search and replace or recolor, remove background, the
+upscalers, control sketch and structure, style guide and transfer) change an image they are given and
+make none from a prompt, so they are not offered, and nothing here edits an image. A model the region
+lists as Legacy is not offered. When the region lists none of these models, Image · Generation says so
+under the instance's name ("No image generation model is available in us-east-2: …") instead of
+offering one that cannot be called.
+
+Video · Generation offers Amazon Nova Reel the same way: the Nova Reel models the region lists, or a
+sentence saying it lists none.
+
+A call Bedrock refuses because the region does not serve the model ("The provided model identifier is
+invalid"), or serves it only through an inference profile, says so and what to choose instead, with
+AWS's words after it. The gateway log's warning is that sentence, on one line; a failure nothing here
+recognises keeps its traceback in the log at DEBUG.
 
 ## Authentication
 

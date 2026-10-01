@@ -258,9 +258,9 @@ def test_the_apps_log_reaches_the_gateway_log():
     assert prov.logger.name in manifest["loggerRoots"]
 
 
-def test_a_listing_that_fails_is_logged_once_with_its_traceback(monkeypatch, caplog):
+def test_a_listing_that_fails_is_logged_once_and_its_traceback_at_debug(monkeypatch, caplog):
     """The catalog is asked on every Models page read, so the log says a failure once every few
-    minutes, not once per read."""
+    minutes, not once per read. The warning is the sentence alone: its traceback is at DEBUG."""
     import logging
 
     def _unanswered(region, profile):
@@ -279,13 +279,20 @@ def test_a_listing_that_fails_is_logged_once_with_its_traceback(monkeypatch, cap
         for r in caplog.records
         if r.name == "bedrock_models" and r.levelno == logging.WARNING
     ]
-    assert len(warned) == 1, warned
-    said, trace = warned[0].split("\n", 1)
-    assert said == (
+    assert warned == [
         "Listing Amazon Bedrock's models failed: No model list came back from Amazon Bedrock in "
         "us-east-1. Try again; if it keeps failing, check the gateway log. Details: the control "
         "plane did not answer [REDACTED: credential]"
-    )
+    ]
+    traced = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "bedrock_models" and r.levelno == logging.DEBUG
+        and "\nTraceback" in r.getMessage()
+    ]
+    assert len(traced) == 2, "each failure's traceback is in the log, at DEBUG"
+    head, trace = traced[0].split("\n", 1)
+    assert head == "Listing Amazon Bedrock's models failed with this traceback:"
     assert trace.startswith("Traceback (most recent call last):") and "RuntimeError" in trace
     assert "AKIA" not in trace, "the traceback is redacted as the detail is"
 

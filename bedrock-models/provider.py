@@ -27,7 +27,7 @@ import logging
 import os
 import re
 from collections.abc import AsyncIterator, Callable
-from typing import Any, NamedTuple, NoReturn
+from typing import Any, NamedTuple, NoReturn, TypeVar
 from urllib.parse import urlsplit
 
 from personalclaw.sdk.model import (
@@ -163,8 +163,8 @@ _ROLE_OPERATIONS = frozenset({"AssumeRole", "AssumeRoleWithWebIdentity", "Assume
 _ON_INSTANCE = "on this Amazon Bedrock instance in Settings → Providers"
 _SET_PROFILE = f"set AWS Profile {_ON_INSTANCE} (under Advanced)"
 #: How a sentence ends when nothing here recognised the failure: the rest of it is in the gateway
-#: log, so :func:`_warn_once` puts the traceback there. A sentence that names the cause and the
-#: fix never says it.
+#: log, where :func:`_warn_once` puts the traceback, at DEBUG. A sentence that names the cause and
+#: the fix never says it.
 _SEE_THE_LOG = "Try again; if it keeps failing, check the gateway log."
 
 
@@ -349,6 +349,9 @@ def _friendly_bedrock_error(
       region (model access is granted per account and region).
     * The credentials themselves turned down (an invalid or expired security token): sign in to
       AWS again.
+    * A model the region does not serve, or one it serves only through an inference profile
+      (``ValidationException``: "The provided model identifier is invalid", "… with on-demand
+      throughput isn't supported"): choose a model the instance's list offers, AWS's words after.
 
     Everything else passes through unchanged.
     """
@@ -365,6 +368,24 @@ def _friendly_bedrock_error(
         )
     code = _aws_error_code(error)
     where = f" in {region}" if region else ""
+    if code == "ValidationException" and "model identifier is invalid" in msg:
+        return ProviderResolutionError(
+            sentence_with_detail(
+                f"Amazon Bedrock{where} has no model '{model_id}' this AWS account can call. "
+                "Choose one of the models Settings → Models lists for this Amazon Bedrock "
+                f"instance, or set AWS Region {_ON_INSTANCE} to a region that serves it.",
+                error,
+            )
+        )
+    if code == "ValidationException" and "on-demand throughput" in msg:
+        return ProviderResolutionError(
+            sentence_with_detail(
+                f"Amazon Bedrock{where} serves '{model_id}' only through an inference profile. "
+                "Choose the inference profile Settings → Models lists for it (its id starts with a "
+                "geography, such as us. or global.).",
+                error,
+            )
+        )
     if code == "AccessDeniedException":
         named = _NOT_AUTHORIZED_RE.search(msg)
         if named:
@@ -1316,13 +1337,15 @@ def _routed_model(profile: dict[str, Any], records: dict[str, dict[str, Any]]) -
 
 
 def _list_bedrock_models_sync(region: str, profile: str) -> list[dict[str, Any]]:
-    """Query the Bedrock control plane for every model this app can bind, each with what it can
-    be bound for (:func:`_capabilities_of`). Blocking boto3 calls — run via ``asyncio.to_thread``.
+    """Query the Bedrock control plane for every id a call in this region can name, each with
+    what the catalog can bind it for (:func:`_capabilities_of`, ``[]`` for a model only the image
+    or video adapter can use) and the foundation model that answers it (``model``). Blocking boto3
+    calls — run via ``asyncio.to_thread``.
 
-    Combines two sources so the dropdown shows what's actually invocable:
+    Combines two sources so every list shows what's actually invocable:
       * ``list_foundation_models()`` — every foundation model's record: what it reads and writes,
-        whether it streams, how it is invoked. A model listed by its own id supports ON_DEMAND
-        throughput (direct ``modelId`` invocation).
+        whether it streams, how it is invoked. A model whose record says ON_DEMAND is called by
+        its own id.
       * ``list_inference_profiles()`` — cross-region / system profiles (the ``us.*`` / ``global.*``
         ids), the only way to call models that don't offer ON_DEMAND (e.g. newer Claude). Each
         profile id is directly invocable, and does what the model it routes to does, so it is
@@ -1358,11 +1381,13 @@ def _list_bedrock_models_sync(region: str, profile: str) -> list[dict[str, Any]]
             continue
         if (m.get("modelLifecycle") or {}).get("status", "ACTIVE") != "ACTIVE":
             continue
-        caps = _capabilities_of(m)
-        if not caps:
-            continue
         seen.add(model_id)
-        out.append({"id": model_id, "name": _label(m, model_id), "capabilities": caps})
+        out.append({
+            "id": model_id,
+            "name": _label(m, model_id),
+            "capabilities": _capabilities_of(m),
+            "model": model_id,
+        })
 
     # ── Inference profiles (cross-region / system — the us.* invocable ids) ──
     try:
@@ -1376,14 +1401,14 @@ def _list_bedrock_models_sync(region: str, profile: str) -> list[dict[str, Any]]
                 if p.get("status", "ACTIVE") != "ACTIVE":
                     continue
                 routed = _routed_model(p, records)
-                caps = _capabilities_of(routed) if routed is not None else []
-                if not caps:
+                if routed is None:
                     continue
                 seen.add(pid)
                 out.append({
                     "id": pid,
                     "name": p.get("inferenceProfileName", pid),
-                    "capabilities": caps,
+                    "capabilities": _capabilities_of(routed),
+                    "model": str(routed.get("modelId") or ""),
                 })
             token = resp.get("nextToken")
             if not token:
@@ -1439,6 +1464,27 @@ def _discovery_failure(error: Exception, *, region: str, profile: str | None) ->
     return ModelDiscoveryError(sentence_with_detail(sentence, error))
 
 
+async def _listed_in_region(region: str, profile: str | None) -> list[dict[str, Any]]:
+    """Every id a call in ``region`` can name (:func:`_list_bedrock_models_sync`), sorted by name
+    and cached for ``_BEDROCK_CACHE_TTL`` seconds: the chat catalog and the image and video adapters
+    read the one listing. A listing that could not run raises its :class:`ModelDiscoveryError`."""
+    region = region or DEFAULT_REGION
+    key = (region, profile or "")
+    cached = _BEDROCK_CACHE.get(key)
+    if cached and (_time.monotonic() - cached[0]) < _BEDROCK_CACHE_TTL:
+        return cached[1]
+    try:
+        rows = await asyncio.to_thread(_list_bedrock_models_sync, region, profile or "")
+    except Exception as exc:  # noqa: BLE001 — every failure is said as its cause
+        failure = _discovery_failure(exc, region=region, profile=profile or None)
+        _warn_once("Listing Amazon Bedrock's models", str(failure), exc)
+        raise failure from exc
+    rows.sort(key=lambda m: m.get("name", "").lower())
+    if rows:
+        _BEDROCK_CACHE[key] = (_time.monotonic(), rows)
+    return rows
+
+
 def _distinct_names(rows: list[dict[str, Any]]) -> dict[str, str]:
     """Each listed model's name by id, told apart from every other's: AWS gives two models names
     that differ in case alone ("Titan Text Embeddings v2" and "Titan Text Embeddings V2"), so a
@@ -1466,26 +1512,7 @@ class BedrockCatalog(ModelCatalog):
         self._profile = profile or ""
 
     async def list_models(self) -> list[ModelInfo]:
-        import time
-
-        key = (self._region, self._profile)
-        cached = _BEDROCK_CACHE.get(key)
-        if cached and (time.monotonic() - cached[0]) < _BEDROCK_CACHE_TTL:
-            rows = cached[1]
-        else:
-            try:
-                rows = await asyncio.to_thread(_list_bedrock_models_sync, self._region, self._profile)
-            except Exception as exc:  # noqa: BLE001 — every failure is said as its cause
-                failure = _discovery_failure(
-                    exc,
-                    region=self._region,
-                    profile=self._profile or None,
-                )
-                _warn_once("Listing Amazon Bedrock's models", str(failure), exc)
-                raise failure from exc
-            rows.sort(key=lambda m: m.get("name", "").lower())
-            if rows:
-                _BEDROCK_CACHE[key] = (time.monotonic(), rows)
+        rows = await _listed_in_region(self._region, self._profile)
         offered = []
         for r in rows:
             capabilities = list(r.get("capabilities", ["chat"]))
@@ -1742,15 +1769,15 @@ _WARN_EVERY = 300.0
 
 
 def _warn_once(what: str, sentence: str, error: BaseException) -> None:
-    """Log that ``what`` failed: ``sentence``, at WARNING the first time in ``_WARN_EVERY``
-    seconds, else at DEBUG. The sentence's own words, not its SDK detail, are what makes it the
-    same failure.
+    """Log that ``what`` failed: ``sentence``, one line, at WARNING the first time in
+    ``_WARN_EVERY`` seconds, else at DEBUG. The sentence's own words, not its SDK detail, are what
+    makes it the same failure.
 
-    A sentence that names the cause and the fix (no AWS credentials, a permission the identity
-    lacks, a bucket that isn't there) is the whole of it: one line. The traceback of a condition
-    this app recognises says nothing the sentence does not, and it buried that sentence under
-    sixty lines of botocore. A sentence that could name no cause sends the reader to the gateway
-    log (:data:`_SEE_THE_LOG`), so ``error``'s traceback follows it there, redacted as the
+    A WARNING is the sentence alone, its SDK detail included. The traceback of a condition this
+    app recognises says nothing the sentence does not, and sixty lines of botocore under a
+    warning buried the sentence, on every failure a user meets at use time (an image the region
+    has no model for). A sentence that could name no cause sends the reader to the gateway log
+    (:data:`_SEE_THE_LOG`), so ``error``'s traceback follows it there at DEBUG, redacted as the
     sentence's detail is, since what a credential command printed is in it."""
     key = (what, sentence.split(" Details: ", 1)[0])
     now = _time.monotonic()
@@ -1760,16 +1787,15 @@ def _warn_once(what: str, sentence: str, error: BaseException) -> None:
         if len(_WARNED_AT) > 64:
             _WARNED_AT.clear()
         _WARNED_AT[key] = now
-    level = logging.DEBUG if repeat else logging.WARNING
-    if _SEE_THE_LOG not in sentence:
-        logger.log(level, "%s failed: %s", what, sentence)
+    logger.log(logging.DEBUG if repeat else logging.WARNING, "%s failed: %s", what, sentence)
+    if _SEE_THE_LOG not in sentence or not logger.isEnabledFor(logging.DEBUG):
         return
     import traceback  # noqa: PLC0415 — failure path only
 
     from personalclaw.sdk.channel import redact_credentials  # noqa: PLC0415
 
     trace, _ = redact_credentials("".join(traceback.format_exception(error)).rstrip())
-    logger.log(level, "%s failed: %s\n%s", what, sentence, trace)
+    logger.debug("%s failed with this traceback:\n%s", what, trace)
 
 
 # ── Bedrock embedding models: each one's own request and answer ─────────────────────────
@@ -1876,14 +1902,23 @@ _EMBEDDING_MODELS: dict[str, _EmbeddingModel] = {
 }
 
 
-def _embedding_model(model_id: str) -> _EmbeddingModel | None:
-    """How ``model_id`` is called, or None for a model this app cannot call. An inference profile
-    (``us.cohere.embed-v4:0``, ``global.…``) is called as the model after its geography."""
+_Known = TypeVar("_Known")
+
+
+def _by_family(known: dict[str, _Known], model_id: str) -> _Known | None:
+    """What ``known`` says of ``model_id``, keyed by the model's id without its version
+    (``amazon.titan-embed-text-v2`` for ``…-v2:0``), or None. An inference profile
+    (``us.cohere.embed-v4:0``, ``global.…``) is the model after its geography."""
     bare = model_id.split(":", 1)[0]
-    found = _EMBEDDING_MODELS.get(bare)
+    found = known.get(bare)
     if found is None and "." in bare:
-        found = _EMBEDDING_MODELS.get(bare.split(".", 1)[1])
+        found = known.get(bare.split(".", 1)[1])
     return found
+
+
+def _embedding_model(model_id: str) -> _EmbeddingModel | None:
+    """How ``model_id`` is called, or None for a model this app cannot call."""
+    return _by_family(_EMBEDDING_MODELS, model_id)
 
 
 def _not_callable(model_id: str) -> str:
@@ -2009,24 +2044,168 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
         return [await self.embed(text, model) for text in texts]
 
 
-# ── Bedrock Image Generation Provider ────────────────────────────────────────
+# ── Bedrock image generation: each model's own request and answer ─────────────────────────────
+#
+# A model that makes an image from a prompt takes an ``InvokeModel`` body of its own and answers
+# in a shape of its own, as AWS documents them: Amazon Nova Canvas a ``TEXT_IMAGE`` task (the
+# Amazon Nova User Guide, "Request and response structure for image generation"), and Stability
+# AI's Stable Diffusion 3.5 Large, Stable Image Core and Stable Image Ultra a prompt and an aspect
+# ratio (the Amazon Bedrock User Guide, "Stability AI models"). Stability AI's Image Services
+# (inpaint, outpaint, erase, search and replace or recolor, remove background, the upscalers,
+# control sketch and structure, style guide and style transfer) each change an image they are
+# given, so none makes one from a prompt; nothing here edits an image, so none of them is offered.
+#
+# Image · Generation offers only these models, and only those the instance's region lists (the
+# one listing the chat catalog reads), each by the id a call there names: the model's own when
+# Bedrock serves it on demand, else that of the inference profile that routes to it. The list used
+# to name Nova Canvas whatever the region, and a binding to it in a region that does not serve it
+# was refused at its first image with "The provided model identifier is invalid".
+
+#: The size Nova Canvas is asked for when a call names none it can read.
+_NOVA_CANVAS_SIZE = (1024, 1024)
+
+#: The aspect ratios Stability AI's text-to-image models make, as each takes them.
+_STABILITY_RATIOS = ("16:9", "1:1", "21:9", "2:3", "3:2", "4:5", "5:4", "9:16", "9:21")
 
 
-_IMAGE_MODELS = [
-    ImageGenModel(
-        name="amazon.nova-canvas-v1:0",
-        description="Amazon Nova Canvas — text-to-image generation",
-        sizes=["1024x1024", "1280x720", "720x1280"],
-        supports_edit=False,
+def _width_height(size: str) -> tuple[int, int] | None:
+    """A size as a width and a height ("1280x720" → (1280, 720)), or None for one that names
+    neither."""
+    width, _, height = size.strip().lower().partition("x")
+    if width.isdigit() and height.isdigit() and int(width) and int(height):
+        return int(width), int(height)
+    return None
+
+
+def _aspect_ratio(size: str) -> str:
+    """The aspect ratio a Stability AI model is asked for: ``size`` when it is one the model makes
+    ("16:9"), the nearest one to a width and height ("1280x720" → "16:9"), else its default, 1:1."""
+    size = size.strip()
+    if size in _STABILITY_RATIOS:
+        return size
+    named = _width_height(size)
+    if named is None:
+        return "1:1"
+    import math  # noqa: PLC0415 — a size named as a width and height only
+
+    wanted = math.log(named[0] / named[1])
+
+    def _off(ratio: str) -> float:
+        across, _, up = ratio.partition(":")
+        return abs(math.log(int(across) / int(up)) - wanted)
+
+    return min(_STABILITY_RATIOS, key=_off)
+
+
+def _nova_canvas_body(prompt: str, size: str, count: int) -> dict[str, Any]:
+    width, height = _width_height(size) or _NOVA_CANVAS_SIZE
+    return {
+        "taskType": "TEXT_IMAGE",
+        "textToImageParams": {"text": prompt},
+        "imageGenerationConfig": {"numberOfImages": count, "width": width, "height": height},
+    }
+
+
+def _stability_body(prompt: str, size: str, count: int) -> dict[str, Any]:
+    """Stable Diffusion 3.5 Large, Stable Image Core and Ultra take the same text-to-image request,
+    and each makes one image for it, so ``count`` is always one."""
+    del count
+    return {"prompt": prompt, "aspect_ratio": _aspect_ratio(size), "output_format": "png"}
+
+
+class _NoImage(Exception):
+    """A model answered, and its answer holds no image. Its text is the reason the answer gave."""
+
+
+def _nova_canvas_images(answer: dict[str, Any]) -> list[str]:
+    """Nova Canvas answers ``images``, or says in ``error`` why it made none."""
+    images = [str(image) for image in answer.get("images") or [] if image]
+    if not images and answer.get("error"):
+        raise _NoImage(str(answer["error"]))
+    return images
+
+
+def _stability_images(answer: dict[str, Any]) -> list[str]:
+    """Stability AI's models answer ``images``, and a ``finish_reasons`` entry that is not null for
+    one they filtered or could not make ("Filter reason: prompt", "Inference error")."""
+    images = [str(image) for image in answer.get("images") or [] if image]
+    reasons = [str(reason) for reason in answer.get("finish_reasons") or [] if reason]
+    if not images and reasons:
+        raise _NoImage("; ".join(reasons))
+    return images
+
+
+class _ImageModel(NamedTuple):
+    """How one model makes an image from a prompt: its request body for a prompt, a size and a count
+    of images, where its answer keeps them, the most one request makes, and the sizes it lists."""
+
+    body: Callable[[str, str, int], dict[str, Any]]
+    images: Callable[[dict[str, Any]], list[str]]
+    per_request: int
+    sizes: tuple[str, ...] = ()
+
+
+_STABILITY_TEXT_TO_IMAGE = _ImageModel(_stability_body, _stability_images, per_request=1)
+
+#: Keyed by the model's id without its version (``stability.stable-image-core-v1`` for ``…-v1:1``).
+#: Stability AI's models are asked for an aspect ratio, not a size, so they list none.
+_IMAGE_MODELS: dict[str, _ImageModel] = {
+    "amazon.nova-canvas-v1": _ImageModel(
+        _nova_canvas_body,
+        _nova_canvas_images,
+        per_request=5,
+        sizes=("1024x1024", "1280x720", "720x1280"),
     ),
-]
+    "stability.sd3-5-large-v1": _STABILITY_TEXT_TO_IMAGE,
+    "stability.stable-image-core-v1": _STABILITY_TEXT_TO_IMAGE,
+    "stability.stable-image-ultra-v1": _STABILITY_TEXT_TO_IMAGE,
+}
+
+
+def _image_model(model_id: str) -> _ImageModel | None:
+    """How ``model_id`` makes an image from a prompt, or None for a model this app cannot call
+    so."""
+    return _by_family(_IMAGE_MODELS, model_id)
+
+
+def _not_an_image_model(model_id: str) -> str:
+    """What an image on a model this app has no text-to-image request for says."""
+    return (
+        f"Bedrock's {model_id} is not a model this app can make an image from a prompt with, so "
+        "nothing was sent. Choose one of the models Settings → Models lists under Image · "
+        "Generation for this Amazon Bedrock instance."
+    )
+
+
+def _no_image_model(region: str) -> str:
+    """What Image · Generation says for an instance whose region lists none of
+    :data:`_IMAGE_MODELS`."""
+    return (
+        f"No image generation model is available in {region}: Amazon Bedrock lists none there that "
+        "this app can make an image from a prompt with (Amazon Nova Canvas, Stable Diffusion 3.5 "
+        "Large, Stable Image Core, Stable Image Ultra). Models that only edit or upscale an image "
+        f"are not offered. Set AWS Region {_ON_INSTANCE} to a region that lists one of them, or "
+        "add an instance for that region."
+    )
+
+
+def _made_no_image(model_id: str, reason: str) -> str:
+    """What an answer that holds no image says: its model's filter stopped it, or it made none."""
+    if reason.startswith("Filter reason"):
+        sentence = (
+            f"{model_id}'s content filter stopped this image. Reword the prompt, then try again."
+        )
+    else:
+        sentence = f"{model_id} made no image for this prompt. Try again."
+    return sentence_with_detail(sentence, reason)
 
 
 class BedrockImageProvider(ImageGenProvider):
-    """Image generation via Bedrock ``invoke_model`` (Nova Canvas).
+    """Image generation via Bedrock ``invoke_model``: each model :data:`_IMAGE_MODELS` names that
+    the instance's region lists, called the way AWS documents it.
 
-    Generates images synchronously via the Bedrock runtime. The blocking
-    invoke_model call runs in a thread pool.
+    boto3 is lazily imported inside methods (Property 11), and the blocking ``invoke_model`` call
+    runs in a thread pool.
     """
 
     def __init__(self, *, region: str = DEFAULT_REGION, profile: str | None = None,
@@ -2054,43 +2233,66 @@ class BedrockImageProvider(ImageGenProvider):
         return session.client("bedrock-runtime", region_name=self._region)
 
     async def is_available(self) -> bool:
-        """True if the AWS credential chain resolves (cached, off-loop)."""
-        return await _creds_ok(self._region, self._profile)
+        """True when it can make an image: :meth:`unavailable_reason` has nothing to say."""
+        return not await self.unavailable_reason()
 
     async def unavailable_reason(self) -> str:
-        """Why images can't be made, as Settings → Models shows it: why the AWS credential chain
-        cannot sign in (the chat's sentence for the same failure), else ``""``."""
-        return await _creds_problem(self._region, self._profile)
+        """Why images can't be made, as Settings → Models shows it under Image · Generation: why the
+        AWS credential chain cannot sign in (the chat's sentence for the same failure), or that the
+        region lists no model this app can make an image from a prompt with, else ``""``.
+
+        A listing that fails says nothing here: :meth:`list_models` raises its failure, which is
+        what the row says."""
+        problem = await _creds_problem(self._region, self._profile)
+        if problem:
+            return problem
+        try:
+            offered = await self.list_models()
+        except ModelDiscoveryError:
+            return ""
+        return "" if offered else _no_image_model(self._region)
 
     async def list_models(self) -> list[ImageGenModel]:
-        return list(_IMAGE_MODELS)
+        """The region's models this app can make an image from a prompt with, each by the id a call
+        names. Raises the listing's :class:`ModelDiscoveryError` when there is no listing."""
+        rows = await _listed_in_region(self._region, self._profile)
+        offered = []
+        for row in rows:
+            how = _image_model(row["id"])
+            if how is None:
+                continue
+            offered.append(
+                ImageGenModel(
+                    name=row["id"],
+                    description=f"{row.get('name') or row['id']} — makes an image from a prompt",
+                    sizes=list(how.sizes),
+                    supports_edit=False,
+                )
+            )
+        return offered
 
-    def _generate_sync(self, prompt: str, model_id: str, size: str, n: int) -> list[dict]:
-        """Blocking image generation — run via to_thread."""
+    def _generate_sync(
+        self, prompt: str, model_id: str, how: _ImageModel, size: str, n: int
+    ) -> list[str]:
+        """Blocking image generation, sent and read as ``how`` says — run via to_thread. Asks for
+        ``n`` images, at most ``how.per_request`` in one request. Raises :class:`_NoImage` for an
+        answer that holds none."""
         client = self._get_client()
-
-        # Parse size
-        width, height = 1024, 1024
-        if size and "x" in size.lower():
-            parts = size.lower().split("x")
-            try:
-                width, height = int(parts[0]), int(parts[1])
-            except (ValueError, IndexError):
-                pass
-
-        body = json.dumps({
-            "taskType": "TEXT_IMAGE",
-            "textToImageParams": {"text": prompt},
-            "imageGenerationConfig": {
-                "numberOfImages": n,
-                "width": width,
-                "height": height,
-            },
-        })
-
-        response = client.invoke_model(modelId=model_id, body=body)
-        result = json.loads(response["body"].read())
-        return result.get("images", [])
+        images: list[str] = []
+        wanted = max(1, n)
+        while len(images) < wanted:
+            count = min(wanted - len(images), how.per_request)
+            response = client.invoke_model(
+                modelId=model_id,
+                body=json.dumps(how.body(prompt, size, count)),
+                contentType="application/json",
+                accept="application/json",
+            )
+            made = how.images(json.loads(response["body"].read()))
+            if not made:
+                raise _NoImage("")
+            images.extend(made)
+        return images[:wanted]
 
     async def generate(
         self,
@@ -2101,24 +2303,31 @@ class BedrockImageProvider(ImageGenProvider):
         n: int = 1,
         **opts: Any,
     ) -> list[ImageResult]:
-        """Generate images from a text prompt with ``model`` (Nova Canvas)."""
+        """Generate images from a text prompt with ``model``. A model this app has no text-to-image
+        request for is refused before anything is sent."""
         try:
             model_id = require_model(model)
         except ProviderResolutionError as exc:
             raise ImageGenError(str(exc)) from exc
+        what = f"Bedrock image generation on {self._name!r}"
+        how = _image_model(model_id)
+        if how is None:
+            sentence = _not_an_image_model(model_id)
+            _warn_once(what, sentence, ValueError(sentence))
+            raise ImageGenError(sentence)
         try:
-            images_b64 = await asyncio.to_thread(self._generate_sync, prompt, model_id, size, n)
+            images = await asyncio.to_thread(self._generate_sync, prompt, model_id, how, size, n)
+        except _NoImage as exc:
+            sentence = _made_no_image(model_id, str(exc))
+            _warn_once(what, sentence, exc)
+            raise ImageGenError(sentence) from exc
         except Exception as exc:
             sentence = _media_failure(
                 "image generation", exc, model_id, region=self._region, profile=self._profile
             )
-            _warn_once(f"Bedrock image generation on {self._name!r}", sentence, exc)
+            _warn_once(what, sentence, exc)
             raise ImageGenError(sentence) from exc
-
-        results: list[ImageResult] = []
-        for b64_str in images_b64:
-            results.append(ImageResult(b64=b64_str, mime="image/png"))
-        return results
+        return [ImageResult(b64=image, mime="image/png") for image in images]
 
     async def edit(
         self,
@@ -2131,21 +2340,40 @@ class BedrockImageProvider(ImageGenProvider):
         n: int = 1,
         **opts: Any,
     ) -> list[ImageResult]:
-        """Edit is not supported by Bedrock Nova Canvas."""
-        raise ImageGenError("Image editing is not supported by Amazon Bedrock Nova Canvas.")
+        """No model this app calls edits an image: each makes a new one from a prompt."""
+        raise ImageGenError(
+            "This Amazon Bedrock instance makes new images from a prompt and edits none, so "
+            "nothing was sent. Ask for a new image instead of an edit."
+        )
 
 
 # ── Bedrock Video Generation Provider ────────────────────────────────────────
 
 
-_VIDEO_MODELS = [
-    VideoGenModel(
-        name="amazon.nova-reel-v1:1",
-        description="Amazon Nova Reel — text-to-video generation",
-        aspect_ratios=["16:9"],
-        max_duration_s=6,
-    ),
-]
+#: The video models this app calls (a ``TEXT_VIDEO`` task through ``StartAsyncInvoke``), keyed by
+#: id without its version, with the aspect ratios each makes: Amazon Nova Reel. Video · Generation
+#: offers those the instance's region lists, as Image · Generation does its models, rather than
+#: naming Nova Reel whatever the region.
+_VIDEO_MODELS: dict[str, tuple[str, ...]] = {"amazon.nova-reel-v1": ("16:9",)}
+
+
+def _not_a_video_model(model_id: str) -> str:
+    """What a video on a model this app has no request for says."""
+    return (
+        f"Bedrock's {model_id} is not a model this app can make a video with, so nothing was sent. "
+        "Choose one of the models Settings → Models lists under Video · Generation for this Amazon "
+        "Bedrock instance."
+    )
+
+
+def _no_video_model(region: str) -> str:
+    """What Video · Generation says for an instance whose region lists no Nova Reel model."""
+    return (
+        f"No video generation model is available in {region}: Amazon Bedrock lists no Amazon Nova "
+        f"Reel model there, the one this app makes videos with. Set AWS Region {_ON_INSTANCE} to a "
+        "region that lists it, or add an instance for that region."
+    )
+
 
 _VIDEO_POLL_INTERVAL = 10  # seconds
 # 600s, not 300s: an async-invoke job still InProgress after 5 minutes has not
@@ -2285,19 +2513,42 @@ class BedrockVideoProvider(VideoGenProvider):
         return session.client("s3", region_name=self._region)
 
     async def is_available(self) -> bool:
-        """True if the AWS credential chain resolves AND an S3 bucket is set
-        (cached, off-loop). Video needs the bucket for Nova Reel output."""
-        return bool(self._s3_bucket) and await _creds_ok(self._region, self._profile)
+        """True when it can make a video: :meth:`unavailable_reason` has nothing to say."""
+        return not await self.unavailable_reason()
 
     async def unavailable_reason(self) -> str:
         """Why video can't be made, as Settings → Models shows it: no S3 bucket for Nova Reel to
-        write to, or why the AWS credential chain cannot sign in, else ``""``."""
+        write to, why the AWS credential chain cannot sign in, or that the region lists no Nova Reel
+        model, else ``""``. A listing that fails is :meth:`list_models`'s to say."""
         if not self._s3_bucket:
             return _needs_bucket(_VIDEO_NEEDS_BUCKET)
-        return await _creds_problem(self._region, self._profile)
+        problem = await _creds_problem(self._region, self._profile)
+        if problem:
+            return problem
+        try:
+            offered = await self.list_models()
+        except ModelDiscoveryError:
+            return ""
+        return "" if offered else _no_video_model(self._region)
 
     async def list_models(self) -> list[VideoGenModel]:
-        return list(_VIDEO_MODELS)
+        """The region's Nova Reel models, each by the id a call names. Raises the listing's
+        :class:`ModelDiscoveryError` when there is no listing."""
+        rows = await _listed_in_region(self._region, self._profile)
+        offered = []
+        for row in rows:
+            ratios = _by_family(_VIDEO_MODELS, row["id"])
+            if ratios is None:
+                continue
+            offered.append(
+                VideoGenModel(
+                    name=row["id"],
+                    description=f"{row.get('name') or row['id']} — makes a video from a prompt",
+                    aspect_ratios=list(ratios),
+                    max_duration_s=6,
+                )
+            )
+        return offered
 
     def _generate_sync(self, prompt: str, model_id: str, duration_seconds: float) -> str:
         """Blocking submit → poll → download. Returns local file path to the MP4."""
@@ -2381,11 +2632,14 @@ class BedrockVideoProvider(VideoGenProvider):
         aspect_ratio: str = "",
         **opts: Any,
     ) -> list[VideoResult]:
-        """Generate a video from a text prompt with ``model`` (Nova Reel, async invoke)."""
+        """Generate a video from a text prompt with ``model`` (Nova Reel, async invoke). Any other
+        model is refused before anything is sent."""
         try:
             model_id = require_model(model)
         except ProviderResolutionError as exc:
             raise VideoGenError(str(exc)) from exc
+        if _by_family(_VIDEO_MODELS, model_id) is None:
+            raise VideoGenError(_not_a_video_model(model_id))
         try:
             local_path = await asyncio.to_thread(
                 self._generate_sync, prompt, model_id, duration_seconds

@@ -311,7 +311,7 @@ def test_audio_with_no_speech_is_an_empty_transcript_not_a_failure(aws_stt, monk
 def test_a_refused_call_names_its_fix(aws_stt, caplog, where, refusal, said):
     """🔴 Red before: every one of these was ``None`` and a DEBUG line."""
     aws_stt.world[where] = refusal
-    caplog.set_level(logging.WARNING, logger="bedrock_models")
+    caplog.set_level(logging.DEBUG, logger="bedrock_models")
 
     with pytest.raises(SttError) as failed:
         _transcribed(aws_stt)
@@ -321,13 +321,18 @@ def test_a_refused_call_names_its_fix(aws_stt, caplog, where, refusal, said):
     warned = [
         r for r in caplog.records if r.name == "bedrock_models" and r.levelno == logging.WARNING
     ]
-    assert [r.getMessage().split("\n", 1)[0] for r in warned] == [
+    assert [r.getMessage() for r in warned] == [
         f"Amazon Transcribe on 'my-bedrock' failed: {failed.value}"
-    ], "said once"
-    # A refusal the sentence names the fix of is that one line; one it could not name sends the
-    # reader to the gateway log, where its traceback is.
+    ], "said once, one line"
+    # A refusal the sentence names the fix of is that line alone; one it could not name sends the
+    # reader to the gateway log, where its traceback is, at DEBUG.
     sends_to_the_log = "check the gateway log" in str(failed.value)
-    assert ("\nTraceback (most recent call last):" in warned[0].getMessage()) is sends_to_the_log
+    traced = [
+        r for r in caplog.records
+        if r.name == "bedrock_models" and r.levelno == logging.DEBUG
+        and "\nTraceback (most recent call last):" in r.getMessage()
+    ]
+    assert bool(traced) is sends_to_the_log
 
 
 def test_a_refusal_that_names_no_action_names_every_one_speech_to_text_needs():
