@@ -8,6 +8,16 @@ Measured before this was written:
   stripped them.
 * With it on, the "isolated" config was seeded from the real ``~/.claude/settings.json``, and a
   ``CLAUDE_CONFIG_DIR`` the operator had set became the isolated root and was rewritten.
+* With it on, the session still loaded the settings of the folder Claude works in.
+  ``CLAUDE_CONFIG_DIR`` moves only the user scope; the ACP adapter asks the Agent SDK for the
+  ``user``, ``project`` and ``local`` setting sources unless the session's
+  ``_meta.claudeCode.options.settingSources`` says otherwise. A repository's
+  ``.claude/settings.json`` and ``.claude/settings.local.json`` and its ``.mcp.json`` therefore
+  applied: hooks and the ``env`` block are used, and ``.mcp.json`` servers connected without
+  asking, in an SDK session in a folder nobody trusted, as Claude Code's permissions
+  documentation says ("What runs before you trust a folder"), as did an untracked local file's
+  allow rules. Claude Code documents the answer for a repository you did not write: load the
+  user source only.
 """
 
 from __future__ import annotations
@@ -23,7 +33,17 @@ import provider
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the repo root: apps_testkit
 
-from apps_testkit.acp_env import PLANTED_SECRETS, handed_env, stub_command  # noqa: E402
+from apps_testkit.acp_env import (  # noqa: E402
+    PLANTED_SECRETS,
+    acp_stub_command,
+    handed_env,
+    opened_sessions,
+    stub_command,
+)
+
+#: What an isolated session asks the adapter for: Claude Code's ``user`` setting source alone,
+#: which ``CLAUDE_CONFIG_DIR`` points at the isolated config. Nothing from the folder it works in.
+ISOLATED_SESSION = {"claudeCode": {"options": {"settingSources": ["user"]}}}
 
 PERMISSIVE = {
     "permissions": {"allow": ["Bash(*)"], "defaultMode": "acceptEdits", "deny": ["Bash(rm:*)"]},
@@ -128,12 +148,60 @@ def test_the_registered_runtime_carries_the_isolated_config_and_its_sign_in(oper
     assert "CLAUDE_CONFIG_DIR" not in entry.options.get("env", {})
 
 
+def test_an_isolated_session_loads_none_of_the_folder_s_settings(operator, monkeypatch):
+    """🔴 Red before: the entry carried no session options, so every session loaded the
+    ``project`` and ``local`` setting sources of the folder Claude was pointed at."""
+    from personalclaw.llm.registry import get_default_registry
+
+    monkeypatch.setattr(provider, "resolve_command", lambda provision=False: ["/opt/bin/claude-agent-acp"])
+    monkeypatch.setattr(provider, "_resolve_claude_exec", lambda: "/opt/bin/claude")
+    provider.create_provider({})
+    assert get_default_registry().get_entry("acp:claude-code").options["session_meta"] == ISOLATED_SESSION
+
+    # Off, Claude loads what it loads anywhere: your own ~/.claude and the folder's settings.
+    provider.create_provider({"isolated_config": False})
+    assert "session_meta" not in get_default_registry().get_entry("acp:claude-code").options
+
+
+def test_the_session_claude_is_asked_for_carries_the_isolation(operator, monkeypatch, tmp_path):
+    """🔴 Red before: the session/new a chat sends asked for no setting sources, so the adapter
+    loaded all three. A stub ACP agent in the adapter's place, started from the entry the app
+    registers by core's runtime, records the session it is asked for and what it was handed."""
+    command, record = acp_stub_command(tmp_path)
+    monkeypatch.setattr(provider, "resolve_command", lambda provision=False: command)
+    monkeypatch.setattr(provider, "_resolve_claude_exec", lambda: "/opt/bin/claude")
+    provider.create_provider({})
+
+    handed, sessions, modes = opened_sessions("acp:claude-code", record)
+
+    assert sessions, "the stub was never asked for a session"
+    assert [s.get("_meta") for s in sessions] == [ISOLATED_SESSION] * len(sessions)
+    assert handed["CLAUDE_CONFIG_DIR"] == str(_home() / "cc-config"), "the user source is its own"
+    # The adapter starts a session in the mode the settings it reads name (its own resolution
+    # reads every source, whatever the session asks the CLI for), and the stub starts this one
+    # approving edits itself. Each tool asks here only because the host then sets the mode that
+    # asks, on every session, before any turn.
+    assert modes == ["default"] * len(sessions)
+
+
 def test_the_app_text_says_what_the_code_does():
     manifest = json.loads((Path(provider.__file__).parent / "app.json").read_text())
     setting = manifest["provider"]["settingsSchema"]["properties"]["isolated_config"]
+    help_text = setting["x-meta"]["help"]
+    readme = (Path(provider.__file__).parent / "README.md").read_text()
     assert setting["default"] is True
     assert "starts empty" in manifest["description"]
-    assert "starts" in setting["x-meta"]["help"] and "empty" in setting["x-meta"]["help"]
+    assert "starts" in help_text and "empty" in help_text
+    # Isolated: nothing from the folder it works in either, CLAUDE.md included. Off: the folder's
+    # own settings apply too, and say what they can do.
+    for text in (manifest["description"], help_text):
+        assert "folder it works in" in text
+        assert "CLAUDE.md" in text
+    on, off = help_text.split("Off:")
+    assert "nothing from the folder it works in" in on
+    assert "the folder's own Claude settings" in off and "hooks and MCP servers" in off
+    assert "nothing from the folder it works in" in readme
+    assert "`--setting-sources user`" in readme or "`settingSources`" in readme
 
 
 #: What an owner running Claude Code on Amazon Bedrock has in the gateway's environment.
@@ -184,9 +252,10 @@ def test_install_consent_names_what_it_starts_installs_and_writes():
     assert manifest.validate() == []
     assert [p.program for p in manifest.launches] == provider._CLAUDE_BIN_NAMES
     assert manifest.dependencies.npmPackages == [provider._ACP_NPM_PKG]
-    # Your own Claude sign-in, settings and rules come along only with isolation off.
+    # Your own Claude sign-in, settings and rules, and the settings of the folder it works in,
+    # come along only with isolation off.
     [claude] = manifest.launches
-    assert claude.inherits == ["sign-in", "settings", "auto-approve-rules"]
+    assert claude.inherits == ["sign-in", "settings", "auto-approve-rules", "folder-settings"]
     assert claude.inheritsWhile is not None
     assert (claude.inheritsWhile.setting, claude.inheritsWhile.value) == (
         provider._ISOLATED_SETTING,

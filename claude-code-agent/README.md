@@ -1,6 +1,6 @@
 # Claude Code
 
-Run Anthropic's Claude Code as an agent (acp:claude-code) via the Zed ACP adapter. It runs with a Claude config of its own that starts empty, so none of your auto-approve rules come along and every tool asks through PersonalClaw's approval gate. Sign in to Claude once for it; PersonalClaw stores no key. Enabling it installs its ACP adapter (@agentclientprotocol/claude-agent-acp) from npm into your PersonalClaw home when no copy is installed; a failed install says why on its card, with Retry.
+Run Anthropic's Claude Code as an agent (acp:claude-code) via the Zed ACP adapter. It runs with a Claude config of its own that starts empty, and loads nothing from the folder it works in (no .claude settings, .mcp.json servers, CLAUDE.md or skills), so no auto-approve rule of yours or of a repository's comes along: apart from the file reads and read-only commands Claude Code allows itself, every tool asks through PersonalClaw's approval gate. Sign in to Claude once for it; PersonalClaw stores no key. Enabling it installs its ACP adapter (@agentclientprotocol/claude-agent-acp) from npm into your PersonalClaw home when no copy is installed; a failed install says why on its card, with Retry.
 
 **Claude Code** is an **ACP agent bundle** — it registers an `acp:claude-code` agent via `personalclaw.sdk.acp` and appears in the Agents list.
 
@@ -29,7 +29,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 | Key | Label | Notes |
 |---|---|---|
-| `isolated_config` | Isolated Claude settings | On by default. Claude runs with `CLAUDE_CONFIG_DIR` set to `<PersonalClaw home>/cc-config`, which starts with an empty `settings.json`: nothing is copied from your `~/.claude`, or from a `CLAUDE_CONFIG_DIR` you set. Off: Claude uses your own `~/.claude`, auto-approve rules included. |
+| `isolated_config` | Isolated Claude settings | On by default. Claude runs with `CLAUDE_CONFIG_DIR` set to `<PersonalClaw home>/cc-config`, which starts with an empty `settings.json`: nothing is copied from your `~/.claude`, or from a `CLAUDE_CONFIG_DIR` you set. And each session loads nothing from the folder it works in: no `.claude/settings.json`, `.claude/settings.local.json`, `.mcp.json`, `CLAUDE.md` or skills. Off: Claude uses your own `~/.claude`, auto-approve rules included, and the folder's own Claude settings. |
 | `model` | Default Model | Optional. Leave empty to use the Claude CLI's own current default (recommended). The Claude adapter advertises the live model set for selection; set this only to pin a specific model. |
 | `acp_bin` | ACP Adapter Path | Optional absolute path to the claude-agent-acp adapter. Empty finds it: PATH → node-manager dirs → the copy PersonalClaw installed in its home when you enabled the app → npx @agentclientprotocol/claude-agent-acp. Equivalent to the CLAUDE_CODE_ACP_BIN env var. |
 
@@ -37,7 +37,19 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 Claude Code signs itself in; PersonalClaw stores no API key. With isolated settings on (the default) that sign-in belongs to the isolated config, so sign in once for it: Settings → Providers → Claude Code → **Sign in** runs `claude /login` with `CLAUDE_CONFIG_DIR` pointed at it. Your own `~/.claude` login is not used, and is not touched.
 
-Why: Claude's own permission engine auto-approves whatever your `permissions.allow` rules and `defaultMode` say. An empty config has none of them, so every tool call comes back to PersonalClaw's approval gate.
+Why: Claude's own permission engine auto-approves whatever the `permissions.allow` rules it loads say, and it loads them from two kinds of place: your own config, and the folder it works in. A repository's `.claude/settings.json` and `.claude/settings.local.json` can add rules of their own, hooks (commands Claude Code runs at its events) and an `env` block, and its `.mcp.json` names MCP servers to start. Claude Code shows no trust prompt for a folder when it runs under the Agent SDK, as it does here, so none of that waits for you to accept it (Claude Code's permissions documentation, "What runs before you trust a folder").
+
+So isolation has two halves. `CLAUDE_CONFIG_DIR` points your own scope at the empty config. And every session asks the ACP adapter for Claude Code's `user` setting source alone (`_meta.claudeCode.options.settingSources`, the Agent SDK's `settingSources`, which is `--setting-sources user` on Claude Code's command line): the folder's settings files, `.mcp.json` servers, `CLAUDE.md` and skills are not loaded, which is what Claude Code's documentation says to do for a repository you did not write. With isolation on, Claude therefore loads nothing from the folder it works in, and apart from the file reads and read-only commands Claude Code allows itself, every tool call comes back to PersonalClaw's approval gate. What still applies is your organization's managed Claude Code settings, if this machine has any, and whatever you add to `cc-config` yourself.
+
+One setting is read apart from the rest. The ACP adapter starts each session in the permission
+mode the settings it can see name (`permissions.defaultMode`, such as `acceptEdits`, which
+approves file edits without asking), and it reads every source for that, the folder's included,
+whatever a session asks Claude Code to load. PersonalClaw sets each session to the mode that
+asks before its first turn, with isolation on or off, so a `defaultMode` of yours or of a
+repository's does not carry into a chat. The one exception is an unattended run that your
+approval settings let approve its own calls.
+
+Claude can still open the folder's files, a `CLAUDE.md` among them, as it opens any other: what isolation takes away is the loading of one at the start of every session. To have the folder's `CLAUDE.md`, skills and settings load as they do in your terminal, turn **Isolated Claude settings** off.
 
 ## Environment
 
@@ -69,9 +81,12 @@ Install consent names each of these before anything installs (the manifest's `la
 
 - It starts the `claude` program installed on this machine, as you and outside PersonalClaw.
   While **Isolated Claude settings** is off, Claude runs with your own Claude sign-in, settings
-  and auto-approve rules, and what those rules allow it does without asking here first.
+  and auto-approve rules, and with the Claude settings of the folder it works in, which can add
+  rules of their own and commands for it to run; what those rules allow it does without asking
+  here first.
 - While that setting is on (the default), Claude runs with `cc-config` in your PersonalClaw
-  folder, a config of its own that starts empty and keeps the sign-in you make for this app.
+  folder, a config of its own that starts empty and keeps the sign-in you make for this app,
+  and loads nothing from the folder it works in.
 - Switching it on installs the npm package `@agentclientprotocol/claude-agent-acp` into your
   PersonalClaw folder (`acp-adapters`) when no copy is on this machine.
 

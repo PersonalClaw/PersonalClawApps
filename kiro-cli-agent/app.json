@@ -1,6 +1,6 @@
 {
   "name": "kiro-cli-agent",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "displayName": "Kiro CLI",
   "description": "Run the kiro-cli agent (acp:kiro-cli) over ACP. This provider activates only when the `kiro-cli` binary is present on the machine, and is unavailable otherwise.",
   "icon": "SquareTerminal",
@@ -22,7 +22,8 @@
       "inherits": [
         "sign-in",
         "settings",
-        "auto-approve-rules"
+        "auto-approve-rules",
+        "folder-settings"
       ]
     }
   ],

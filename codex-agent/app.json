@@ -1,6 +1,6 @@
 {
   "name": "codex-agent",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "displayName": "OpenAI Codex",
   "description": "Run the OpenAI Codex CLI as an agent (acp:codex) via the Zed ACP adapter. Codex manages its own configuration and authentication; every tool call it asks about routes through PersonalClaw's host approval gate. Enabling it installs its ACP adapter (@agentclientprotocol/codex-acp) from npm into your PersonalClaw home when no copy is installed; a failed install says why on its card, with Retry.",
   "icon": "SquareTerminal",
@@ -21,7 +21,8 @@
       "inherits": [
         "sign-in",
         "settings",
-        "auto-approve-rules"
+        "auto-approve-rules",
+        "folder-settings"
       ]
     }
   ],

@@ -71,8 +71,10 @@ like any other app. (Or [install it from a shell](../docs/third-party-install.md
 
 Install consent names this before anything installs (the manifest's `launches`): it starts the
 `gemini` program installed on this machine in its ACP mode, as you and outside PersonalClaw,
-with your own Gemini sign-in, settings and auto-approve rules: what those rules allow, it does
-without asking here first. There is no adapter to install.
+with your own Gemini sign-in, settings and auto-approve rules, and with the Gemini settings of
+the folder it works in: a project's own `.gemini/settings.json` overrides yours, and can add MCP
+servers, hooks and tools that skip confirmation. What those rules allow, it does without asking
+here first. There is no adapter to install.
 
 ## Capability boundary
 

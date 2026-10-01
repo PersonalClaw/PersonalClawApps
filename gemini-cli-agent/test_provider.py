@@ -294,5 +294,10 @@ def test_install_consent_names_the_program_it_starts():
     )
     assert manifest.validate() == []
     assert [p.program for p in manifest.launches] == gemini_cli._BIN_NAMES
-    assert manifest.launches[0].inherits == ["sign-in", "settings", "auto-approve-rules"]
+    assert manifest.launches[0].inherits == [
+        "sign-in",
+        "settings",
+        "auto-approve-rules",
+        "folder-settings",
+    ]
     assert manifest.dependencies.npmPackages == [] and manifest.writes == []

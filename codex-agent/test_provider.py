@@ -82,5 +82,10 @@ def test_install_consent_names_what_it_starts_and_installs():
     assert manifest.validate() == []
     assert [p.program for p in manifest.launches] == provider._CODEX_BIN_NAMES
     assert manifest.dependencies.npmPackages == [provider._ACP_NPM_PKG]
-    assert manifest.launches[0].inherits == ["sign-in", "settings", "auto-approve-rules"]
+    assert manifest.launches[0].inherits == [
+        "sign-in",
+        "settings",
+        "auto-approve-rules",
+        "folder-settings",
+    ]
     assert manifest.writes == []

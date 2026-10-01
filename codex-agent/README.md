@@ -52,8 +52,10 @@ Install consent names each of these before anything installs (the manifest's `la
 `dependencies.npmPackages`):
 
 - It starts the `codex` program installed on this machine, as you and outside PersonalClaw,
-  with your own Codex sign-in, settings and auto-approve rules: what those rules allow, it does
-  without asking here first.
+  with your own Codex sign-in, settings and auto-approve rules, and with the Codex settings of
+  the folder it works in: in a project you trust in Codex, Codex loads that project's own
+  `.codex/` config, hooks and rules, which can add rules of their own and commands for it to run.
+  What those rules allow, it does without asking here first.
 - Switching it on installs the npm package `@agentclientprotocol/codex-acp` into your
   PersonalClaw folder (`acp-adapters`) when no copy is on this machine.
 

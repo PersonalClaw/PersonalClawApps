@@ -453,7 +453,7 @@ example.
 "launches": [{
   "program": "claude",                                  // its name as found on this machine (80)
   "why": "Claude Code does the work of each chat ...",  // what the app uses it for (300)
-  "inherits": ["sign-in", "settings", "auto-approve-rules"],
+  "inherits": ["sign-in", "settings", "auto-approve-rules", "folder-settings"],
   "inheritsWhile": {"setting": "isolated_config", "value": false} // optional
 }],
 "writes": [{
@@ -469,16 +469,25 @@ Install consent lists each of these under what the app runs, and an update that 
 widens what a program inherits, asks for consent again:
 
 - **`launches`** is each program on the machine your app starts, outside PersonalClaw: an agent
-  CLI, or a tool your code runs. `inherits` says what of the owner's own it runs with, from three
-  words: `sign-in` (the account it is signed in to), `settings` (its own configuration folder)
-  and `auto-approve-rules` (rules there that let it act without asking; consent says that what
-  they allow, it does without asking first). When one of your provider's boolean settings
-  decides that, name it in `inheritsWhile`: consent then says "While Isolated Claude settings is
-  off, …" in the setting's own label, and where it starts.
+  CLI, or a tool your code runs. `inherits` says what it runs with, from four words. Three are
+  the owner's own: `sign-in` (the account it is signed in to), `settings` (its own configuration
+  folder) and `auto-approve-rules` (rules there that let it act without asking; consent says that
+  what they allow, it does without asking first). The fourth, `folder-settings`, is its settings
+  in the folder it works in, such as a repository's own, which can add rules of that kind and
+  commands for it to run; consent names them apart, since whoever wrote the folder wrote them.
+  Declare it for an agent CLI that reads a project's own config. When one of your provider's boolean
+  settings decides that, name it in `inheritsWhile`: consent then says "While Isolated Claude
+  settings is off, …" in the setting's own label, and where it starts.
 - **`dependencies.npmPackages`** is each npm package core may install for the app into
   `<home>/acp-adapters` when it is installed or switched on (`provision_acp_adapter`), or fetch
   with `npx` until it is. Names only, no versions.
 - **`writes`** is each place outside your app's folder its code writes.
+
+An agent app that keeps its CLI's sessions to a config of their own passes the CLI's
+per-session options with `register_acp_cli_entry(session_meta={...})`: a JSON object core adds as
+the `_meta` of every `session/new` and `session/load` it sends from the app's entry.
+`claude-code-agent` asks for Claude Code's `user` setting source alone while Isolated Claude
+settings is on, so a session loads nothing from the folder it works in.
 
 Core holds what it does for your app to this list. `provision_acp_adapter` installs no package
 the manifest does not list, and `register_acp_cli_entry` refuses a CLI from an app that lists no

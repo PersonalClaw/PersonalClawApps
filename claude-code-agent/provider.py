@@ -16,13 +16,17 @@ This module owns everything Claude-specific so the core ACP layer never names Cl
   ``set_mode``). Selected EXPLICITLY via ``options["dialect"]`` — never inferred
   from the command basename (an ``npx`` launch would otherwise yield
   ``acp:npx``).
-* **Config isolation** (the E12 §6 security control, ON unless the
-  ``isolated_config`` setting turns it off) — points ``CLAUDE_CONFIG_DIR`` at
-  ``<PersonalClaw home>/cc-config``, which starts EMPTY: nothing is copied from
-  the operator's ``~/.claude`` or from a ``CLAUDE_CONFIG_DIR`` they set, so no
-  inherited ``permissions.allow``/``ask``/``defaultMode`` can auto-approve a tool
-  and every Claude tool routes back through the host approval gate. Claude signs
-  in once for that config (the Sign-in command targets it).
+* **Config isolation** (the security control, ON unless the ``isolated_config`` setting turns
+  it off) — two halves, because Claude Code reads settings from two kinds of place. Its user
+  scope: ``CLAUDE_CONFIG_DIR`` points at ``<PersonalClaw home>/cc-config``, which starts EMPTY:
+  nothing is copied from the operator's ``~/.claude`` or from a ``CLAUDE_CONFIG_DIR`` they set.
+  And the folder it works in: each session asks the adapter for the ``user`` setting source
+  only (:data:`_ISOLATED_SESSION`), so a repository's ``.claude/settings.json``,
+  ``.claude/settings.local.json``, ``.mcp.json``, ``CLAUDE.md`` and skills are not loaded.
+  So no ``permissions.allow`` rule, hook or MCP server of the operator's or of a repository's
+  can act without asking: apart from the file reads and read-only commands Claude Code allows
+  itself, every Claude tool routes back through the host approval gate. Claude signs in once
+  for that config (the Sign-in command targets it).
 * **Model catalogue** — a small curated Claude list, Opus 4.8 default.
 """
 
@@ -92,7 +96,7 @@ PROVIDER_ENV: tuple[str, ...] = (
 )
 
 
-# ── config isolation (E12 §6 — Claude-only security hardening) ──────────────
+# ── config isolation (Claude-only security control) ──────────────────────────
 #
 # The spawned Claude gets a config root of its own that starts EMPTY. It used to be seeded from
 # the operator's real ``~/.claude/settings.json`` with the auto-approve keys stripped, and only
@@ -102,6 +106,15 @@ PROVIDER_ENV: tuple[str, ...] = (
 
 #: The setting that turns isolation off (``settingsSchema.isolated_config``).
 _ISOLATED_SETTING = "isolated_config"
+
+#: What every isolated session asks the ACP adapter for (``session/new`` and ``session/load``
+#: ``_meta``): the Agent SDK's ``settingSources`` with the ``user`` source alone, which
+#: ``CLAUDE_CONFIG_DIR`` points at the isolated config. Claude Code's own default, and the
+#: adapter's, is ``user``, ``project`` and ``local``: the settings files, ``.mcp.json`` servers,
+#: ``CLAUDE.md`` and skills of the folder it works in. In an SDK session no trust dialog is shown,
+#: so a repository's hooks, ``env`` block and ``.mcp.json`` servers apply as they are, and Claude
+#: Code's documentation names this as what to pass for a repository you did not write.
+_ISOLATED_SESSION: dict = {"claudeCode": {"options": {"settingSources": ["user"]}}}
 
 
 def _claude_config_root() -> Path:
@@ -229,7 +242,8 @@ def create_provider(config: dict | None = None):
     Invoked by the extension system's ``agent``-type handler whenever the app loads — as it is
     installed or enabled, and at each gateway start — with the bundle's settings config.
     Resolves the adapter argv + Claude binary, applies
-    config isolation (``isolated_config``, on unless set off), and publishes the
+    config isolation (``isolated_config``, on unless set off: the isolated config dir and the
+    session's setting sources), and publishes the
     ``acp_agent`` registry entry. Returns
     ``None`` (agents are config/registry-based — same contract as the
     ``native-agents`` bundle); registration is the side effect.
@@ -250,6 +264,9 @@ def create_provider(config: dict | None = None):
     command = resolve_command(provision=True)
     isolated = _isolated(config)
     env = _build_env(isolated=isolated) if command else {}
+    # Off, a session loads what Claude Code loads anywhere (the adapter's default sources): your
+    # own ~/.claude, and the settings of the folder it works in, which install consent names.
+    session_meta = _ISOLATED_SESSION if isolated else None
 
     register_acp_cli_entry(
         cli=CLI,
@@ -258,6 +275,7 @@ def create_provider(config: dict | None = None):
         model=model,
         env=env,
         env_passthrough=list(PROVIDER_ENV),
+        session_meta=session_meta,
         extension=EXTENSION,
         login_command=login_command(isolated=isolated),
         # claude-agent-acp delegates the model turn to the separate Claude Code

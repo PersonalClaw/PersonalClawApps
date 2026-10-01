@@ -42,8 +42,11 @@ variable, add its name under Settings → Security → Child environment passthr
 
 Install consent names this before anything installs (the manifest's `launches`): it starts the
 `kiro-cli` program installed on this machine as `kiro-cli acp`, as you and outside PersonalClaw,
-with your own kiro-cli sign-in, settings and auto-approve rules (its agents' allowed tools): what
-those rules allow, it does without asking here first. There is no adapter to install.
+with your own kiro-cli sign-in, settings and auto-approve rules (its agents' allowed tools), and
+with the kiro-cli settings of the folder it works in: a workspace's own `.kiro/agents` and
+`.kiro/settings/mcp.json`, whose MCP servers merge with yours, the workspace's taking
+precedence, and can auto-approve their tools. What those rules allow, it does without asking
+here first. There is no adapter to install.
 
 ## Capability boundary
 
