@@ -37,7 +37,13 @@ from typing import Any, Callable
 from personalclaw.sdk.channel import approval_brief_for, is_tracked_channel, sel
 
 from telegram_runtime.api import TelegramAPI, TelegramAPIError
-from telegram_runtime.format import TELEGRAM_MAX_TEXT, render_parts, to_markdown_v2, utf16_len
+from telegram_runtime.format import (
+    TELEGRAM_MAX_TEXT,
+    escape_markdown_v2,
+    render_parts,
+    to_markdown_v2,
+    utf16_len,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +167,8 @@ class _StreamState:
     """Bookkeeping for one edit-streamed message: its placeholder, and one line per task.
 
     A task's line is replaced in place as its status changes, so a finished task does not
-    leave its "in progress" line behind."""
+    leave its "in progress" line behind. The text is plain: a title is a tool's name or the
+    purpose given for the call, and an underscore, star or backtick in it is part of it."""
 
     __slots__ = ("chat_id", "message_id", "last_edit", "last_text", "head", "tasks")
 
@@ -182,7 +189,7 @@ class _StreamState:
         while True:
             body = (["…"] if dropped else []) + lines
             text = "\n".join(body if final else [self.head, *body]).strip()
-            if not lines or utf16_len(to_markdown_v2(text)) <= TELEGRAM_MAX_TEXT:
+            if not lines or utf16_len(escape_markdown_v2(text)) <= TELEGRAM_MAX_TEXT:
                 return text
             lines, dropped = lines[1:], True
 
@@ -327,7 +334,9 @@ class TelegramDelivery:
     # ── edit-based streaming ──
     async def start_stream(self, channel: str, thread_ts: str = "", initial_text: str = "") -> str:
         head = initial_text or "…"
-        msg = await self._api.send_message(channel, to_markdown_v2(head), parse_mode="MarkdownV2")
+        msg = await self._api.send_message(
+            channel, escape_markdown_v2(head), parse_mode="MarkdownV2"
+        )
         mid = int(msg.get("message_id", 0) or 0)
         if not mid:
             return ""
@@ -389,7 +398,7 @@ class TelegramDelivery:
     async def _edit(self, st: _StreamState, text: str, now: float) -> None:
         try:
             await self._api.edit_message_text(
-                st.chat_id, st.message_id, to_markdown_v2(text), parse_mode="MarkdownV2",
+                st.chat_id, st.message_id, escape_markdown_v2(text), parse_mode="MarkdownV2",
             )
         except TelegramAPIError as exc:
             if not _not_modified(exc):

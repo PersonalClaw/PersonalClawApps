@@ -137,8 +137,14 @@ def to_slack_mrkdwn(text: str, *, keep_tables: bool = False) -> str:
 
 # ── Inline conversions (outside code blocks) ──
 
-# Markdown link [text](url) → Slack <url|text>
-_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+#: What a line is read as, left to right: a code span (CommonMark: a run of backticks closed by
+#: a run of exactly as many), which is sent as written, or a markdown link [text](url), which
+#: becomes Slack's <url|text>. Whichever starts first wins, so a link written inside code stays
+#: code, and a code span in a link's text stays in the link.
+_INLINE_RE = re.compile(
+    r"(?P<code>(?<!`)(?P<ticks>`+)(?!`).+?(?<!`)(?P=ticks)(?!`))"
+    r"|\[(?P<label>[^\]]+)\]\((?P<url>[^)]+)\)"
+)
 # Headings: # text → *text*
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")
 # Horizontal rule: --- or *** or ___ (3+ chars)
@@ -148,7 +154,8 @@ _STRIKE_RE = re.compile(r"~~(.+?)~~")
 
 
 def _convert_inline(line: str) -> str:
-    """Convert a single non-code line from markdown to Slack mrkdwn."""
+    """Convert a single non-code line from markdown to Slack mrkdwn. A code span in it is sent
+    as written."""
     # Headings → bold
     m = _HEADING_RE.match(line)
     if m:
@@ -158,16 +165,23 @@ def _convert_inline(line: str) -> str:
     if _HR_RE.match(line):
         return "─" * 30
 
-    # **bold** → *bold*
-    line = line.replace("**", "*")
+    out: list[str] = []
+    pos = 0
+    for m in _INLINE_RE.finditer(line):
+        out.append(_convert_emphasis(line[pos:m.start()]))
+        if m.group("code"):
+            out.append(m.group("code"))
+        else:
+            # [text](url) → <url|text>
+            out.append(f"<{m.group('url')}|{_convert_emphasis(m.group('label'))}>")
+        pos = m.end()
+    out.append(_convert_emphasis(line[pos:]))
+    return "".join(out)
 
-    # ~~strike~~ → ~strike~
-    line = _STRIKE_RE.sub(r"~\1~", line)
 
-    # [text](url) → <url|text>
-    line = _LINK_RE.sub(r"<\2|\1>", line)
-
-    return line
+def _convert_emphasis(text: str) -> str:
+    """**bold** → *bold*, ~~strike~~ → ~strike~, in text outside code."""
+    return _STRIKE_RE.sub(r"~\1~", text.replace("**", "*"))
 
 
 # Markdown table: line starting with | and containing at least one more |

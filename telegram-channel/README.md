@@ -37,10 +37,13 @@ ships as a self-contained directory:
     Approval wait*, up to a week); the prompt keeps no clock of its own.
     Only the owner's press answers an approval: in a tracked group every member sees
     the buttons, and anyone else's press is refused and logged.
-  - `format.py` — the MarkdownV2 escaper (the classic Telegram footgun, contained), and
+  - `format.py` — the MarkdownV2 renderer (the classic Telegram footgun, contained), and
     the splitter that cuts a long reply into messages BEFORE rendering them, so every
     part is MarkdownV2 Telegram accepts and a code block stays code on both sides of a
-    cut. A part Telegram still refuses goes out as plain text rather than not at all.
+    cut. A reply is read as CommonMark reads it: code spans and blocks arrive exactly as
+    written, wherever they sit, and an underscore inside a word (`list_allowed_directories`)
+    is a character, not italics. A progress line's tool title is shown as written. A part
+    Telegram still refuses goes out as plain text rather than not at all.
   - `settings.py` — the app's own DM-activation config + credential key.
 - `cli_setup.py` / `cli_doctor.py` — the app's `personalclaw setup` / `doctor` hooks.
 - `test_provider.py` + `tests/` — the app's own tests.
