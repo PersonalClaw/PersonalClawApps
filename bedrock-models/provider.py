@@ -26,8 +26,8 @@ import json
 import logging
 import os
 import re
-from collections.abc import AsyncIterator
-from typing import Any, NoReturn
+from collections.abc import AsyncIterator, Callable
+from typing import Any, NamedTuple, NoReturn
 from urllib.parse import urlsplit
 
 from personalclaw.sdk.model import (
@@ -1438,6 +1438,20 @@ def _discovery_failure(error: Exception, *, region: str, profile: str | None) ->
     return ModelDiscoveryError(sentence_with_detail(sentence, error))
 
 
+def _distinct_names(rows: list[dict[str, Any]]) -> dict[str, str]:
+    """Each listed model's name by id, told apart from every other's: AWS gives two models names
+    that differ in case alone ("Titan Text Embeddings v2" and "Titan Text Embeddings V2"), so a
+    name another model shares, case aside, is shown with its id after it."""
+    named = {r["id"]: str(r.get("name") or r["id"]) for r in rows}
+    counts: dict[str, int] = {}
+    for name in named.values():
+        counts[name.casefold()] = counts.get(name.casefold(), 0) + 1
+    return {
+        model_id: f"{name} · {model_id}" if counts[name.casefold()] > 1 else name
+        for model_id, name in named.items()
+    }
+
+
 class BedrockCatalog(ModelCatalog):
     """Discovers Bedrock models from the AWS control plane (boto3 chain auth), cached for
     ``_BEDROCK_CACHE_TTL`` seconds. Config-only: reads region/profile from the entry options.
@@ -1471,9 +1485,18 @@ class BedrockCatalog(ModelCatalog):
             rows.sort(key=lambda m: m.get("name", "").lower())
             if rows:
                 _BEDROCK_CACHE[key] = (time.monotonic(), rows)
+        offered = []
+        for r in rows:
+            capabilities = list(r.get("capabilities", ["chat"]))
+            # Embedding is offered only on a model this app knows the request of.
+            if "embedding" in capabilities and _embedding_model(r["id"]) is None:
+                capabilities.remove("embedding")
+            if capabilities:
+                offered.append({**r, "capabilities": capabilities})
+        names = _distinct_names(offered)
         models = [
-            ModelInfo(id=r["id"], name=r.get("name", r["id"]), capabilities=list(r.get("capabilities", ["chat"])))
-            for r in rows
+            ModelInfo(id=r["id"], name=names[r["id"]], capabilities=r["capabilities"])
+            for r in offered
         ]
         if models:
             # Amazon Transcribe, which the speech-to-text adapter runs, is no foundation model,
@@ -1748,11 +1771,134 @@ def _warn_once(what: str, sentence: str, error: BaseException) -> None:
     logger.log(level, "%s failed: %s\n%s", what, sentence, trace)
 
 
+# ── Bedrock embedding models: each one's own request and answer ─────────────────────────
+#
+# Every embedding model on Bedrock takes an ``InvokeModel`` body of its own and answers in a shape
+# of its own, as the Amazon Bedrock User Guide documents them ("Inference request parameters and
+# response fields for foundation models": Amazon Titan Embeddings G1 - Text, which also covers
+# Titan Text Embeddings V2; Amazon Titan Multimodal Embeddings G1; Cohere Embed v3 and v4) and the
+# Amazon Nova User Guide ("Complete embeddings request and response schema"). One body for every id
+# that was not Cohere's (V2's ``dimensions`` and ``normalize``, which only V2 takes) and one answer
+# for every Cohere id (v4's) failed four of the six models a region listed on their first text.
+#
+# A model is called only the way its documentation says, so only those models are offered for
+# Embedding (``BedrockCatalog.list_models``), and a binding to any other is refused before anything
+# is sent. Titan Text Embeddings ``amazon.titan-embed-g1-text-02`` is listed by Bedrock but has no
+# documented request body.
+
+#: The width every model that lets the caller choose one is asked for: Titan Text Embeddings V2's
+#: own default, and one each of the others takes.
+_EMBEDDING_WIDTH = 1024
+
+
+def _titan_text_g1_body(text: str) -> dict[str, Any]:
+    """Titan Embeddings G1 - Text: ``inputText`` is its only field."""
+    return {"inputText": text}
+
+
+def _titan_text_v2_body(text: str) -> dict[str, Any]:
+    return {"inputText": text, "dimensions": _EMBEDDING_WIDTH, "normalize": True}
+
+
+def _titan_multimodal_body(text: str) -> dict[str, Any]:
+    return {"inputText": text, "embeddingConfig": {"outputEmbeddingLength": _EMBEDDING_WIDTH}}
+
+
+def _cohere_body(text: str) -> dict[str, Any]:
+    """Cohere Embed v3 and v4 take the same text request. Every text is embedded as a document:
+    the embedding contract has no query/document distinction to pass on."""
+    return {"texts": [text], "input_type": "search_document"}
+
+
+def _nova_body(text: str) -> dict[str, Any]:
+    return {
+        "taskType": "SINGLE_EMBEDDING",
+        "singleEmbeddingParams": {
+            "embeddingPurpose": "GENERIC_INDEX",
+            "embeddingDimension": _EMBEDDING_WIDTH,
+            "text": {"truncationMode": "END", "value": text},
+        },
+    }
+
+
+class _NoEmbedding(Exception):
+    """A model answered, and its answer holds no embedding."""
+
+
+def _titan_vector(answer: dict[str, Any]) -> Any:
+    """Every Titan embedding model answers ``embedding``; the multimodal one says in ``message``
+    why it could not."""
+    if answer.get("message") and not answer.get("embedding"):
+        raise _NoEmbedding(str(answer["message"]))
+    return answer.get("embedding")
+
+
+def _cohere_vector(answer: dict[str, Any]) -> Any:
+    """Cohere answers ``embeddings`` as a list of vectors (``embeddings_floats``) or, by type, as
+    ``{"float": [...]}`` (``embeddings_by_type``)."""
+    embeddings = answer.get("embeddings")
+    if isinstance(embeddings, dict):
+        embeddings = embeddings.get("float")
+    return embeddings[0] if isinstance(embeddings, list) and embeddings else None
+
+
+def _nova_vector(answer: dict[str, Any]) -> Any:
+    embeddings = answer.get("embeddings")
+    first = embeddings[0] if isinstance(embeddings, list) and embeddings else {}
+    return first.get("embedding") if isinstance(first, dict) else None
+
+
+class _EmbeddingModel(NamedTuple):
+    """How one embedding model is called: its request body for a text, where its answer keeps the
+    vector, and, for a model that refuses a longer text outright, the most characters it takes."""
+
+    body: Callable[[str], dict[str, Any]]
+    vector: Callable[[dict[str, Any]], Any]
+    max_chars: int | None = None
+
+
+_COHERE_V3 = _EmbeddingModel(_cohere_body, _cohere_vector, max_chars=2048)
+
+#: Keyed by the model's id without its version (``amazon.titan-embed-text-v2`` for ``…-v2:0``).
+#: Cohere Embed v3 refuses a text over 2,048 characters, and Nova one over 8,192; each cuts a text
+#: past its token limit at the end, so each is sent the first that many characters.
+_EMBEDDING_MODELS: dict[str, _EmbeddingModel] = {
+    "amazon.titan-embed-text-v1": _EmbeddingModel(_titan_text_g1_body, _titan_vector),
+    "amazon.titan-embed-text-v2": _EmbeddingModel(_titan_text_v2_body, _titan_vector),
+    "amazon.titan-embed-image-v1": _EmbeddingModel(_titan_multimodal_body, _titan_vector),
+    "cohere.embed-english-v3": _COHERE_V3,
+    "cohere.embed-multilingual-v3": _COHERE_V3,
+    "cohere.embed-v4": _EmbeddingModel(_cohere_body, _cohere_vector),
+    "amazon.nova-2-multimodal-embeddings-v1": _EmbeddingModel(
+        _nova_body, _nova_vector, max_chars=8192
+    ),
+}
+
+
+def _embedding_model(model_id: str) -> _EmbeddingModel | None:
+    """How ``model_id`` is called, or None for a model this app cannot call. An inference profile
+    (``us.cohere.embed-v4:0``, ``global.…``) is called as the model after its geography."""
+    bare = model_id.split(":", 1)[0]
+    found = _EMBEDDING_MODELS.get(bare)
+    if found is None and "." in bare:
+        found = _EMBEDDING_MODELS.get(bare.split(".", 1)[1])
+    return found
+
+
+def _not_callable(model_id: str) -> str:
+    """What an embedding on a model this app has no request for says."""
+    return (
+        f"Bedrock's {model_id} is not an embedding model this app can call, so nothing was sent. "
+        "Choose one of the embedding models Settings → Models lists for Amazon Bedrock."
+    )
+
+
 # ── Bedrock Embedding Provider ───────────────────────────────────────────────
 
 
 class BedrockEmbeddingProvider(EmbeddingProvider):
-    """Embedding via Bedrock ``invoke_model`` (Titan Embeddings / Cohere Embed).
+    """Embedding via Bedrock ``invoke_model`` (Titan Embeddings, Cohere Embed, Nova Multimodal
+    Embeddings), each model called as ``_EMBEDDING_MODELS`` says.
 
     boto3 is lazily imported inside methods (Property 11). All blocking calls
     run via ``asyncio.to_thread`` so the event loop stays unblocked.
@@ -1802,30 +1948,25 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
         """True if the AWS credential chain resolves (cached, off-loop)."""
         return await _creds_ok(self._region, self._profile)
 
-    def _invoke_embed_sync(self, text: str, model_id: str) -> list[float] | None:
-        """Blocking invoke_model for embedding — run via to_thread."""
-        client = self._get_client()
-
-        # Build request body per model family
-        if model_id.startswith("cohere"):
-            body = json.dumps({"texts": [text], "input_type": "search_document"})
-        else:
-            # Titan Embed
-            body = json.dumps({"inputText": text, "dimensions": 1024, "normalize": True})
-
-        response = client.invoke_model(modelId=model_id, body=body)
-        result = json.loads(response["body"].read())
-
-        if model_id.startswith("cohere"):
-            embeddings = result.get("embeddings", {})
-            # Cohere v4 returns float embeddings under "float" key
-            floats = embeddings.get("float", [])
-            return floats[0] if floats else None
-        else:
-            return result.get("embedding")
+    def _invoke_embed_sync(self, text: str, model_id: str, how: _EmbeddingModel) -> list[float]:
+        """Blocking ``invoke_model`` for one embedding, sent and read as ``how`` says — run via
+        to_thread. Raises :class:`_NoEmbedding` for an answer that holds no vector."""
+        if how.max_chars is not None:
+            text = text[: how.max_chars]
+        response = self._get_client().invoke_model(
+            modelId=model_id,
+            body=json.dumps(how.body(text)),
+            contentType="application/json",
+            accept="application/json",
+        )
+        vector = how.vector(json.loads(response["body"].read()))
+        if not isinstance(vector, list) or not vector:
+            raise _NoEmbedding(f"{model_id} answered with no embedding.")
+        return vector
 
     async def embed(self, text: str, model: str = "") -> list[float] | None:
-        """Embed a single text string with ``model``. ``None`` when it names none, or fails.
+        """Embed a single text string with ``model``. ``None`` when it names none or a model this
+        app cannot call, or fails.
 
         A failure is logged with the sentence that names its fix, and :meth:`unavailable_reason`
         says it: the contract answers a failure with ``None`` and nothing else."""
@@ -1834,8 +1975,14 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
         except ProviderResolutionError as exc:
             logger.warning("Bedrock embedding on %r refused: %s", self._name, exc)
             return None
+        how = _embedding_model(model_id)
+        if how is None:
+            sentence = _not_callable(model_id)
+            self._last_failure = (_time.monotonic(), sentence)
+            _warn_once(f"Bedrock embedding on {self._name!r}", sentence, ValueError(sentence))
+            return None
         try:
-            vector = await asyncio.to_thread(self._invoke_embed_sync, text, model_id)
+            vector = await asyncio.to_thread(self._invoke_embed_sync, text, model_id, how)
         except Exception as exc:  # noqa: BLE001 — said, then answered with the contract's None
             sentence = _media_failure(
                 "embedding", exc, model_id, region=self._region, profile=self._profile
@@ -1843,9 +1990,8 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
             self._last_failure = (_time.monotonic(), sentence)
             _warn_once(f"Bedrock embedding on {self._name!r}", sentence, exc)
             return None
-        if vector:
-            self._last_failure = None
-        return vector or None
+        self._last_failure = None
+        return vector
 
     async def embed_batch(self, texts: list[str], model: str = "") -> list[list[float] | None]:
         """Embed multiple texts (sequential calls — Bedrock has no native batch): one entry per

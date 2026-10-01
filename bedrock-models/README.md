@@ -15,6 +15,8 @@ as a self-contained directory:
   `test_media_says_why.py`, `test_provider.py`, `test_stream_timeout.py` — the app's own tests.
 - `test_wire.py` — proves a call's per-call temperature and output budget reach the request, against
   a recording endpoint.
+- `test_embedding_models.py` — proves every embedding model offered embeds, each with the request and
+  answer AWS documents for it, against a loopback Bedrock that holds each request to its model's schema.
 
 It imports only the PersonalClaw **SDK** (never core internals), so core can evolve
 without breaking it:
@@ -47,8 +49,8 @@ Settings → Models lists the models Bedrock's control plane says the instance's
 each foundation model callable by its own id, and each inference profile (`us.…`, `global.…`).
 Each is offered for what Bedrock's record of the model says it does. A model that reads and writes
 text and streams its answer is a chat model, and an image or audio one too when it reads images or
-speech; a model that writes embeddings is an embedding model. A profile is offered for what the
-model it routes to does. Rerank, image-editing and video-analysis models are not listed, nor is
+speech; a model that writes embeddings is an embedding model when this app knows how to call it
+([Embeddings](#embeddings)). A profile is offered for what the model it routes to does. Rerank, image-editing and video-analysis models are not listed, nor is
 Nova Sonic, which takes only a two-way audio stream: nothing here can use them. Image and video
 generation list their own models (Nova Canvas, Nova Reel).
 
@@ -68,6 +70,26 @@ count, so savings show up in the usual usage view rather than needing a Bedrock-
 Turn it off globally with **Settings → Agent → Prompt Caching**; there is nothing to
 configure per-model. Caching is best-effort on Bedrock's side and needs a prompt long enough
 to be worth caching, so short turns may report no reads at all — that is normal.
+
+## Embeddings
+
+Each embedding model is called its own way, with the request and answer AWS documents for it:
+
+| Model | Id | Width |
+|---|---|---|
+| Titan Embeddings G1 - Text | `amazon.titan-embed-text-v1` | 1,536 |
+| Titan Text Embeddings V2 | `amazon.titan-embed-text-v2:0` | 1,024 |
+| Titan Multimodal Embeddings G1 (text) | `amazon.titan-embed-image-v1` | 1,024 |
+| Cohere Embed English v3, Embed Multilingual v3 | `cohere.embed-english-v3`, `cohere.embed-multilingual-v3` | 1,024 |
+| Cohere Embed v4 | through an inference profile: `us.cohere.embed-v4:0`, `global.cohere.embed-v4:0`, … | 1,536 |
+| Nova Multimodal Embeddings (text) | `amazon.nova-2-multimodal-embeddings-v1:0` | 1,024 |
+
+Settings → Models offers only these for Embedding, those of them the instance's region lists. Any other
+model, such as `amazon.titan-embed-g1-text-02`, which Bedrock lists without a documented request, is
+not offered, and a binding to one is refused with a sentence before anything is sent. Cohere Embed v3
+takes at most 2,048 characters and Nova 8,192, so a longer text is embedded from its start, as each
+model does with a text past its token limit. When AWS names two models alike, each is shown with its
+id after its name.
 
 ## Authentication
 
