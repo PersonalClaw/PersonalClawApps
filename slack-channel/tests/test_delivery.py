@@ -285,10 +285,15 @@ class TestApprovalBriefOnTheNotification:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("outcome,verdict", [("approved", True), ("rejected", False)])
     async def test_no_brief_is_composed_from_the_event(self, outcome, verdict):
-        """No brief stamped: core composes one from the event, so the push still says it."""
+        """No brief stamped: core composes one from the event, so the push still says it. Its
+        words are core's; the push carries them as they are."""
+        from personalclaw.sdk.channel import approval_brief_for
+
+        composed = approval_brief_for(self._event(None))["summary"]
+        assert composed.endswith("Risk: Destructive")
         got, fallback = await self._prompt(None, outcome)
         assert got is verdict
-        assert fallback == "🔐 [cron] Approval needed: bash — Can: runs a command · Risk: Destructive"
+        assert fallback == f"🔐 [cron] Approval needed: bash — {composed}"
 
     @pytest.mark.asyncio
     async def test_the_arguments_and_the_purpose_are_in_the_prompt(self):

@@ -766,11 +766,16 @@ class TestApprovalBriefLine:
         assert self._context_lines(blocks) == []
 
     def test_no_brief_is_composed_by_core_from_the_event(self):
-        """A turn Slack runs itself raises its approval with no brief on it."""
+        """A turn Slack runs itself raises its approval with no brief on it: the line shown is the
+        one core composes from the event, whatever its words are."""
+        from personalclaw.sdk.channel import approval_brief_for
         from slack_runtime.handler import _approval_messages
 
-        (blocks,) = _approval_messages(self._event(None))
-        assert self._context_lines(blocks) == ["Can: runs a command · Risk: Destructive"]
+        event = self._event(None)
+        composed = approval_brief_for(event)["summary"]
+        assert composed.endswith("Risk: Destructive")
+        (blocks,) = _approval_messages(event)
+        assert self._context_lines(blocks) == [composed]
 
     def test_both_decisions_stay_offered_in_dm_and_in_a_group_channel(self):
         """The brief informs the prompt; it must not reshape it. Trust stays DM-only."""
