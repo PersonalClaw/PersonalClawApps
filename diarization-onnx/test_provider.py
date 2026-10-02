@@ -207,86 +207,220 @@ async def test_a_pair_left_in_the_old_cache_outside_the_home_is_not_read(monkeyp
     assert models[0].downloaded is False
 
 
+# ── the engine runs in a process of its own ──────────────────────────────────────────────────
+
+#: A stand-in for sherpa-onnx, written to disk so the provider's child process imports it too.
+#: It notes what it was handed (model paths, the samples, its pid) in a JSON file, and its
+#: ``process()`` holds the interpreter lock for ``_HOLD`` seconds, as the real one does for the
+#: whole of a diarization: one C call that never lets the lock go.
+_FAKE_ENGINE_BODY = '''
+import ctypes
+import json
+import os
+
+
+def _note(**seen):
+    try:
+        with open(_RECORD) as f:
+            noted = json.load(f)
+    except (OSError, ValueError):
+        noted = {}
+    noted.update(seen)
+    with open(_RECORD, "w") as f:
+        json.dump(noted, f)
+
+
+class FastClusteringConfig:
+    def __init__(self, **kw):
+        _note(clustering=kw)
+
+
+class OfflineSpeakerSegmentationPyannoteModelConfig:
+    def __init__(self, model=""):
+        _note(seg=model)
+
+
+class OfflineSpeakerSegmentationModelConfig:
+    def __init__(self, **kw):
+        pass
+
+
+class SpeakerEmbeddingExtractorConfig:
+    def __init__(self, model=""):
+        _note(emb=model)
+
+
+class OfflineSpeakerDiarizationConfig:
+    def __init__(self, **kw):
+        pass
+
+
 class _Segment:
     def __init__(self, start, end, speaker):
         self.start, self.end, self.speaker = start, end, speaker
 
 
-def _fake_sherpa(monkeypatch, *, turns=(), fail: Exception | None = None, seen=None):
-    """sherpa-onnx stubbed into sys.modules (the repo's vendor-SDK pattern): records the model
-    paths it is given and the samples it is handed, and answers *turns* (or raises *fail*)."""
+class _Result:
+    def sort_by_start_time(self):
+        return [_Segment(*turn) for turn in _TURNS]
+
+
+class OfflineSpeakerDiarization:
+    sample_rate = 16000
+
+    def __init__(self, config):
+        pass
+
+    def process(self, samples):
+        _note(samples=[float(s) for s in samples[:64]], count=len(samples),
+              loudest=float(abs(samples).max()) if len(samples) else 0.0, pid=os.getpid())
+        if _HOLD:
+            ctypes.PyDLL(None).usleep(int(_HOLD * 1_000_000))
+        if _FAIL:
+            raise RuntimeError(_FAIL)
+        return _Result()
+'''
+
+
+@pytest.fixture
+def fake_engine(tmp_path, monkeypatch):
+    """Install the stand-in engine where both this process and the provider's child import it
+    (``PYTHONPATH`` reaches the child and precedes the installed sherpa-onnx there). Returns the
+    file it notes what it saw in."""
+    import os
     import sys
-    import types
 
-    seen = {} if seen is None else seen
+    def install(*, turns=(), fail=None, hold=0.0) -> Path:
+        site = tmp_path / "fake-site"
+        package = site / "sherpa_onnx"
+        package.mkdir(parents=True, exist_ok=True)
+        record = tmp_path / "engine-saw.json"
+        record.unlink(missing_ok=True)
+        (package / "__init__.py").write_text(
+            f"_RECORD = {str(record)!r}\n_TURNS = {[list(t) for t in turns]!r}\n"
+            f"_FAIL = {fail!r}\n_HOLD = {hold!r}\n" + _FAKE_ENGINE_BODY,
+            encoding="utf-8",
+        )
+        inherited = os.environ.get("PYTHONPATH", "")
+        monkeypatch.setenv("PYTHONPATH", os.pathsep.join(p for p in (str(site), inherited) if p))
+        monkeypatch.syspath_prepend(str(site))
+        monkeypatch.delitem(sys.modules, "sherpa_onnx", raising=False)
+        return record
 
-    def _record(key):
-        def _factory(**kwargs):
-            seen[key] = kwargs.get("model")
-            return object()
-        return _factory
+    return install
 
-    fake = types.ModuleType("sherpa_onnx")
-    fake.FastClusteringConfig = lambda **k: object()
-    fake.OfflineSpeakerSegmentationPyannoteModelConfig = _record("seg")
-    fake.OfflineSpeakerSegmentationModelConfig = lambda **k: object()
-    fake.SpeakerEmbeddingExtractorConfig = _record("emb")
-    fake.OfflineSpeakerDiarizationConfig = lambda **k: object()
 
-    class _Sd:
-        sample_rate = 16000
+def _engine_saw(record: Path) -> dict:
+    import json
 
-        def __init__(self, cfg):
-            pass
+    return json.loads(record.read_text(encoding="utf-8"))
 
-        def process(self, samples):
-            seen["samples"] = samples
-            if fail is not None:
-                raise fail
 
-            class _R:
-                def sort_by_start_time(self):
-                    return list(turns)
-            return _R()
+def _fake_ffmpeg(tmp_path: Path, pcm: bytes) -> str:
+    """An ffmpeg stand-in under the test's own folder (``bin/ffmpeg``): it notes how it was run
+    (its own path, then its arguments) and writes *pcm* as the decoded audio."""
+    import sys
 
-    fake.OfflineSpeakerDiarization = _Sd
-    monkeypatch.setitem(sys.modules, "sherpa_onnx", fake)
-    return seen
+    script = tmp_path / "bin" / "ffmpeg"
+    script.parent.mkdir(exist_ok=True)
+    (tmp_path / "pcm").write_bytes(pcm)
+    script.write_text(
+        f"#!{sys.executable}\nimport json, sys\n"
+        f"open({str(tmp_path / 'ffmpeg-ran.json')!r}, 'w').write(json.dumps(sys.argv))\n"
+        f"sys.stdout.buffer.write(open({str(tmp_path / 'pcm')!r}, 'rb').read())\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return str(script)
+
+
+async def _worst_gap_while(awaitable):
+    """Await *awaitable* while the event loop ticks every 10 ms: its result, and the longest gap."""
+    import asyncio
+    import time
+
+    gaps: list[float] = []
+    done = asyncio.Event()
+
+    async def _tick():
+        last = time.monotonic()
+        while not done.is_set():
+            await asyncio.sleep(0.01)
+            now = time.monotonic()
+            gaps.append(now - last)
+            last = now
+
+    ticker = asyncio.ensure_future(_tick())
+    await asyncio.sleep(0.05)
+    try:
+        result = await awaitable
+    finally:
+        done.set()
+        await ticker
+    return result, max(gaps)
+
+
+def _ffmpeg_ran(tmp_path: Path) -> list[str]:
+    """How the stand-in ffmpeg was run: its own path, then its arguments."""
+    import json
+
+    return json.loads((tmp_path / "ffmpeg-ran.json").read_text(encoding="utf-8"))
 
 
 @pytest.mark.asyncio
-async def test_diarize_reads_the_pair_from_the_home(monkeypatch, tmp_path):
+async def test_diarize_reads_the_pair_from_the_home(monkeypatch, tmp_path, fake_engine):
     """The PIPELINE is handed the home's paths."""
     _home(monkeypatch, tmp_path)
     _seed_pair(P._models_dir())
-    seen = _fake_sherpa(monkeypatch)
-    monkeypatch.setattr(P, "_decode", lambda path, rate: [0.0] * 8)
+    record = fake_engine()
+    monkeypatch.setattr(P, "find_ffmpeg", lambda: _fake_ffmpeg(tmp_path, bytes(32)))
 
     f = tmp_path / "a.wav"
     f.write_bytes(b"\x00" * 32)
     assert await P.create_provider({}).diarize(str(f), model=P._MODEL) == []
-    assert seen["seg"] == str(P._models_dir() / P._SEG_REL)
-    assert seen["emb"] == str(P._models_dir() / P._EMB_REL)
+    saw = _engine_saw(record)
+    assert saw["seg"] == str(P._models_dir() / P._SEG_REL)
+    assert saw["emb"] == str(P._models_dir() / P._EMB_REL)
 
 
 @pytest.mark.asyncio
-async def test_the_model_hears_the_recording_decoded_at_its_own_rate(monkeypatch, tmp_path):
+async def test_the_diarizations_process_runs_only_a_program_named_ffmpeg(
+    monkeypatch, tmp_path, fake_engine
+):
+    """The child is handed the path of the ffmpeg core found, and looks for ffmpeg in that folder
+    only: a path that names another program runs nothing, and the diarization says why."""
+    from personalclaw.sdk.diarization import DiarizationError
+
+    _home(monkeypatch, tmp_path)
+    _seed_pair(P._models_dir())
+    fake_engine()
+    stand_in = Path(_fake_ffmpeg(tmp_path, bytes(32)))
+    other = stand_in.rename(stand_in.with_name("recorder"))
+    monkeypatch.setattr(P, "find_ffmpeg", lambda: str(other))
+    memo = tmp_path / "standup.m4a"
+    memo.write_bytes(b"\x00" * 32)
+
+    with pytest.raises(DiarizationError) as raised:
+        await P.create_provider({}).diarize(str(memo), model=P._MODEL)
+
+    assert f"there is no ffmpeg to run at {other}" in str(raised.value)
+    assert not (tmp_path / "ffmpeg-ran.json").exists(), "a program not named ffmpeg ran"
+
+
+@pytest.mark.asyncio
+async def test_the_model_hears_the_recording_decoded_at_its_own_rate(
+    monkeypatch, tmp_path, fake_engine
+):
     """Every recording goes through ffmpeg, mono, at the model's sample rate, as float32: the
     samples the pipeline is handed are exactly what ffmpeg wrote. Turns come back labelled."""
     import numpy as np
 
     _home(monkeypatch, tmp_path)
     _seed_pair(P._models_dir())
-    seen = _fake_sherpa(monkeypatch, turns=[_Segment(0.0, 4.2, 0), _Segment(4.4, 9.1, 1)])
+    record = fake_engine(turns=[(0.0, 4.2, 0), (4.4, 9.1, 1)])
     pcm = np.linspace(-0.5, 0.5, 64, dtype=np.float32)
-    argv: list = []
-
-    def _run(cmd, **kwargs):
-        argv.extend(cmd)
-        return P.subprocess.CompletedProcess(cmd, 0, stdout=pcm.tobytes(), stderr=b"")
-
-    monkeypatch.setattr(P, "find_ffmpeg", lambda: "/usr/bin/ffmpeg")
-    monkeypatch.setattr(P.subprocess, "run", _run)
+    ffmpeg = _fake_ffmpeg(tmp_path, pcm.tobytes())
+    monkeypatch.setattr(P, "find_ffmpeg", lambda: ffmpeg)
     memo = tmp_path / "team call.m4a"
     memo.write_bytes(b"\x00" * 32)
 
@@ -295,11 +429,12 @@ async def test_the_model_hears_the_recording_decoded_at_its_own_rate(monkeypatch
     assert [(t.start, t.end, t.speaker) for t in turns] == [
         (0.0, 4.2, "SPEAKER_00"), (4.4, 9.1, "SPEAKER_01"),
     ]
-    assert argv[0] == "/usr/bin/ffmpeg"
+    ran, *argv = _ffmpeg_ran(tmp_path)
+    assert ran == ffmpeg
     assert argv[argv.index("-i") + 1] == str(memo)
     assert argv[argv.index("-ar") + 1] == "16000" and argv[argv.index("-ac") + 1] == "1"
     assert argv[argv.index("-f") + 1] == "f32le"
-    assert np.array_equal(seen["samples"], pcm)
+    assert _engine_saw(record)["samples"] == pytest.approx(pcm.tolist())
 
 
 def _ffmpeg_or_skip() -> str:
@@ -311,7 +446,10 @@ def _ffmpeg_or_skip() -> str:
     return ffmpeg
 
 
-def test_an_aac_voice_memo_is_read_where_soundfile_could_not(tmp_path):
+@pytest.mark.asyncio
+async def test_an_aac_voice_memo_is_read_where_soundfile_could_not(
+    monkeypatch, tmp_path, fake_engine
+):
     """🔴 A two-voice voice memo was an ``.m4a`` (AAC at 22.05 kHz). soundfile's libsndfile cannot
     open AAC, so the app failed before diarizing and answered "no speakers". Built here with
     ffmpeg; soundfile's refusal of the same file is the control that it is the failing kind."""
@@ -328,28 +466,40 @@ def test_an_aac_voice_memo_is_read_where_soundfile_could_not(tmp_path):
     )
     with pytest.raises(Exception, match="Format not recognised"):
         soundfile.read(str(memo))
+    _home(monkeypatch, tmp_path)
+    _seed_pair(P._models_dir())
+    record = fake_engine()
+    monkeypatch.setattr(P, "find_ffmpeg", lambda: ffmpeg)
 
-    samples = P._decode(str(memo), 16000)
+    assert await P.create_provider({}).diarize(str(memo), model=P._MODEL) == []
 
-    assert samples.dtype.name == "float32"
-    assert 15_500 <= len(samples) <= 16_600, len(samples)  # one second at 16 kHz, not 22,050
-    assert float(abs(samples).max()) > 0.1  # the tone, not silence
+    saw = _engine_saw(record)
+    assert 15_500 <= saw["count"] <= 16_600, saw["count"]  # one second at 16 kHz, not 22,050
+    assert saw["loudest"] > 0.1  # the tone, not silence
 
 
-def test_a_file_ffmpeg_cannot_read_says_why(tmp_path):
+@pytest.mark.asyncio
+async def test_a_file_ffmpeg_cannot_read_says_why(monkeypatch, tmp_path, fake_engine):
     from personalclaw.sdk.diarization import DiarizationError
 
-    _ffmpeg_or_skip()
+    ffmpeg = _ffmpeg_or_skip()
+    _home(monkeypatch, tmp_path)
+    _seed_pair(P._models_dir())
+    fake_engine()
+    monkeypatch.setattr(P, "find_ffmpeg", lambda: ffmpeg)
     junk = tmp_path / "not audio.m4a"
     junk.write_text("this is a text file")
     with pytest.raises(DiarizationError) as raised:
-        P._decode(str(junk), 16000)
+        await P.create_provider({}).diarize(str(junk), model=P._MODEL)
     said = str(raised.value)
     assert said.startswith("ONNX diarization could not read this recording. Details: ")
     assert "[in#" not in said and str(tmp_path) not in said and "\n" not in said, said
 
 
-def test_a_recording_cut_off_after_its_header_is_not_a_recording_with_no_speakers(tmp_path):
+@pytest.mark.asyncio
+async def test_a_recording_cut_off_after_its_header_is_not_a_recording_with_no_speakers(
+    monkeypatch, tmp_path, fake_engine
+):
     """🔴 Red before: a voice memo whose upload stopped after the file's header (it declares 24
     seconds of audio and holds none) decoded to nothing, ffmpeg exited 0 with a "partial file"
     warning, and diarizing nothing reported "done" with no speakers."""
@@ -367,32 +517,40 @@ def test_a_recording_cut_off_after_its_header_is_not_a_recording_with_no_speaker
     whole = memo.read_bytes()
     cut = tmp_path / "cut off memo.m4a"
     cut.write_bytes(whole[: whole.index(b"mdat") + 4])  # the header, and none of the audio
+    _home(monkeypatch, tmp_path)
+    _seed_pair(P._models_dir())
+    record = fake_engine()
+    monkeypatch.setattr(P, "find_ffmpeg", lambda: ffmpeg)
+    provider = P.create_provider({})
 
-    assert len(P._decode(str(memo), 16000)) > 0  # the control: the whole memo is read
+    assert await provider.diarize(str(memo), model=P._MODEL) == []
+    assert _engine_saw(record)["count"] > 0  # the control: the whole memo is read
     with pytest.raises(DiarizationError) as raised:
-        P._decode(str(cut), 16000)
+        await provider.diarize(str(cut), model=P._MODEL)
     assert str(raised.value) == P._NO_AUDIO
 
 
 def test_ffmpegs_closing_line_is_the_detail():
+    import worker as W
+
     stderr = (b"[in#0 @ 0x76e5020000] moov atom not found\n"
               b"[in#0 @ 0x76e4c14000] Error opening input: Invalid data found when processing input\n"
               b"Error opening input file /srv/knowledge/files/0b1c.m4a.\n"
               b"Error opening input files: Invalid data found when processing input\n")
-    assert P._ffmpeg_said(stderr, 1) == "Error opening input files: Invalid data found when processing input"
-    assert P._ffmpeg_said(b"[aac @ 0x1] Too many bits\n", 1) == "Too many bits"
-    assert P._ffmpeg_said(b"", 183) == "ffmpeg exited with status 183"
+    assert W.ffmpeg_said(stderr, 1) == "Error opening input files: Invalid data found when processing input"
+    assert W.ffmpeg_said(b"[aac @ 0x1] Too many bits\n", 1) == "Too many bits"
+    assert W.ffmpeg_said(b"", 183) == "ffmpeg exited with status 183"
 
 
 @pytest.mark.asyncio
-async def test_a_pipeline_that_fails_says_why(monkeypatch, tmp_path):
+async def test_a_pipeline_that_fails_says_why(monkeypatch, tmp_path, fake_engine):
     """🔴 Red before: swallowed into ``None``, with no log line."""
     from personalclaw.sdk.diarization import DiarizationError
 
     _home(monkeypatch, tmp_path)
     _seed_pair(P._models_dir())
-    _fake_sherpa(monkeypatch, fail=RuntimeError("Expected samples rate: 16000, given: 22050"))
-    monkeypatch.setattr(P, "_decode", lambda path, rate: [0.0] * 8)
+    fake_engine(fail="Expected samples rate: 16000, given: 22050")
+    monkeypatch.setattr(P, "find_ffmpeg", lambda: _fake_ffmpeg(tmp_path, bytes(32)))
     with pytest.raises(DiarizationError) as raised:
         await P.create_provider({}).diarize(str(tmp_path / "a.wav"), model=P._MODEL)
     assert str(raised.value) == (
@@ -402,7 +560,9 @@ async def test_a_pipeline_that_fails_says_why(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_a_long_recording_is_not_cut_off_by_a_clock_of_its_own(monkeypatch, tmp_path):
+async def test_a_long_recording_is_not_cut_off_by_a_clock_of_its_own(
+    monkeypatch, tmp_path, fake_engine
+):
     """🔴 Red before: a fixed ten-minute ``wait_for`` answered ``None`` when it fired, whatever
     the caller's budget. Here every ``wait_for`` gives up at once: the provider must not use one."""
     import asyncio
@@ -414,11 +574,36 @@ async def test_a_long_recording_is_not_cut_off_by_a_clock_of_its_own(monkeypatch
 
     _home(monkeypatch, tmp_path)
     _seed_pair(P._models_dir())
-    _fake_sherpa(monkeypatch, turns=[_Segment(0.0, 1.0, 0)])
-    monkeypatch.setattr(P, "_decode", lambda path, rate: [0.0] * 8)
+    fake_engine(turns=[(0.0, 1.0, 0)])
+    monkeypatch.setattr(P, "find_ffmpeg", lambda: _fake_ffmpeg(tmp_path, bytes(32)))
     monkeypatch.setattr(asyncio, "wait_for", _out_of_time)
     turns = await P.create_provider({}).diarize(str(tmp_path / "a.wav"), model=P._MODEL)
     assert [t.speaker for t in turns] == ["SPEAKER_00"]
+
+
+@pytest.mark.asyncio
+async def test_a_process_that_ends_before_it_answers_says_so(monkeypatch, tmp_path, fake_engine):
+    """The diarization's process can be ended under it (out of memory on a long recording): the
+    step says it stopped and how, rather than that no one spoke."""
+    from personalclaw.sdk.diarization import DiarizationError
+
+    _home(monkeypatch, tmp_path)
+    _seed_pair(P._models_dir())
+    fake_engine(fail="unused")
+    engine = tmp_path / "fake-site" / "sherpa_onnx" / "__init__.py"
+    engine.write_text(
+        engine.read_text(encoding="utf-8").replace(
+            "        if _FAIL:\n",
+            "        os.kill(os.getpid(), 9)\n        if _FAIL:\n",
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(P, "find_ffmpeg", lambda: _fake_ffmpeg(tmp_path, bytes(32)))
+    with pytest.raises(DiarizationError) as raised:
+        await P.create_provider({}).diarize(str(tmp_path / "a.wav"), model=P._MODEL)
+    assert str(raised.value) == (
+        "ONNX diarization stopped before it finished: the process it ran in ended (signal_9)."
+    )
 
 
 @pytest.mark.asyncio
@@ -481,7 +666,7 @@ def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
 
 @pytest.mark.asyncio
 async def test_a_diarization_runs_the_ffmpeg_on_its_path_and_leaves_the_path_alone(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, fake_engine
 ):
     """🔴 Red before: a diarization first put the folder holding an ffmpeg in front of the
     gateway's own PATH, which every program the gateway starts afterwards inherits, and then ran
@@ -493,30 +678,43 @@ async def test_a_diarization_runs_the_ffmpeg_on_its_path_and_leaves_the_path_alo
 
     _home(monkeypatch, tmp_path)
     _seed_pair(P._models_dir())
-    seen = _fake_sherpa(monkeypatch, turns=[_Segment(0.0, 1.0, 0)])
+    record = fake_engine(turns=[(0.0, 1.0, 0)])
     pcm = np.linspace(-0.5, 0.5, 16, dtype=np.float32)
-    (tmp_path / "pcm").write_bytes(pcm.tobytes())
-    folder = tmp_path / "bin"
-    folder.mkdir()
-    stand_in = folder / "ffmpeg"
-    stand_in.write_text(f"#!/bin/sh\ncat '{tmp_path / 'pcm'}'\n", encoding="utf-8")
-    stand_in.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{folder}{os.pathsep}/usr/bin{os.pathsep}/bin")
+    stand_in = _fake_ffmpeg(tmp_path, pcm.tobytes())
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}/usr/bin{os.pathsep}/bin")
     before = os.environ["PATH"]
-    ran: list = []
-    real_run = P.subprocess.run
-
-    def _run(cmd, **kwargs):
-        ran.append(cmd[0])
-        return real_run(cmd, **kwargs)
-
-    monkeypatch.setattr(P.subprocess, "run", _run)
     memo = tmp_path / "memo.m4a"
     memo.write_bytes(b"\x00" * 32)
 
     turns = await P.create_provider({}).diarize(str(memo), model=P._MODEL)
 
     assert [t.speaker for t in turns] == ["SPEAKER_00"]
-    assert ran == [str(stand_in)]
-    assert np.array_equal(seen["samples"], pcm)
+    assert _ffmpeg_ran(tmp_path)[0] == stand_in
+    assert _engine_saw(record)["samples"] == pytest.approx(pcm.tolist())
     assert os.environ["PATH"] == before
+
+
+@pytest.mark.asyncio
+async def test_a_long_diarization_leaves_the_gateway_answering(monkeypatch, tmp_path, fake_engine):
+    """🔴 Red before: sherpa-onnx holds the interpreter lock for the whole of ``process()``, and
+    this app ran it in a thread of the gateway, so every request the gateway was serving waited
+    for the diarization to end (two minutes, for a six-minute video). The stand-in holds the lock
+    for 1.5 s; the event loop must go on ticking, because the engine runs in a child process."""
+    import os
+
+    _home(monkeypatch, tmp_path)
+    _seed_pair(P._models_dir())
+    record = fake_engine(turns=[(0.0, 1.0, 0), (1.2, 2.0, 1)], hold=1.5)
+    monkeypatch.setattr(P, "find_ffmpeg", lambda: _fake_ffmpeg(tmp_path, bytes(64)))
+    memo = tmp_path / "standup.m4a"
+    memo.write_bytes(b"\x00" * 32)
+
+    turns, worst = await _worst_gap_while(
+        P.create_provider({}).diarize(str(memo), model=P._MODEL)
+    )
+
+    assert [(t.start, t.end, t.speaker) for t in turns] == [
+        (0.0, 1.0, "SPEAKER_00"), (1.2, 2.0, "SPEAKER_01"),
+    ]
+    assert worst < 0.75, f"the event loop stopped for {worst:.2f}s while the engine held its lock"
+    assert _engine_saw(record)["pid"] != os.getpid(), "the engine ran in the gateway's process"

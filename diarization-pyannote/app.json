@@ -1,6 +1,6 @@
 {
   "name": "diarization-pyannote",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "displayName": "Diarization (pyannote)",
   "description": "Higher-accuracy speaker diarization via the pyannote.audio pretrained pipeline. Requires a HuggingFace token + license acceptance. Provides a model for the diarization use-case; bind it in Settings \u2192 Models. Large install (pulls torch).",
   "icon": "Users",

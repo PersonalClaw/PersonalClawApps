@@ -11,12 +11,23 @@ as a self-contained directory:
 
 - `app.json` — the manifest (identity, provider/backend/UI declarations, permissions).
 - `provider.py` — the implementation, exposed via `create_provider`.
+- `worker.py` — the diarization itself, run in a process of its own (below).
 - `test_provider.py` — the app's own tests.
 
 It imports only the PersonalClaw **SDK** (never core internals), so core can evolve
 without breaking it:
 
 - `personalclaw.sdk.diarization`
+- `personalclaw.sdk.sidecar` (`run_once`)
+
+## How it runs
+
+sherpa-onnx holds Python's interpreter lock for the whole of a diarization, so a recording
+diarized inside the gateway would stop the gateway answering anything until it was done (two
+minutes for a six-minute video). Each diarization therefore runs `worker.py` in a child process
+of its own, which loads the packages this app installs and exits when it has answered. The
+gateway goes on serving meanwhile. A diarization stopped before it finishes (its knowledge step
+out of time, the gateway stopping) stops the child and its ffmpeg with it.
 
 ## Install
 

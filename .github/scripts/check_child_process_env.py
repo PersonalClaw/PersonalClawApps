@@ -65,9 +65,6 @@ BUILT = {
     "piper-tts/provider.py::_synthesize_piper_chunk::asyncio.create_subprocess_exec": (
         "piper, someone else's program reading a voice someone else trained"
     ),
-    "diarization-onnx/provider.py::_decode::subprocess.run": (
-        "ffmpeg, someone else's program decoding a recording someone uploaded"
-    ),
     "skills-sh/provider.py::SkillsShMarketplace._search_via_cli::subprocess.run": (
         "`npx -y skills`, a package someone else publishes, fetched and run"
     ),
@@ -108,6 +105,10 @@ OWN_ENVIRONMENT = {
     "issue-radar/app_cli.py::_tracker_line::subprocess.run": "a `personalclaw doctor` step",
     "notes/app_cli.py::_git_version::subprocess.run": "a `personalclaw doctor` step",
     "spec-builder/app_cli.py::_git_version::subprocess.run": "a `personalclaw doctor` step",
+    "diarization-onnx/worker.py::decode::subprocess.run": (
+        "ffmpeg in the diarization's own child process, whose environment core built as the "
+        "child allowlist (`run_once`), not the gateway"
+    ),
     "menu-bar-companion/menubar_companion/notify.py::_default_runner::subprocess.run": (
         "the companion's own process, not the gateway"
     ),

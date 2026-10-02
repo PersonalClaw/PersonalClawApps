@@ -175,7 +175,7 @@ READ_BY_HAND: dict[str, tuple[tuple[str, ...], str]] = {
 KNOWN_LAUNCHES = {
     "menu-bar-companion": "open",  # a path, read by its basename
     "code-review": "gh",  # a name bound to a list, handed on starred
-    "diarization-onnx": "ffmpeg",  # find_ffmpeg()
+    "diarization-onnx": "ffmpeg",  # shutil.which() in the folder find_ffmpeg() found
     "git-repo": "git",  # git_argv(…)
     "skills-sh": NPX,  # shutil.which("npx"), and the package it fetches
     "lima-sandbox": "limactl",  # a module constant

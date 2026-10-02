@@ -4,6 +4,10 @@ The higher-ceiling, HF-gated diarization backend: the pyannote.audio pretrained 
 Requires a HuggingFace token + license acceptance (pyannote/speaker-diarization-3.1). A
 SECOND, independent provider for the ``diarization`` capability alongside the ONNX one —
 uniform with how multiple apps can serve stt. Heavy torch deps install only with this app.
+
+The pipeline itself runs in a child process (``worker.py``, through the SDK's ``run_once``): its
+clustering holds the interpreter lock while it runs, and in a thread of the gateway that stopped
+the gateway answering anything for as long.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ from personalclaw.sdk.diarization import (
 )
 from personalclaw.sdk.model import ProviderResolutionError, require_model
 from personalclaw.sdk.net import sentence_with_detail
+from personalclaw.sdk.sidecar import SidecarCrashed, SidecarWorkerError, run_once
 from personalclaw.sdk.util import config_dir
 
 logger = logging.getLogger(__name__)
@@ -35,6 +40,11 @@ logger = logging.getLogger(__name__)
 os.environ["PYANNOTE_METRICS_ENABLED"] = "false"
 
 _MODEL = "pyannote/speaker-diarization-3.1"
+
+#: The diarization's own process: what ``run_once`` runs, beside this file.
+_WORKER = Path(__file__).with_name("worker.py")
+
+_COULD_NOT_TELL = "Diarization (pyannote) could not tell the speakers apart in this recording."
 
 
 def _models_dir() -> Path:
@@ -59,6 +69,37 @@ def availability() -> tuple[bool, str]:
     except ImportError:
         return False, ("pyannote diarization needs personalclaw[diarization-pyannote] "
                        "(pyannote.audio + torch) — a large install; server/container build.")
+
+
+def _turns(answer: Any) -> list[SpeakerTurn]:
+    """The speaker turns the diarization's process answered with, or the sentence for what
+    stopped them (``worker.diarize`` says which). What it sends back is only ever data, and it is
+    read as such: anything that is not a list of turns is a failure, not a guess."""
+    if not isinstance(answer, dict):
+        raise DiarizationError(_COULD_NOT_TELL)
+    if answer.get("refused"):
+        raise DiarizationError(
+            f"Hugging Face would not give this token {_MODEL}. Accept its user conditions at "
+            f"https://hf.co/{_MODEL} with the same account, then try again."
+        )
+    if "gated" in answer:
+        repo = str(answer["gated"] or "") or "the pyannote model"
+        logger.warning("pyannote diarize blocked: the HF token can't download %s", repo)
+        raise DiarizationError(
+            f"This Hugging Face token can't download {repo}. Accept its user conditions at "
+            f"https://hf.co/{repo} (a one-time click on the Hugging Face website), then try again: "
+            "pyannote.audio 4.x needs the embedding model's conditions accepted too."
+        )
+    if "failed" in answer:
+        logger.warning("pyannote diarize failed: %s", answer["failed"])
+        raise DiarizationError(sentence_with_detail(_COULD_NOT_TELL, str(answer["failed"])))
+    try:
+        return [
+            SpeakerTurn(start=float(start), end=float(end), speaker=str(speaker))
+            for start, end, speaker in answer.get("turns") or []
+        ]
+    except (TypeError, ValueError) as exc:
+        raise DiarizationError(_COULD_NOT_TELL) from exc
 
 
 class PyannoteDiarizationProvider(DiarizationProvider, LocalModelProvider):
@@ -174,67 +215,32 @@ class PyannoteDiarizationProvider(DiarizationProvider, LocalModelProvider):
                 "HuggingFace Token in the app's settings, then try again."
             )
 
-        def _run():
-            try:
-                from pyannote.audio import Pipeline
-                # pyannote.audio ≥3.1 renamed the auth kwarg ``use_auth_token`` → ``token``;
-                # try the current name, fall back for older installs. (Passing the wrong
-                # kwarg raises TypeError → the whole diarize silently returned None → 0
-                # turns; that was invisible until we logged the exception below.)
-                cache = str(_models_dir())
-                try:
-                    pipeline = Pipeline.from_pretrained(_MODEL, token=token, cache_dir=cache)
-                except TypeError:
-                    pipeline = Pipeline.from_pretrained(
-                        _MODEL, use_auth_token=token, cache_dir=cache
-                    )
-                if pipeline is None:
-                    raise DiarizationError(
-                        f"Hugging Face would not give this token {_MODEL}. Accept its user "
-                        f"conditions at https://hf.co/{_MODEL} with the same account, then try "
-                        "again."
-                    )
-                kwargs: dict = {}
-                if num_speakers:
-                    kwargs["num_speakers"] = int(num_speakers)
-                if min_speakers:
-                    kwargs["min_speakers"] = int(min_speakers)
-                if max_speakers:
-                    kwargs["max_speakers"] = int(max_speakers)
-                diarization = pipeline(audio_path, **kwargs)
-                # pyannote.audio 4.x wraps the result in a ``DiarizeOutput`` whose
-                # ``.speaker_diarization`` is the ``Annotation`` (with ``itertracks``); 3.x
-                # returned that Annotation directly. Unwrap the 4.x shape, fall back to the
-                # object itself for the older direct-Annotation return.
-                annotation = getattr(diarization, "speaker_diarization", diarization)
-                return [SpeakerTurn(start=float(t.start), end=float(t.end), speaker=str(spk))
-                        for t, _, spk in annotation.itertracks(yield_label=True)]
-            except DiarizationError:
-                raise
-            except Exception as exc:
-                # A GATED-repo error is actionable + distinct from a real failure: pyannote.audio
-                # 4.x pulls a nested embedding model (speaker-diarization-community-1) that needs
-                # its OWN license-acceptance click on HuggingFace — the token alone isn't enough.
-                # Name the exact repo + URL so the operator knows to accept conditions, rather
-                # than burying it in a generic stack trace (the diarize just returned None before).
-                msg = str(exc)
-                if "gated" in msg.lower() or "403" in msg or "accept" in msg.lower():
-                    import re as _re
-                    m = _re.search(r"(pyannote/[\w.-]+)", msg)
-                    repo = m.group(1) if m else "the pyannote model"
-                    logger.warning("pyannote diarize blocked: the HF token can't download %s", repo)
-                    raise DiarizationError(
-                        f"This Hugging Face token can't download {repo}. Accept its user "
-                        f"conditions at https://hf.co/{repo} (a one-time click on the Hugging Face "
-                        "website), then try again: pyannote.audio 4.x needs the embedding model's "
-                        "conditions accepted too."
-                    ) from exc
-                logger.warning("pyannote diarize failed", exc_info=True)
-                raise DiarizationError(sentence_with_detail(
-                    "Diarization (pyannote) could not tell the speakers apart in this recording.",
-                    exc,
-                )) from exc
-
-        # No clock of its own: the caller's budget grows with the recording's length, and a
-        # timer here could only throw a finished result away (a thread cannot be cancelled).
-        return await asyncio.get_running_loop().run_in_executor(None, _run)
+        # In a process of its own (``worker.py``, through the SDK's ``run_once``): the pipeline's
+        # clustering holds the interpreter lock while it runs, and in a thread of the gateway that
+        # stopped every request the gateway had. No clock of its own: the caller's budget grows
+        # with the recording's length, and a cancelled call stops the process.
+        try:
+            answer = await run_once(
+                self.name,
+                _WORKER,
+                "diarize",
+                {
+                    "audio": audio_path,
+                    "model": _MODEL,
+                    "token": token,
+                    "cache": str(_models_dir()),
+                    "num_speakers": int(num_speakers or 0),
+                    "min_speakers": int(min_speakers or 0),
+                    "max_speakers": int(max_speakers or 0),
+                },
+            )
+        except SidecarWorkerError as exc:
+            logger.warning("diarization-pyannote could not diarize %s: %s", audio_path, exc)
+            raise DiarizationError(sentence_with_detail(_COULD_NOT_TELL, exc)) from exc
+        except SidecarCrashed as exc:
+            logger.warning("diarization-pyannote's process ended diarizing %s: %s", audio_path, exc)
+            raise DiarizationError(
+                "Diarization (pyannote) stopped before it finished: the process it ran in ended "
+                f"({exc.reason})."
+            ) from exc
+        return _turns(answer)
