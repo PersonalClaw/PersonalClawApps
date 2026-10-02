@@ -257,7 +257,7 @@ yours — follow the nearest peer app rather than inventing a new pattern.
   "network": false,                              // DECLARED intent only — see note
   "memory": "",                                  // "" | "app-scoped" | "shared"
   "cron": true,                                  // may register manifest crons
-  "agent": true                                  // may run background agent tasks
+  "agent": "text"                                // what its agent tasks may use: "text" | "read" | "tools"
 }
 ```
 
@@ -266,6 +266,34 @@ install-consent surface. All of these are enforced server-side EXCEPT `network`,
 which is declaration-only by design (a backend subprocess has its own OS network
 stack; the flag discloses intent to the user rather than fencing it). See the
 [permission enforcement table](platform-architecture.md#permission-enforcement).
+
+#### Agent tasks: pick the least tier your tasks need
+
+`agent` names a tier, and install consent shows the owner one sentence for it:
+
+| Tier | What a task's model gets | Use it when |
+|---|---|---|
+| `text` | the task your app sends and nothing else — none of the owner's memory, lessons or history — with no tools at all; it runs on PersonalClaw's own worker that has no tools to call, and any call it makes is refused | your app already has the content and wants text back: a summary, an extraction, a draft (Minutes and Growth) |
+| `read` | an agent with read-only tools: it may read the owner's files and data and change nothing. It runs only on PersonalClaw's own agent, which can be held to read-only tools; a task on an agent CLI is refused before it starts | the task has to look things up first |
+| `tools` | an agent with the owner's tools | the task has to change things |
+
+No tier lets your app approve its agent's calls: a task starts on the owner's install consent,
+and every call that needs approval asks her, whatever her own approval settings are. A turn in a
+conversation your app started needs `tools` and asks the same way. `"agent": true` names no tier
+and is refused at install.
+
+A task runs at your app's tier unless it asks for a narrower one, and asking for a wider one is
+refused (`403 agent_tier_exceeded`) before anything runs:
+
+```js
+const agent = createAgentTask(ctx.name)
+const res = await agent.run(`Summarise these notes:\n${notes}`)    // your app's tier
+await agent.run('Find the open invoices.', { tier: 'read' })        // a tools app, reading only
+```
+
+The SDK rejects a refused task with an `AppPermissionError` carrying the gateway's sentence,
+which names the tier the task asked for and the one your app holds. A `text` task names no
+`agent`. Widening your tier in an update is a change the owner is asked to agree to again.
 
 A request your provider makes goes through `personalclaw.sdk.net.fetch` under a policy built
 with `egress_policy_for(<profile>)`: `CONNECTOR` for a vendor's API, `WEBHOOK` for a POST to an
@@ -686,8 +714,9 @@ export function mount(el, ctx) {
 
 Two mount shapes are supported: a React component shape (probed first) and the
 imperative `(el, ctx)` shape shown above — demo-dashboard uses the imperative
-one. The SDK also provides `createAgentTask` (background agent runs, gated by
-the `agent` permission), `useTheme`/`readAppTheme`, and React-hook variants
+one. The SDK also provides `createAgentTask` (background agent tasks at the
+app's `agent` tier, see [Agent tasks](#agent-tasks-pick-the-least-tier-your-tasks-need)),
+`useTheme`/`readAppTheme`, and React-hook variants
 (`useAppApi`, `useAppEvents`) under an `AppApiProvider`.
 
 Read your saved `configSchema` values via your own detail endpoint

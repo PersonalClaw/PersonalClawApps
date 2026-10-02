@@ -138,6 +138,10 @@ jobs:
       - name: The publication-hygiene rail reds on a planted defect
         # Drives the rail's own script against seeded repos: one control per rule and field.
         run: python -m pytest .github/tests/test_publication_hygiene.py -q
+      - name: Every app that runs agent work declares the least tier its tasks need
+        # The census names each first-party app's permissions.agent tier and why its tasks need it,
+        # so a new, dropped or widened tier fails until someone reads what the tasks use.
+        run: python -m pytest .github/tests/test_agent_tiers.py -q
       - name: The network-declaration rail reds on a planted defect
         # Drives the rail's own script against seeded trees: an undeclared reach, a declared
         # `false`, an unreadable file and a lost floor signal each red it; a clean tree is green.

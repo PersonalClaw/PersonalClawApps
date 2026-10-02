@@ -1,6 +1,6 @@
 {
   "name": "growth",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Growth Tracker",
   "description": "Turn your real work into evidenced growth artifacts. It draws on your chat sessions, the projects you ran, the tasks you closed, and your notes. Track growth areas, score against a customizable rubric, and generate a shareable accomplishment doc that cites its evidence.",
   "icon": "TrendingUp",
@@ -189,7 +189,7 @@
     ],
     "storage": true,
     "network": false,
-    "agent": true,
+    "agent": "text",
     "cron": true
   },
   "quality": {

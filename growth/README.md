@@ -33,7 +33,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 - `backend/server.py` — the app's own API, launched as a subprocess and reached through the gateway proxy (`/apps/growth/api/*`).
 - `ui/` — the contributed Growth page (route `/apps/growth`).
 - A daily `daily-capture` cron (18:03) scans your recent work and files growth artifacts per `DAILY_CAPTURE.md`.
-- Declared permissions: core `api` paths (projects/tasks/knowledge), `events`, `storage`, `agent`, `cron`.
+- Declared permissions: core `api` paths (projects/tasks/knowledge), `events`, `storage`, `agent` at the `text` tier (drafting an artifact from its evidence and writing a digest hand the model the evidence and artifacts the page sends, with no tools), and `cron`.
 
 ## License
 

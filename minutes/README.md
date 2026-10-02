@@ -32,7 +32,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 - `backend/server.py` — the app's own API, launched as a subprocess and reached through the gateway proxy (`/apps/minutes/api/*`).
 - `ui/` — the contributed Minutes page (route `/apps/minutes`), a synced timeline over recordings, transcripts, notes and docs.
-- Declared permissions: core `api` paths (knowledge/lexicon/projects/tasks), `events`, `storage`, `agent`.
+- Declared permissions: core `api` paths (knowledge/lexicon/projects/tasks), `events`, `storage`, and `agent` at the `text` tier: generating minutes and extracting items hands the model the meeting's notes and extracted text the page gathered, and nothing else, with no tools.
 
 ## License
 
