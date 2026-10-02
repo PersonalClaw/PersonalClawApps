@@ -335,6 +335,44 @@ async def test_complete_sends_max_tokens_and_accumulates_large_tool_args(
     assert calls[0].tool_input == full_args  # reassembled intact, not truncated
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["stream", "complete"])
+async def test_an_answer_cut_at_its_cap_says_so_on_its_terminal_event(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """Core tells a model that ran out of output room from one that finished by the terminal
+    event's stop reason. Converse names it in ``messageStop``, which this app never read, so a
+    call that spent its whole cap on nothing read as a finished, healthy answer."""
+    from provider import BedrockProvider
+
+    events = [{"messageStop": {"stopReason": "max_tokens"}}, _usage_event(39_311, 8_192)]
+    _install_fake_boto3(monkeypatch, events)
+    provider = BedrockProvider(model="m")
+    await provider.start()
+
+    stream = (
+        provider.stream("audit it")
+        if path == "stream"
+        else provider.complete([{"role": "user", "content": "audit it"}])
+    )
+    (done,) = [ev async for ev in stream if ev.kind == EVENT_COMPLETE]
+    assert (done.stop_reason, done.output_tokens) == ("max_tokens", 8_192)
+
+
+@pytest.mark.asyncio
+async def test_a_finished_answer_says_how_it_finished(monkeypatch: pytest.MonkeyPatch) -> None:
+    from provider import BedrockProvider
+
+    _install_fake_boto3(
+        monkeypatch,
+        [_text_event("ok"), {"messageStop": {"stopReason": "end_turn"}}, _usage_event(5, 1)],
+    )
+    provider = BedrockProvider(model="m")
+    await provider.start()
+    seen = [ev async for ev in provider.complete([{"role": "user", "content": "hi"}])]
+    assert [ev.stop_reason for ev in seen if ev.kind == EVENT_COMPLETE] == ["end_turn"]
+
+
 # ── Friendly error mapping (data-retention policy restriction) ──
 
 def test_friendly_bedrock_error_maps_data_retention():

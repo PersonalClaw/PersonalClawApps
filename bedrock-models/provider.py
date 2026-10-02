@@ -992,6 +992,9 @@ class BedrockProvider(ModelProvider):
                         text = delta.get("text", "")
                         if text:
                             loop.call_soon_threadsafe(queue.put_nowait, ("text", text))
+                    elif "messageStop" in event:
+                        reason = str(event["messageStop"].get("stopReason") or "")
+                        loop.call_soon_threadsafe(queue.put_nowait, ("stop", reason))
                     elif "metadata" in event:
                         usage = event["metadata"].get("usage", {})
                         loop.call_soon_threadsafe(queue.put_nowait, ("usage", usage))
@@ -1007,6 +1010,9 @@ class BedrockProvider(ModelProvider):
         output_tokens = 0
         cache_creation_tokens = 0
         cache_read_tokens = 0
+        # How the answer ended (`messageStop.stopReason`), carried on the terminal event:
+        # `max_tokens` is the one core must know, an answer cut at its Max Output Tokens.
+        stop_reason = ""
         error: Exception | None = None
         try:
             while True:
@@ -1017,6 +1023,8 @@ class BedrockProvider(ModelProvider):
                 if kind == "text":
                     assistant_text += payload
                     yield LLMEvent(kind=EVENT_TEXT_CHUNK, text=payload)
+                elif kind == "stop":
+                    stop_reason = payload
                 elif kind == "usage":
                     input_tokens = int(payload.get("inputTokens", input_tokens) or input_tokens)
                     output_tokens = int(payload.get("outputTokens", output_tokens) or output_tokens)
@@ -1038,6 +1046,7 @@ class BedrockProvider(ModelProvider):
 
         yield LLMEvent(
             kind=EVENT_COMPLETE,
+            stop_reason=stop_reason,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cache_creation_tokens=cache_creation_tokens,
@@ -1138,6 +1147,9 @@ class BedrockProvider(ModelProvider):
                     elif "contentBlockStop" in event:
                         block_index = event["contentBlockStop"].get("contentBlockIndex", 0)
                         loop.call_soon_threadsafe(queue.put_nowait, ("block_stop", block_index))
+                    elif "messageStop" in event:
+                        reason = str(event["messageStop"].get("stopReason") or "")
+                        loop.call_soon_threadsafe(queue.put_nowait, ("stop", reason))
                     elif "metadata" in event:
                         usage = event["metadata"].get("usage", {})
                         loop.call_soon_threadsafe(queue.put_nowait, ("usage", usage))
@@ -1155,6 +1167,9 @@ class BedrockProvider(ModelProvider):
         output_tokens = 0
         cache_creation_tokens = 0
         cache_read_tokens = 0
+        # How the answer ended (`messageStop.stopReason`), carried on the terminal event:
+        # `max_tokens` is the one core must know, an answer cut at its Max Output Tokens.
+        stop_reason = ""
         error: Exception | None = None
         try:
             while True:
@@ -1188,6 +1203,8 @@ class BedrockProvider(ModelProvider):
                             title=tool_name_rev.get(bucket["name"], bucket["name"]),
                             tool_input=bucket["arguments"],
                         )
+                elif kind == "stop":
+                    stop_reason = payload
                 elif kind == "usage":
                     input_tokens = int(payload.get("inputTokens", input_tokens) or input_tokens)
                     output_tokens = int(payload.get("outputTokens", output_tokens) or output_tokens)
@@ -1219,6 +1236,7 @@ class BedrockProvider(ModelProvider):
 
         yield LLMEvent(
             kind=EVENT_COMPLETE,
+            stop_reason=stop_reason,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cache_creation_tokens=cache_creation_tokens,
