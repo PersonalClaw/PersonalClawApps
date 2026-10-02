@@ -190,6 +190,9 @@ class S3SyncProvider(SyncTransportProvider):
 
     name = "s3-sync"
     display_name = "S3 Sync"
+    #: Each sync sends this machine's records as one whole copy; the cycle removes the copies a
+    #: newer one replaced (:meth:`remove`), so the bucket holds about one copy per machine.
+    removes_old_copies = True
 
     def __init__(
         self,
@@ -419,11 +422,11 @@ class S3SyncProvider(SyncTransportProvider):
         """What a store's non-2xx answer means, and what to do — by S3's own error ``code``
         where that pins the fix to one setting, else by the status's class. ``action`` is what S3
         Sync asked for: a ``write`` (a push, or the registry swap, conditional on the
-        ``condition`` header), a ``read`` of the object ``key``, or a ``list`` of the bucket — any
-        listing, the connection test's among them. The sentence alone: the caller says whether
-        the cycle retries, and adds the store's words."""
+        ``condition`` header), a ``read`` of the object ``key``, a ``list`` of the bucket — any
+        listing, the connection test's among them — or a ``remove`` of the object ``key``. The
+        sentence alone: the caller says whether the cycle retries, and adds the store's words."""
         endpoint, bucket = self._endpoint, self._bucket
-        request = {"write": "write", "read": "read", "list": "request"}[action]
+        request = {"write": "write", "read": "read", "list": "request", "remove": "removal"}[action]
         if status == 409 and action == "write" and code in _WRITE_IN_PROGRESS:
             return (
                 f"The store at {endpoint} was still busy with another conditional write to the "
@@ -477,6 +480,12 @@ class S3SyncProvider(SyncTransportProvider):
                 f"The store at {endpoint} was too busy to take S3 Sync's {request} — it is "
                 "limiting how fast it takes requests. If it keeps happening, check the store's "
                 "load and any request limits on the bucket."
+            )
+        if status in (401, 403) and action == "remove":
+            return (
+                f"The store at {endpoint} refused S3 Sync's removal of {key} from bucket {bucket}, "
+                "so the copies of your records a newer one replaced stay there. Let the key's "
+                f"policy delete objects in that bucket (s3:DeleteObject) — Access key ID {_ON_CARD}."
             )
         if status in (401, 403) and action == "read":
             return (
@@ -719,6 +728,28 @@ class S3SyncProvider(SyncTransportProvider):
             if resp is not None:  # None is a ref the store no longer has: dropped, not raised
                 out.append(SyncObject(key=ref.key, data=resp.body))
         return out
+
+    def remove(self, keys: list[str]) -> int:
+        """Remove the objects at *keys* from the bucket, one DELETE each, and return how many the
+        store removed. A key already gone is no error: S3 answers its removal as it answers any
+        other. A removal the store refuses raises :class:`S3RequestFailed`, said as what went
+        wrong, and the cycle tries again next time."""
+        if not self.configured or not keys:
+            return 0
+        removed = 0
+        for key in keys:
+            try:
+                resp = self._request("DELETE", self._object_url(key))
+            except Exception as e:  # noqa: BLE001 — every failure is said, then raised
+                raise self._raised(e) from e
+            if 200 <= resp.status < 300:
+                removed += 1
+                continue
+            code, words = _answer(resp)
+            if resp.status == 404 and code != "NoSuchBucket":
+                continue  # gone already
+            raise self._refusal(resp, code, words, action="remove", key=f"{self._prefix}{key}")
+        return removed
 
     def cas_registry(self, expected_sha: str | None, data: bytes) -> bool:
         """Compare-and-swap ``registry.json`` using S3 conditional writes.

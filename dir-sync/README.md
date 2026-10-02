@@ -56,6 +56,14 @@ convergence criterion (two machines sharing one folder reach the same merged sta
 - **Insert-only, idempotent.** Each shard object is written to `<root>/<key>` exactly
   once. A re-push of an existing key is skipped, never overwritten, so the sync cycle can
   retry freely after a lost race.
+- **The folder keeps each machine's newest copy.** A sync sends this machine's records as one
+  whole copy (`machines/<id>/seq-NNNN/`), and only when they changed since the copy before. Once
+  a newer copy has stood for 15 minutes — long enough for a machine that started reading the
+  older one to finish — the sync removes the older one, and any folder that leaves empty. So the
+  folder holds about one copy per machine, never a copy per sync. A machine that has been away
+  catches up from the newest copy; a record deleted elsewhere reaches it if it syncs within 90
+  days of the delete. The service your folder syncs through may keep removed files in its own
+  trash or version history for a while.
 - **Atomic writes.** Objects are written to a `.tmp-` file in the same directory, then
   `os.replace`d into place, so a reader never sees a half-written object and `list_remote`
   excludes the temp files.
@@ -76,11 +84,13 @@ convergence criterion (two machines sharing one folder reach the same merged sta
   transport only reads and writes files in the folder you choose. Whatever protects that
   folder (your disk, your cloud-sync account, your network share) is the only trust
   boundary.
-- **Nothing outside the folder is read or written.** Whoever else writes the folder can put
-  a link in it to any file on this machine, so Folder Sync follows none out of it: a key whose
-  path leaves the folder, through a link or with `..`, is refused before anything is read or
-  written; a link at the key itself is refused even when it points inside the folder; and a
-  listing follows no link, and names each one where it looks. The sync report names each
+- **Nothing outside the folder is read, written or removed.** Whoever else writes the folder
+  can put a link in it to any file on this machine, so Folder Sync follows none out of it: a key
+  whose path leaves the folder, through a link or with `..`, is refused before anything is read,
+  written or removed; a link at the key itself is refused even when it points inside the folder;
+  a listing follows no link, and names each one where it looks; and a removal opens each folder
+  on the way without following a link, so one made a link since its key was looked at leads
+  nowhere. The sync report names each
   refused key, and a change from another machine that holds one is not taken in. Take any link
   out of the folder.
 - **The folder holds shard objects only.** Secrets are excluded upstream by the durability

@@ -121,11 +121,17 @@ Objects are insert-only and idempotent on their key. Nothing here is ever overwr
 
 ## Costs and housekeeping
 
-Sync writes one small object per shard per cycle, so the cost driver is request count, not
-storage. Two knobs help: raise `durability.sync_interval_secs` to sync less often, and set a
-bucket **lifecycle rule** to expire old `machines/*/seq-*/` prefixes — old sequences are
-superseded once every machine has consumed them. This app never deletes, so expiry is yours
-to configure.
+A sync sends this machine's records as one whole copy (`seq-<n>/`), and only when they changed
+since the copy before. Once a newer copy has stood for 15 minutes — long enough for a machine
+that started reading the older one to finish — the sync removes the older one, one `DELETE` per
+object, so the bucket holds about one copy per machine. That needs the key's policy to allow
+`s3:DeleteObject` on the prefix; without it the copies stay, and Settings → Backups → Sync says
+the last sync couldn't remove them. To sync less often, raise `durability.sync_stale_after_secs`.
+
+Don't expire `machines/*/seq-*/` by age with a lifecycle rule: a machine whose records haven't
+changed keeps an old copy as its newest, and the others read that one. On a bucket with
+versioning on, a removal leaves the object's older version behind; a lifecycle rule that expires
+**noncurrent versions** is the one to set.
 
 ## Troubleshooting
 

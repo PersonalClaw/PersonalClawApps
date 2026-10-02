@@ -67,6 +67,12 @@ clone of an empty repo succeeds and the first push publishes the branch.
 - **Insert-only, idempotent.** Each shard object is written to `<clone>/<key>` exactly
   once. A re-push of an existing key is skipped, never overwritten, so the git history stays
   append-only per object and the sync cycle can retry freely after a lost race.
+- **Every copy stays.** A sync sends this machine's records as one whole copy
+  (`machines/<id>/seq-<n>/`), and only when they changed since the copy before. Git Sync removes
+  none of them — the repository's history is the record of what the assistant knew, which is the
+  point of this transport — and Settings → Backups → Sync says so. Unencrypted, git stores a file
+  it has seen before once, so a copy costs the repository what changed in it; encrypted, every
+  copy is new bytes, and costs its whole size.
 - **Catch up before every step.** Every push, read and registry swap first fetches the
   remote and replays this machine's unpushed commits on top of it (`git rebase`), so the
   clone carries everyone's objects. A remote with nothing on the branch yet has nothing to

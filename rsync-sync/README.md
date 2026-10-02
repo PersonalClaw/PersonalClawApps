@@ -141,10 +141,14 @@ which the loser re-applies on its next cycle. If you need a genuinely atomic reg
 
 ## Housekeeping
 
-This transport never deletes anything on the target. Old `machines/*/seq-*/` prefixes are
-superseded once every machine has consumed them, so prune them yourself when the sync root
-grows — a periodic `find /srv/personalclaw-sync/machines -type d -name 'seq-*' -mtime +90`
-review on the host is enough.
+This transport never deletes anything on the target, so the sync root keeps every copy a sync
+sends, and Settings → Backups → Sync says so. A sync sends this machine's records as one whole
+copy (`machines/<id>/seq-<n>/`), only when they changed since the copy before, and a machine
+reads only the newest copy of each of the others — the one `registry.json` names for it. Every
+other `seq-<n>/` folder of a machine is never read again, so remove those yourself when the sync
+root grows; never remove a machine's newest, whatever its age: a machine whose records haven't
+changed keeps an old copy as its newest. The local mirror under Local working directory keeps
+what each pull brought down, and can be cleared the same way.
 
 ## Troubleshooting
 
@@ -167,7 +171,7 @@ another machine rewriting the registry — are not a failure: what arrived is us
 | `Host key verification failed` | Expected on first contact. Connect once by hand to record the key; the app will not accept an unknown key for you. |
 | PersonalClaw couldn't start rsync on this machine | rsync is not installed here, or is not on the `PATH` PersonalClaw runs with. |
 | Misconfigured, with a character complaint | The host or path contains something that rsync could read as an option or a daemon spec. Use a plain hostname and a plain absolute path. |
-| Sync stalls, registry never updates | Two machines racing the registry, or a target whose clock is far from this machine's. Check `durability.sync_interval_secs` and the host's time. |
+| Sync stalls, registry never updates | Two machines racing the registry, or a target whose clock is far from this machine's. Check `durability.sync_stale_after_secs` and the host's time. |
 
 ## Layout on the target
 

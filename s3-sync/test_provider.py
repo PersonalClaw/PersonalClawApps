@@ -32,6 +32,7 @@ from typing import Any
 import pytest
 
 from provider import (
+    S3RequestFailed,
     S3SyncProvider,
     canonical_request,
     create_provider,
@@ -424,6 +425,16 @@ class _StubS3(http.server.BaseHTTPRequestHandler):
         headers = {} if self.server.suppress_etag else {"ETag": self._etag(data)}  # type: ignore[attr-defined]
         self._send(200, data, headers=headers)
 
+    def do_DELETE(self):  # noqa: N802
+        self.server.requests.append(("DELETE", self.path, dict(self.headers)))  # type: ignore[attr-defined]
+        if "Authorization" not in self.headers:
+            return self._send(403, b"<Error><Code>AccessDenied</Code></Error>")
+        _bucket, key, _q = self._split()
+        if ("DELETE", key) in self.server.answers:  # type: ignore[attr-defined]
+            return self._send(*self.server.answers[("DELETE", key)])  # type: ignore[attr-defined]
+        self.store.pop(key, None)  # S3 answers a key that isn't there as one that was
+        self._send(204)
+
     def _list(self, q):
         prefix = (q.get("prefix") or [""])[0]
         max_keys = int((q.get("max-keys") or ["1000"])[0])
@@ -588,6 +599,75 @@ class TestInsertOnly:
         # Header names are case-insensitive on the wire; read them that way.
         sent = {k.lower(): v for k, v in puts[0][2].items()}
         assert sent.get("if-none-match") == "*"
+
+
+class TestRemove:
+    """Each sync sends this machine's records as one whole copy, and nothing removed one: the
+    bucket took a full copy every fifteen minutes, for good. The cycle removes the copies a newer
+    one replaced through ``remove``."""
+
+    def test_s3_sync_removes_old_copies(self):
+        assert S3SyncProvider.removes_old_copies is True
+
+    def test_each_key_is_removed_by_one_signed_request_under_the_prefix(self, live, stub):
+        keys = ["machines/A/seq-0001/manifest.json", "machines/A/seq-0001/tasks.jsonl"]
+        live.push([SyncObject(key=k, data=b"x") for k in [*keys, "machines/A/seq-0002/manifest.json"]])
+
+        assert live.remove(keys) == 2
+
+        assert sorted(stub.store) == ["personalclaw/machines/A/seq-0002/manifest.json"]
+        deletes = [r for r in stub.requests if r[0] == "DELETE"]
+        assert [urllib.parse.unquote(r[1]) for r in deletes] == [
+            "/mybucket/personalclaw/machines/A/seq-0001/manifest.json",
+            "/mybucket/personalclaw/machines/A/seq-0001/tasks.jsonl",
+        ]
+        assert all("Authorization" in r[2] for r in deletes)
+
+    def test_a_key_already_gone_is_no_error(self, live, stub):
+        assert live.remove(["machines/A/seq-0001/manifest.json"]) == 1  # S3 can't tell: 204
+        stub.answers[("DELETE", "personalclaw/gone")] = (404, b"<Error><Code>NoSuchKey</Code></Error>")
+        assert live.remove(["gone"]) == 0
+        assert live.remove([]) == 0
+
+    def test_a_refused_removal_says_what_to_change(self, live, stub):
+        key = "machines/A/seq-0001/manifest.json"
+        stub.answers[("DELETE", f"personalclaw/{key}")] = (
+            403,
+            b"<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>",
+        )
+        with pytest.raises(S3RequestFailed) as refused:
+            live.remove([key])
+        said = str(refused.value)
+        assert f"refused S3 Sync's removal of personalclaw/{key} from bucket mybucket" in said
+        assert "s3:DeleteObject" in said
+
+    def test_an_unconfigured_transport_removes_nothing(self):
+        assert S3SyncProvider("", "").remove(["k"]) == 0
+
+    def test_the_bucket_keeps_this_machines_newest_copy_through_a_sync(
+        self, isolated_home, stub, live, monkeypatch
+    ):
+        from datetime import datetime, timedelta, timezone
+
+        from personalclaw.durability import crypto as crypto_mod
+        from personalclaw.durability.sync_cycle import run_sync_cycle
+
+        monkeypatch.setattr(crypto_mod, "load_passphrase", lambda: "a shared sync passphrase")
+        start = datetime(2026, 10, 2, 12, 0, tzinfo=timezone.utc)
+
+        def copies(minutes: int, title: str) -> list[str]:
+            _seed_task(isolated_home, "task-a", title)
+            when = (start + timedelta(minutes=minutes)).isoformat()
+            report = run_sync_cycle(live, isolated_home, self_id="A", now=when)
+            assert report.ok, report.error
+            return sorted(
+                {k.split("/")[3] for k in stub.store if k.startswith("personalclaw/machines/A/")}
+            )
+
+        assert copies(0, "one") == ["seq-0001"]
+        assert copies(15, "two") == ["seq-0001", "seq-0002"]
+        assert copies(40, "three") == ["seq-0002", "seq-0003"]
+        assert copies(60, "three") == ["seq-0003"]  # unchanged: none sent, the previous removed
 
 
 def _tiny_cap(monkeypatch, max_bytes: int = 64) -> None:

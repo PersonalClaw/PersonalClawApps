@@ -5,19 +5,25 @@ share, a mounted USB drive) and the durability layer converges through it, with 
 credentials and no server. The folder holds one object per shard key; the transport only
 moves bytes — the merge, the machine-seq registry, and the outbox live above it in core.
 
-Every method is insert-only and idempotent on the object key: a retried push of an object
-already present is a no-op (skipped, never overwritten), so the sync cycle can retry
-freely after a CAS race. A synced folder has no cross-process atomic compare-and-swap, so
-``cas_registry`` degrades to a rename-based lock (``os.mkdir`` on a lock directory, which
-is atomic on POSIX and on the network filesystems people sync through).
+A push is insert-only and idempotent on the object key: a retried push of an object already
+present is a no-op (skipped, never overwritten), so the sync cycle can retry freely after a
+CAS race. A synced folder has no cross-process atomic compare-and-swap, so ``cas_registry``
+degrades to a rename-based lock (``os.mkdir`` on a lock directory, which is atomic on POSIX
+and on the network filesystems people sync through).
 
-Nothing outside the sync folder is read or written. Whoever else writes the folder can put a
-link in it to any file on this machine: read through, that file would come in as another
-machine's object, and written through, an object would land on it. So a key is taken only as a
-path of plain names that stays inside the folder with every link on the way followed
-(``personalclaw.sdk.sync.is_path_in_store``), a link at the key itself is never followed, and a
-listing follows none; anything else is refused, named, before anything of the call is read or
-written (``KeysRefused``), and the sync report says which.
+Each sync sends this machine's records as one whole copy, and the cycle removes the copies a
+newer one replaced (``remove``), so the folder holds about one copy per machine rather than a
+copy per sync.
+
+Nothing outside the sync folder is read, written or removed. Whoever else writes the folder can
+put a link in it to any file on this machine: read through, that file would come in as another
+machine's object, written through, an object would land on it, and removed through, it would go.
+So a key is taken only as a path of plain names that stays inside the folder with every link on
+the way followed (``personalclaw.sdk.sync.is_path_in_store``), a link at the key itself is never
+followed, and a listing follows none; anything else is refused, named, before anything of the
+call is read, written or removed (``KeysRefused``), and the sync report says which. A removal
+also opens each folder on the way without following a link, so one made a link since its key
+was looked at leads nowhere.
 """
 
 import errno
@@ -61,6 +67,15 @@ _A_LINK = "is a link in the sync folder, which Folder Sync doesn't follow"
 
 #: Opens a file without following a link there: one put there since the key was looked at.
 _NO_FOLLOW = getattr(os, "O_NOFOLLOW", 0)
+#: Opens a folder, and only a folder.
+_A_FOLDER = getattr(os, "O_DIRECTORY", 0)
+
+#: Whether this system removes a file through the folders it opened (``unlinkat``), which is
+#: what keeps a removal from following a link put on the way since its key was looked at. One
+#: that can't keeps every copy, and says so (``removes_old_copies``).
+_REMOVES_SAFELY = bool(_NO_FOLLOW and _A_FOLDER) and all(
+    call in os.supports_dir_fd for call in (os.open, os.unlink, os.rmdir)
+)
 
 
 class DirSyncProvider(SyncTransportProvider):
@@ -68,6 +83,7 @@ class DirSyncProvider(SyncTransportProvider):
 
     name = "dir-sync"
     display_name = "Folder Sync"
+    removes_old_copies = _REMOVES_SAFELY
 
     def __init__(self, root: str = "") -> None:
         # Expand ``~`` and ``$VARS`` so a configured "~/synced/personalclaw" or
@@ -307,6 +323,55 @@ class DirSyncProvider(SyncTransportProvider):
                 os.rmdir(lock)
             except OSError:
                 pass
+
+    def remove(self, keys: list[str]) -> int:
+        """Remove the objects at *keys* from the sync folder, and the folders that leaves empty
+        (never the sync folder itself); return how many were there. A key already gone is no
+        error. One Folder Sync won't remove — not a path of plain names, leading out of the
+        folder through a link, or a link itself — is refused before any is removed."""
+        if not self._root or not keys:
+            return 0
+        self._paths(keys, "remove")
+        removed = 0
+        for key in keys:
+            removed += self._unlink(key)
+        return removed
+
+    def _unlink(self, key: str) -> int:
+        """Remove the file at *key*: 1 when it was there, 0 when it wasn't. Each folder on the way
+        is opened without following a link, and the file removed through the last of them, so a
+        folder made a link since *key* was looked at stops it here, refused, with nothing removed
+        through it; then each folder the removal emptied goes, deepest first."""
+        parts = key.split("/")
+        try:
+            fds = [os.open(self._root, os.O_RDONLY | _A_FOLDER)]
+        except FileNotFoundError:
+            return 0
+        try:
+            for name in parts[:-1]:
+                try:
+                    fds.append(
+                        os.open(name, os.O_RDONLY | _A_FOLDER | _NO_FOLLOW, dir_fd=fds[-1])
+                    )
+                except FileNotFoundError:
+                    return 0
+                except OSError as e:
+                    if e.errno in (errno.ELOOP, errno.ENOTDIR):  # made a link since
+                        raise self._refusal({key: _LEADS_OUT}, "remove") from None
+                    raise
+            try:
+                os.unlink(parts[-1], dir_fd=fds[-1])  # a link there is the link, never its file
+            except FileNotFoundError:
+                return 0
+            for depth in range(len(parts) - 1, 0, -1):
+                try:
+                    os.rmdir(parts[depth - 1], dir_fd=fds[depth - 1])
+                except OSError:
+                    break  # not empty (another object, a file the sync service keeps), or gone
+            return 1
+        finally:
+            for fd in reversed(fds):
+                os.close(fd)
 
     def test(self) -> ConnectionResult:
         if not self._root:

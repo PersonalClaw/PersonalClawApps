@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import json
 import os
 
 import pytest
@@ -501,3 +502,132 @@ def test_the_refusal_says_which_key_why_and_what_to_do(folder, tmp_path):
         f"Folder Sync won't read a key in {folder}: {key} {LEADS_OUT}. Take the link out of the "
         "sync folder: Folder Sync follows none out of it."
     )
+
+
+# ── remove ───────────────────────────────────────────────────────────────────────────
+#
+# Each sync sends this machine's records as one whole copy, and nothing removed one: the folder
+# took a full copy every fifteen minutes, for good. The cycle removes the copies a newer one
+# replaced through ``remove``, which must hold to the same rule as every other call: nothing
+# outside the sync folder, and no link followed.
+
+SEQ1 = "machines/a/seq-0001/"
+
+
+def _copy(root, prefix: str = SEQ1) -> list[str]:
+    keys = [f"{prefix}manifest.json", f"{prefix}tasks/entities.jsonl", f"{prefix}db/memory_db.db"]
+    DirSyncProvider(str(root)).push([SyncObject(k, b"x") for k in keys])
+    return keys
+
+
+def test_a_folder_sync_removes_old_copies():
+    assert DirSyncProvider.removes_old_copies is True
+
+
+def test_remove_removes_the_objects_and_the_folders_it_empties(tmp_path):
+    keys = _copy(tmp_path)
+    _copy(tmp_path, "machines/a/seq-0002/")
+    p = DirSyncProvider(str(tmp_path))
+
+    assert p.remove(keys) == 3
+
+    assert not (tmp_path / "machines" / "a" / "seq-0001").exists()
+    assert (tmp_path / "machines" / "a" / "seq-0002" / "manifest.json").is_file()
+    assert [r.key for r in p.list_remote(SEQ1)] == []
+
+
+def test_remove_is_idempotent_and_counts_what_was_there(tmp_path):
+    keys = _copy(tmp_path)
+    p = DirSyncProvider(str(tmp_path))
+    assert p.remove(keys[:1]) == 1
+    assert p.remove(keys) == 2  # the first was gone already: no error
+    assert p.remove(keys) == 0
+    assert p.remove([]) == 0 and DirSyncProvider("").remove(keys) == 0
+
+
+def test_remove_never_removes_the_sync_folder(tmp_path):
+    root = tmp_path / "sync"
+    p = DirSyncProvider(str(root))
+    p.push([SyncObject("only.json", b"x")])
+    assert p.remove(["only.json"]) == 1
+    assert root.is_dir() and list(root.iterdir()) == []
+
+
+def test_remove_leaves_a_folder_something_else_still_holds(tmp_path):
+    keys = _copy(tmp_path)
+    (tmp_path / "machines" / "a" / "seq-0001" / ".DS_Store").write_bytes(b"finder")
+    assert DirSyncProvider(str(tmp_path)).remove(keys) == 3
+    assert (tmp_path / "machines" / "a" / "seq-0001" / ".DS_Store").is_file()
+
+
+def test_a_key_that_climbs_out_or_leads_out_is_refused_and_nothing_is_removed(folder, tmp_path):
+    keys = _copy(folder)
+    _plant(folder, "machines/b", tmp_path / "elsewhere")
+    (tmp_path / "elsewhere" / "seq-0001").mkdir()
+    (tmp_path / "elsewhere" / "seq-0001" / "x.jsonl").write_bytes(OUTSIDE)
+    p = DirSyncProvider(str(folder))
+
+    assert _refused(lambda: p.remove([keys[0], "../outside.txt"])) == {
+        "../outside.txt": NOT_A_PATH
+    }
+    assert _refused(lambda: p.remove([keys[0], f"{PEERS}x.jsonl"])) == {
+        f"{PEERS}x.jsonl": LEADS_OUT
+    }
+    assert (tmp_path / "outside.txt").read_bytes() == OUTSIDE
+    assert (tmp_path / "elsewhere" / "seq-0001" / "x.jsonl").read_bytes() == OUTSIDE
+    assert (folder / keys[0]).is_file(), "part of a refused removal went ahead"
+
+
+def test_a_link_at_the_key_is_refused_and_neither_it_nor_its_file_goes(folder, tmp_path):
+    key = f"{PEERS}tasks/entities.jsonl"
+    _plant(folder, key, tmp_path / "outside.txt")
+    assert _refused(lambda: DirSyncProvider(str(folder)).remove([key])) == {key: LEADS_OUT}
+    assert (folder / key).is_symlink() and (tmp_path / "outside.txt").read_bytes() == OUTSIDE
+
+
+def test_a_folder_made_a_link_after_the_key_was_looked_at_removes_nothing_outside(
+    folder, tmp_path, monkeypatch
+):
+    """The key is looked at, then each folder on the way opened without following a link: a
+    link put there in between leads nowhere. Played by a look that finds nothing wrong."""
+    (tmp_path / "elsewhere" / "seq-0001").mkdir()
+    (tmp_path / "elsewhere" / "seq-0001" / "x.jsonl").write_bytes(OUTSIDE)
+    _plant(folder, "machines/b", tmp_path / "elsewhere")
+    monkeypatch.setattr(
+        DirSyncProvider, "_path", lambda self, k: (os.path.join(self._root, *k.split("/")), "")
+    )
+    key = f"{PEERS}x.jsonl"
+
+    assert _refused(lambda: DirSyncProvider(str(folder)).remove([key])) == {key: LEADS_OUT}
+    assert (tmp_path / "elsewhere" / "seq-0001" / "x.jsonl").read_bytes() == OUTSIDE
+
+
+def test_the_folder_keeps_this_machines_newest_copy_through_a_sync(tmp_path, monkeypatch):
+    """Driven through the sync cycle on a real folder: a copy per change, and the copy a newer
+    one replaced removed once the newer has stood fifteen minutes."""
+    from datetime import datetime, timedelta, timezone
+
+    from personalclaw.durability import crypto as crypto_mod
+    from personalclaw.durability.sync_cycle import run_sync_cycle
+
+    monkeypatch.setattr(crypto_mod, "load_passphrase", lambda: "a passphrase for this test")
+    home, root = tmp_path / "home", tmp_path / "sync"
+    (home / "tasks").mkdir(parents=True)
+    p = DirSyncProvider(str(root))
+    start = datetime(2026, 10, 2, 12, 0, tzinfo=timezone.utc)
+
+    def cycle(minutes: int, title: str | None):
+        if title is not None:
+            (home / "tasks" / "t1.json").write_text(json.dumps({"id": "t1", "title": title}))
+        report = run_sync_cycle(
+            p, home, self_id="a", now=(start + timedelta(minutes=minutes)).isoformat()
+        )
+        assert report.ok, report.error
+        return sorted(d.name for d in (root / "machines" / "a").iterdir())
+
+    assert cycle(0, "one") == ["seq-0001"]
+    assert cycle(15, None) == ["seq-0001"]  # nothing changed: nothing sent
+    assert cycle(30, "two") == ["seq-0001", "seq-0002"]
+    assert cycle(46, None) == ["seq-0002"]
+    assert cycle(61, "three") == ["seq-0002", "seq-0003"]
+    assert cycle(90, "four") == ["seq-0003", "seq-0004"]
