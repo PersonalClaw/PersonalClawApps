@@ -215,6 +215,16 @@ Stated plainly, because the difference matters.
 
 None of these are faked or asserted as done anywhere in this bundle.
 
+## What it starts
+
+Install consent names this before anything installs (the manifest's `launches`):
+
+- It starts the `git` program installed on this machine, as you and outside PersonalClaw, to
+  keep the notebook's history: each note you save or delete is committed in the notebook
+  folder, and an older version is read back from it; `personalclaw doctor` runs
+  `git --version`. It runs with your own git settings, and with the notebook folder's own,
+  which can add commands of their own for it to run.
+
 ## License
 
 MIT — see `LICENSE`.

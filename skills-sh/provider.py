@@ -1,9 +1,11 @@
 """skills.sh marketplace client for PersonalClaw.
 
 Implements ``SkillsMarketplace`` (a read-only source: ``search`` + ``fetch``)
-against the skills.sh REST API (https://skills.sh/api/v1). If no API key is
-configured the client falls back to the ``npx skills add <id>`` CLI — into a
-throwaway temp dir — to read a skill's files for search/fetch. Committing to the
+against the skills.sh REST API (https://skills.sh/api/v1). With no API key
+configured, a search runs ``npx -y skills find <query>`` (npx downloads the
+``skills`` npm package and runs it), and a fetch clones the skill's repository
+from GitHub into a throwaway temp dir to read its files; the manifest's
+``launches`` declares both, so install consent names them. Committing to the
 live skills tree is never this client's job: ``SkillsRegistry.install_guarded``
 scans the fetched payload and writes the exact scanned bytes via the shared
 ``install_skill_files`` chokepoint.
@@ -48,8 +50,8 @@ class _EgressRefused(RuntimeError):
 class SkillsShMarketplace(SkillsMarketplace):
     """skills.sh marketplace client.
 
-    API key is resolved lazily from the credential store; the client
-    degrades to the ``npx skills add`` CLI fallback when no key is set.
+    API key is resolved lazily from the credential store; with no key set, a
+    search runs the ``skills`` CLI through ``npx`` and a fetch clones from GitHub.
     """
 
     @property

@@ -190,6 +190,14 @@ Stated plainly, because the difference matters.
 
 None of these are faked or asserted as done anywhere in this bundle.
 
+## What it starts
+
+Install consent names this before anything installs (the manifest's `launches`):
+
+- It starts the `gh` program installed on this machine, as you and outside PersonalClaw,
+  with your own `gh` sign-in and settings: `gh pr diff` for each pull request it reviews,
+  and `gh auth status` for `personalclaw doctor`. It never writes to GitHub.
+
 ## Network
 
 Reaches GitHub through your `gh` CLI: `github.com`, or the GitHub Enterprise host `gh` is signed in to.

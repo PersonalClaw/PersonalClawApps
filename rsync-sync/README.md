@@ -178,6 +178,15 @@ another machine rewriting the registry — are not a failure: what arrived is us
 <path>/machines/<machine-id>/seq-<n>/<domain>/<file>     # shard objects (encrypted by default)
 ```
 
+## What it starts
+
+Install consent names these before anything installs (the manifest's `launches`):
+
+- It starts the `rsync` program installed on this machine, as you and outside PersonalClaw,
+  to copy your PersonalClaw data to the folder or host you set and read it back.
+- To reach a host, rsync starts `ssh`, with your own ssh sign-in (your SSH agent and keys) and
+  settings.
+
 ## Network
 
 Reaches only the host you set in **SSH host**, over ssh. With **SSH host** empty, it syncs to **Sync root path** on this machine and reaches nothing.

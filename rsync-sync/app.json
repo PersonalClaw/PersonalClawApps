@@ -1,6 +1,6 @@
 {
   "name": "rsync-sync",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "displayName": "Rsync Sync",
   "description": "Sync PersonalClaw state between your machines with rsync over ssh. Any host you can already log into works — a home server, a NAS, a VPS. No object store, no credentials beyond your existing ssh key. Shards are encrypted end-to-end by default, and secrets are excluded upstream so they never reach the host.",
   "icon": "Server",
@@ -13,6 +13,20 @@
   "permissions": {
     "network": true
   },
+  "launches": [
+    {
+      "program": "rsync",
+      "why": "rsync copies your PersonalClaw data to the folder or host you set, and reads it back from there."
+    },
+    {
+      "program": "ssh",
+      "why": "rsync starts ssh to reach the host you set, when you set one.",
+      "inherits": [
+        "sign-in",
+        "settings"
+      ]
+    }
+  ],
   "cli": {
     "setup": "app_cli:setup",
     "doctor": "app_cli:doctor"

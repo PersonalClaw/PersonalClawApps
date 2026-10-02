@@ -107,6 +107,14 @@ python -m pytest git-repo -q
 The tests run real `git` against local fixture repos and drive the remote path through a
 canned GitHub backend — **no network, no credentials, no gateway**.
 
+## What it starts
+
+Install consent names this before anything installs (the manifest's `launches`):
+
+- It starts the `git` program installed on this machine, as you and outside PersonalClaw,
+  with your own git settings, to read the commits and files of the local clone you point it
+  at. It runs only commands that read the clone.
+
 ## License
 
 MIT — see `LICENSE`.

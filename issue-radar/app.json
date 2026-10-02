@@ -1,6 +1,6 @@
 {
   "name": "issue-radar",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Issue Radar",
   "description": "Triages a repository's open issues through your local gh or glab. It suggests labels from the repository's own label set and ranks the queue by which issues need a maintainer first. Investigation notes stay on your machine, and nothing is ever labeled, commented on or closed on the tracker.",
   "icon": "Radar",
@@ -21,6 +21,24 @@
     "storage": true,
     "network": true
   },
+  "launches": [
+    {
+      "program": "gh",
+      "why": "Issue Radar reads a GitHub repository's open issues and labels with gh, and personalclaw doctor runs gh auth status. It never writes to a tracker.",
+      "inherits": [
+        "sign-in",
+        "settings"
+      ]
+    },
+    {
+      "program": "glab",
+      "why": "Issue Radar reads a GitLab project's open issues and labels with glab, and personalclaw doctor runs glab auth status. It never writes to a tracker.",
+      "inherits": [
+        "sign-in",
+        "settings"
+      ]
+    }
+  ],
   "provider": {
     "type": "tool",
     "implementation": "provider:create_provider",

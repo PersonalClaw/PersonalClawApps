@@ -455,6 +455,11 @@ example.
   "why": "Claude Code does the work of each chat ...",  // what the app uses it for (300)
   "inherits": ["sign-in", "settings", "auto-approve-rules", "folder-settings"],
   "inheritsWhile": {"setting": "isolated_config", "value": false} // optional
+}, {
+  "program": "npx",
+  "why": "Without a skills.sh API key, each search you make runs skills find ...",
+  "npmPackage": "skills",                               // what npx downloads and runs
+  "hosts": ["registry.npmjs.org", "skills.sh"]          // optional: the hosts it reaches (10)
 }],
 "writes": [{
   "path": "cc-config",                                  // in the PersonalClaw folder, or "~/…" (200)
@@ -478,10 +483,30 @@ widens what a program inherits, asks for consent again:
   Declare it for an agent CLI that reads a project's own config. When one of your provider's boolean
   settings decides that, name it in `inheritsWhile`: consent then says "While Isolated Claude
   settings is off, …" in the setting's own label, and where it starts.
+  - `hosts` names the hosts the program reaches (`"github.com"`: lowercase, no scheme, port or
+    path), and consent says "It reaches …".
+  - An `npx` entry names the npm package npx downloads and runs in `npmPackage`, and every `npx`
+    entry must. Consent says that each time, npx fetches the newest version of that package from
+    the npm registry and runs it as you, and that npm runs its install scripts. Your code must run
+    exactly that package, by name and with no version (`npx -y skills find …`): `skills-sh` is the
+    worked example.
+  - When the owner chooses the program, as with a runbook action they wrote, the program is `*`.
+    Consent says "Starts the programs you name for it", and `why` says where they name them. A `*`
+    entry covers no program your own code names, and lets core start nothing: `ops` is the worked
+    example.
 - **`dependencies.npmPackages`** is each npm package core may install for the app into
   `<home>/acp-adapters` when it is installed or switched on (`provision_acp_adapter`), or fetch
-  with `npx` until it is. Names only, no versions.
-- **`writes`** is each place outside your app's folder its code writes.
+  with `npx` until it is. Names only, no versions. A package your own code runs with `npx` is not
+  one of these: core never installs it, and its `launches` entry names it.
+- **`writes`** is each place outside your app's folder its code writes, the programs it starts
+  included (`~/.npm`, where npx keeps what it downloads).
+
+The `launches-declared` CI job (`.github/scripts/check_launches_declared.py`) reads every spawn in
+your app's own code (`subprocess`, `asyncio.create_subprocess_*`, `os.system`, `os.exec*`,
+`os.spawn*`, `pty.spawn`) and fails the app for a program its manifest does not declare, or an
+`npx` that runs a package its entry does not name. Start a program by name (a literal argv,
+`shutil.which("<name>")`, `git_argv`, `find_ffmpeg`) so the rail can read it; its docstring lists
+the shapes it reads, and what to do when your code hands a program on at run time.
 
 An agent app that keeps its CLI's sessions to a config of their own passes the CLI's
 per-session options with `register_acp_cli_entry(session_meta={...})`: a JSON object core adds as

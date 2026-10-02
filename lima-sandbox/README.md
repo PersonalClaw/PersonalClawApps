@@ -94,6 +94,15 @@ sandbox tier is chosen.
   `limactl start`); the settings here are an advisory record for the degradation dialog, not a
   second enforcement path.
 
+## What it starts
+
+Install consent names this before anything installs (the manifest's `launches`):
+
+- It starts the `limactl` program installed on this machine, as you and outside
+  PersonalClaw, with your own Lima settings: `limactl shell` runs each command sent to the
+  isolated tier inside your Lima virtual machine, and `limactl list` checks that the machine
+  is running. It never creates or starts one.
+
 ## License
 
 MIT — see `LICENSE`.

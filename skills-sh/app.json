@@ -1,6 +1,6 @@
 {
   "name": "skills-sh",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "displayName": "Skills.sh Marketplace",
   "description": "Browse and install community skills from skills.sh. Search, preview, and manage external skill packages.",
   "icon": "Store",
@@ -14,6 +14,38 @@
   "permissions": {
     "network": true
   },
+  "launches": [
+    {
+      "program": "npx",
+      "why": "Without a skills.sh API key, or when the skills.sh API fails, each search you make runs skills find with what you typed.",
+      "inherits": [
+        "sign-in",
+        "settings"
+      ],
+      "npmPackage": "skills",
+      "hosts": [
+        "registry.npmjs.org",
+        "skills.sh"
+      ]
+    },
+    {
+      "program": "git",
+      "why": "Without a skills.sh API key, showing or installing a skill clones its repository from GitHub into a temporary folder, which is removed once its files are read.",
+      "inherits": [
+        "sign-in",
+        "settings"
+      ],
+      "hosts": [
+        "github.com"
+      ]
+    }
+  ],
+  "writes": [
+    {
+      "path": "~/.npm",
+      "why": "npx keeps the skills package it downloads, and the packages it depends on, in npm's own cache folder."
+    }
+  ],
   "provider": {
     "type": "skills",
     "implementation": "provider:create_provider",
@@ -30,7 +62,7 @@
           "default": "",
           "x-meta": {
             "label": "API Key",
-            "help": "Skills.sh API key for search and install. Get one at skills.sh/settings. Without this, search uses npx CLI (slower) and install may fail.",
+            "help": "Skills.sh API key for search and install. Get one at skills.sh/settings. Without one, each search runs the skills command line through npx, which downloads and runs the skills npm package, and showing or installing a skill clones its repository from GitHub.",
             "sensitive": true
           }
         }

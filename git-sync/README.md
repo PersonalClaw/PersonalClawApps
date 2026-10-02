@@ -186,6 +186,16 @@ clone of an empty repo succeeds and the first push publishes the branch.
   shards plaintext so `git log -p` stays human-readable — the readable history is the value.
   Point it at a remote whose access you control; anyone who can read the repo has the state.
 
+## What it starts
+
+Install consent names this before anything installs (the manifest's `launches`):
+
+- It starts the `git` program installed on this machine, as you and outside PersonalClaw: it
+  clones your remote into the working clone you set, commits there, and pulls and pushes. It
+  runs with your own git sign-in and settings (or, with an Access token set, that token), and
+  with the working clone's own git settings, which can add commands of their own for it to
+  run.
+
 ## Network
 
 Reaches only the git remote you set in **Git remote URL**, over HTTPS or SSH.

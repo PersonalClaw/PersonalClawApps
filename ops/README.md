@@ -331,6 +331,16 @@ Stated plainly, because the difference matters.
 
 None of these are faked or asserted as done anywhere in this bundle.
 
+## What it starts
+
+Install consent names this before anything installs (the manifest's `launches`):
+
+- While **Allow gated remediation** is on (it starts off), applying a fix starts the program a
+  runbook action of yours declares, exactly as your runbook gives it, as you and outside
+  PersonalClaw, with your own sign-in and settings for that program. No program can be named
+  before you write a runbook, so the entry's program is `*` and consent says "Starts the
+  programs you name for it".
+
 ## License
 
 MIT — see `LICENSE`.

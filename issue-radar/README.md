@@ -277,6 +277,18 @@ Stated plainly, because the difference matters.
 
 None of these are faked or asserted as done anywhere in this bundle.
 
+## What it starts
+
+Install consent names these before anything installs (the manifest's `launches`):
+
+- It starts the `gh` program installed on this machine, as you and outside PersonalClaw,
+  with your own `gh` sign-in and settings, to read a GitHub repository's open issues and
+  labels; `personalclaw doctor` runs `gh auth status`.
+- It starts the `glab` program the same way for a GitLab project, and `personalclaw doctor`
+  runs `glab auth status`.
+
+It never writes to a tracker.
+
 ## Network
 
 Reaches GitHub or GitLab through your `gh` or `glab` CLI: `github.com` or `gitlab.com`, or the host each is signed in to.

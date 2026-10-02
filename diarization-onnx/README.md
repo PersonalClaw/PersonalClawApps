@@ -34,6 +34,13 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 Reads every recording through `ffmpeg` (a voice memo's `.m4a`, an `.mp3`, a video's audio), resampled to what the model hears, so `ffmpeg` must be installed. It runs the one PersonalClaw finds, on the `PATH` the gateway started with or in `~/.local/bin`, `/opt/homebrew/bin` or `/usr/local/bin`, by that path. Settings → Models says so, and where it looked, when there is none, and a recording it cannot read fails its diarization step with ffmpeg's own words.
 
+## What it starts
+
+Install consent names this before anything installs (the manifest's `launches`):
+
+- It starts the `ffmpeg` program installed on this machine, as you and outside
+  PersonalClaw, to decode each recording into the sound the speaker model hears.
+
 ## Network
 
 Downloads its two models from `github.com` (the sherpa-onnx releases) when you download them; diarizing runs on this machine.

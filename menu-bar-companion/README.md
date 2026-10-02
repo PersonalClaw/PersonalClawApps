@@ -183,6 +183,16 @@ python3 -m pytest menu-bar-companion -q
 No PersonalClaw core import anywhere outside `test_manifest.py` (which checks the
 manifest against core's own `AppManifest.from_dict`, and skips when core is absent).
 
+## What it starts
+
+Install consent names these before anything installs (the manifest's `launches`). Both run on
+your Mac, from the companion's own process:
+
+- `open` opens a loop that needs your input in the PersonalClaw dashboard, in your browser,
+  when you pick it from the menu.
+- `osascript` shows a macOS notification, unless you mute notifications in its Settings
+  menu.
+
 ## Network
 
 Reaches only the PersonalClaw gateway URL you give it (`run.py --configure`, or `PERSONALCLAW_COMPANION_URL`).

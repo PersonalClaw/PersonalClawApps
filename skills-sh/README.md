@@ -31,7 +31,24 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 | Key | Label | Notes |
 |---|---|---|
-| `api_key` | API Key | Skills.sh API key for search and install. Get one at skills.sh/settings. Without this, search uses npx CLI (slower) and install may fail. |
+| `api_key` | API Key | Skills.sh API key for search and install. Get one at skills.sh/settings. Without one, each search runs the skills command line through npx, which downloads and runs the skills npm package, and showing or installing a skill clones its repository from GitHub. |
+
+## What it starts
+
+Install consent names these before anything installs (the manifest's `launches` and `writes`).
+Both run only without a skills.sh API key, and a search also when the skills.sh API fails:
+
+- Each search starts `npx`, as you and outside PersonalClaw. npx fetches the newest version of
+  the npm package `skills` from the npm registry, unless npm already holds it, and runs
+  `skills find` with what you typed; npm runs the install scripts of that package and of every
+  package it depends on. It reaches `registry.npmjs.org` and `skills.sh`, runs with your own
+  npm sign-in and settings (`~/.npmrc`), and keeps what it downloads in npm's cache
+  (`~/.npm`).
+- Showing or installing a skill starts `git`, which clones the skill's repository from
+  `github.com` into a temporary folder, removed once its files are read, with your own git
+  sign-in and settings.
+
+With an API key, search and fetch go to the skills.sh API from the app's own code instead.
 
 ## Network
 

@@ -142,6 +142,12 @@ jobs:
         # Drives the rail's own script against seeded trees: an undeclared reach, a declared
         # `false`, an unreadable file and a lost floor signal each red it; a clean tree is green.
         run: python -m pytest .github/tests/test_network_declared.py -q
+      - name: The launch-declaration rail reds on a planted defect
+        # Drives the rail's own script against seeded trees: an undeclared program, another program
+        # declared in its place, `*` standing in for a named one, npx running a package its entry
+        # does not name, an unreadable spawn, a stale hand-read spawn, an unparseable file and a lost
+        # floor app each red it; a clean tree is green.
+        run: python -m pytest .github/tests/test_launches_declared.py -q
       - name: The egress-policy rail reds on a planted defect
         # Drives the rail's own script against seeded trees: each shape of a request the owner's
         # network settings do not reach, a failed check that lets the request go ahead, an unnamed
@@ -324,6 +330,19 @@ jobs:
           python-version: "3.12"
       - name: Every child an app starts says where its environment comes from
         run: python .github/scripts/check_child_process_env.py
+
+  launches-declared:
+    # Every program an app's code starts is declared under `launches`: install consent names each
+    # one, what of the owner's it runs with, the package an npx entry downloads and runs, and the
+    # hosts it reaches. Pure-stdlib AST rail, no core install, the same script run locally.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Every program an app starts is declared
+        run: python .github/scripts/check_launches_declared.py
 
   network-declared:
     # Every app whose code reaches the network declares `"network": true`: install consent

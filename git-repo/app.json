@@ -1,6 +1,6 @@
 {
   "name": "git-repo",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Git Repository",
   "description": "Index the CONTENT of a git repository you own into your knowledge library. Source code AND docs, from a local clone or a github.com URL; each file becomes a searchable knowledge item, and a re-poll after a new commit ingests only the changed files (commit-cursor), never the whole tree. Remote fetches route through the core network chokepoint; it owns no socket.",
   "icon": "GitBranch",
@@ -77,6 +77,15 @@
   "permissions": {
     "network": true
   },
+  "launches": [
+    {
+      "program": "git",
+      "why": "git reads the commits and files of the local clone you point the app at, to index them. It runs only commands that read the clone.",
+      "inherits": [
+        "settings"
+      ]
+    }
+  ],
   "quality": {
     "tested": true
   }

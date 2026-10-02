@@ -273,6 +273,14 @@ Stated plainly, because the difference matters.
 
 None of these are faked or asserted as done anywhere in this bundle.
 
+## What it starts
+
+Install consent names this before anything installs (the manifest's `launches`):
+
+- It starts the `git` program installed on this machine, as you and outside PersonalClaw,
+  with your own git settings, to read the source repository you set: a spec is seeded from
+  its files at a commit. It only reads; `personalclaw doctor` runs `git --version`.
+
 ## License
 
 MIT — see `LICENSE`.

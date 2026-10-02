@@ -1,6 +1,6 @@
 {
   "name": "git-sync",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "displayName": "Git Sync",
   "description": "Sync PersonalClaw state between your machines through a git remote you own. The transport keeps a local working clone and moves durability shard objects as files it commits and pushes, so `git log -p` over the shards is a human-diffable audit history of what the assistant knows — the whole point of this transport. It stays plaintext (never encrypted) so that history stays readable; secrets are excluded upstream and never touch it.",
   "icon": "GitBranch",
@@ -13,6 +13,17 @@
   "permissions": {
     "network": true
   },
+  "launches": [
+    {
+      "program": "git",
+      "why": "git keeps your synced PersonalClaw data in the working clone you set and syncs it with your remote: it clones, commits, pulls and pushes. With an Access token set, it signs in with that token instead of yours.",
+      "inherits": [
+        "sign-in",
+        "settings",
+        "folder-settings"
+      ]
+    }
+  ],
   "provider": {
     "type": "sync",
     "implementation": "provider:create_provider",

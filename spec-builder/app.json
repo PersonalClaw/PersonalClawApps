@@ -1,6 +1,6 @@
 {
   "name": "spec-builder",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Spec Builder",
   "description": "Write a spec, then compile it into a workflow definition PersonalClaw's engine runs. The spec spells out the problem, done-when clauses, steps, and how done-ness is decided. It is the artifact you review and argue with; the compiled definition is what executes, and this app never runs one.",
   "icon": "ClipboardList",
@@ -20,6 +20,15 @@
     "storage": true,
     "network": false
   },
+  "launches": [
+    {
+      "program": "git",
+      "why": "git reads the source repository you set: a spec is seeded from its files at a commit. It only reads.",
+      "inherits": [
+        "settings"
+      ]
+    }
+  ],
   "provider": {
     "type": "tool",
     "implementation": "provider:create_provider",
