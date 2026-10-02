@@ -100,17 +100,18 @@ class WebToolProvider(ToolProvider):
             ToolDefinition(
                 name="web_fetch",
                 description=(
-                    "Fetch a web page and get its main content as clean markdown. Only "
-                    "fetch URLs that appeared in the conversation (e.g. a web_search "
-                    "result) — not URLs constructed from memory. Large pages paginate: "
-                    "if the result is truncated, call again with the returned next_index. "
-                    "Routed through the SSRF-safe egress guard. Read-only."
+                    "Fetch a web page and get its main content as clean markdown. It opens "
+                    "a link the user wrote or pasted in their own message, or one a "
+                    "web_search or web_fetch returned in this chat; a link found only in "
+                    "a page or another tool's output, or made up, is refused. Large pages "
+                    "paginate: if the result is truncated, call again with the returned "
+                    "next_index. Routed through the SSRF-safe egress guard. Read-only."
                 ),
                 provider=self.name,
                 parameters={
                     "type": "object",
                     "properties": {
-                        "url": {"type": "string", "description": "The http(s) URL to fetch (must have appeared in context)."},
+                        "url": {"type": "string", "description": "The http(s) URL to fetch: one the user gave, or a web_search or web_fetch returned."},
                         "max_tokens": {
                             "type": "integer",
                             "description": "Approximate content budget per call (default 5000). Larger pages paginate.",
@@ -135,14 +136,14 @@ class WebToolProvider(ToolProvider):
                     "Fetch a web page and extract STRUCTURED data from it as a JSON object, "
                     "per your instructions (describe the fields/shape you want). Use this "
                     "instead of web_fetch when you need specific values pulled out (prices, "
-                    "dates, a table, contact details) rather than the page's prose. Only "
-                    "extract from URLs that appeared in the conversation. Read-only."
+                    "dates, a table, contact details) rather than the page's prose. It "
+                    "opens the same links web_fetch does. Read-only."
                 ),
                 provider=self.name,
                 parameters={
                     "type": "object",
                     "properties": {
-                        "url": {"type": "string", "description": "The http(s) URL to extract from (must have appeared in context)."},
+                        "url": {"type": "string", "description": "The http(s) URL to extract from: one the user gave, or a web_search or web_fetch returned."},
                         "instructions": {
                             "type": "string",
                             "description": "What to extract — the fields/shape wanted (e.g. \"the product name, price, and in-stock boolean\" or \"a list of {title, author, year} for each cited paper\").",
@@ -218,7 +219,7 @@ class WebToolProvider(ToolProvider):
         # shows the notice above the results.
         payload = result.to_dict()
         # Record the surfaced URLs so a follow-up web_fetch of any result passes the
-        # provenance gate (the agent found the link here, didn't fabricate it).
+        # provenance gate (a search returned the link; the model didn't write it).
         record_seen_urls(_session_key(), result.sources)
         # Search results are external content (titles/snippets/answers scraped from
         # arbitrary pages), so an injection could hide in a snippet. Fence the FREE-TEXT
