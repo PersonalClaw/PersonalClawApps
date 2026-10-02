@@ -300,6 +300,12 @@ _BRIEF = {
     "summary": "Can: runs a command · Risk: Destructive",
     "answers": _ONE_CALL,
 }
+#: What core says, on a line of its own, of a command reaching a host off the allowed hosts.
+_REACH = (
+    "It reaches pkgs.example.com, which is not on Allowed hosts in Settings → Security → Network "
+    "egress. A command that reaches a host off that list, or one it does not name, is always asked "
+    "about, whatever this chat or its agent allows."
+)
 
 
 class TestApproval:
@@ -407,6 +413,29 @@ class TestApproval:
         assert await asyncio.wait_for(task, timeout=1.0) is True
         # Answered, the prompt keeps what was approved, with the outcome under it.
         assert d._api.edits[-1]["text"] == to_markdown_v2(f"{source}\n✅ Approved")
+
+    @pytest.mark.asyncio
+    async def test_a_host_off_the_allowed_hosts_is_named_on_a_line_of_its_own(self):
+        """The card names a host off the owner's allowed hosts on a line under its chips, and the
+        prompt names it on a line under the summary, in core's words."""
+        from telegram_runtime.format import to_markdown_v2
+
+        d = _delivery(owner="42")
+        brief = {**_BRIEF, "reach": _REACH}
+        task = asyncio.ensure_future(d.request_approval(_Event("reqR", brief=brief), source="t"))
+        await asyncio.sleep(0)
+        (prompt,) = d._api.sent
+        assert prompt["text"] == to_markdown_v2(
+            "🔐 [t] Approve `execute_bash`?\n"
+            "```\n"
+            '{"command": "deploy --token [REDACTED: credential] --env staging"}\n'
+            "```\n"
+            "ship the staging build\n"
+            "Can: runs a command · Risk: Destructive\n"
+            f"{_REACH}"
+        )
+        await d.resolve_callback({"id": "c", "data": "a1:reqR", "from": {"id": 42}})
+        assert await asyncio.wait_for(task, timeout=1.0) is False
 
     @pytest.mark.asyncio
     async def test_arguments_holding_a_code_fence_cannot_close_the_block(self):

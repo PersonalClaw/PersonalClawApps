@@ -318,6 +318,37 @@ class TestApprovalBriefOnTheNotification:
         context = [e["text"] for b in blocks if b["type"] == "context" for e in b["elements"]]
         assert context == ["clear the old build", "Can: writes files, runs a command · Risk: Destructive"]
 
+    @pytest.mark.asyncio
+    async def test_a_host_off_the_allowed_hosts_is_named_on_a_line_of_its_own(self):
+        """The card names a host off the owner's allowed hosts on a line under its chips, and the
+        prompt names it in a line under the summary, in core's words. The push keeps the summary."""
+        from slack_runtime.format import escape_mrkdwn
+
+        reach = (
+            "It reaches pkgs.example.com, which is not on Allowed hosts in Settings → Security → "
+            "Network egress. A command that reaches a host off that list, or one it does not name, "
+            "is always asked about, whatever this chat or its agent allows."
+        )
+        client = MagicMock()
+        client.open_dm = AsyncMock(return_value="D1")
+        client.post_blocks = AsyncMock(return_value="1.1")
+        client.update_message = AsyncMock()
+        await _delivery(client).request_approval(
+            self._event({**self._BRIEF, "purpose": "clear the old build", "reach": reach}),
+            source="cron",
+            on_prompted=lambda pending: pending.future.set_result("rejected"),
+        )
+        blocks = client.post_blocks.call_args[0][1]
+        context = [e["text"] for b in blocks if b["type"] == "context" for e in b["elements"]]
+        assert context == [
+            "clear the old build",
+            "Can: writes files, runs a command · Risk: Destructive",
+            escape_mrkdwn(reach),
+        ]
+        assert client.post_blocks.call_args[0][2] == (
+            "🔐 [cron] Approval needed: bash — Can: writes files, runs a command · Risk: Destructive"
+        )
+
 
     @pytest.mark.asyncio
     async def test_the_source_core_names_is_shown_as_written(self):

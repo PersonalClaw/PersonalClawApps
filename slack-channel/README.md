@@ -63,9 +63,11 @@ the channel), the Inbox says so under Slack's name, with Slack's own reason for 
 When an agent asks to run a tool, the prompt says what will run, as PersonalClaw's own
 approval card does: where the call came from (*[loop “Fix the README”]*, *[workflow
 “deep-research” · step “sweep”]*), shown as written, the tool, its arguments, why the agent is
-calling it, and what the call can touch with its risk (*Can: runs a command · Risk: Destructive*). Keys and exfiltration links in
-the arguments are masked by PersonalClaw before they reach Slack. Long arguments are split over
-as many code blocks, and messages, as they take, the buttons on the last.
+calling it, what the call can touch with its risk (*Can: runs a command · Risk: Destructive*)
+and, for a command that reaches a host off your allowed hosts, a line saying so. Keys and
+exfiltration links in the arguments are masked by PersonalClaw before they reach Slack. Long
+arguments are split over as many code blocks, and messages, as they take, the buttons on the
+last.
 
 **The prompt shows how its approval ended.** An approval PersonalClaw asks here ends when you
 press one of its buttons, when you answer it in PersonalClaw, when nobody answers within
@@ -79,7 +81,8 @@ approvals wait; this app keeps no clock of its own for them.
 
 A prompt PersonalClaw asks offers the answers its approval card offers for that call: **Allow
 once** and **Deny**, and **Allow for this chat** on a prompt in the chat that is asking (never
-for a call that may destroy something), which the prompt explains first, in the card's words.
+for a call that may destroy something, or for a command that reaches a host off your allowed
+hosts, which is asked about every time), which the prompt explains first, in the card's words.
 That one trusts the chat in PersonalClaw, as the card's *This chat* does: its header shows it and
 you turn it off there. **Trust session** is on the prompts of a thread this app runs itself (in
 a DM), where it lets the rest of that thread's tool calls run without asking. Such a prompt waits as long as PersonalClaw's approval wait, and goes once it

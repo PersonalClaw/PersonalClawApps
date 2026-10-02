@@ -3212,8 +3212,9 @@ def _approval_messages(
     """The approval prompt, as the Block Kit messages it takes: what will run, then the decision.
 
     Everything shown comes from core's brief (``approval_brief_for``): the tool, its arguments,
-    the purpose the runner gave and the summary line (what the call can touch, and its risk),
-    each already masked. That is what the dashboard's approval card shows. The arguments are
+    the purpose the runner gave, the summary line (what the call can touch, and its risk) and,
+    for a command that reaches a host off the owner's allowed hosts, the line saying so, each
+    already masked. That is what the dashboard's approval card shows. The arguments are
     shown whole, in code sections split to fit a section; they used to be cut at a section's
     limit, so a command was approved whose end nobody saw. When they need more blocks than one
     message holds, the prompt runs over several messages and the buttons ride the last, where
@@ -3270,7 +3271,7 @@ def _approval_messages(
         {"type": "context", "elements": [
             {"type": "mrkdwn", "text": escape_mrkdwn(str(brief[k]))},
         ]}
-        for k in ("purpose", "summary")
+        for k in ("purpose", "summary", "reach")
         if brief.get(k)
     ]
     tail += [

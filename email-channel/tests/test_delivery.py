@@ -501,6 +501,37 @@ class TestApprovalReplyToken:
         await asyncio.wait_for(task, timeout=1.0)
 
     @pytest.mark.asyncio
+    async def test_a_host_off_the_allowed_hosts_is_named_on_a_line_of_its_own(self, wired):
+        """The card names a host off the owner's allowed hosts on a line under its chips, and the
+        mail names it on a line under the summary, in core's words."""
+        delivery, smtp, _ = wired
+        reach = (
+            "It reaches pkgs.example.com, which is not on Allowed hosts in Settings → Security → "
+            "Network egress. A command that reaches a host off that list, or one it does not name, "
+            "is always asked about, whatever this chat or its agent allows."
+        )
+        brief = {
+            "tool": "execute_bash",
+            "input": '{"command": "curl -s https://pkgs.example.com/simple/"}',
+            "purpose": "look up the package",
+            "risk": "caution",
+            "summary": "Can: runs a command, uses the network · Risk: Caution",
+            "answers": _ONE_CALL,
+            "reach": reach,
+        }
+        task = asyncio.ensure_future(delivery.request_approval(self._Event(brief=brief), source="t"))
+        await asyncio.sleep(0)
+        token = next(iter(delivery._pending))
+        assert (
+            "look up the package\n"
+            "Can: runs a command, uses the network · Risk: Caution\n"
+            f"{reach}\n\n"
+            "Reply to this message with exactly one of:\n"
+        ) in smtp.body_text()
+        delivery.resolve_reply_token(f"{DENY_WORD} {token}", OWNER)
+        await asyncio.wait_for(task, timeout=1.0)
+
+    @pytest.mark.asyncio
     async def test_prompt_carries_both_verbs_and_a_token(self, wired):
         delivery, smtp, _ = wired
         task = asyncio.ensure_future(delivery.request_approval(self._Event(), source="tool"))

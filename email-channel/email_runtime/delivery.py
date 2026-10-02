@@ -769,10 +769,11 @@ def _reply_line(answer: dict[str, str], token: str) -> str:
 
 def _approval_text(brief: dict, source: str) -> str:
     """What the approval mail says will run, from core's brief (``approval_brief_for``): the
-    tool, its arguments, the purpose the runner gave and the summary line (what the call can
-    touch, and its risk), which is what the dashboard's approval card shows. It used to name the
-    tool alone. Every string is already masked; the arguments are indented, as a mail client
-    shows code."""
+    tool, its arguments, the purpose the runner gave, the summary line (what the call can touch,
+    and its risk) and, for a command that reaches a host off the owner's allowed hosts, the line
+    saying so, which is what the dashboard's approval card shows. It used to name the tool
+    alone. Every string is already masked; the arguments are indented, as a mail client shows
+    code."""
     tool = str(brief.get("tool") or "") or "a tool"
     # *source* is where the call came from, in core's words for it: "loop “Fix the README”".
     parts = [f"PersonalClaw needs your approval for {tool}, from {source}."]
@@ -780,7 +781,7 @@ def _approval_text(brief: dict, source: str) -> str:
     if arguments:
         indented = "\n".join(f"    {line}" for line in arguments.split("\n"))
         parts.append(f"What will run:\n\n{indented}")
-    extra = [str(brief[k]) for k in ("purpose", "summary") if brief.get(k)]
+    extra = [str(brief[k]) for k in ("purpose", "summary", "reach") if brief.get(k)]
     if extra:
         parts.append("\n".join(extra))
     return "\n\n".join(parts)

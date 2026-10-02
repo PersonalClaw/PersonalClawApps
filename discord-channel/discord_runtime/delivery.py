@@ -768,15 +768,16 @@ def _monotonic() -> float:
 
 def _approval_text(brief: dict, source: str) -> str:
     """The approval prompt, from core's brief (``approval_brief_for``): the tool, its arguments
-    in a code block, the purpose the runner gave and the summary line (what the call can touch,
-    and its risk). That is what the dashboard's approval card shows; the prompt used to show the
+    in a code block, the purpose the runner gave, the summary line (what the call can touch, and
+    its risk) and, for a command that reaches a host off the owner's allowed hosts, the line
+    saying so. That is what the dashboard's approval card shows; the prompt used to show the
     tool's name alone, so a command was approved unseen. Every string is already masked."""
     tool = str(brief.get("tool") or "") or "a tool"
     lines = [f"🔐 [{source}] Approve `{tool}`?"]
     arguments = str(brief.get("input") or "")
     if arguments:
         lines += ["```", _unfenced(arguments), "```"]
-    lines += [str(brief[k]) for k in ("purpose", "summary") if brief.get(k)]
+    lines += [str(brief[k]) for k in ("purpose", "summary", "reach") if brief.get(k)]
     # What each standing answer does, in the dashboard card's words, read before it is pressed.
     lines += [
         f"{a['label']}: {a['promise']}" for a in brief.get("answers") or [] if a.get("promise")
