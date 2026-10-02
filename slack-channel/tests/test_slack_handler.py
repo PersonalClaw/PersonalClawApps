@@ -1686,71 +1686,95 @@ class TestAutoTitleSlack:
 
     @pytest.fixture(autouse=True)
     def _clean_titled_threads(self):
-        import slack_runtime.handler as _h
         from slack_runtime.handler import _titled_threads
 
         _titled_threads.clear()
-        _h._auto_title_lock = None
         yield
         _titled_threads.clear()
-        _h._auto_title_lock = None
+
+    @staticmethod
+    def _answers(monkeypatch, reply):
+        """The Background model as a chore reaches it, answering *reply* (or raising it): every
+        prompt it was asked, with whose spend it is."""
+        import slack_runtime.handler as _h
+
+        asked = []
+
+        async def _chore(prompt, *, usage, validate=None):
+            asked.append((prompt, usage))
+            if isinstance(reply, BaseException):
+                raise reply
+            return reply
+
+        monkeypatch.setattr(_h, "run_chore", _chore, raising=False)
+        return asked
 
     @pytest.mark.asyncio
-    async def test_auto_title_happy_path(self):
+    async def test_auto_title_happy_path(self, monkeypatch):
         """Valid LLM title → set_thread_title called, session_key stays in _titled_threads."""
         from slack_runtime.handler import _mark_titled, _maybe_auto_title_slack, _titled_threads
 
         slack = MockSlackClient()
-        sessions = FakeSessionManager()
-        sessions._provider = FakeProvider(
-            [LLMEvent(kind="text_chunk", text="ETL Debug Session")]
-        )
+        self._answers(monkeypatch, "ETL Debug Session")
         _mark_titled("sk1")
-        await _maybe_auto_title_slack(slack, sessions, "C1", "sk1", None, "help me", "sure")
+        await _maybe_auto_title_slack(slack, "C1", "sk1", None, "help me", "sure")
         title_actions = [a for a in slack.actions if a[0] == "set_thread_title"]
         assert len(title_actions) == 1
         assert title_actions[0][1]["title"] == "ETL Debug Session"
         assert "sk1" in _titled_threads
 
     @pytest.mark.asyncio
-    async def test_auto_title_skip_removes_claim(self):
+    async def test_each_threads_title_is_a_chore_of_its_own(self, monkeypatch):
+        """A thread's title is one call of its own, sent that thread's exchange and nothing of
+        another, its spend the thread's. Titles used to be asked on the one background session
+        every chore of every chat shared, so each was sent the chores before it."""
+        from personalclaw.sdk.channel import chore_usage
+        from slack_runtime.handler import _mark_titled, _maybe_auto_title_slack
+
+        slack = MockSlackClient()
+        asked = self._answers(monkeypatch, "A Weekend Plan")
+        for key, ask in (("sk5", "plan the lighthouse walk"), ("sk6", "rescue my sourdough")):
+            _mark_titled(key)
+            await _maybe_auto_title_slack(slack, "C1", key, None, ask, "sure")
+        assert [usage for _prompt, usage in asked] == [chore_usage("sk5"), chore_usage("sk6")]
+        (walk, _), (bread, _) = asked
+        assert "lighthouse" in walk and "sourdough" not in walk
+        assert "sourdough" in bread and "lighthouse" not in bread
+
+    @pytest.mark.asyncio
+    async def test_auto_title_skip_removes_claim(self, monkeypatch):
         """LLM returns SKIP → no title set, session_key removed from _titled_threads."""
         from slack_runtime.handler import _mark_titled, _maybe_auto_title_slack, _titled_threads
 
         slack = MockSlackClient()
-        sessions = FakeSessionManager()
-        sessions._provider = FakeProvider([LLMEvent(kind="text_chunk", text="SKIP")])
+        self._answers(monkeypatch, "SKIP")
         _mark_titled("sk2")
-        await _maybe_auto_title_slack(slack, sessions, "C1", "sk2", None, "hi", "hello")
+        await _maybe_auto_title_slack(slack, "C1", "sk2", None, "hi", "hello")
         title_actions = [a for a in slack.actions if a[0] == "set_thread_title"]
         assert len(title_actions) == 0
         assert "sk2" not in _titled_threads
 
     @pytest.mark.asyncio
-    async def test_auto_title_error_removes_claim(self):
-        """Exception during streaming → session_key removed from _titled_threads for retry."""
+    async def test_auto_title_error_removes_claim(self, monkeypatch):
+        """No model answered → session_key removed from _titled_threads for retry."""
         from slack_runtime.handler import _mark_titled, _maybe_auto_title_slack, _titled_threads
 
         slack = MockSlackClient()
-        sessions = FakeSessionManager()
-        sessions._provider = None  # will cause AttributeError
+        self._answers(monkeypatch, RuntimeError("no model of the Background chain answered"))
         _mark_titled("sk3")
-        await _maybe_auto_title_slack(slack, sessions, "C1", "sk3", None, "test", "test")
+        await _maybe_auto_title_slack(slack, "C1", "sk3", None, "test", "test")
         assert "sk3" not in _titled_threads
 
     @pytest.mark.asyncio
-    async def test_auto_title_with_curly_braces(self):
+    async def test_auto_title_with_curly_braces(self, monkeypatch):
         """User text with curly braces doesn't crash or skip title."""
         from slack_runtime.handler import _mark_titled, _maybe_auto_title_slack
 
         slack = MockSlackClient()
-        sessions = FakeSessionManager()
-        sessions._provider = FakeProvider(
-            [LLMEvent(kind="text_chunk", text="JSON Debug Session")]
-        )
+        self._answers(monkeypatch, "JSON Debug Session")
         _mark_titled("sk4")
         await _maybe_auto_title_slack(
-            slack, sessions, "C1", "sk4", None,
+            slack, "C1", "sk4", None,
             'parse this: {"key": "value"}',
             "sure, here's the parsed output",
         )

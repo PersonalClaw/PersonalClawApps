@@ -1,6 +1,6 @@
 {
   "name": "slack-channel",
-  "version": "0.1.26",
+  "version": "0.1.27",
   "displayName": "Slack Channel",
   "description": "Slack workspace integration. Monitor channels, respond to mentions, and interact via Slack.",
   "icon": "Slack",

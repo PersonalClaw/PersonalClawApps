@@ -43,6 +43,7 @@ from personalclaw.sdk.channel import (
     to_schedule_row,
 )
 from personalclaw.sdk.channel import ConversationLog, HistoryConsolidator
+from personalclaw.sdk.channel import chore_usage, run_chore
 from personalclaw.sdk.channel import HOOK_REPLY, TOOL_AUTO_APPROVE, TOOL_DENY, validate_file_path
 from personalclaw.sdk.channel import save_conversation_turn
 from personalclaw.sdk.channel import (
@@ -2238,7 +2239,7 @@ async def handle_message(
             prior_turns = context_builder.conversation_log.history_for_model(
                 session_key, sys.maxsize
             )
-            compressed = await compress_thread_history(prior_turns, session_key, text, sessions)
+            compressed = await compress_thread_history(prior_turns, session_key, text)
 
         # After a soft-cancel, ACP agent drops the cancelled turn from its
         # conversation log — but the user+assistant text is persisted to our
@@ -2842,25 +2843,13 @@ async def handle_message(
     if not _had_error and session_key not in _titled_threads and not _skip_writes:
         _mark_titled(session_key)  # claim early to prevent duplicate tasks
         _t = asyncio.create_task(
-            _maybe_auto_title_slack(
-                slack, sessions, channel, session_key, conversation_log, text, accumulated
-            )
+            _maybe_auto_title_slack(slack, channel, session_key, conversation_log, text, accumulated)
         )
         _background_tasks.add(_t)
         _t.add_done_callback(_background_tasks.discard)
 
 
 # ── Slack thread auto-title ─────────────────────────────────────────────
-
-_auto_title_lock: asyncio.Lock | None = None
-
-
-def _get_auto_title_lock() -> asyncio.Lock:
-    """Lazily create the lock inside a running event loop."""
-    global _auto_title_lock
-    if _auto_title_lock is None:
-        _auto_title_lock = asyncio.Lock()
-    return _auto_title_lock
 
 
 def _build_title_prompt(user_msg: str, assistant_msg: str) -> str:
@@ -2877,44 +2866,23 @@ def _build_title_prompt(user_msg: str, assistant_msg: str) -> str:
 
 async def _maybe_auto_title_slack(
     slack: SlackClientOps,
-    sessions: SessionManager,
     channel: str,
     session_key: str,
     conversation_log: ConversationLog | None,
     user_text: str,
     assistant_text: str,
 ) -> None:
-    """Generate and set a Slack thread title after the first response."""
+    """Generate and set a Slack thread title after the first response.
+
+    The title is a chore of the thread's (``run_chore``): one call of its own on the Background
+    chain, sent this exchange and nothing of any other thread or chat, its spend the thread's.
+    """
     try:
-        from personalclaw.sdk.channel import BACKGROUND_KEY
-
         prompt = _build_title_prompt(user_text[:200], assistant_text[:200])
-        async with _get_auto_title_lock():
-            client, _, _ = await sessions.get_or_create(BACKGROUND_KEY)
-            title = ""
-            try:
-
-                async def _stream_title() -> str:
-                    t = ""
-                    async for event in client.stream(prompt):
-                        if event.kind == EVENT_TEXT_CHUNK:
-                            t += event.text
-                        elif event.kind == EVENT_PERMISSION_REQUEST:
-                            sel().log_api_access(
-                                caller="system",
-                                operation="auto_title.tool_rejected",
-                                outcome="denied",
-                                source="slack",
-                                resources=str(event.request_id),
-                            )
-                            await client.reject_tool(event.request_id)
-                        elif event.kind == EVENT_COMPLETE:
-                            break
-                    return t
-
-                title = await asyncio.wait_for(_stream_title(), timeout=30)
-            finally:
-                sessions.release(BACKGROUND_KEY)
+        if not prompt:
+            _titled_threads.pop(session_key, None)  # allow retry on next exchange
+            return
+        title = await asyncio.wait_for(run_chore(prompt, usage=chore_usage(session_key)), timeout=30)
 
         # The title itself — never an echoed "Title:" label, the tag line or a code fence: core's
         # own parser, the one the dashboard titles chats with. "" means the reply held no
@@ -2925,7 +2893,7 @@ async def _maybe_auto_title_slack(
             return
 
         if _titled_threads.get(session_key) == "manual":
-            return  # manual title was set while we were streaming
+            return  # a manual title was set while this one was asked for
         await slack.set_thread_title(channel, session_key, title)
         if conversation_log:
             try:

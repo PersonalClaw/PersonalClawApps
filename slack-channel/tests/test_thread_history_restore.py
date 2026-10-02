@@ -9,8 +9,9 @@ model never received the message at all.
 
 Everything here runs the REAL core: ``ContextBuilder``, ``ConversationLog``,
 ``compress_thread_history`` and the model view background compression reads through
-(``ConversationLog.history_for_model``, #3603). Only the transport (``MockSlackClient``) and the
-agent runtime are fakes, and the fake runtime records exactly what the model was sent.
+(``ConversationLog.history_for_model``, #3603). Only the transport (``MockSlackClient``), the
+agent runtime and the Background model a compression asks (core's chore helper) are fakes, and
+the fakes record exactly what each model was sent.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from personalclaw.context import ContextBuilder
 from personalclaw.history import ConversationLog, summary_record
 from personalclaw.llm.base import LLMEvent
 from personalclaw.memory import MemoryStore
-from personalclaw.session import BACKGROUND_KEY
+from personalclaw.sdk.channel import chore_usage
 from personalclaw.skills import SkillsLoader
 from slack_runtime.handler import handle_message, set_allowed_users, set_owner_id
 
@@ -64,22 +65,15 @@ class _Runtime:
 
 
 class _Sessions:
-    """A SessionManager whose thread runtime is always FRESH (not resumed) — the path under test —
-    and whose background key serves the compression model."""
+    """A SessionManager whose thread runtime is always FRESH (not resumed) — the path under test."""
 
     def __init__(self) -> None:
         self.chat = _Runtime("ok")
-        self.background = _Runtime("COMPRESSED-MIDDLE-OF-THE-THREAD")
-        self.background_agents: list[str | None] = []
+        self.keys: list[str] = []
 
     async def get_or_create(self, key, agent=None, channel_id=None, approval_policy=None):
-        if key == BACKGROUND_KEY:
-            self.background_agents.append(agent)
-            return self.background, False, False
+        self.keys.append(key)
         return self.chat, True, False
-
-    async def recycle_background(self):
-        pass
 
     def check_context_usage(self, key, provider):
         return 0.0
@@ -107,6 +101,20 @@ class _Sessions:
 
     def is_cancelled(self, key, msg_ts):
         return False
+
+
+@pytest.fixture
+def compressor(monkeypatch) -> list[tuple[str, object]]:
+    """The Background model as a compression reaches it, a chore of its own: every prompt it was
+    asked, with whose spend it is."""
+    asked: list[tuple[str, object]] = []
+
+    async def _chore(prompt, *, usage, validate=None):
+        asked.append((prompt, usage))
+        return "COMPRESSED-MIDDLE-OF-THE-THREAD"
+
+    monkeypatch.setattr("personalclaw.chores.run_chore", _chore)
+    return asked
 
 
 def _builder(tmp_path, log: ConversationLog) -> ContextBuilder:
@@ -149,7 +157,7 @@ def _posted(slack: MockSlackClient) -> str:
 
 
 @pytest.mark.asyncio
-async def test_a_fresh_runtime_is_handed_the_threads_earlier_turns(tmp_path):
+async def test_a_fresh_runtime_is_handed_the_threads_earlier_turns(tmp_path, compressor):
     log = _thread(tmp_path, [("user", "what port does the gateway use"), ("assistant", "10000 by default")])
 
     sessions, slack = await _send(tmp_path, log)
@@ -164,9 +172,10 @@ async def test_a_fresh_runtime_is_handed_the_threads_earlier_turns(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_a_long_thread_is_compressed_by_the_background_model(tmp_path):
+async def test_a_long_thread_is_compressed_by_the_background_model(tmp_path, compressor):
     """Past the compression cap the middle of the thread goes to the background model, and its
-    summary — not the raw middle — is what the fresh runtime is handed."""
+    summary — not the raw middle — is what the fresh runtime is handed. The compression is a chore
+    of the thread's: a call of its own, its spend the thread's, and no session is taken for it."""
     turns = []
     for i in range(12):
         turns.append(("user", f"question {i} " + "q" * 3000))
@@ -175,8 +184,9 @@ async def test_a_long_thread_is_compressed_by_the_background_model(tmp_path):
 
     sessions, slack = await _send(tmp_path, log)
 
-    assert sessions.background.sent, "the background model was never asked to compress the thread"
-    assert sessions.background_agents == ["personalclaw-lite"]
+    assert compressor, "the background model was never asked to compress the thread"
+    assert [usage for _prompt, usage in compressor] == [chore_usage(THREAD)]
+    assert sessions.keys == [THREAD], "the compression took a session"
     sent = sessions.chat.sent[0]
     assert "COMPRESSED-MIDDLE-OF-THE-THREAD" in sent
     assert "question 0" in sent  # the verbatim head
@@ -186,7 +196,7 @@ async def test_a_long_thread_is_compressed_by_the_background_model(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_a_background_summary_stands_in_for_the_span_it_covers(tmp_path):
+async def test_a_background_summary_stands_in_for_the_span_it_covers(tmp_path, compressor):
     """#3603: background compression writes a summary BESIDE the thread and never rewrites it. The
     model view applies it, so a fresh runtime reads the summary instead of the turns it covers —
     which only happens if the app reads the thread through that view."""
@@ -228,11 +238,11 @@ async def test_a_background_summary_stands_in_for_the_span_it_covers(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_a_brand_new_thread_restores_nothing_and_still_answers(tmp_path):
+async def test_a_brand_new_thread_restores_nothing_and_still_answers(tmp_path, compressor):
     log = ConversationLog(base_dir=tmp_path / "conv")
 
     sessions, slack = await _send(tmp_path, log, text="first message")
 
     assert sessions.chat.sent and sessions.chat.sent[0].count("first message") == 1
-    assert not sessions.background.sent
+    assert not compressor
     assert _FAILED not in _posted(slack)

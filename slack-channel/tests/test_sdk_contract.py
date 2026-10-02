@@ -117,9 +117,9 @@ def test_the_conformance_rail_catches_the_3599_break(tmp_path, monkeypatch):
         """
         from personalclaw.sdk.channel import compress_thread_history
 
-        async def restore(log, key, query, sessions):
+        async def restore(log, key, query):
             try:
-                return await compress_thread_history(log, key, query, sessions)
+                return await compress_thread_history(log, key, query)
             except TypeError:
                 return None
         """,
@@ -132,7 +132,7 @@ def test_the_conformance_rail_catches_the_3599_break(tmp_path, monkeypatch):
     with sdk_contract.record_sdk_calls(app, monkeypatch) as recorder:
         from probe_runtime.caller import restore
 
-        assert asyncio.run(restore(log, "T1", "follow up", MagicMock())) is None  # it did raise
+        assert asyncio.run(restore(log, "T1", "follow up")) is None  # it did raise
     assert len(recorder.violations) == 1, recorder.violations
     violation = recorder.violations[0]
     assert "compress_thread_history(prior_turns=…) was passed ConversationLog" in violation
@@ -146,8 +146,8 @@ def test_the_conformance_rail_is_quiet_for_the_call_the_contract_declares(tmp_pa
         """
         from personalclaw.sdk.channel import compress_thread_history
 
-        async def restore(turns, key, query, sessions):
-            return await compress_thread_history(turns, key, query, sessions)
+        async def restore(turns, key, query):
+            return await compress_thread_history(turns, key, query)
         """,
     )
     monkeypatch.syspath_prepend(str(app))
@@ -157,7 +157,7 @@ def test_the_conformance_rail_is_quiet_for_the_call_the_contract_declares(tmp_pa
         from probe_runtime.caller import restore
 
         turns = [{"role": "user", "content": "hello"}]
-        result = asyncio.run(restore(turns, "T1", "follow up", MagicMock()))
+        result = asyncio.run(restore(turns, "T1", "follow up"))
     assert recorder.violations == []
     assert sum(recorder.seen.values()) == 1  # the call was checked, not skipped
     assert result is not None and "hello" in result
