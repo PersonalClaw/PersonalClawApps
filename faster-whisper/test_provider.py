@@ -487,6 +487,22 @@ def test_a_long_recording_is_not_cut_off_by_a_clock_of_its_own(monkeypatch):
 
 
 def test_without_faster_whisper_a_transcription_says_what_to_install(monkeypatch):
+    import sys
+
+    import pytest
+
+    from personalclaw.sdk.stt import SttError
+
+    monkeypatch.setitem(sys.modules, "faster_whisper", None)
+    with pytest.raises(SttError) as refused:
+        _run(prov.create_provider({}).transcribe_detailed("/tmp/x.wav", model="small"))
+    assert str(refused.value) == prov.availability()[1]
+    assert "Reinstall Faster Whisper from the Store" in str(refused.value)
+
+
+def test_an_installed_faster_whisper_that_cannot_load_says_why(monkeypatch):
+    """Installed, by its spec, and failing as it imports (a native library it needs is broken):
+    the transcription says so with the import's own reason, rather than an empty sentence."""
     import builtins
 
     import pytest
@@ -495,28 +511,50 @@ def test_without_faster_whisper_a_transcription_says_what_to_install(monkeypatch
 
     real_import = builtins.__import__
 
-    def _no_fw(name, *a, **k):
+    def _broken(name, *a, **k):
         if name == "faster_whisper":
-            raise ImportError("not installed")
+            raise ImportError("libctranslate2.dylib could not be loaded")
         return real_import(name, *a, **k)
 
-    monkeypatch.setattr(builtins, "__import__", _no_fw)
-    with pytest.raises(SttError, match="personalclaw\\[stt\\]"):
+    monkeypatch.setattr(prov, "missing_modules", lambda *modules: [])
+    monkeypatch.setattr(builtins, "__import__", _broken)
+    with pytest.raises(SttError) as refused:
         _run(prov.create_provider({}).transcribe_detailed("/tmp/x.wav", model="small"))
+    assert str(refused.value).startswith(
+        "In-process speech-to-text could not load faster-whisper, which is installed."
+    )
+    assert "libctranslate2.dylib could not be loaded" in str(refused.value)
 
 
-def test_availability_reason_without_faster_whisper(monkeypatch):
-    import builtins
-    real_import = builtins.__import__
+def test_asking_whether_it_can_run_loads_no_library(monkeypatch):
+    """Every Models page asks this, and asking used to import faster-whisper, which loads
+    CTranslate2: seconds of work, in the gateway itself for ``is_available``."""
+    import sys
 
-    def _no_fw(name, *a, **k):
-        if name == "faster_whisper":
-            raise ImportError("not installed")
-        return real_import(name, *a, **k)
+    monkeypatch.delitem(sys.modules, "faster_whisper", raising=False)
+    monkeypatch.delitem(sys.modules, "ctranslate2", raising=False)
 
-    monkeypatch.setattr(builtins, "__import__", _no_fw)
-    ok, reason = prov.availability()
-    assert ok is False and "stt" in reason.lower()
+    prov.availability()
+    _run(prov.create_provider({}).is_available())
+
+    assert "faster_whisper" not in sys.modules and "ctranslate2" not in sys.modules
+
+
+def test_without_faster_whisper_it_says_how_to_get_it(monkeypatch):
+    """Found missing without importing anything (a module ``None`` in ``sys.modules`` is one the
+    import system reports absent). The package ships with this app, so the fix is its reinstall,
+    which the desktop app cannot do."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "faster_whisper", None)
+
+    assert prov.availability() == (
+        False,
+        "In-process speech-to-text needs faster-whisper, which ships with this app, not with "
+        "PersonalClaw itself. Reinstall Faster Whisper from the Store. The desktop app cannot "
+        "install it: use the server or container build there.",
+    )
+    assert _run(prov.create_provider({}).is_available()) is False
 
 
 def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():

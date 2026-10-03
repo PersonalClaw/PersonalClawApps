@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import io
+import json
 import tarfile
+import urllib.request
 from pathlib import Path
 
 import pytest
+from personalclaw.sdk.net import EgressBlocked
 
 import provider as P
 
@@ -20,22 +23,42 @@ def _seed_pair(root: Path) -> None:
     (root / P._EMB_REL).write_bytes(b"\x00" * 16)
 
 
-def _fake_urlretrieve(url, dest):
-    """Stand in for the network. The segmentation URL yields a REAL ``.tar.bz2`` whose one
-    member is the model, so ``download_model`` runs its actual extract path into whatever
-    root it chose — the point of the cache_dir() assertions below."""
-    dest = Path(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if url == P._SEG_URL:
-        payload = b"\x00" * 16
-        buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode="w:bz2") as tf:
-            info = tarfile.TarInfo(str(P._SEG_REL))
-            info.size = len(payload)
-            tf.addfile(info, io.BytesIO(payload))
-        dest.write_bytes(buf.getvalue())
-    else:
-        dest.write_bytes(b"\x00" * 16)
+class _Served(io.BytesIO):
+    """What opening a source returns: its bytes, and the length it announced (by default, the
+    true one)."""
+
+    def __init__(self, body: bytes, announced: int | None = None) -> None:
+        super().__init__(body)
+        self.headers = {"Content-Length": str(len(body) if announced is None else announced)}
+
+
+def _source_bytes(url: str) -> bytes:
+    """The segmentation URL yields a REAL ``.tar.bz2`` whose one member is the model, so
+    ``download_model`` runs its actual extract path into whatever root it chose."""
+    if url != P._SEG_URL:
+        return b"\x00" * 16
+    payload = b"\x00" * 16
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:bz2") as tf:
+        info = tarfile.TarInfo(str(P._SEG_REL))
+        info.size = len(payload)
+        tf.addfile(info, io.BytesIO(payload))
+    return buf.getvalue()
+
+
+def _serve(monkeypatch, announced: dict[str, int] | None = None) -> list[str]:
+    """Stand in for the network at the one place the app opens a source, and return the URLs
+    opened: the real download path (the partial file, the length check, the extract, the move
+    into place) runs on what it hands out — the point of the cache_dir() assertions below."""
+    opened: list[str] = []
+
+    def open_url(url: str, *, timeout_s: float) -> _Served:
+        assert timeout_s > 0, "a download opened with no bound on a stalled read"
+        opened.append(url)
+        return _Served(_source_bytes(url), (announced or {}).get(url))
+
+    monkeypatch.setattr(P, "open_url", open_url)
+    return opened
 
 
 def test_create_provider():
@@ -68,7 +91,8 @@ def test_a_missing_package_is_named_with_the_way_to_get_it(monkeypatch):
     assert P.availability() == (
         False,
         "ONNX diarization needs sherpa-onnx, which ships with this app, not with PersonalClaw "
-        "itself. Reinstall Diarization (ONNX) from the Store.",
+        "itself. Reinstall Diarization (ONNX) from the Store. The desktop app cannot install it: "
+        "use the server or container build there.",
     )
 
     monkeypatch.setitem(sys.modules, "numpy", None)
@@ -201,7 +225,7 @@ async def test_a_pair_left_in_the_old_cache_outside_the_home_is_not_read(monkeyp
     def _boom(*a, **k):
         raise AssertionError("presence check hit the network")
 
-    monkeypatch.setattr(P.urllib.request, "urlretrieve", _boom)
+    monkeypatch.setattr(P, "open_url", _boom)
     assert P._downloaded() is False
     models = await P.create_provider({}).list_models()
     assert models[0].downloaded is False
@@ -612,12 +636,55 @@ async def test_cache_dir_is_the_dir_a_fresh_download_fills(monkeypatch, tmp_path
     directory that ACTUALLY fills. Asserted by running the real download path against a
     stubbed network and then checking the REPORTED dir now holds the weights."""
     _home(monkeypatch, tmp_path)
-    monkeypatch.setattr(P.urllib.request, "urlretrieve", _fake_urlretrieve)
+    opened = _serve(monkeypatch)
 
     p = P.create_provider({})
     reported = Path(p.cache_dir())
     assert await p.download_model(P._MODEL) is True
     assert P._has_weights(reported), f"cache_dir() {reported} did not fill"
+    assert opened == [P._SEG_URL, P._EMB_URL]
+    assert not [f for f in _files(reported) if f.endswith((".partial", ".tar.bz2"))]
+
+
+@pytest.mark.asyncio
+async def test_a_download_cut_off_before_its_end_is_not_kept(monkeypatch, tmp_path):
+    """A source that stops sending before the length it announced leaves nothing at the
+    model's path: a short file there would read as a downloaded model every run after."""
+    _home(monkeypatch, tmp_path)
+    _serve(monkeypatch, announced={P._EMB_URL: 64})
+
+    assert await P.create_provider({}).download_model(P._MODEL) is False
+    assert not (P._models_dir() / P._EMB_REL).exists()
+    assert P._downloaded() is False
+    assert not [f for f in _files(P._models_dir()) if f.endswith(".partial")]
+
+
+@pytest.mark.asyncio
+async def test_a_source_on_denied_hosts_is_refused_and_the_download_says_why(
+    monkeypatch, tmp_path
+):
+    """The download is held to the owner's Network egress settings, through core's own guard:
+    a source on Denied hosts is never connected to, and the download fails with the guard's
+    sentence, which names the setting, rather than a bare failure."""
+    home = _home(monkeypatch, tmp_path)
+    (home / "config.json").write_text(
+        json.dumps({"security": {"egress": {"deny_hosts": ["github.com"]}}}), encoding="utf-8"
+    )
+    connected: list[str] = []
+
+    def connect(_handler, request):
+        connected.append(request.full_url)
+        raise OSError("the guard let this through")
+
+    monkeypatch.setattr(urllib.request.HTTPSHandler, "https_open", connect)
+
+    with pytest.raises(EgressBlocked) as refused:
+        await P.create_provider({}).download_model(P._MODEL)
+
+    assert connected == [], "a refused source was connected to"
+    assert f"{P._SEG_URL} was not reached" in str(refused.value)
+    assert "Denied hosts" in str(refused.value)
+    assert _files(P._models_dir()) == []
 
 
 @pytest.mark.asyncio

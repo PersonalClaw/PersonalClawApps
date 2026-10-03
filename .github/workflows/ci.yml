@@ -140,6 +140,11 @@ jobs:
         # conftest.py tells the libraries a model app's tests load what every personalclaw
         # command tells them, before anything is collected.
         run: python -m pytest .github/tests/test_the_libraries_a_test_loads_stay_inside_the_home.py -q
+      - name: Every app's availability hook answers from metadata, naming only real extras
+        # The SDK's contract: a hook never imports the library it checks for (an import is the
+        # library's whole start-up, and every Models page asks). And every personalclaw[extra] an
+        # app tells a user to install is one core declares.
+        run: python -m pytest .github/tests/test_availability_hooks_answer_from_metadata.py -q
       - name: The publication-hygiene rail reds on a planted defect
         # Drives the rail's own script against seeded repos: one control per rule and field.
         run: python -m pytest .github/tests/test_publication_hygiene.py -q

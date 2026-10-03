@@ -23,6 +23,42 @@ def _no_ambient_hf_token(monkeypatch):
     monkeypatch.setattr(P, "resolve_token", lambda: "")
 
 
+def test_asking_whether_it_can_run_loads_no_library(monkeypatch):
+    """Every Models page asks this, and asking used to import pyannote.audio, which imports torch.
+    Found by its module spec now: only the ``pyannote`` namespace package is located."""
+    import asyncio
+    import sys
+
+    for name in ("pyannote.audio", "torch"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+
+    P.availability()
+    asyncio.run(P.create_provider({}).is_available())
+
+    assert [name for name in ("pyannote.audio", "torch") if name in sys.modules] == []
+
+
+def test_a_missing_package_is_named_with_the_way_to_get_it(monkeypatch):
+    """It named ``personalclaw[diarization-pyannote]``, an extra PersonalClaw has never had: the
+    packages ship with this app, so the fix is its reinstall, which the desktop app cannot do."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "pyannote.audio", None)
+    monkeypatch.setitem(sys.modules, "torch", None)
+    assert P.availability() == (
+        False,
+        "pyannote diarization needs pyannote.audio and torch, which ship with this app, not with "
+        "PersonalClaw itself. Reinstall Diarization (pyannote) from the Store. The desktop app "
+        "cannot install them: use the server or container build there.",
+    )
+
+    monkeypatch.setattr(P, "missing_modules", lambda *modules: ["torch"])
+    assert P.availability()[1].startswith(
+        "pyannote diarization needs torch, which ships with this app, not with PersonalClaw itself."
+    )
+    assert "personalclaw[" not in P.availability()[1]
+
+
 def test_loading_the_app_turns_pyannotes_usage_reports_off(tmp_path):
     """pyannote.audio (from 4.0) reports each pipeline it loads and each file it diarizes to its
     makers unless ``PYANNOTE_METRICS_ENABLED`` says otherwise; it counts ``true`` and ``1`` as on,

@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import tarfile
-import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +30,7 @@ from personalclaw.sdk.diarization import (
     find_ffmpeg,
 )
 from personalclaw.sdk.model import ProviderResolutionError, require_model
-from personalclaw.sdk.net import sentence_with_detail
+from personalclaw.sdk.net import EgressBlocked, open_url, sentence_with_detail
 from personalclaw.sdk.sidecar import SidecarCrashed, SidecarWorkerError, run_once
 from personalclaw.sdk.util import config_dir
 
@@ -49,6 +49,10 @@ _EMB_URL = ("https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-rec
 #: alone cannot diarize, so the pair is the unit of "downloaded".
 _SEG_REL = Path("sherpa-onnx-pyannote-segmentation-3-0") / "model.onnx"
 _EMB_REL = Path("embed.onnx")
+
+#: How long one read of a download may wait, and how much it reads at a time.
+_SOCKET_TIMEOUT_S = 30.0
+_CHUNK_BYTES = 1024 * 1024
 
 #: What the pipeline runs on: each module, by the package that installs it. sherpa-onnx carries
 #: an ONNX Runtime build of its own, so the ``onnxruntime`` package is neither declared nor
@@ -88,6 +92,24 @@ def _has_weights(root: Path) -> bool:
     return (root / _SEG_REL).is_file() and (root / _EMB_REL).is_file()
 
 
+def _fetch(url: str, path: Path) -> None:
+    """Download *url* to *path* through the egress guard: every request, each redirect hop
+    included, is asked of the owner's Network egress settings first, and a refused one is never
+    sent (``open_url``). The bytes land in a partial file beside *path*, moved into place only
+    once as many arrived as the source said it would send, so a cut-off transfer is not kept."""
+    partial = path.with_name(f"{path.name}.partial")
+    try:
+        with open_url(url, timeout_s=_SOCKET_TIMEOUT_S) as response, partial.open("wb") as sink:
+            shutil.copyfileobj(response, sink, _CHUNK_BYTES)
+            announced = str(response.headers.get("Content-Length") or "")
+        received = partial.stat().st_size
+        if announced.isdigit() and received != int(announced):
+            raise OSError(f"{url} ended after {received} of {announced} bytes")
+        partial.replace(path)
+    finally:
+        partial.unlink(missing_ok=True)
+
+
 def create_provider(config: dict[str, Any] | None = None) -> "OnnxDiarizationProvider":
     return OnnxDiarizationProvider(config or {})
 
@@ -99,10 +121,11 @@ def availability() -> tuple[bool, str]:
     page."""
     missing = [_RUNTIME[module] for module in missing_modules(*_RUNTIME)]
     if missing:
-        ships = "ships" if len(missing) == 1 else "ship"
+        ships, it = ("ships", "it") if len(missing) == 1 else ("ship", "them")
         return False, (
             f"ONNX diarization needs {' and '.join(missing)}, which {ships} with this app, not "
-            "with PersonalClaw itself. Reinstall Diarization (ONNX) from the Store."
+            "with PersonalClaw itself. Reinstall Diarization (ONNX) from the Store. The desktop "
+            f"app cannot install {it}: use the server or container build there."
         )
     if find_ffmpeg() is None:
         return False, _needs_ffmpeg()
@@ -171,7 +194,7 @@ class OnnxDiarizationProvider(DiarizationProvider, LocalModelProvider):
                 root.mkdir(parents=True, exist_ok=True)
                 if not seg.is_file():
                     tarball = root / "seg.tar.bz2"
-                    urllib.request.urlretrieve(_SEG_URL, tarball)
+                    _fetch(_SEG_URL, tarball)
                     with tarfile.open(tarball, "r:bz2") as tf:
                         # filter="data" is 3.14's default and the safe one: it refuses
                         # members that would escape *root*. Passed explicitly because the
@@ -180,8 +203,12 @@ class OnnxDiarizationProvider(DiarizationProvider, LocalModelProvider):
                         tf.extractall(root, filter="data")
                     tarball.unlink(missing_ok=True)
                 if not emb.is_file():
-                    urllib.request.urlretrieve(_EMB_URL, emb)
+                    _fetch(_EMB_URL, emb)
                 return _has_weights(root)
+            except EgressBlocked:
+                # Its sentence names what was refused and the setting that allows it, which is
+                # what the download shows; a bare False would say only that it failed.
+                raise
             except Exception:
                 return False
 

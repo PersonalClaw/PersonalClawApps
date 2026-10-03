@@ -1,6 +1,6 @@
 {
   "name": "faster-whisper",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "displayName": "Faster Whisper",
   "description": "Speech-to-text using CTranslate2-optimized Whisper models. Download and manage STT models for voice input.",
   "icon": "Mic",

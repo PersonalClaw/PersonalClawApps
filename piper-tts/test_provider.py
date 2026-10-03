@@ -395,3 +395,25 @@ def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
     adapters = media_adapters(Path(__file__).parent, prov.create_provider)
     report = asyncio.run(media_refusal_report(adapters))
     assert report == media_refusal_expected(adapters)
+
+
+def test_asking_whether_voices_can_download_loads_no_library(monkeypatch):
+    """Every Models page asks this, and asking used to import huggingface_hub."""
+    monkeypatch.delitem(sys.modules, "huggingface_hub", raising=False)
+
+    prov.availability()
+
+    assert "huggingface_hub" not in sys.modules
+
+
+def test_without_huggingface_hub_it_says_how_to_get_it(monkeypatch):
+    """The package ships with this app, so the fix is its reinstall, which the desktop app
+    cannot do."""
+    monkeypatch.setitem(sys.modules, "huggingface_hub", None)
+
+    assert prov.availability() == (
+        False,
+        "Piper voice downloads need huggingface-hub, which ships with this app, not with "
+        "PersonalClaw itself. Reinstall Piper TTS from the Store. The desktop app cannot install "
+        "it: use the server or container build there.",
+    )

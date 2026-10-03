@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from personalclaw.sdk.availability import missing_modules
 from personalclaw.sdk.credentials import resolve_token
 from personalclaw.sdk.diarization import (
     DiarizationError,
@@ -61,14 +62,26 @@ def create_provider(config: dict[str, Any] | None = None) -> "PyannoteDiarizatio
     return PyannoteDiarizationProvider(config or {})
 
 
+#: What the pipeline runs on: each module, by the package this app installs for it.
+_RUNTIME = {"pyannote.audio": "pyannote.audio", "torch": "torch"}
+
+
 def availability() -> tuple[bool, str]:
-    """Whether pyannote diarization can run here (needs pyannote.audio + torch)."""
-    try:
-        import pyannote.audio  # noqa: F401
+    """Whether pyannote diarization can run here, + a UI reason if not.
+
+    Found without importing either package, as the SDK's availability contract asks: importing
+    pyannote.audio imports torch, the heaviest import there is, to answer one question on every
+    Models page (``pyannote`` itself is a namespace package, which runs nothing as it is found).
+    """
+    missing = [_RUNTIME[module] for module in missing_modules(*_RUNTIME)]
+    if not missing:
         return True, ""
-    except ImportError:
-        return False, ("pyannote diarization needs personalclaw[diarization-pyannote] "
-                       "(pyannote.audio + torch) — a large install; server/container build.")
+    ships, it = ("ships", "it") if len(missing) == 1 else ("ship", "them")
+    return False, (
+        f"pyannote diarization needs {' and '.join(missing)}, which {ships} with this app, not "
+        "with PersonalClaw itself. Reinstall Diarization (pyannote) from the Store. The desktop "
+        f"app cannot install {it}: use the server or container build there."
+    )
 
 
 def _turns(answer: Any) -> list[SpeakerTurn]:

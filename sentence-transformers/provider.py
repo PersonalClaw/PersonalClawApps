@@ -23,6 +23,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
+from personalclaw.sdk.availability import missing_modules
 from personalclaw.sdk.credentials import resolve_token
 from personalclaw.sdk.embedding import EmbeddingModel, EmbeddingProvider
 from personalclaw.sdk.local_model import LocalModelProvider
@@ -192,15 +193,26 @@ def make_native_embed_fn(model_name: str) -> Callable[[str], list[float] | None]
     return _embed
 
 
+#: What local embedding runs on: each module, by the package this app installs for it.
+_RUNTIME = {"sentence_transformers": "sentence-transformers"}
+
+
 def availability() -> tuple[bool, str]:
-    """Whether local embedding models can run here, + a UI reason if not. torch is a
-    heavy optional dep (omitted from the desktop PyInstaller bundle)."""
-    try:
-        import sentence_transformers  # noqa: F401
+    """Whether local embedding models can run here, + a UI reason if not.
+
+    Found without importing anything, as the SDK's availability contract asks: importing
+    sentence-transformers imports torch, which took 171.8 s cold to answer this one question.
+    The desktop app does not include them."""
+    missing = [_RUNTIME[module] for module in missing_modules(*_RUNTIME)]
+    if not missing:
         return True, ""
-    except ImportError:
-        return False, ("Local embedding models need the sentence-transformers package "
-                       "(server/container build) — or bind a remote embedding provider.")
+    ships, it = ("ships", "it") if len(missing) == 1 else ("ship", "them")
+    return False, (
+        f"Local embedding models need {' and '.join(missing)}, which {ships} with this app, not "
+        "with PersonalClaw itself. Reinstall Sentence Transformers (local embeddings) from the "
+        f"Store, or bind a remote embedding provider. The desktop app cannot install {it}: use "
+        "the server or container build there."
+    )
 
 
 # ── The embedding provider (registered into core's embedding registry by the loader) ──

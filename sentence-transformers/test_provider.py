@@ -41,20 +41,34 @@ def test_cache_dir_exposed_for_download_progress():
     assert p.cache_dir().endswith("models")
 
 
-def test_availability_false_without_sentence_transformers(monkeypatch):
-    # Simulate the package missing (desktop bundle): availability + is_available
-    # degrade to False rather than raising.
-    import builtins
-    real_import = builtins.__import__
+def test_asking_whether_it_can_run_loads_no_library(monkeypatch):
+    """Every Models page asks this, and asking used to import sentence-transformers, which imports
+    torch: 171.8 s cold, measured, to answer one question."""
+    import sys
 
-    def _no_st(name, *a, **k):
-        if name == "sentence_transformers":
-            raise ImportError("not installed")
-        return real_import(name, *a, **k)
+    for name in ("sentence_transformers", "torch"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
 
-    monkeypatch.setattr(builtins, "__import__", _no_st)
-    ok, reason = prov.availability()
-    assert ok is False and "sentence-transformers" in reason
+    prov.availability()
+    _run(prov.create_provider({}).is_available())
+
+    assert "sentence_transformers" not in sys.modules and "torch" not in sys.modules
+
+
+def test_without_sentence_transformers_it_says_how_to_get_it(monkeypatch):
+    """Found missing without importing anything: availability and is_available degrade to False
+    rather than raising, and the reason names the reinstall that brings the package back."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "sentence_transformers", None)
+
+    assert prov.availability() == (
+        False,
+        "Local embedding models need sentence-transformers, which ships with this app, not with "
+        "PersonalClaw itself. Reinstall Sentence Transformers (local embeddings) from the Store, "
+        "or bind a remote embedding provider. The desktop app cannot install it: use the server "
+        "or container build there.",
+    )
     assert _run(prov.create_provider({}).is_available()) is False
 
 

@@ -7,11 +7,13 @@ the channel then arrived as a notice with nothing to press, and nothing had chec
 fitted that PersonalClaw. An app names the core features it relies on in ``requiresCoreFeatures``,
 and PersonalClaw refuses to review, install, update or switch on one it cannot host.
 
-Two rails over every bundle, against the installed core:
+Three rails over every bundle, against the installed core:
 
 1. every name an app declares is a core feature the installed PersonalClaw offers: a misspelt name,
    or one from a PersonalClaw that does not exist yet, would make the app installable nowhere;
-2. every app whose shipped code reads the approval brief's answers declares ``approval-answers``.
+2. every app whose shipped code reads the approval brief's answers declares ``approval-answers``;
+3. every app whose shipped code downloads with ``personalclaw.sdk.net.open_url`` declares
+   ``guarded-download``: on a PersonalClaw without it the app would not load at all.
 """
 
 from __future__ import annotations
@@ -34,6 +36,9 @@ BUNDLES = sorted(manifest.parent for manifest in ROOT.glob("*/app.json"))
 #: The apps whose prompts offer the brief's answers as this rail lands: a reader the scan stopped
 #: recognising would leave rail 2 checking nothing.
 KNOWN_READERS = {"telegram-channel", "slack-channel", "discord-channel", "email-channel"}
+
+#: The apps that download with ``open_url``, for rail 3 the same way.
+KNOWN_DOWNLOADERS = {"diarization-onnx"}
 
 
 @pytest.fixture(autouse=True)
@@ -119,3 +124,47 @@ def test_the_scan_tells_a_reader_from_an_app_that_reads_nothing(tmp_path):
     (other / "provider.py").write_text("def answers(d):\n    return d.get('answers')\n")
     assert _reads_the_answers(reader) is True
     assert _reads_the_answers(other) is False
+
+
+def _downloads_through_the_guard(bundle: Path) -> bool:
+    """Whether the bundle's shipped code takes ``open_url`` from the SDK."""
+    for path in sdk_contract.shipped_sources(bundle):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "personalclaw.sdk.net":
+                if any(alias.name == "open_url" for alias in node.names):
+                    return True
+    return False
+
+
+def test_every_app_that_downloads_through_the_guard_declares_it():
+    from personalclaw.sdk.features import GUARDED_DOWNLOAD
+
+    downloaders = {bundle.name for bundle in BUNDLES if _downloads_through_the_guard(bundle)}
+    assert KNOWN_DOWNLOADERS <= downloaders, (
+        f"the scan no longer sees these apps download with open_url: "
+        f"{sorted(KNOWN_DOWNLOADERS - downloaders)}"
+    )
+    undeclared = sorted(
+        name for name in downloaders if GUARDED_DOWNLOAD not in _declared(ROOT / name)
+    )
+    assert undeclared == [], (
+        f"these apps download with personalclaw.sdk.net.open_url without declaring "
+        f"'requiresCoreFeatures': ['{GUARDED_DOWNLOAD}'] in app.json: {undeclared}"
+    )
+
+
+def test_the_scan_tells_a_downloader_from_an_app_that_only_fetches(tmp_path):
+    """Positive and negative control for rail 3."""
+    downloader = tmp_path / "downloader-app"
+    downloader.mkdir()
+    (downloader / "app.json").write_text('{"name": "downloader-app", "version": "0.1.0"}')
+    (downloader / "provider.py").write_text(
+        "from personalclaw.sdk.net import EgressBlocked, open_url\n", encoding="utf-8"
+    )
+    other = tmp_path / "other-app"
+    other.mkdir()
+    (other / "app.json").write_text('{"name": "other-app", "version": "0.1.0"}')
+    (other / "provider.py").write_text("from personalclaw.sdk.net import fetch\n")
+    assert _downloads_through_the_guard(downloader) is True
+    assert _downloads_through_the_guard(other) is False

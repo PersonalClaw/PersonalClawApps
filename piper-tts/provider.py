@@ -25,6 +25,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from personalclaw.sdk.availability import missing_modules
 from personalclaw.sdk.credentials import resolve_token
 from personalclaw.sdk.model import ProviderResolutionError, require_model
 from personalclaw.sdk.tts import LocalTtsProvider, TtsVoice
@@ -319,10 +320,19 @@ def create_provider(config: dict[str, Any] | None = None) -> PiperTtsProvider:
     return PiperTtsProvider()
 
 
+#: What voice downloads run on: each module, by the package this app installs for it.
+_RUNTIME = {"huggingface_hub": "huggingface-hub"}
+
+
 def availability() -> tuple[bool, str]:
-    """Whether piper voices can be downloaded here (needs huggingface_hub)."""
-    try:
-        import huggingface_hub  # noqa: F401
+    """Whether piper voices can be downloaded here, + a UI reason if not. Found without importing
+    the library, as the SDK's availability contract asks: an import runs it."""
+    missing = [_RUNTIME[module] for module in missing_modules(*_RUNTIME)]
+    if not missing:
         return True, ""
-    except ImportError:
-        return False, "Piper voice downloads need the huggingface_hub package (server/container build)."
+    ships, it = ("ships", "it") if len(missing) == 1 else ("ship", "them")
+    return False, (
+        f"Piper voice downloads need {' and '.join(missing)}, which {ships} with this app, not "
+        "with PersonalClaw itself. Reinstall Piper TTS from the Store. The desktop app cannot "
+        f"install {it}: use the server or container build there."
+    )

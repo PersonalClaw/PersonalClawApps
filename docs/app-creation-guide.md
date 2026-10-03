@@ -319,6 +319,14 @@ when that check raises, since it judged nothing. The bare profile, or no policy 
 the owner's settings out, and `.github/scripts/check_egress_policy.py` holds every request in
 this repository to the layered form, and every failed check to a refusal.
 
+A download too large to hold in memory (a model's files) streams through
+`open_url(url, timeout_s=...)` instead: the standard library's opener with every request asked
+of the guard first, under `CONNECTOR` and the owner's settings, each redirect hop included. A
+refused request raises `EgressBlocked` before it is sent, its message the sentence to show; what
+the source answers is yours to read, bound and check, as with `urllib.request.urlopen`. An app that
+downloads with it declares `"requiresCoreFeatures": ["guarded-download"]`, so a PersonalClaw without
+it refuses the app rather than installing one that cannot load.
+
 ### Crons
 
 ```json

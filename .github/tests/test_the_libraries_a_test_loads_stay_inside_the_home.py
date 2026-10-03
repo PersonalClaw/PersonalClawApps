@@ -19,16 +19,21 @@ from pathlib import Path
 import pytest
 
 #: The switches, by the libraries' own names: each is on in a PersonalClaw process.
-SWITCHES = ("HF_HUB_DISABLE_IMPLICIT_TOKEN", "HF_HUB_DISABLE_TELEMETRY", "ORT_DISABLE_TELEMETRY")
-#: The folders the libraries are told to keep their caches in.
-FOLDERS = ("HF_XET_CACHE", "TREE_SITTER_LANGUAGE_PACK_CACHE_DIR")
+SWITCHES = (
+    "HF_HUB_DISABLE_IMPLICIT_TOKEN",
+    "HF_HUB_DISABLE_XET",
+    "HF_HUB_DISABLE_TELEMETRY",
+    "ORT_DISABLE_TELEMETRY",
+)
+#: The places the libraries are told to keep, or read, their files: a folder, or a file's address.
+FOLDERS = ("TREE_SITTER_LANGUAGE_PACK_CACHE_DIR", "TREE_SITTER_LANGUAGE_PACK_MANIFEST_URL")
 
 
 def test_this_session_tells_the_libraries_what_personalclaw_tells_them():
     for name in SWITCHES:
         assert os.environ.get(name) == "1", f"{name} is not set for this session's tests"
     for name in FOLDERS:
-        folder = Path(os.environ.get(name, ""))
+        folder = Path(os.environ.get(name, "").removeprefix("file://"))
         assert any(
             part.startswith("pclaw-apps-tests-") for part in folder.parts
         ), f"{name} points outside the session's scratch folder: {folder}"

@@ -54,7 +54,7 @@ Install consent names this before anything installs (the manifest's `launches`):
 
 ## Network
 
-Downloads its two models from `github.com` (the sherpa-onnx releases) when you download them; diarizing runs on this machine.
+Downloads its two models from `github.com` (the sherpa-onnx releases) when you download them; diarizing runs on this machine. Each request goes through PersonalClaw's egress guard under your **Settings → Security → Network egress** rules, the redirect to the file's storage included, so a host you put on Denied hosts is never reached.
 
 ## License
 

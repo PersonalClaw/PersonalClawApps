@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from personalclaw.sdk.availability import missing_modules
 from personalclaw.sdk.credentials import resolve_token
 from personalclaw.sdk.local_model import LocalModelProvider
 from personalclaw.sdk.model import ProviderResolutionError, require_model
@@ -31,18 +32,27 @@ def create_provider(config: dict[str, Any] | None = None) -> "FasterWhisperProvi
     return FasterWhisperProvider()
 
 
+#: What in-process speech-to-text runs on: each module, by the package this app installs for it.
+_RUNTIME = {"faster_whisper": "faster-whisper"}
+
+
 def availability() -> tuple[bool, str]:
     """Whether in-process Whisper STT can run here, + a UI reason if not.
 
-    Backed by ``faster-whisper`` (CTranslate2). Builds without it — e.g. the
-    desktop PyInstaller bundle — surface this so the Settings card greys out and
-    blocks model downloads instead of offering buttons that only ever 500.
+    Backed by ``faster-whisper`` (CTranslate2). Found without importing it, as the SDK's
+    availability contract asks: importing it loads CTranslate2, seconds of work, to answer one
+    question on every Models page. Builds without it (the desktop app) surface this so the
+    Settings card greys out and blocks model downloads instead of offering buttons that only fail.
     """
-    try:
-        import faster_whisper  # noqa: F401
+    missing = [_RUNTIME[module] for module in missing_modules(*_RUNTIME)]
+    if not missing:
         return True, ""
-    except ImportError:
-        return False, "In-process STT needs the personalclaw[stt] package (not bundled with the desktop app — use the server or container build)."
+    ships, it = ("ships", "it") if len(missing) == 1 else ("ship", "them")
+    return False, (
+        f"In-process speech-to-text needs {' and '.join(missing)}, which {ships} with this app, "
+        "not with PersonalClaw itself. Reinstall Faster Whisper from the Store. The desktop app "
+        f"cannot install {it}: use the server or container build there."
+    )
 
 _MODELS = [
     SttModel(name="tiny", size_mb=75, description="Fastest, lowest accuracy"),
@@ -218,11 +228,7 @@ class FasterWhisperProvider(SttProvider, LocalModelProvider):
         return str(_models_dir())
 
     async def is_available(self) -> bool:
-        try:
-            import faster_whisper  # noqa: F401
-            return True
-        except ImportError:
-            return False
+        return availability()[0]
 
     async def list_models(self) -> list[SttModel]:
         # No active-binding lookup here: core's Settings/discovery layer marks which
@@ -327,7 +333,11 @@ class FasterWhisperProvider(SttProvider, LocalModelProvider):
         try:
             from faster_whisper import WhisperModel
         except ImportError as exc:
-            raise SttError(availability()[1]) from exc
+            # Missing, availability says how to get it; there but unloadable (a native library it
+            # needs is broken), the reason is the import's own.
+            raise SttError(availability()[1] or sentence_with_detail(
+                "In-process speech-to-text could not load faster-whisper, which is installed. "
+                "Reinstall Faster Whisper from the Store.", exc)) from exc
 
         lang = language.split("-")[0] if language else None
         # Whisper's decoder caps the PROMPT window at max_length//2 = 224 tokens; a bias
