@@ -51,13 +51,18 @@ class _FakeMenu:
 
 
 def _fake_rumps() -> types.ModuleType:
-    """The subset of ``rumps`` this app uses: ``App``, ``MenuItem``, ``Timer``.
+    """The subset of ``rumps`` this app uses: ``App``, ``MenuItem``, ``Timer``,
+    ``quit_application``.
 
     Keeping the stub to exactly those three is itself a check — if ``run.py`` starts
     reaching for a fourth attribute, this raises ``AttributeError`` instead of silently
     passing while the real host would break.
     """
     mod = types.ModuleType("rumps")
+    quits: list[bool] = []
+
+    def quit_application() -> None:
+        quits.append(True)
 
     class MenuItem(_FakeMenu):
         """A ``rumps.MenuItem`` is also a menu: what is set on it is its submenu."""
@@ -88,9 +93,15 @@ def _fake_rumps() -> types.ModuleType:
             self.ran = False
 
         def run(self) -> None:
+            # As rumps does, the app's own Quit item (when it has one) is added once, here.
+            if self.quit_button is not None:
+                self.menu[self.quit_button] = MenuItem(
+                    self.quit_button, callback=lambda _sender: quit_application()
+                )
             self.ran = True  # a real rumps App.run() blocks forever; return instead
 
     mod.App, mod.MenuItem, mod.Timer = App, MenuItem, Timer  # type: ignore[attr-defined]
+    mod.quit_application, mod.quits = quit_application, quits  # type: ignore[attr-defined]
     return mod
 
 
@@ -221,3 +232,19 @@ def test_items_that_read_the_same_are_each_drawn(stub_rumps, monkeypatch):
         ("POST", "http://127.0.0.1:10000/api/approvals/a1/approve"),
         ("POST", "http://127.0.0.1:10000/api/approvals/a2/approve"),
     ]
+
+
+def test_the_menu_keeps_quit_after_every_redraw(stub_rumps, monkeypatch):
+    """rumps adds its own Quit item once, when the app starts, and a redraw clears the menu: the
+    menu must still end with Quit after a change, and Quit must still quit."""
+    companion, _ = _companion()
+    app = _run_host(stub_rumps, monkeypatch, companion)
+    assert app.menu.items()[-1].title == "Quit"
+
+    companion.toggle_mute()
+    (timer,) = stub_rumps.Timer.instances
+    timer.fire()  # the tick sees the new revision and redraws
+    last = app.menu.items()[-1]
+    assert last.title == "Quit"
+    last.callback(last)
+    assert stub_rumps.quits == [True]

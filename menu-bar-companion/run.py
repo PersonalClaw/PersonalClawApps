@@ -73,7 +73,10 @@ def _run_status_item(host, companion, settings: Settings) -> int:
 
     class CompanionApp(host.App):  # type: ignore[misc, name-defined]
         def __init__(self) -> None:
-            super().__init__("PersonalClaw", quit_button="Quit")
+            # The menu is drawn again from nothing on every change, and rumps adds its own Quit
+            # item only once, when the app starts, so the first redraw would drop it: each draw
+            # ends with Quit itself instead.
+            super().__init__("PersonalClaw", quit_button=None)
             # Set the seen-revision BEFORE the first draw, or the first tick redraws a
             # menu that is already current.
             self._revision = companion.revision
@@ -98,6 +101,9 @@ def _run_status_item(host, companion, settings: Settings) -> int:
             self.menu.clear()
             for key, item in enumerate(items):
                 self.menu[str(key)] = _native_item(host, item)
+            self.menu["quit"] = host.MenuItem(
+                "Quit", callback=lambda _sender: host.quit_application()
+            )
 
     start_background(companion)
     CompanionApp().run()
