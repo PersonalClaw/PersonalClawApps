@@ -119,7 +119,10 @@ Prefer to fork a repo instead of generating? `personalclaw app new --from-templa
 ## The manifest (`app.json`)
 
 The full field set, as parsed by the platform (`personalclaw/apps/manifest.py`).
-Unknown fields are preserved for forward compatibility, never fatal.
+Unknown fields are preserved for forward compatibility, never fatal. Every boolean is
+the JSON `true` or `false`, written without quotes: a `"false"` in quotes, a number or
+`null` is refused at install (and in the review before it), with a message naming the
+field.
 
 ### Identity (required)
 
@@ -271,7 +274,7 @@ yours — follow the nearest peer app rather than inventing a new pattern.
   "mcpTools": [],                                // MCP tools the app may invoke directly
   "storage": true,                               // get a persistent DATA_DIR
   "network": false,                              // DECLARED intent only — see note
-  "memory": "",                                  // "" | "app-scoped" | "shared"
+  "memory": false,                               // true to read and change the owner's memory
   "cron": true,                                  // may register manifest crons (needs `agent`)
   "agent": "text"                                // what its agent tasks may use: "text" | "read" | "tools"
 }
@@ -664,7 +667,10 @@ Three things worth knowing before you declare:
 Note: legacy manifest fields `agents`, `skills`, `sops` (and the old
 `backend.hooks`/`backend.routes`) were **stripped** — they parse into the
 forward-compat `extra` bag but have no runtime consumer. Don't use them. The
-`native` flag is reserved for core-shipped apps; never set it.
+`native` flag is reserved for the apps that ship inside PersonalClaw; never set it. An
+app is native only when PersonalClaw installed it from its own package, so the review,
+install and update of any other app that sets `"native": true` is refused, naming the
+field.
 
 ## Capability types
 

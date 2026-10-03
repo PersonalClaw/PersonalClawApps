@@ -155,7 +155,9 @@ self-update only.)
   each shared dependency (removable / shared with another app /
   user-installed) so removing one app never breaks another.
 - **Native apps** (the core-shipped baseline set) are locked on: disable and
-  both uninstall flavors are refused; only their settings are editable.
+  both uninstall flavors are refused; only their settings are editable, and they
+  are updated with PersonalClaw. An app you install from a source is never native,
+  whatever its `app.json` says: one that declares `"native": true` is refused.
 
 ## Where things live
 

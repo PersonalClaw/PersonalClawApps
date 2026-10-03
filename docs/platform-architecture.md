@@ -14,7 +14,7 @@ Core source pointers (for the curious): `personalclaw/apps/` (`app_manager.py`,
 
 | Tier | Where it lives | Managed how |
 |---|---|---|
-| **Native** | inside the core package (`personalclaw/apps/native/`) | Seeded as installed on first boot, **locked on** — disable/uninstall/force-uninstall are refused; only settings are editable. |
+| **Native** | inside the core package (`personalclaw/apps/native/`) | Seeded as installed on first boot, **locked on** — disable/uninstall/force-uninstall are refused; only settings are editable, and it is updated with PersonalClaw, never from a source. Native is where an app was installed from: one from any other source that declares `native` is refused at install. |
 | **First-party** | this repo's `apps/` directory | Surfaced in the Store via an always-present, read-only local source; user-managed like any other app. |
 | **Third-party** | user-added sources (local dirs or git URLs) | Fully user-managed; full scanner gate. |
 
@@ -158,14 +158,15 @@ The app claim is adopted in ALL auth modes, including `AUTH_MODE=none`.
 ## Permission enforcement
 
 Declared in the manifest `permissions` block; enforced server-side per
-`apps/permissions.py`. Enforcement status of every permission:
+`apps/permissions.py`. A boolean permission is the JSON `true` or `false`; any other
+value is refused at install, naming the field. Enforcement status of every permission:
 
 | Permission | Declares | Enforced where | Status |
 |---|---|---|---|
 | `api` (list of path prefixes) | which gateway API paths the app may call | app-permission middleware in the gateway server — an app-identified request to an undeclared path is rejected **403 before the handler runs**. Matching is prefix-based on the pathname only (query stripped); `*` suffix wildcards supported. The app's own proxy route `/apps/{name}/api/*` is always allowed (that's the app talking to itself). No declared `api` = no gateway API at all (deny by default). | **Enforced** |
 | `events` (list of event types) | which WebSocket events the app's connection receives | the WS fan-out filter — an app-scoped WS connection only receives events matching its declared set | **Enforced** |
 | `mcpTools` (list of tool names) | which MCP tools the app may invoke directly | the direct tool-invoke endpoint | **Enforced** |
-| `memory` (`""` / `"app-scoped"` / `"shared"`) | memory tier access | app-permission middleware gates any `/api/memory` path; empty = none, `app-scoped` = own scope only, `shared` = both | **Enforced** |
+| `memory` (bool) | may read and change the owner's memory | app-permission middleware refuses `/api/memory/*` and `/api/lessons` unless held, and the app's own work (its conversations, agent tasks and scheduled jobs) reads and writes the owner's memory only with it, as the app. The old `"app-scoped"` / `"shared"` values are refused at install | **Enforced** |
 | `cron` (bool) | may register manifest crons | cron reconciliation registers an app's crons only when held, with an agent tier for their agents to run at; without it the declaration is inert, and a manifest declaring jobs or `cron` with no tier is refused at install | **Enforced** |
 | `storage` (bool) | gets a persistent data dir | the backend launcher hands `PERSONALCLAW_APP_DATA_DIR` only when held | **Enforced** |
 | `agent` (`"text"` / `"read"` / `"tools"`) | what the app's agent work may use: `text` hands the model only the task the app sends, with no tools; `read` an agent with read-only tools; `tools` an agent with the owner's tools | the app agent-run endpoint (`POST /api/apps/{name}/agent-run`) runs a task at the calling app's tier, or a narrower `tier` the task asks for, and refuses a wider one `403 agent_tier_exceeded`; the run is held to the tier where its calls are decided (a `text` task on the worker with no tools, a `read` task only on PersonalClaw's own agent), and no tier approves a call, so each one that needs approval asks the owner. A turn in the app's own conversation needs `tools`. `true` is refused at install | **Enforced** |
