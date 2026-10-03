@@ -13,7 +13,7 @@ import aiohttp
 from slack_sdk.errors import SlackClientError
 from slack_sdk.web.async_client import AsyncWebClient
 
-from slack_runtime.format import escape_mrkdwn, verbatim_blocks
+from slack_runtime.format import escape_mrkdwn, slack_text, verbatim_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -499,10 +499,12 @@ class RealSlackClient(SlackClientOps):
         return [t for t in texts if t]
 
     async def fetch_message(self, channel: str, ts: str) -> str | None:
-        """Fetch a single message's text by channel and timestamp.
+        """Fetch a single message's text by channel and timestamp, as its sender typed it.
 
         Prefers content extracted from Block Kit ``blocks`` and falls back
-        to the top-level ``text`` field when blocks yield nothing.
+        to the top-level ``text`` field when blocks yield nothing. The top-level text and a
+        mrkdwn section are in Slack's spelling and are read back (``format.slack_text``); a plain
+        text section and a rich text element carry the characters themselves.
         """
         try:
             resp = await self._web.conversations_history(
@@ -511,7 +513,7 @@ class RealSlackClient(SlackClientOps):
             messages: list[dict[str, Any]] = resp.get("messages", [])
             if messages:
                 message = messages[0]
-                text = message.get("text", "")
+                text = slack_text(message.get("text", ""))
                 parts: list[str] = []
                 for block in message.get("blocks", []):
                     block_type = block.get("type")
@@ -520,7 +522,11 @@ class RealSlackClient(SlackClientOps):
                         if text_obj:
                             section_text = text_obj.get("text", "")
                             if section_text:
-                                parts.append(section_text)
+                                parts.append(
+                                    slack_text(section_text)
+                                    if text_obj.get("type") == "mrkdwn"
+                                    else section_text
+                                )
                     elif block_type == "rich_text":
                         for rich_text_element in block.get("elements", []):
                             # rich_text_list has children that are each rich_text_section;

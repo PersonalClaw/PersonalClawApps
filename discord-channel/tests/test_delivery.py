@@ -213,19 +213,28 @@ class TestTextDelivery:
         assert len(d._api.sent) == 1
 
     @pytest.mark.asyncio
-    async def test_deliver_rich_attaches_components_when_discord_shaped(self):
+    @pytest.mark.parametrize("payload", [
+        {"components": [{"type": COMPONENT_ACTION_ROW, "components": [
+            {"type": COMPONENT_BUTTON, "style": BUTTON_STYLE_SUCCESS, "label": "Open",
+             "custom_id": "open_report"},
+        ]}]},
+        [{"type": "section", "text": {"type": "mrkdwn", "text": "Block Kit"}}],
+    ])
+    async def test_deliver_rich_sends_its_text_and_no_components_of_the_payloads(self, payload):
+        """A rich message is its text. Components in its payload are not sent: Discord hands this
+        app a press on a button as its custom id, which whoever wrote the component chose, and this
+        app answers its own buttons (an approval's) by theirs."""
         d = _delivery()
-        rows = [{"type": COMPONENT_ACTION_ROW, "components": []}]
-        await d.deliver_rich("500", {"components": rows}, "fallback")
-        assert d._api.sent[0]["components"] == rows
+        await d.deliver_rich("500", payload, "plain fallback")
+        assert [(m["content"], m["components"]) for m in d._api.sent] == [("plain fallback", None)]
 
     @pytest.mark.asyncio
-    async def test_deliver_rich_falls_back_for_foreign_payload(self):
-        """A Slack Block Kit payload isn't renderable here — use the fallback text."""
+    async def test_a_long_rich_message_is_split_like_a_reply(self):
         d = _delivery()
-        await d.deliver_rich("500", {"blocks": [{"type": "section"}]}, "plain fallback")
-        assert d._api.sent[0]["content"] == "plain fallback"
-        assert d._api.sent[0]["components"] is None
+        text = "A long result line.\n" * 200
+        await d.deliver_rich("500", [], text)
+        assert len(d._api.sent) >= 2
+        assert "".join(m["content"] for m in d._api.sent).count("A long result line.") == 200
 
     @pytest.mark.asyncio
     async def test_deliver_chat_mirror_renders_options_as_buttons(self):

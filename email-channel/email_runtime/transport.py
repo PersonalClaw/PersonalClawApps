@@ -162,7 +162,8 @@ class EmailTransport(ChannelTransportProvider):
         * ``threads`` → ``Message-ID``/``In-Reply-To``/``References`` chains, kept by
           :class:`~email_runtime.delivery.ThreadStore`.
         * ``attachments`` → ``EmailDelivery.upload_attachment`` adds a MIME part.
-        * ``rich_text`` → ``EmailDelivery.deliver_rich`` sends an HTML alternative.
+        * ``rich_text`` → ``EmailDelivery.deliver_rich`` adds an HTML part written from the
+          message's own text (``email_runtime.html_part``).
         * ``reactions`` → email has no reaction concept.
         * ``typing_indicator`` → nothing to show between messages.
         * ``edits`` → **False, and this is how "streaming=false" is declared.** The

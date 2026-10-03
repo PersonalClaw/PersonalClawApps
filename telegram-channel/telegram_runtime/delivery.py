@@ -263,10 +263,11 @@ class TelegramDelivery:
         thread_ts: str = "", unfurl_links: bool = True, unfurl_media: bool = True,
         reply_broadcast: bool = False,
     ) -> str:
-        # Telegram has no Block-Kit analogue; render the plain-text fallback. When a
-        # caller hands a reply_markup dict through, pass it as an inline keyboard.
-        markup = payload if isinstance(payload, dict) and "inline_keyboard" in payload else None
-        return await send_parts(self._api, channel, fallback_text, reply_markup=markup)
+        """Deliver a rich message as its text (core hands every channel the Block Kit the agent
+        wrote). A keyboard in the payload is not sent: Telegram hands this app a press on a button
+        as its callback data, which whoever wrote the keyboard chose, and this app answers its own
+        buttons (an approval's) by theirs. The buttons this app sends are its own."""
+        return await send_parts(self._api, channel, fallback_text)
 
     async def deliver_cron_result(
         self, channel: str, job_name: str, job_id: str, text: str, thread_ts: str = ""

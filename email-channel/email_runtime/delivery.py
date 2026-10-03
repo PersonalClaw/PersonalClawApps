@@ -51,6 +51,7 @@ from personalclaw.sdk.channel import (
 )
 from personalclaw.sdk.util import app_data_dir
 
+from email_runtime.html_part import html_for
 from email_runtime.mime import build_outbound, build_references, reply_subject
 from email_runtime.smtp_client import SmtpError, SmtpSender
 
@@ -445,15 +446,17 @@ class EmailDelivery:
         thread_ts: str = "", unfurl_links: bool = True, unfurl_media: bool = True,
         reply_broadcast: bool = False,
     ) -> str:
-        """Deliver a rich payload as an HTML alternative (C3: MAY, and we do).
+        """Deliver a rich message as its text, with an HTML part written here from that text.
 
-        A caller handing through ``{"html": "<p>…</p>"}`` gets it as the HTML part with
-        ``fallback_text`` as the plain part; anything else falls back to plain text
-        only, per the contract."""
-        html = ""
-        if isinstance(payload, dict) and isinstance(payload.get("html"), str):
-            html = payload["html"]
-        return await self._deliver(channel, thread_ts, "", fallback_text, html_body=html)
+        The payload is another channel's shape (core hands every channel the Block Kit the agent
+        wrote) and nothing a mail can show, so the mail is ``fallback_text``: the plain part as it
+        came, and an HTML part that says the same with its formatting
+        (:func:`~email_runtime.html_part.html_for`). Markup in the payload or the text is never
+        sent as markup: a mail client shows the HTML part in place of the plain one, and markup in
+        it could load from the network as the mail is opened, run, or hide where a link goes. It
+        is written off the event loop, as a send is: a long text takes a moment to format."""
+        html_body = await asyncio.to_thread(html_for, fallback_text)
+        return await self._deliver(channel, thread_ts, "", fallback_text, html_body=html_body)
 
     async def deliver_cron_result(
         self, channel: str, job_name: str, job_id: str, text: str, thread_ts: str = ""

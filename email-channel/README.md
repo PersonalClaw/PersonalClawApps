@@ -43,6 +43,8 @@ A standalone PersonalClaw app bundle. It ships as a self-contained directory:
     stripped to text, quoted-history trimming, `parseaddr`-only sender addresses, and the
     RFC 3834 check for mail a program sent) and outbound build (`Message-ID` /
     `In-Reply-To` / `References`).
+  - `html_part.py` — the HTML part of a rich mail, written from the mail's own text and read
+    back with a parser before it is sent (see [A rich mail's HTML part](#a-rich-mails-html-part)).
   - `transport.py` — the IMAP poll loop, the self-message filter, trust-seam
     integration, code-in-reply pairing, and session routing.
   - `delivery.py` — the `ChannelDelivery` the gateway delivers results through, plus the
@@ -226,6 +228,24 @@ name, type and size, with a download. From an allowed correspondent, the files r
 mail's turn as that turn's attached files, the way a file you attach in the chat does. A mail
 that is only its attachments is still a turn: it names what came.
 
+## A rich mail's HTML part
+
+A rich message the agent sends (a notification it gives blocks) goes out with an HTML part beside
+its plain text, and your mail client shows that part instead. This app writes it from the
+message's own text, so it says what the plain text says: its paragraphs and line breaks, bold,
+italic, struck-through and code text, code blocks and tables as preformatted text, rules, headings
+as bold lines, and links. Every other character shows as it was written, markup included. A link
+points only at a web or mail address and always shows where it goes:
+`[the plan](https://example.com/q3)` reads *the plan (https://example.com/q3)*, the address being
+the link. A link to anything else is the text that was written.
+
+Nothing in the part loads when you open the mail: no image, style sheet, font or frame, each of
+which would tell its server that you read it, when and from where. Nothing runs or submits
+either, and the blocks the agent wrote for another channel, or any markup it hands over, are never
+sent as markup. The part is read back with a parser before it goes: one holding anything but that
+formatting is not sent, and the mail goes out as its plain text alone, as does a message longer
+than 100,000 characters.
+
 ## Capabilities
 
 | Capability | Value | Why |
@@ -233,7 +253,7 @@ that is only its attachments is still a turn: it names what came.
 | `inbound` | ✅ | the IMAP poll loop |
 | `threads` | ✅ | `Message-ID` / `In-Reply-To` / `References` chains |
 | `attachments` | ✅ | `upload_attachment` adds a MIME part |
-| `rich_text` | ✅ | `deliver_rich` sends an HTML alternative |
+| `rich_text` | ✅ | `deliver_rich` adds an HTML part written from the message's own text ([above](#a-rich-mails-html-part)) |
 | `reactions` | ❌ | email has no reaction concept |
 | `typing_indicator` | ❌ | nothing to show between messages |
 | `edits` | ❌ | **this is how `streaming=false` is declared** — see below |

@@ -52,7 +52,10 @@ ships as a self-contained directory:
     is a character, not italics. A progress line's tool title is shown as written. A link is
     a link only when it points at a web or mail address: Telegram reads a link to
     `tg://user?id=…` as a mention that notifies that person, so one is shown as written. A part
-    Telegram still refuses goes out as plain text rather than not at all.
+    Telegram still refuses goes out as plain text rather than not at all. A rich message the
+    agent sends goes out as its text, and the buttons on a message are only ever this app's own:
+    Telegram hands this app a press by the callback data its writer chose, and this app answers
+    its own buttons (an approval's) by theirs, so a keyboard the agent wrote is never sent.
   - `settings.py` — the app's own DM-activation config + credential key.
 - `cli_setup.py` / `cli_doctor.py` — the app's `personalclaw setup` / `doctor` hooks.
 - `test_provider.py` + `tests/` — the app's own tests.

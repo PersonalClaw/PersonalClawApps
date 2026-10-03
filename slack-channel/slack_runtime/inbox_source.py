@@ -61,7 +61,7 @@ if _APP_DIR not in _sys.path:
 from personalclaw.sdk.inbox import IncomingMessage, MessageSourceProvider
 
 from slack_runtime.client import RealSlackClient, SlackClientOps
-from slack_runtime.format import to_slack_mrkdwn
+from slack_runtime.format import slack_text, to_slack_mrkdwn
 from slack_runtime.settings import LiveConfig, load_tokens
 
 logger = logging.getLogger(__name__)
@@ -192,7 +192,7 @@ class SlackInboxSource(MessageSourceProvider):
                         channel_id=channel_id,
                         channel_name=channel_id,
                         thread_id=str(msg.get("thread_ts")) if msg.get("thread_ts") else None,
-                        text=str(msg.get("text", "")),
+                        text=slack_text(str(msg.get("text", ""))),
                         sender_id=sender,
                         sender_name=await self.resolve_user_name(sender),
                         timestamp=_ts_epoch(ts),
@@ -282,14 +282,18 @@ class SlackInboxSource(MessageSourceProvider):
     async def get_channel_history(
         self, channel_id: str, oldest: str, limit: int = 200
     ) -> list[dict[str, Any]]:
-        """Raw history for digest/context use. Empty list on failure.
+        """Raw history for digest/context use, each message's text as its sender typed it
+        (``format.slack_text``). Empty list on failure.
 
         Unlike ``poll``, an error here is not cursor-bearing — the caller wants
         best-effort context, so degrading to "no history" is correct.
         """
         try:
             messages, _ = await self._client.fetch_history(channel_id, oldest, limit)
-            return [dict(m) for m in messages]
+            return [
+                {**m, "text": slack_text(str(m["text"]))} if "text" in m else dict(m)
+                for m in messages
+            ]
         except Exception:
             logger.debug("inbox history failed for %s", channel_id, exc_info=True)
             return []

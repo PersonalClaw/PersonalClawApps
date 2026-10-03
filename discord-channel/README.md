@@ -128,6 +128,11 @@ No one. Every message, edit, upload and button answer this app sends tells Disco
 mentions (`allowed_mentions` with nothing in `parse`), so `@everyone`, `@here`, `<@id>` and
 `<@&role>` in a reply, text a model may only be repeating, show as written and notify nobody.
 
+A rich message the agent sends goes out as its text, split the way a reply is, and the buttons
+on a message are only ever this app's own. Discord hands this app a press on a button by the id
+its writer gave it, and this app answers its own buttons (an approval's) by theirs, so a button
+the agent wrote is never sent.
+
 ## Install
 
 From the App Store, add the `apps/` directory as a **local source**, then install

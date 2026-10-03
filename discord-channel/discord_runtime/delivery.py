@@ -331,17 +331,14 @@ class DiscordDelivery:
         thread_ts: str = "", unfurl_links: bool = True, unfurl_media: bool = True,
         reply_broadcast: bool = False,
     ) -> str:
-        """Deliver a rich payload. Discord's analogue of Block Kit is ``components``.
+        """Deliver a rich message as its text, split the way a reply is.
 
-        A caller that hands through a Discord-shaped ``{"components": [...]}`` gets
-        them attached; anything else falls back to the plain text, per the contract."""
-        components = None
-        if isinstance(payload, dict) and isinstance(payload.get("components"), list):
-            components = payload["components"]
-        msg = await self._api.create_message(
-            channel, fallback_text[:DISCORD_MAX_TEXT], components=components
-        )
-        return str(msg.get("id", ""))
+        Nothing in the payload is sent (core hands every channel the Block Kit the agent wrote).
+        Components in it would be buttons and menus, and Discord hands this app a press on one as
+        its custom id, which whoever wrote the component chose: this app answers its own buttons
+        (an approval's) by theirs, so a press on one the agent wrote could answer one of them. The
+        buttons this app sends are its own."""
+        return await self.deliver_text(channel, fallback_text, thread_ts)
 
     async def deliver_cron_result(
         self, channel: str, job_name: str, job_id: str, text: str, thread_ts: str = ""

@@ -271,18 +271,15 @@ class TestStreamingIsAbsent:
 
 class TestDeliveryMethods:
     @pytest.mark.asyncio
-    async def test_deliver_rich_sends_an_html_alternative(self, wired):
+    async def test_deliver_rich_sends_its_text_with_an_html_alternative(self, wired):
+        """The HTML part is written from the text (what it holds is read in
+        tests/test_a_rich_mail_carries_only_its_own_text.py); the payload, another channel's
+        shape, is not what is sent."""
         delivery, smtp, _ = wired
-        await delivery.deliver_rich(BOB, {"html": "<p>rich</p>"}, "plain fallback")
+        await delivery.deliver_rich(BOB, [{"type": "section"}], "plain **fallback**")
         types = {p.get_content_type() for p in smtp.last.walk() if not p.is_multipart()}
         assert types == {"text/plain", "text/html"}
-
-    @pytest.mark.asyncio
-    async def test_deliver_rich_falls_back_to_plain_for_an_opaque_payload(self, wired):
-        delivery, smtp, _ = wired
-        await delivery.deliver_rich(BOB, {"blocks": [{"type": "section"}]}, "plain fallback")
-        assert smtp.last.get_content_type() == "text/plain"
-        assert "plain fallback" in smtp.body_text()
+        assert smtp.body_text().strip() == "plain **fallback**"
 
     @pytest.mark.asyncio
     async def test_cron_result_is_subject_tagged(self, wired):
@@ -837,7 +834,8 @@ _HANDED = {
         BOB, f"Nightly {SECRET}", f"result {SECRET}"
     ),
     "deliver_rich": lambda h, _: h.deliver_rich(
-        BOB, {"html": f"<p>{SECRET}</p>"}, f"fallback {SECRET}"
+        BOB, [{"type": "section", "text": {"type": "mrkdwn", "text": SECRET}}],
+        f"fallback **{SECRET}**",
     ),
     "deliver_cron_result": lambda h, _: h.deliver_cron_result(
         BOB, f"backup {SECRET}", "job-1", f"done {SECRET}"

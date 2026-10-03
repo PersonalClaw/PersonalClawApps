@@ -118,6 +118,21 @@ they point at a web or mail address; a link to anything else is shown as it was 
 message the agent writes in Block Kit follows the same rules, and a mention element in it shows as
 its words.
 
+A rich message the agent writes also has nothing to press. It keeps the blocks that show something
+(sections and their fields, headers, dividers, context, images and rich text) and leaves out
+every button, menu, date or time picker and input, along with any block this app does not know.
+Slack sends a press on one of those to this app as an action, the way it sends a press on this
+app's own buttons (an approval's among them), by an id whoever wrote the button chose. So the only
+buttons on a message are this app's own.
+
+## What the agent reads
+
+A message's text as its sender typed it. Slack sends `&`, `<` and `>` in a message as `&amp;`,
+`&lt;` and `&gt;`; this app reads those three back as the characters, and decodes nothing else,
+for the agent, the channel history it is given, your automations, the Inbox and its digests, a
+thread's first message and a thread you link to the dashboard. A mention, a channel or a link
+stays in Slack's own spelling (`<@U…>`, `<#C…|name>`, `<https://…|words>`).
+
 ## Install
 
 From the App Store, add the `apps/` directory as a **local source**, then install

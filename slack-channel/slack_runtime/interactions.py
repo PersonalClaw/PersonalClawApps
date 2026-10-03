@@ -35,6 +35,7 @@ from slack_runtime.format import (
     OPTIONS_SUBMIT_ACTION,
     build_options_selected_blocks,
     escape_mrkdwn,
+    slack_text,
     to_slack_mrkdwn,
 )
 from slack_runtime.handler import (
@@ -884,7 +885,7 @@ async def _import_thread_to_session(slack: Any, ds: Any, channel: str, thread_ts
     for m in msgs:
         is_bot = bool(m.get("bot_id")) or m.get("user") == bot_id
         role = "assistant" if is_bot else "user"
-        text_content = m.get("text", "")
+        text_content = slack_text(m.get("text", ""))
         text_content, _ = redact_exfiltration_urls(text_content)
         text_content, _ = redact_credentials(text_content)
         session.append(role, text_content, f"msg msg-{'a' if is_bot else 'u'}")

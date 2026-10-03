@@ -56,6 +56,7 @@ from slack_runtime.enterprise import (
     validate_enterprise,
 )
 from slack_runtime.files import process_slack_files
+from slack_runtime.format import slack_text
 from slack_runtime.handler import (
     APPROVAL_INTERACTIVE,
     claim_owner,
@@ -1562,7 +1563,7 @@ async def _route_message(
 
         if should_record_observe_history(orch.channel_history, _user_authorized):
             assert orch.channel_history is not None  # narrowed by helper
-            orch.channel_history.push(channel, sender_id, text, thread_ts=thread_ts)
+            orch.channel_history.push(channel, sender_id, slack_text(text), thread_ts=thread_ts)
         if not is_mention:
             in_active_thread = (
                 thread_ts
@@ -1636,6 +1637,16 @@ async def _route_message(
     if seen.check_and_add(msg_ts):
         return
 
+    # An @mention starts with Slack's mention of this bot, read off Slack's own spelling: there a
+    # "<" is always Slack's markup, and once the text is read back a "<@" the sender typed
+    # looks the same. From here on the text is what the sender typed (format.slack_text), for the
+    # agent, the history and the automations alike, before a transcript or a file of this app's
+    # own joins it.
+    bot_mention = ""
+    if is_mention and text.startswith("<@") and (end := text.find(">")) != -1:
+        bot_mention = slack_text(text[: end + 1])
+    text = slack_text(text)
+
     # ── Transcribe audio files (voice memos) ──
     # Placed after dedup + auth to avoid expensive work on duplicate events
     # or unauthorized users.
@@ -1692,12 +1703,9 @@ async def _route_message(
             orch.channel_history.push(channel, sender_id, text, thread_ts=thread_ts)
 
     # Strip the leading bot @mention so the LLM sees clean text.
-    # app_mention events always start with "<@BOTID> ..." — just slice past the first ">".
     clean_text = text
-    if is_mention and text.startswith("<@"):
-        end = text.find(">")
-        if end != -1:
-            clean_text = text[end + 1 :].lstrip()
+    if bot_mention and text.startswith(bot_mention):
+        clean_text = text[len(bot_mention) :].lstrip()
     if not clean_text:
         _cleanup_image_temps()
         return

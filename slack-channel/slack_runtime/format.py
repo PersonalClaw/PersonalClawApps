@@ -120,6 +120,23 @@ def escape_mrkdwn(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+#: The entities Slack spells ``&``, ``<`` and ``>`` as in a message's text, and the characters.
+_SLACK_ENTITIES = {"&amp;": "&", "&lt;": "<", "&gt;": ">"}
+_SLACK_ENTITY_RE = re.compile("|".join(_SLACK_ENTITIES))
+
+
+def slack_text(text: str) -> str:
+    """A message's text from Slack as its sender typed it: :func:`escape_mrkdwn` read back.
+
+    Slack sends ``&``, ``<`` and ``>`` in a message's text as ``&amp;``, ``&lt;`` and ``&gt;``,
+    because it reads the characters themselves as its own markup. Each of the three is turned back
+    into its character in one pass, so ``&amp;lt;`` (someone who typed ``&lt;``) stays ``&lt;``.
+    Nothing else is decoded, since Slack encodes nothing else: any other ``&…;`` is as typed. A
+    mention (``<@U…>``, ``<!here>``), a channel (``<#C…|name>``) or a link
+    (``<https://…|words>``) stays in Slack's spelling, the characters inside it read back too."""
+    return _SLACK_ENTITY_RE.sub(lambda m: _SLACK_ENTITIES[m.group(0)], text)
+
+
 #: The rich-text elements that notify someone: a person, a user group, or everyone in a channel
 #: or the workspace.
 _NOTIFYING_ELEMENTS = {"user": "user_id", "usergroup": "usergroup_id", "broadcast": "range"}
@@ -143,22 +160,61 @@ def verbatim_blocks(blocks: Any) -> Any:
     return blocks
 
 
+#: The blocks a model's rich message keeps: the ones that show something and have nothing to
+#: press.
+_SHOWN_BLOCKS = frozenset(
+    {"section", "header", "divider", "context", "image", "rich_text", "markdown"}
+)
+#: What a context block of a model's keeps, and a section's accessory: text and images.
+_SHOWN_ELEMENTS = frozenset({"mrkdwn", "plain_text", "image"})
+
+
 def model_blocks(blocks: Any) -> Any:
-    """Blocks a model wrote, as Slack shows them with nobody notified.
+    """Blocks a model wrote, as Slack shows them with nobody notified and nothing to press.
+
+    Only the blocks that show something are kept (:data:`_SHOWN_BLOCKS`): a section's accessory
+    only when it is an image, a context's elements only its text and images. A button, a menu, a
+    date or time picker, an input, and a block this app does not know, are left out. Slack sends a
+    press, a pick or an input on one to this app as an action, and this app answers its own controls
+    (an approval's among them) by the action's id, which whoever writes the blocks chooses. So the
+    only controls on a message are this app's own.
 
     A mrkdwn text in them is the model's markdown, converted as a reply is
     (:func:`to_slack_mrkdwn`): its links to web addresses are links and every other character is
     text. A markdown block's text is shown as written. A rich-text mention of a person, a user
     group or a whole channel is text, ``@`` and what it names (``@here``, a person's id), and
     notifies no one."""
-    if isinstance(blocks, list):
-        return [model_blocks(b) for b in blocks]
-    if not isinstance(blocks, dict):
-        return blocks
-    kind = blocks.get("type")
+    if not isinstance(blocks, list):
+        return _model_text(blocks)
+    shown: list[Any] = []
+    for block in blocks:
+        if not isinstance(block, dict) or block.get("type") not in _SHOWN_BLOCKS:
+            continue
+        accessory = block.get("accessory")
+        if accessory is not None and not _shown_element(accessory):
+            block = {k: v for k, v in block.items() if k != "accessory"}
+        if block.get("type") == "context" and isinstance(block.get("elements"), list):
+            block = {**block, "elements": [e for e in block["elements"] if _shown_element(e)]}
+        shown.append(_model_text(block))
+    return shown
+
+
+def _shown_element(element: Any) -> bool:
+    """Whether a context element or a section's accessory shows something and has nothing to
+    press: text or an image."""
+    return isinstance(element, dict) and element.get("type") in _SHOWN_ELEMENTS
+
+
+def _model_text(node: Any) -> Any:
+    """*node* of a model's blocks with its text shown as written and its mentions as words."""
+    if isinstance(node, list):
+        return [_model_text(n) for n in node]
+    if not isinstance(node, dict):
+        return node
+    kind = node.get("type")
     if kind in _NOTIFYING_ELEMENTS:
-        return {"type": "text", "text": f"@{blocks.get(_NOTIFYING_ELEMENTS[kind]) or kind}"}
-    out = {k: model_blocks(v) for k, v in blocks.items()}
+        return {"type": "text", "text": f"@{node.get(_NOTIFYING_ELEMENTS[kind]) or kind}"}
+    out = {k: _model_text(v) for k, v in node.items()}
     if isinstance(out.get("text"), str):
         if kind == "mrkdwn":
             out["text"] = to_slack_mrkdwn(out["text"])

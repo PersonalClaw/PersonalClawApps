@@ -196,13 +196,15 @@ class TestTheLimitIsTelegrams:
         assert _shown(api).count("🙂") == 3000
 
     @pytest.mark.asyncio
-    async def test_a_keyboard_rides_the_last_part_only(self):
+    async def test_a_long_rich_message_is_split_like_a_reply_and_has_no_buttons(self):
+        """A rich message is its text. A keyboard in its payload is not sent: Telegram hands this
+        app a press on a button as its callback data, which whoever wrote the keyboard chose, and
+        this app answers its own buttons (an approval's) by theirs."""
         markup = {"inline_keyboard": [[{"text": "Open", "callback_data": "opt:0"}]]}
         api = BotAPI()
         await _delivery(api).deliver_rich("42", markup, "A long result line.\n" * 400)
         assert len(api.sent) >= 2
-        assert [m["reply_markup"] for m in api.sent[:-1]] == [None] * (len(api.sent) - 1)
-        assert api.sent[-1]["reply_markup"] == markup
+        assert [m["reply_markup"] for m in api.sent] == [None] * len(api.sent)
         assert _shown(api).count("A long result line.") == 400
 
     @pytest.mark.asyncio

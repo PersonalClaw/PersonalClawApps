@@ -458,8 +458,8 @@ def build_outbound(
     """Build one outbound message with correct threading headers.
 
     ``attachments`` are ``(filename, mimetype, payload)`` triples. ``html_body``, when
-    given, is added as a ``multipart/alternative`` sibling so ``deliver_rich`` can send
-    HTML while the plain part stays the readable fallback."""
+    given, is added as a ``multipart/alternative`` sibling of the plain part: the HTML part
+    ``deliver_rich`` writes from the same text (``email_runtime.html_part``)."""
     msg = EmailMessage()
     msg["From"] = from_addr
     msg["To"] = to_addr
