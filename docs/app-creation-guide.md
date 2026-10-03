@@ -293,8 +293,12 @@ stack; the flag discloses intent to the user rather than fencing it). See the
 No tier lets your app approve its agent's calls: a task starts on the owner's install consent,
 and every call that needs approval asks her, whatever her own approval settings are. A turn in a
 conversation your app started needs `tools` and asks the same way, and so does each of your
-scheduled jobs: its agent runs at your app's tier (see [Crons](#crons)). `"agent": true` names no
-tier and is refused at install.
+scheduled jobs: its agent runs at your app's tier (see [Crons](#crons)). Every agent your app's
+agent starts is your app's work too, held the same way: a subagent, a batch of them
+(`subagent_run`) and each step of a workflow run it starts run at no more than your tier and ask
+her for their calls, and each ask names your app (and the job, when a job started the work). A
+batch never starts on her own approval settings, and from an app whose tier is `text`, or that
+holds none, it starts nothing. `"agent": true` names no tier and is refused at install.
 
 In Python, a parsed manifest holds the tier as `Permissions.agent_tier`, `""` when the app runs no
 agent work, and `personalclaw.sdk.manifest.AGENT_TIERS` lists the tiers, narrowest first. The field

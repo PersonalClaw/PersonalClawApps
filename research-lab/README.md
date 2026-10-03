@@ -90,9 +90,13 @@ drags the previous one's context along. The cycle needs that tier: `research_nex
 and the `read` tier refuses all of them. The campaign tools run without asking (none needs
 approval). The cycle's agent approves nothing on its own: each of its calls that needs approval
 asks you, whatever your own approval settings say. A subagent it starts for one sub-question is
-the app's work too and approves nothing on its own either; several at once run as one batch, which
-asks you once before it starts unless your own settings let a batch start without asking. The job
-is headless (`delivery: none`). Disable or uninstall the app and the cron goes with it.
+the app's work too: it runs at the app's tier and approves nothing on its own either. Several at
+once run as one batch, which starts on the app's install consent as one subagent does, never on
+your own settings (your YOLO, a chat's Trust, the hook setting), and each of its tasks is held the
+same way: each call one makes that needs approval asks you, and the ask in your Inbox names
+Research Lab and its `advance-campaigns` job. A batch whose task may change things asks you to
+allow it first. The job is headless (`delivery: none`). Disable or uninstall the app and the cron
+goes with it.
 
 ### Why it terminates
 
