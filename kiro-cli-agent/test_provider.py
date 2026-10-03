@@ -186,3 +186,12 @@ def test_install_consent_names_the_program_it_starts():
         "folder-settings",
     ]
     assert manifest.dependencies.npmPackages == [] and manifest.writes == []
+
+
+def test_the_cli_declares_its_sign_in_store():
+    """The host can refuse shell reads of the browser sign-in state without knowing this CLI."""
+    _fake = {
+        "~/.local/share/kiro-cli/data.sqlite3",
+        "~/Library/Application Support/kiro-cli/data.sqlite3",
+    }
+    assert set(kiro_cli.CREDENTIAL_FILES) == _fake

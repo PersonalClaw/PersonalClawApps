@@ -69,6 +69,10 @@ SELF_SANDBOXING = True
 #: region: none. It signs in with its own ``kiro-cli login``, which keeps the account it runs as
 #: and where; an agent CLI gets no variable of the gateway's it is not handed.
 PROVIDER_ENV: tuple[str, ...] = ()
+CREDENTIAL_FILES: tuple[str, ...] = (
+    "~/.local/share/kiro-cli/data.sqlite3",
+    "~/Library/Application Support/kiro-cli/data.sqlite3",
+)
 
 
 def resolve_command() -> list[str] | None:
@@ -137,5 +141,6 @@ def create_provider(config: dict | None = None):
         login_command=login_command(command),
         # kiro-cli applies its own OS sandbox; the host's cannot nest around it.
         self_sandboxing=SELF_SANDBOXING,
+        credential_files=CREDENTIAL_FILES,
     )
     return None
