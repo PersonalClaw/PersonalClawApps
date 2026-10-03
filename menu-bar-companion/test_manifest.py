@@ -75,7 +75,7 @@ def test_permissions_are_exactly_the_minimum_this_app_uses():
     assert perms.storage is False, "client app: the platform never grants it a DATA_DIR"
     assert perms.network is True, "its one connection is your gateway, which may be another machine"
     assert perms.cron is False
-    assert perms.agent == "", "it runs no agent work of its own"
+    assert perms.agent_tier == "", "it runs no agent work of its own"
     assert perms.memory is False
     assert perms.mcpTools == []
     assert perms.appMessaging == []

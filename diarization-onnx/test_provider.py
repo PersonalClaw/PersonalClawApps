@@ -470,16 +470,36 @@ def _ffmpeg_or_skip() -> str:
     return ffmpeg
 
 
+def _mp4_audio(path: Path) -> tuple[bytes, int]:
+    """The sample entry an MP4 file's audio track declares (``mp4a`` for AAC) and its sample rate,
+    read from the file's own boxes: ``moov/trak/mdia/minf/stbl/stsd``, whose first entry holds the
+    rate as a 16.16 number 32 bytes in."""
+    data = path.read_bytes()
+    assert data[4:8] == b"ftyp", "not an MP4 file"
+
+    def inside(kinds: list[bytes], start: int, end: int) -> int:
+        while start + 8 <= end:
+            size = int.from_bytes(data[start : start + 4], "big")
+            if size < 8:  # a box running to the end of the file, or a 64-bit size: not ffmpeg's
+                break
+            if data[start + 4 : start + 8] == kinds[0]:
+                return start + 8 if len(kinds) == 1 else inside(kinds[1:], start + 8, start + size)
+            start += size
+        raise AssertionError(f"no {kinds[0]!r} box")
+
+    entry = inside([b"moov", b"trak", b"mdia", b"minf", b"stbl", b"stsd"], 0, len(data)) + 8
+    return data[entry + 4 : entry + 8], int.from_bytes(data[entry + 32 : entry + 36], "big") >> 16
+
+
 @pytest.mark.asyncio
 async def test_an_aac_voice_memo_is_read_where_soundfile_could_not(
     monkeypatch, tmp_path, fake_engine
 ):
     """🔴 A two-voice voice memo was an ``.m4a`` (AAC at 22.05 kHz). soundfile's libsndfile cannot
     open AAC, so the app failed before diarizing and answered "no speakers". Built here with
-    ffmpeg; soundfile's refusal of the same file is the control that it is the failing kind."""
+    ffmpeg, and the file's own boxes are the control that it is that kind: an AAC track at
+    22,050 Hz, a rate that is not the model's."""
     import subprocess
-
-    import soundfile
 
     ffmpeg = _ffmpeg_or_skip()
     memo = tmp_path / "snippet.m4a"
@@ -488,8 +508,7 @@ async def test_an_aac_voice_memo_is_read_where_soundfile_could_not(
          "-c:a", "aac", "-map_metadata", "-1", str(memo)],
         check=True,
     )
-    with pytest.raises(Exception, match="Format not recognised"):
-        soundfile.read(str(memo))
+    assert _mp4_audio(memo) == (b"mp4a", 22050)
     _home(monkeypatch, tmp_path)
     _seed_pair(P._models_dir())
     record = fake_engine()

@@ -99,7 +99,7 @@ def opened_sessions(runtime: str, record: Path) -> tuple[dict[str, str], list[di
     :func:`acp_stub_command`, and return what its process was handed, the params of each
     ``session/new`` it was sent, and each permission mode the host then set on a session
     (``session/set_config_option`` with ``configId: "mode"``)."""
-    from personalclaw.llm.registry import get_default_registry
+    from personalclaw.sdk.model import get_default_registry
 
     async def _start() -> None:
         provider = get_default_registry().build(runtime)

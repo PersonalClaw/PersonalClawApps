@@ -295,6 +295,11 @@ and every call that needs approval asks her, whatever her own approval settings 
 conversation your app started needs `tools` and asks the same way. `"agent": true` names no tier
 and is refused at install.
 
+In Python, a parsed manifest holds the tier as `Permissions.agent_tier`, `""` when the app runs no
+agent work, and `personalclaw.sdk.manifest.AGENT_TIERS` lists the tiers, narrowest first. The field
+is not `agent`, the boolean the tiers replaced, so code still passing `Permissions(agent=...)`
+fails where it is called.
+
 A task runs at your app's tier unless it asks for a narrower one, and asking for a wider one is
 refused (`403 agent_tier_exceeded`) before anything runs:
 

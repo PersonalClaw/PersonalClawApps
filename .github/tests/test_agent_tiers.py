@@ -74,5 +74,25 @@ def test_each_app_declares_the_tier_its_tasks_need(app):
         f"{app} declares agent {raw['permissions']['agent']!r}; its tasks need {tier!r} ({why})"
     )
     manifest = AppManifest.from_dict(raw)
-    assert manifest.permissions.agent == tier
+    assert manifest.permissions.agent_tier == tier
     assert [e for e in manifest.validate() if "permissions.agent" in e] == []
+
+
+@pytest.mark.parametrize("written", [True, False, "yes"])
+def test_a_value_that_names_no_tier_holds_none_and_only_false_is_accepted(written):
+    """What this census relies on from core's parser, the one the Store installs with: ``true``, the
+    boolean the tiers replaced, and any other value that names no tier hold no tier and are refused
+    by name, while ``false`` declares no agent work and is accepted."""
+    manifest = AppManifest.from_dict(
+        {
+            "name": "probe-app",
+            "version": "1.0.0",
+            "displayName": "Probe App",
+            "description": "Declares an agent permission.",
+            "permissions": {"agent": written},
+        }
+    )
+    assert manifest.permissions.agent_tier == ""
+    refusals = [e for e in manifest.validate() if "permissions.agent" in e]
+    assert len(refusals) == (0 if written is False else 1), refusals
+    assert "agent" not in manifest.permissions.to_dict()
