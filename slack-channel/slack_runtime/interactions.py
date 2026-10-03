@@ -879,7 +879,9 @@ async def _import_thread_to_session(slack: Any, ds: Any, channel: str, thread_ts
     truncated = len(msgs) > 50
     if truncated:
         msgs = msgs[-50:]
-    session = ds.get_or_create_session()
+    # Made as this channel's chat, as the inbound door makes every chat it opens: its answers go
+    # back to the thread, and a reply there continues it, after a restart too.
+    session = ds.get_or_create_session(app="slack")
     session.title = f"Slack thread {thread_ts[:10]}" + (" (truncated)" if truncated else "")
     bot_id = getattr(ds, "_self_bot_id", None) or ""
     for m in msgs:

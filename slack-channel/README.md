@@ -135,6 +135,15 @@ Slack sends a press on one of those to this app as an action, the way it sends a
 app's own buttons (an approval's among them), by an id whoever wrote the button chose. So the only
 buttons on a message are this app's own.
 
+## A thread linked to the dashboard
+
+`!link-to-dashboard` in a thread, or **Link to dashboard** under an answer, brings the thread
+into a new chat in PersonalClaw and links the thread to it. A reply in the thread then continues
+that chat, with everything said before, and its answer comes back to the thread, after a
+PersonalClaw restart too: the chat is this channel's, as every chat a channel opens is, and
+PersonalClaw keeps which chat the thread continues. Asked again in the same thread, it keeps the
+chat it made rather than making a second one.
+
 ## What the agent reads
 
 A message's text as its sender typed it. Slack sends `&`, `<` and `>` in a message as `&amp;`,
