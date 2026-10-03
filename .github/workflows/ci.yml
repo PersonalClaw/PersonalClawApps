@@ -121,6 +121,11 @@ jobs:
         # slack-channel's suite ran them, so vector-store-qdrant's CredentialStore() call,
         # missing the home it requires, failed on every connect with nothing to name it.
         run: python -m pytest .github/tests/test_sdk_calls_bind.py -q
+      - name: Every app declares the core features it relies on, by names PersonalClaw offers
+        # A name the installed PersonalClaw does not offer would make the app installable nowhere,
+        # and an app whose prompt offers the approval brief's answers must declare approval-answers,
+        # so a PersonalClaw that does not hand them over refuses it instead of quietly doing less.
+        run: python -m pytest .github/tests/test_core_features_declared.py -q
       - name: Every test runs against a scratch PersonalClaw home
         # conftest.py gives every test its own; pytest.ini makes pytest load it however it starts.
         run: python -m pytest .github/tests/test_scratch_home.py -q

@@ -22,7 +22,9 @@ approval prompt does too, its buttons on the last part. The prompt shows what wi
 as the dashboard's approval card does (:func:`_approval_text`): the tool, its arguments, the
 purpose and what the call can touch, from core's brief. Its buttons are the answers the brief
 offers, the card's own (:func:`_approval_markup`): Allow once and Deny, and Allow for this chat
-where core offers it, which the prompt explains before it is pressed.
+where core offers it, which the prompt explains before it is pressed. A PersonalClaw older than
+those answers sends a brief with none: the prompt still shows what will run, with nothing to
+press, and says to answer it in PersonalClaw (:data:`_NO_ANSWERS`), and the log says so once.
 
 Core masks every text it hands this handle, keys and exfiltration URLs included, before
 any method here is called, so nothing here masks it again.
@@ -143,6 +145,13 @@ _LATE_ANSWERS = {
 _NO_LONGER_WAITING = "This approval is no longer waiting. This press changes nothing."
 # A press naming no answer the prompt offers.
 _NOT_OFFERED = "That is not an answer this approval offers. This press changes nothing."
+# What a prompt says when the brief carries no answers it can offer, as a PersonalClaw older than
+# the answers it hands a channel's prompt (the core feature ``approval-answers``) sends it.
+_NO_ANSWERS = (
+    "No buttons here: this PersonalClaw sends approvals without the answers Telegram Channel "
+    "offers as buttons. Answer it in PersonalClaw, and update PersonalClaw to answer approvals "
+    "here."
+)
 
 # A progress line for each status core gives a call (``ChannelDelivery.append_stream_task``): its
 # mark, and the words for an ending other than done. A call that did not run never reads done.
@@ -241,6 +250,8 @@ class TelegramDelivery:
         self._ended: OrderedDict[str, str] = OrderedDict()
         # Background closes of prompts whose wait was cancelled, kept until they are sent.
         self._closing: set[asyncio.Task[None]] = set()
+        # Whether the log has said that this PersonalClaw sends prompts no answers to offer.
+        self._said_no_answers = False
         # monotonic clock is injectable so the throttle test needn't sleep.
         self._now = _monotonic
 
@@ -435,8 +446,10 @@ class TelegramDelivery:
         """Post an inline keyboard of the answers the brief offers and wait for the approval to
         end.
 
-        Returns whether it ended approved, or None when we can't prompt (no owner/chat, or a
-        brief that offers nothing) so the gateway falls back to the dashboard. A press resolves
+        Returns whether it ended approved, or None when we can't prompt (no owner/chat, or no
+        tool to show) so the gateway falls back to the dashboard. A brief with no answers this
+        prompt can offer still prompts, with nothing to press and :data:`_NO_ANSWERS` under what
+        will run, and it ends as any prompt does. A press resolves
         the pending record with the pressed answer's key. ``on_prompted(pending)`` lets core
         race a dashboard prompt against this one: core resolves the same future with how
         the approval ended wherever it ended, so the wait keeps no timer of its own. Once
@@ -455,22 +468,23 @@ class TelegramDelivery:
         if not chat_id:
             return None
 
-        brief = approval_brief_for(event) or {}
-        answers = list(brief.get("answers") or [])
-        if not answers:
+        brief = approval_brief_for(event)
+        if brief is None:
             return None
+        answers = _offered(brief)
         request_id = str(getattr(event, "request_id", ""))
         # What will run, as the dashboard's card shows it. Split like a reply, the buttons on
         # the last part: one message of it all was refused as too long, and the owner was
         # never asked.
-        prompt = _approval_text(brief, source)
+        prompt = _approval_text(brief, source, answers)
+        if not answers:
+            # Returning None here left the owner a bare link with no reason given, and the log
+            # said nothing: the prompt says why it has no buttons, and where to answer instead.
+            self._log_no_answers()
+            prompt = f"{prompt}\n{_NO_ANSWERS}"
         parts = render_parts(prompt)
-        mid = int(
-            await send_parts(
-                self._api, chat_id, prompt, reply_markup=_approval_markup(answers, request_id)
-            )
-            or 0
-        )
+        markup = _approval_markup(answers, request_id) if answers else None
+        mid = int(await send_parts(self._api, chat_id, prompt, reply_markup=markup) or 0)
         pending = _PendingApproval(request_id, chat_id, mid, answers)
         self._pending[f"req:{request_id}"] = pending
         if on_prompted:
@@ -490,6 +504,18 @@ class TelegramDelivery:
         pressed = pending.answer(outcome)
         await self._close(chat_id, mid, parts, request_id, outcome, pressed)
         return (pressed["ends"] if pressed else outcome) == "approved"
+
+    def _log_no_answers(self) -> None:
+        """Say once, in the log, that this PersonalClaw hands approval prompts no answers."""
+        if self._said_no_answers:
+            return
+        self._said_no_answers = True
+        logger.warning(
+            "telegram: PersonalClaw sent an approval with no answers this app can offer, so its "
+            "prompts here have no buttons and say to answer them in PersonalClaw. Telegram "
+            "Channel needs a PersonalClaw with the core feature 'approval-answers': update "
+            "PersonalClaw. (Logged once.)"
+        )
 
     async def _close(
         self,
@@ -589,7 +615,21 @@ class TelegramDelivery:
                 logger.debug("telegram: answerCallbackQuery failed", exc_info=True)
 
 
-def _approval_text(brief: dict, source: str) -> str:
+def _offered(brief: dict) -> list[dict[str, str]]:
+    """The answers *brief* offers, in its order, when this prompt can offer every one: each
+    names what a press resolves the prompt with (``key``) and its button's words (``label``).
+    ``[]`` when it carries none, as a PersonalClaw older than the answers it hands a prompt sends
+    it, or one this prompt could not show: a prompt offers all of core's answers or none."""
+    answers = brief.get("answers")
+    if isinstance(answers, list) and answers and all(
+        isinstance(a, dict) and all(isinstance(a.get(f), str) and a[f] for f in ("key", "label"))
+        for a in answers
+    ):
+        return answers
+    return []
+
+
+def _approval_text(brief: dict, source: str, answers: list[dict[str, str]]) -> str:
     """The approval prompt, from core's brief (``approval_brief_for``): the tool, its arguments
     in a code block, the purpose the runner gave, the summary line (what the call can touch, and
     its risk) and, for a command that reaches a host off the owner's allowed hosts, the line
@@ -602,9 +642,7 @@ def _approval_text(brief: dict, source: str) -> str:
     if arguments:
         lines += ["```", _unfenced(arguments), "```"]
     lines += [str(brief[k]) for k in ("purpose", "summary", "reach") if brief.get(k)]
-    lines += [
-        f"{a['label']}: {a['promise']}" for a in brief.get("answers") or [] if a.get("promise")
-    ]
+    lines += [f"{a['label']}: {a['promise']}" for a in answers if a.get("promise")]
     return "\n".join(lines)
 
 

@@ -272,16 +272,20 @@ class SlackDelivery:
         the approval to end.
 
         Returns whether it ended approved, or None when Slack can't prompt (caller falls
-        back to the dashboard), or the brief offers nothing. A press resolves the pending record
-        with the pressed answer's key. ``on_prompted(pending)`` lets the caller race a dashboard
-        prompt against the Slack one: core resolves ``pending.future`` with how the approval
-        ended wherever it ended, so the wait keeps no timer of its own. Once it ends, the prompt
-        says how and loses its buttons (:func:`~slack_runtime.handler.close_prompt`), and so it
-        does when this wait is cancelled."""
+        back to the dashboard), or there is no tool to show. A brief with no answers this prompt
+        can offer still prompts, with no buttons and a line saying to answer it in PersonalClaw
+        (``handler._NO_ANSWERS``), and it ends as any prompt does. A press resolves the pending
+        record with the pressed answer's key. ``on_prompted(pending)`` lets the caller race a
+        dashboard prompt against the Slack one: core resolves ``pending.future`` with how the
+        approval ended wherever it ended, so the wait keeps no timer of its own. Once it ends, the
+        prompt says how and loses its buttons (:func:`~slack_runtime.handler.close_prompt`), and
+        so it does when this wait is cancelled."""
         import re
 
         from slack_runtime.handler import (
             _close_prompt_later,
+            _log_no_answers,
+            _offered,
             _pending_approvals,
             _PendingApproval,
             _post_approval,
@@ -291,9 +295,14 @@ class SlackDelivery:
         owner = self._owner()
         if not owner:
             return None
-        answers = list((approval_brief_for(event) or {}).get("answers") or [])
-        if not answers:
+        brief = approval_brief_for(event)
+        if brief is None:
             return None
+        answers = _offered(brief)
+        if not answers:
+            # Returning None here left the owner a bare link with no reason given, and the log
+            # said nothing: the prompt says why it has no buttons, and where to answer instead.
+            _log_no_answers()
         request_id = str(event.request_id)
         thread_ts: str | None = None
         channel: str | None = None

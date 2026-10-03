@@ -870,13 +870,60 @@ _OUTCOME_APPROVED = "approved"
 _OUTCOME_REJECTED = "rejected"
 _OUTCOME_EXPIRED = "expired"
 _OUTCOME_CANCELLED = "cancelled"
+#: A call of a thread this app runs itself that it could not ask the owner about: PersonalClaw
+#: handed its approval no answers to offer, and nothing else asks for this app's own turns.
+_OUTCOME_UNASKED = "unasked"
 
 # What the thread says about a call its approval did not let run: a Reject, or nobody answering
 # in time, which is not a Deny.
 _UNRUN_LINES = {
     _OUTCOME_REJECTED: "🚫 _Tool use rejected._",
     _OUTCOME_EXPIRED: "⌛ _Nobody answered in time, so it did not run._",
+    _OUTCOME_UNASKED: (
+        "⚠️ _This PersonalClaw sends approvals without the answers Slack Channel offers as "
+        "buttons, so it could not ask you here and the call did not run. Update PersonalClaw "
+        "to answer approvals here._"
+    ),
 }
+
+#: What a prompt says when the brief carries no answers it can offer, as a PersonalClaw older than
+#: the answers it hands a channel's prompt (the core feature ``approval-answers``) sends it.
+_NO_ANSWERS = (
+    "No buttons here: this PersonalClaw sends approvals without the answers Slack Channel "
+    "offers as buttons. Answer it in PersonalClaw, and update PersonalClaw to answer approvals "
+    "here."
+)
+#: Whether the log has said that this PersonalClaw sends prompts no answers to offer.
+_said_no_answers = False
+
+
+def _offered(brief: dict) -> list[dict[str, str]]:
+    """The answers *brief* offers, in its order, when a prompt can offer every one: each names
+    what a press resolves the prompt with (``key``) and its button's words (``label``). ``[]``
+    when it carries none, as a PersonalClaw older than the answers it hands a prompt sends it, or
+    one a prompt could not show: a prompt offers all of core's answers or none."""
+    answers = brief.get("answers")
+    if isinstance(answers, list) and answers and all(
+        isinstance(a, dict) and all(isinstance(a.get(f), str) and a[f] for f in ("key", "label"))
+        for a in answers
+    ):
+        return answers
+    return []
+
+
+def _log_no_answers() -> None:
+    """Say once, in the log, that this PersonalClaw hands approval prompts no answers."""
+    global _said_no_answers
+    if _said_no_answers:
+        return
+    _said_no_answers = True
+    logger.warning(
+        "slack: PersonalClaw sent an approval with no answers this app can offer, so its prompts "
+        "here have no buttons and say to answer them in PersonalClaw, and a call in a thread this "
+        "app runs is not run. Slack Channel needs a PersonalClaw with the core feature "
+        "'approval-answers': update PersonalClaw. (Logged once.)"
+    )
+
 
 # What :func:`handle_interaction` returns for the owner's press on a prompt that has ended.
 LATE_PRESS = "late_press"
@@ -2978,7 +3025,9 @@ async def _request_approval(
     """Ask the owner about *event* in the thread, and wait as long as PersonalClaw waits for any
     approval (``approval_window_secs``, read now). Returns how it ended: ``approved``,
     ``rejected`` (the owner pressed Reject) or ``expired`` (nobody answered in that window, so the
-    call does not run). A wait the turn's own stop cancels ends ``cancelled`` and re-raises.
+    call does not run). A wait the turn's own stop cancels ends ``cancelled`` and re-raises. A
+    brief with no answers to offer (an older PersonalClaw's) ends ``unasked`` before anything is
+    posted: nothing else asks the owner about a turn this app runs, so the call does not run.
 
     Each ending is audited here, once, the way core audits its own: a press was decided by the
     owner, an unanswered or stopped wait by nobody, so the audit log's rejections are only real
@@ -2989,6 +3038,15 @@ async def _request_approval(
     button carries a nonce minted here, and the offer is kept (:func:`_offer_trust`) for as long as
     the approval waits, so a press trusts the thread only on this very prompt, and only in that
     time; it is offered nowhere else (group channels, to limit its blast radius)."""
+    brief = approval_brief_for(event)
+    if brief is not None and not _offered(brief):
+        # Nothing to offer, and nothing but this prompt asks for a turn this app runs itself, so
+        # the call cannot be approved: it does not run, and the thread says why, rather than a
+        # prompt with nothing to press waiting out the whole approval window.
+        _log_no_answers()
+        await provider.reject_tool(event.request_id)
+        _audit_ending(event, session_key, _OUTCOME_UNASKED)
+        return _OUTCOME_UNASKED
     window = approval_window_secs()
     nonce = secrets.token_urlsafe(16) if is_dm and session_key else ""
     approval_ts = await _post_approval(slack, channel, thread_ts, event, trust=nonce)
@@ -3000,7 +3058,7 @@ async def _request_approval(
         provider,
         event.request_id,
         session_key,
-        answers=list((approval_brief_for(event) or {}).get("answers") or []),
+        answers=_offered(brief or {}),
     )
     _pending_approvals[key] = pending
 
@@ -3249,7 +3307,7 @@ def _approval_messages(event: LLMEvent, source: str = "", *, trust: str = "") ->
     brief = approval_brief_for(event) or {}
     tool = str(brief.get("tool") or "") or "a tool"
     tag = f"[{source}] " if source else ""
-    answers = list(brief.get("answers") or [])
+    answers = _offered(brief)
     approving = [a for a in answers if a.get("ends") == _OUTCOME_APPROVED]
     refusing = [a for a in answers if a.get("ends") != _OUTCOME_APPROVED]
     buttons: list[dict] = [_answer_button(a, event.request_id) for a in approving]
@@ -3301,7 +3359,13 @@ def _approval_messages(event: LLMEvent, source: str = "", *, trust: str = "") ->
         for a in answers
         if a.get("promise")
     ]
-    tail.append({"type": "actions", "elements": buttons})
+    if buttons:
+        tail.append({"type": "actions", "elements": buttons})
+    elif brief:
+        # Slack refuses an actions block with no buttons, and a prompt with nothing to press says
+        # why, and where to answer it instead.
+        why = {"type": "mrkdwn", "text": escape_mrkdwn(_NO_ANSWERS)}
+        tail.append({"type": "context", "elements": [why]})
     messages: list[list[dict]] = []
     while len(blocks) + len(tail) > _MAX_BLOCKS:
         messages.append(blocks[:_MAX_BLOCKS])

@@ -278,6 +278,11 @@ call, each with the word to reply with: `APPROVE <token>` (Allow once) and
 in the chat that is asking, never for a call that may destroy something or for a command that
 reaches a host off your allowed hosts, which is asked about every time. That one trusts the chat
 in PersonalClaw, as the card's *This chat* does: its header shows it and you turn it off there.
+The answers come from PersonalClaw, so the app declares the core feature that hands them over
+(`requiresCoreFeatures`: `approval-answers`), and a PersonalClaw without it will not install or
+update the app. A PersonalClaw from before that check sends no answers: the mail then lists
+nothing to reply with and says so, telling you to answer it in PersonalClaw and to update
+PersonalClaw, and the gateway log says it once.
 **Only the owner is asked, and only the owner answers.** The owner is the
 address paired from Configure → **Pair as owner** (above), which core keeps as this channel's
 owner id. The prompt goes to that address alone, and only a reply from it can resolve one. It

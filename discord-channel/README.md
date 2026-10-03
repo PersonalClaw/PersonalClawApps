@@ -50,6 +50,11 @@ ships as a self-contained directory:
     reaches a host off your allowed hosts, which is asked about every time), which the prompt
     explains first, in the card's words. That one trusts the chat in PersonalClaw, as the card's
     *This chat* does: its header shows it and you turn it off there.
+    The answers come from PersonalClaw, so the app declares the core feature that hands them
+    over (`requiresCoreFeatures`: `approval-answers`), and a PersonalClaw without it will not
+    install or update the app. A PersonalClaw from before that check sends no answers: the
+    prompt then has no buttons and says so, telling you to answer it in PersonalClaw and to
+    update PersonalClaw, and the gateway log says it once.
     When the approval ends, however it ends (an answer here, an answer in PersonalClaw,
     nobody answering within PersonalClaw's approval wait, or the work that asked for it
     stopping first), the buttons come off and how it ended is added under the last part, or

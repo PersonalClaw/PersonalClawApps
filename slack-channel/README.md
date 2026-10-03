@@ -93,6 +93,13 @@ that same wait: pressed after the approval ended, on a client still showing the 
 trusts the thread. Pressed on a prompt from before a restart, or once that wait has run out, it
 trusts nothing, and you are told, in a message only you see, that the prompt is no longer valid.
 
+The answers come from PersonalClaw, so the app declares the core feature that hands them over
+(`requiresCoreFeatures`: `approval-answers`), and a PersonalClaw without it will not install or
+update the app. A PersonalClaw from before that check sends no answers. A prompt it asks for
+then has no buttons and says so, telling you to answer it in PersonalClaw and to update
+PersonalClaw; a call in a thread this app runs itself, which nothing else can ask you about,
+does not run, and the thread says why. The gateway log says it once.
+
 ## Compaction
 
 `!compact` compacts the thread's conversation and says how much that freed (*✅ Compacted: freed

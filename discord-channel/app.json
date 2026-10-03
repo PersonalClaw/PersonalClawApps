@@ -1,11 +1,14 @@
 {
   "name": "discord-channel",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "displayName": "Discord Channel",
   "description": "Discord bot integration over the raw Gateway WebSocket + REST API. Pair a DM, converse in servers, and receive results with approval buttons.",
   "icon": "MessagesSquare",
   "author": "PersonalClaw",
   "license": "MIT",
+  "requiresCoreFeatures": [
+    "approval-answers"
+  ],
   "tags": [
     "channel",
     "bundled"

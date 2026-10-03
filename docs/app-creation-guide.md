@@ -488,6 +488,32 @@ At most 10 entries, each named once. Something PersonalClaw can install is not a
 prerequisite: a Python package goes in `dependencies`. `local-image-gen` is the worked
 example.
 
+### What it needs from PersonalClaw (`minPersonalClawVersion`, `requiresCoreFeatures`)
+
+```json
+"minPersonalClawVersion": "0.2.0",            // the oldest PersonalClaw release it runs on
+"requiresCoreFeatures": ["approval-answers"]  // the core contracts it relies on, by name
+```
+
+PersonalClaw refuses to review, install, update or switch on an app it cannot host, and the
+refusal names what it lacks, so the owner is told to update PersonalClaw instead of finding the
+app quietly doing less. Every PersonalClaw built between two releases reads the same version, so
+`minPersonalClawVersion` cannot tell a build that has a contract your app relies on from one
+made before it. A core feature can: each names one contract, and `personalclaw.sdk.features`
+lists the ones the running PersonalClaw offers (`CORE_FEATURES`; `core_has(name)` asks about
+one). Declare each one your app cannot work without. For one it can do without, ask `core_has`
+and say so when it is missing.
+
+| Feature | What it is | Declared by |
+|---|---|---|
+| `approval-answers` | the answers an approval prompt offers, handed over in the approval brief (`approval_brief_for(event)["answers"]`) | a channel app whose prompt offers them: `telegram-channel`, `slack-channel`, `discord-channel`, `email-channel` |
+
+A PersonalClaw from before core features cannot read the field, so an app also checks what it
+relies on where it uses it: a channel app handed a brief with no answers says so on the prompt,
+with nothing to press, and logs it once. `.github/tests/test_core_features_declared.py` holds
+every bundle's names to the ones the installed PersonalClaw offers, and every app whose prompt
+offers the brief's answers to declaring `approval-answers`.
+
 ### What it starts, installs and writes outside PersonalClaw (`launches`, `npmPackages`, `writes`)
 
 ```json

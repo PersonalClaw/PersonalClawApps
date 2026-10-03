@@ -23,7 +23,10 @@ Two Discord-specific shapes drive this module:
   ``components`` are cleared — a still-clickable approval button on a
   hours-old decided request is a real footgun, not a cosmetic one. A prompt too
   long for one message is split like a reply, the buttons on its last part. It shows
-  what will run, as the dashboard's approval card does (:func:`_approval_text`).
+  what will run, as the dashboard's approval card does (:func:`_approval_text`). A
+  PersonalClaw older than the answers it hands a prompt sends a brief with none: the prompt
+  still shows what will run, with no buttons, and says to answer it in PersonalClaw
+  (:data:`_NO_ANSWERS`), and the log says so once.
 
 Discord renders standard markdown, so unlike Telegram's MarkdownV2 there is no
 escaping layer: the model's markdown goes out as-is. Length is the only rendering
@@ -87,6 +90,13 @@ _LATE_ANSWERS = {
 _NO_LONGER_WAITING = "This approval is no longer waiting. This press changes nothing."
 # A press naming no answer the prompt offers.
 _NOT_OFFERED = "That is not an answer this approval offers. This press changes nothing."
+# What a prompt says when the brief carries no answers it can offer, as a PersonalClaw older than
+# the answers it hands a channel's prompt (the core feature ``approval-answers``) sends it.
+_NO_ANSWERS = (
+    "No buttons here: this PersonalClaw sends approvals without the answers Discord Channel "
+    "offers as buttons. Answer it in PersonalClaw, and update PersonalClaw to answer approvals "
+    "here."
+)
 _NOT_THE_OWNER = "Only the owner can answer this."
 
 # A progress line for each status core gives a call (``ChannelDelivery.append_stream_task``): its
@@ -280,6 +290,8 @@ class DiscordDelivery:
         self._ended: OrderedDict[str, str] = OrderedDict()
         # Background closes of prompts whose wait was cancelled, kept until they are sent.
         self._closing: set[asyncio.Task[None]] = set()
+        # Whether the log has said that this PersonalClaw sends prompts no answers to offer.
+        self._said_no_answers = False
         # user id → opened DM channel id. create_dm is idempotent server-side but
         # costs a request on a bucket shared with sends, so cache the resolution.
         self._dm_channels: dict[str, str] = {}
@@ -564,8 +576,10 @@ class DiscordDelivery:
     ) -> bool | None:
         """Post a button row of the answers the brief offers and wait for the approval to end.
 
-        Returns whether it ended approved, or None when we can't prompt (no owner/channel, or a
-        brief that offers nothing) so the gateway falls back to the dashboard. A press resolves
+        Returns whether it ended approved, or None when we can't prompt (no owner/channel, or no
+        tool to show) so the gateway falls back to the dashboard. A brief with no answers this
+        prompt can offer still prompts, with no buttons and :data:`_NO_ANSWERS` under what will
+        run, and it ends as any prompt does. A press resolves
         the pending record with the pressed answer's key. ``on_prompted(pending)`` lets core
         race a dashboard prompt against this one: core resolves the same future with how
         the approval ended wherever it ended, so the wait keeps no timer of its own. Once
@@ -585,22 +599,28 @@ class DiscordDelivery:
         if not channel_id:
             return None
 
-        brief = approval_brief_for(event) or {}
-        answers = list(brief.get("answers") or [])
-        if not answers:
+        brief = approval_brief_for(event)
+        if brief is None:
             return None
+        answers = _offered(brief)
         request_id = str(getattr(event, "request_id", ""))
         # What will run, as the dashboard's card shows it. Split like a reply, the buttons on
         # the last part: the prompt was cut at 2,000 characters, so the owner approved a
         # command whose end they never saw.
-        parts = split_message(_approval_text(brief, source))
+        prompt = _approval_text(brief, source, answers)
+        if not answers:
+            # Returning None here left the owner a bare link with no reason given, and the log
+            # said nothing: the prompt says why it has no buttons, and where to answer instead.
+            self._log_no_answers()
+            prompt = f"{prompt}\n{_NO_ANSWERS}"
+        parts = split_message(prompt)
         msg: dict[str, Any] = {}
         for index, part in enumerate(parts, 1):
             last = index == len(parts)
             msg = await self._api.create_message(
                 channel_id,
                 part,
-                components=_approval_components(answers, request_id) if last else None,
+                components=_approval_components(answers, request_id) if last and answers else None,
             )
         message_id = str(msg.get("id", ""))
         pending = _PendingApproval(request_id, channel_id, message_id, answers)
@@ -622,6 +642,18 @@ class DiscordDelivery:
         pressed = pending.answer(outcome)
         await self._close(channel_id, message_id, parts, request_id, outcome, pressed)
         return (pressed["ends"] if pressed else outcome) == "approved"
+
+    def _log_no_answers(self) -> None:
+        """Say once, in the log, that this PersonalClaw hands approval prompts no answers."""
+        if self._said_no_answers:
+            return
+        self._said_no_answers = True
+        logger.warning(
+            "discord: PersonalClaw sent an approval with no answers this app can offer, so its "
+            "prompts here have no buttons and say to answer them in PersonalClaw. Discord "
+            "Channel needs a PersonalClaw with the core feature 'approval-answers': update "
+            "PersonalClaw. (Logged once.)"
+        )
 
     async def _close(
         self,
@@ -785,7 +817,21 @@ def _monotonic() -> float:
     return time.monotonic()
 
 
-def _approval_text(brief: dict, source: str) -> str:
+def _offered(brief: dict) -> list[dict[str, str]]:
+    """The answers *brief* offers, in its order, when this prompt can offer every one: each
+    names what a press resolves the prompt with (``key``) and its button's words (``label``).
+    ``[]`` when it carries none, as a PersonalClaw older than the answers it hands a prompt sends
+    it, or one this prompt could not show: a prompt offers all of core's answers or none."""
+    answers = brief.get("answers")
+    if isinstance(answers, list) and answers and all(
+        isinstance(a, dict) and all(isinstance(a.get(f), str) and a[f] for f in ("key", "label"))
+        for a in answers
+    ):
+        return answers
+    return []
+
+
+def _approval_text(brief: dict, source: str, answers: list[dict[str, str]]) -> str:
     """The approval prompt, from core's brief (``approval_brief_for``): the tool, its arguments
     in a code block, the purpose the runner gave, the summary line (what the call can touch, and
     its risk) and, for a command that reaches a host off the owner's allowed hosts, the line
@@ -798,9 +844,7 @@ def _approval_text(brief: dict, source: str) -> str:
         lines += ["```", _unfenced(arguments), "```"]
     lines += [str(brief[k]) for k in ("purpose", "summary", "reach") if brief.get(k)]
     # What each standing answer does, in the dashboard card's words, read before it is pressed.
-    lines += [
-        f"{a['label']}: {a['promise']}" for a in brief.get("answers") or [] if a.get("promise")
-    ]
+    lines += [f"{a['label']}: {a['promise']}" for a in answers if a.get("promise")]
     return "\n".join(lines)
 
 

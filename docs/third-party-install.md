@@ -82,6 +82,12 @@ the gate, and never auto-forced for an unattended/agent-initiated install.
   carries a copy-paste one-liner to run on YOUR machine. Nothing was installed
   on the server, and the one-liner is never auto-executed.
 - `already installed` — use update instead.
+- `needs a newer PersonalClaw` (HTTP 400; the review answers `app_preview_failed`) — the app
+  declares a `minPersonalClawVersion` above this PersonalClaw, or a core feature in
+  `requiresCoreFeatures` it does not offer. The sentence names the version and each missing
+  feature. Update PersonalClaw (`personalclaw update`), then install again; nothing was
+  installed. An update to such a version is refused the same way, and the installed version
+  keeps running.
 
 ## Installing from a shell
 

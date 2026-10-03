@@ -25,6 +25,11 @@ subject and the correspondent. An outbound reply sets ``In-Reply-To`` to the las
 ``References`` to the chain, then records its own id — so the third message in a
 conversation references both prior ones, in order, and a mail client shows one thread.
 
+**An approval mail lists the answers core hands over** (the approval brief's ``answers``),
+each with the word a reply gives it. A PersonalClaw older than those answers sends a brief with
+none: the mail still says what will run, lists nothing to reply with, and says to answer it in
+PersonalClaw (:data:`_NO_ANSWERS`), and the log says so once.
+
 **Core masks every text it hands this handle**, keys and exfiltration URLs included, the
 subject's words as well as the body and the HTML alternative, before any method here is
 called, so nothing here masks it again.
@@ -85,6 +90,16 @@ _LATE_ANSWERS = {
         "run. Your reply changes nothing."
     ),
 }
+
+
+#: What an approval mail says when the brief carries no answers it can list, as a PersonalClaw
+#: older than the answers it hands a channel's prompt (the core feature ``approval-answers``)
+#: sends it.
+_NO_ANSWERS = (
+    "This mail cannot be answered by reply: this PersonalClaw sends approvals without the "
+    "answers Email Channel lists to reply with. Answer it in PersonalClaw, and update "
+    "PersonalClaw to answer approvals by reply."
+)
 
 
 def _how_long(minutes: int) -> str:
@@ -328,6 +343,8 @@ class EmailDelivery:
         self._ended = approvals if approvals is not None else EndedApprovalStore()
         # Background sends of those answers, kept until they are sent.
         self._answering: set[asyncio.Task[Any]] = set()
+        # Whether the log has said that this PersonalClaw sends prompts no answers to offer.
+        self._said_no_answers = False
         #: Why the most recent send failed, or "" when it went out (or none was tried). The
         #: channel's health reads it: SMTP holds no connection, so the last send IS its state.
         self.send_failure = ""
@@ -607,7 +624,9 @@ class EmailDelivery:
         chat linked to a thread with the owner is asked in that thread. One with anyone else,
         a paired correspondent included, is asked in a new mail to the owner. Returns
         approved/rejected, or ``None`` when there is no owner address to ask (the gateway then
-        falls back to the dashboard), or the brief offers nothing. A reply resolves the pending
+        falls back to the dashboard), or no tool to show. A brief with no answers this mail can
+        list still asks, with nothing to reply with and :data:`_NO_ANSWERS` under what will run,
+        and it ends as any prompt does. A reply resolves the pending
         record with the answer's key. ``on_prompted(pending)`` lets core race a dashboard
         prompt against this one: core resolves the same future with how the approval ended
         wherever it ended, so the wait keeps no timer of its own, and the mail says how long
@@ -625,20 +644,29 @@ class EmailDelivery:
                 channel, thread_ts = str(linked), str(linked_thread or "")
 
         request_id = str(getattr(event, "request_id", ""))
-        brief = approval_brief_for(event) or {}
-        answers = list(brief.get("answers") or [])
-        if not answers:
+        brief = approval_brief_for(event)
+        if brief is None:
             return None
+        answers = _offered(brief)
         title = str(brief.get("tool") or "") or "a tool"
         token = secrets.token_hex(_TOKEN_BYTES).upper()
         pending = _PendingApproval(request_id, token, channel, answers)
         self._pending[token] = pending
 
         window = _approval_window()
+        if answers:
+            asks = "Reply to this message with exactly one of:\n" + "".join(
+                f"    {_reply_line(a, token)}\n" for a in answers
+            )
+        else:
+            # Returning None here left the owner a bare link with no reason given, and the log
+            # said nothing: the mail says why there is nothing to reply with, and where to answer.
+            self._log_no_answers()
+            asks = f"{_NO_ANSWERS}\n"
         body = (
             _approval_text(brief, source)
-            + "\n\nReply to this message with exactly one of:\n"
-            + "".join(f"    {_reply_line(a, token)}\n" for a in answers)
+            + "\n\n"
+            + asks
             + "\n"
             + (
                 f"PersonalClaw waits up to {window} for your answer. If nobody answers by "
@@ -676,6 +704,18 @@ class EmailDelivery:
                 token, _EndedApproval(ending, request_id, channel, thread_ts or sent, words)
             )
         return ending == "approved"
+
+    def _log_no_answers(self) -> None:
+        """Say once, in the log, that this PersonalClaw hands approval prompts no answers."""
+        if self._said_no_answers:
+            return
+        self._said_no_answers = True
+        logger.warning(
+            "email: PersonalClaw sent an approval with no answers this app can list, so its "
+            "approval mails list nothing to reply with and say to answer them in PersonalClaw. "
+            "Email Channel needs a PersonalClaw with the core feature 'approval-answers': "
+            "update PersonalClaw. (Logged once.)"
+        )
 
     def _answer_late(self, ended: _EndedApproval) -> None:
         """Mail the owner how the approval they replied to ended, in its thread. Sent on its own,
@@ -762,6 +802,22 @@ def _breadth(answer: dict[str, str]) -> int:
     if answer.get("ends") != "approved":
         return 0
     return 2 if answer.get("promise") else 1
+
+
+def _offered(brief: dict) -> list[dict[str, str]]:
+    """The answers *brief* offers, in its order, when this mail can list every one: each names
+    what a reply resolves the prompt with (``key``), the word that reply gives (``word``) and what
+    the answer is called (``label``). ``[]`` when it carries none, as a PersonalClaw older than the
+    answers it hands a prompt sends it, or one this mail could not list: a prompt offers all of
+    core's answers or none."""
+    answers = brief.get("answers")
+    if isinstance(answers, list) and answers and all(
+        isinstance(a, dict)
+        and all(isinstance(a.get(f), str) and a[f] for f in ("key", "word", "label"))
+        for a in answers
+    ):
+        return answers
+    return []
 
 
 def _reply_line(answer: dict[str, str], token: str) -> str:
