@@ -34,8 +34,8 @@ OWNER = "42"
 
 def _press(delivery: DiscordDelivery, api: FakeAPI):
     """The owner's press on one of the prompt's answers, by its key, through the handler a button
-    press reaches, with the custom_id the prompt's own button carries; returns what the owner
-    was told, in the message only they see ("" for a silent ack)."""
+    press reaches, with the custom_id the prompt's own button carries, from the message it is on;
+    returns what the owner was told, in the message only they see ("" for a silent ack)."""
 
     async def press(pending, answer: str) -> str:
         acked = len(api.acks)
@@ -54,6 +54,7 @@ def _press(delivery: DiscordDelivery, api: FakeAPI):
                 "token": "tok",
                 "data": {"custom_id": custom_id},
                 "user": {"id": OWNER},
+                **api.press_on_prompt(),
             }
         )
         told = [a.get("data") or {} for a in api.acks[acked:]]

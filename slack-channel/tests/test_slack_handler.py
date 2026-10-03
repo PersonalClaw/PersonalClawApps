@@ -783,8 +783,10 @@ class TestApprovalBriefLine:
         (blocks,) = _approval_messages(event)
         assert self._context_lines(blocks) == [composed]
 
-    def test_both_decisions_stay_offered_in_dm_and_in_a_group_channel(self):
-        """The brief informs the prompt; it must not reshape it. Trust stays DM-only."""
+    def test_both_decisions_stay_offered_with_or_without_trust_session(self):
+        """The brief informs the prompt; it must not reshape it. Trust session is there only when
+        the prompt offers it (a DM thread this app runs itself), its button carrying the offer's
+        nonce."""
         from slack_runtime.handler import (
             _ACTION_APPROVE,
             _ACTION_REJECT,
@@ -792,11 +794,14 @@ class TestApprovalBriefLine:
             _approval_messages,
         )
 
-        for is_dm, expected in ((True, [_ACTION_APPROVE, _ACTION_TRUST, _ACTION_REJECT]),
-                                (False, [_ACTION_APPROVE, _ACTION_REJECT])):
-            (blocks,) = _approval_messages(self._event(self._BRIEF), is_dm=is_dm)
+        for trust, expected in (("n0nce", [_ACTION_APPROVE, _ACTION_TRUST, _ACTION_REJECT]),
+                                ("", [_ACTION_APPROVE, _ACTION_REJECT])):
+            (blocks,) = _approval_messages(self._event(self._BRIEF), trust=trust)
             actions = next(b for b in blocks if b["type"] == "actions")
             assert [e["action_id"] for e in actions["elements"]] == expected
+            assert [e["value"] for e in actions["elements"] if e["action_id"] == _ACTION_TRUST] == (
+                [trust] if trust else []
+            )
 
     def test_malformed_brief_renders_rather_than_raising(self):
         """A brief this renderer cannot use is composed again from the event, never a traceback:

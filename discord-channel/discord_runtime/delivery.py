@@ -273,8 +273,8 @@ class DiscordDelivery:
         #: approval prompt to nobody until the next restart.
         self._owner = owner
         self._streams: dict[str, _StreamState] = {}
-        # keyed by "req:<request_id>" (from the button custom_id) and by
-        # "<channel>:<message>" (the prompt the buttons live on).
+        # Each waiting approval, keyed by "req:<request_id>": what its buttons' custom_ids name it
+        # by. A press answers it only from its own prompt (:func:`_on_its_prompt`).
         self._pending: dict[str, _PendingApproval] = {}
         # How each ended approval ended, by its request id, for a press that comes after.
         self._ended: OrderedDict[str, str] = OrderedDict()
@@ -604,8 +604,6 @@ class DiscordDelivery:
             )
         message_id = str(msg.get("id", ""))
         pending = _PendingApproval(request_id, channel_id, message_id, answers)
-        self._pending[f"{channel_id}:{message_id}"] = pending
-        # Index by request_id too so resolve_interaction can find it from custom_id.
         self._pending[f"req:{request_id}"] = pending
         if on_prompted:
             try:
@@ -619,7 +617,6 @@ class DiscordDelivery:
             self._close_later(channel_id, message_id, parts, request_id, "cancelled")
             raise
         finally:
-            self._pending.pop(f"{channel_id}:{message_id}", None)
             self._pending.pop(f"req:{request_id}", None)
 
         pressed = pending.answer(outcome)
@@ -676,8 +673,9 @@ class DiscordDelivery:
         within three seconds, so the ack happens even for an unknown/stale custom_id.
 
         A press that decides nothing is answered with why, in a message only the presser sees:
-        someone who is not the owner, and a press after the approval ended, which is told how it
-        ended. Acknowledged silently, either read as an answer that worked."""
+        someone who is not the owner, a press after the approval ended, which is told how it
+        ended, and a press naming an answer its prompt does not offer, or naming it from anything
+        but that prompt. Acknowledged silently, each read as an answer that worked."""
         if int(interaction.get("type", 0) or 0) != INTERACTION_TYPE_COMPONENT:
             return
         custom_id = str((interaction.get("data") or {}).get("custom_id", ""))
@@ -688,15 +686,24 @@ class DiscordDelivery:
             pending = self._pending.get(f"req:{request_id}")
             if pending is None or pending.future.done():
                 told = _LATE_ANSWERS.get(self._ended.get(request_id, "")) or _NO_LONGER_WAITING
+            elif not _on_its_prompt(interaction, pending):
+                told = _NOT_OFFERED
+                logger.warning("discord: refused a press for %s off its prompt", request_id)
+                sel().log_api_access(
+                    caller=f"discord:{_presser(interaction) or 'unknown'}",
+                    operation="discord.approval_press",
+                    outcome="denied",
+                    source="discord",
+                    resources=request_id,
+                    error="not on its prompt",
+                )
             elif int(place) >= len(pending.answers):
                 told = _NOT_OFFERED
             else:
                 # Only the owner's press answers it. A prompt for a chat linked to a tracked
                 # channel is posted there, where everyone in it sees the buttons, and a member
-                # must not approve what the owner's agent runs. In a server the presser is
-                # `member.user`, in a DM `user`.
-                member_user = (interaction.get("member") or {}).get("user") or {}
-                presser = str((member_user or interaction.get("user") or {}).get("id", "") or "")
+                # must not approve what the owner's agent runs.
+                presser = _presser(interaction)
                 owner = str(self._owner() or "")
                 if owner and presser == owner:
                     pending.future.set_result(pending.answers[int(place)]["key"])
@@ -728,13 +735,28 @@ class DiscordDelivery:
                 logger.debug("discord: interaction ack failed", exc_info=True)
 
 
+def _presser(interaction: dict[str, Any]) -> str:
+    """Who pressed: in a server the presser is ``member.user``, in a DM ``user``."""
+    member_user = (interaction.get("member") or {}).get("user") or {}
+    return str((member_user or interaction.get("user") or {}).get("id", "") or "")
+
+
+def _on_its_prompt(interaction: dict[str, Any], pending: _PendingApproval) -> bool:
+    """Whether a press came from the message *pending*'s buttons were posted on, in its channel.
+    Those buttons answer the approval; a button naming it on any other message answers nothing."""
+    message = interaction.get("message") or {}
+    channel = str(message.get("channel_id") or interaction.get("channel_id") or "")
+    pressed_on = str(message.get("id") or "")
+    return bool(pressed_on) and (channel, pressed_on) == (pending.channel_id, pending.message_id)
+
+
 def _approval_components(answers: list[dict[str, str]], request_id: str) -> list[dict[str, Any]]:
     """One action row with a button per answer the brief offers, in its order: success for an
     answer that approves, danger for one that does not.
 
-    The answer's place and the request id ride in each ``custom_id`` (:data:`_ANSWER`) — that is
-    the only state Discord hands back on the press, so it is what re-finds the pending future
-    and the answer pressed."""
+    The answer's place and the request id ride in each ``custom_id`` (:data:`_ANSWER`): they are
+    what re-finds the pending future and the answer pressed, on a press from this message alone
+    (:func:`_on_its_prompt`)."""
     return [
         {
             "type": COMPONENT_ACTION_ROW,

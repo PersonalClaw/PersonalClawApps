@@ -60,7 +60,8 @@ ships as a self-contained directory:
     no clock of its own.
     Only the owner's press answers an approval: in a tracked channel everyone in it
     sees the buttons, and anyone else's press is refused, logged, and told "Only the owner can
-    answer this."
+    answer this." And only a press on the prompt's own buttons does: a button naming the
+    approval on any other message answers nothing, and is logged.
   - `settings.py` — the app's own DM-activation / application-id config + the
     credential key.
 - `cli_setup.py` / `cli_doctor.py` — the app's `personalclaw setup` / `doctor` hooks.

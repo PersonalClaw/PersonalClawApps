@@ -60,7 +60,10 @@ class _FakeAPI(TelegramAPI):
     async def send_message(self, chat_id, text, *, parse_mode=None, reply_to_message_id=None,
                            reply_markup=None, disable_web_page_preview=None):
         self._mid += 1
-        self.sent.append({"chat_id": str(chat_id), "text": text, "reply_markup": reply_markup})
+        self.sent.append(
+            {"chat_id": str(chat_id), "text": text, "reply_markup": reply_markup,
+             "message_id": self._mid}
+        )
         return {"message_id": self._mid}
 
     async def edit_message_text(self, chat_id, message_id, text, *, parse_mode=None,
@@ -155,7 +158,10 @@ async def test_an_owner_paired_while_the_receiver_runs_gets_the_next_approval_pr
         assert [row[0]["callback_data"] for row in prompt["reply_markup"]["inline_keyboard"]] == [
             "a0:after", "a1:after",
         ]
-        await transport._delivery.resolve_callback({"id": "cb", "data": "a0:after", "from": {"id": OWNER}})
+        on = {"message_id": prompt["message_id"], "chat": {"id": int(prompt["chat_id"])}}
+        await transport._delivery.resolve_callback(
+            {"id": "cb", "data": "a0:after", "from": {"id": OWNER}, "message": on}
+        )
         assert await asyncio.wait_for(task, timeout=1.0) is True
     finally:
         await transport.stop_inbound()

@@ -88,7 +88,10 @@ you turn it off there. **Trust session** is on the prompts of a thread this app 
 a DM), where it lets the rest of that thread's tool calls run without asking. Such a prompt waits as long as PersonalClaw's approval wait, and goes once it
 has ended. If nobody answers in that time, the call does not run and the thread says *⌛ Nobody
 answered in time, so it did not run*: that is not a Reject, and the security log records it as
-decided by nobody.
+decided by nobody. Trust session counts only on the prompt that offered it, in its thread, for
+that same wait: pressed after the approval ended, on a client still showing the prompt, it still
+trusts the thread. Pressed on a prompt from before a restart, or once that wait has run out, it
+trusts nothing, and you are told, in a message only you see, that the prompt is no longer valid.
 
 ## Compaction
 

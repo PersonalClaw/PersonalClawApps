@@ -302,7 +302,6 @@ class SlackDelivery:
             thread_ts = sessions.get_thread(parent_session_key)
             if not thread_ts and channel and re.fullmatch(r"\d+\.\d+", parent_session_key):
                 thread_ts = parent_session_key
-        is_dm = not channel
         if not channel:
             channel = await self._client.open_dm(owner)
             thread_ts = None
@@ -310,10 +309,9 @@ class SlackDelivery:
             return None
 
         # What will run, as the dashboard's card shows it, over as many messages as it takes;
-        # the buttons are on the last one, whose ts this is.
-        approval_ts = await _post_approval(
-            self._client, channel, thread_ts, event, is_dm=is_dm, source=source, offer_trust=False
-        )
+        # the buttons are on the last one, whose ts this is. No Trust session: that trust is this
+        # app's own, for the threads it runs itself (`_approval_messages`).
+        approval_ts = await _post_approval(self._client, channel, thread_ts, event, source=source)
 
         pending = _PendingApproval(
             provider=None, request_id=request_id, session_key=parent_session_key,  # type: ignore[arg-type]
@@ -324,12 +322,11 @@ class SlackDelivery:
         if on_prompted:
             on_prompted(pending)
 
-        closing = {"is_dm": is_dm, "source": source}
         try:
             outcome = await pending.future
         except asyncio.CancelledError:
             _close_prompt_later(
-                self._client, channel, approval_ts, event, outcome="cancelled", **closing
+                self._client, channel, approval_ts, event, outcome="cancelled", source=source
             )
             raise
         finally:
@@ -339,6 +336,6 @@ class SlackDelivery:
         ending = pressed["ends"] if pressed else outcome
         await close_prompt(
             self._client, channel, approval_ts, event, outcome=ending,
-            kept=(pressed or {}).get("promise", ""), **closing,
+            kept=(pressed or {}).get("promise", ""), source=source,
         )
         return ending == "approved"

@@ -31,8 +31,8 @@ OWNER = "42"
 
 def _press(delivery: TelegramDelivery, api: FakeAPI):
     """The owner's press on one of the prompt's answers, by its key, through the handler a
-    button press reaches, with the callback data the prompt's own button carries; returns what
-    the owner's press was answered with."""
+    button press reaches, with the callback data the prompt's own button carries, from the
+    message it is on; returns what the owner's press was answered with."""
 
     async def press(pending, answer: str) -> str:
         answered = len(api.answers)
@@ -44,7 +44,9 @@ def _press(delivery: TelegramDelivery, api: FakeAPI):
             if offered["key"] == answer
         )
         assert data.startswith(_ANSWER) and data.endswith(f":{pending.request_id}")
-        await delivery.resolve_callback({"id": f"cq-{answered}", "data": data, "from": {"id": OWNER}})
+        await delivery.resolve_callback(
+            {"id": f"cq-{answered}", "data": data, "from": {"id": OWNER}, **api.press_on_prompt()}
+        )
         told = api.answers[answered:]
         return str(told[-1]["text"] or "") if told else ""
 

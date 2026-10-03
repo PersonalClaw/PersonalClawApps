@@ -55,7 +55,10 @@ class _FakeAPI(DiscordAPI):
 
     async def create_message(self, channel_id, content, *, components=None, message_reference=None):
         self._id += 1
-        self.sent.append({"channel_id": str(channel_id), "content": content, "components": components})
+        self.sent.append(
+            {"channel_id": str(channel_id), "content": content, "components": components,
+             "id": str(self._id)}
+        )
         return {"id": str(self._id)}
 
     async def edit_message(self, channel_id, message_id, content, *, components=None):
@@ -176,7 +179,8 @@ async def test_an_owner_paired_while_the_receiver_runs_gets_the_next_approval_pr
         assert [b["custom_id"] for b in buttons] == ["a0:after", "a1:after"]
         await transport._delivery.resolve_interaction(
             {"type": INTERACTION_TYPE_COMPONENT, "id": "i1", "token": "t1", "data": {"custom_id": "a0:after"},
-             "user": {"id": OWNER}}
+             "user": {"id": OWNER}, "channel_id": prompt["channel_id"],
+             "message": {"id": prompt["id"], "channel_id": prompt["channel_id"]}}
         )
         assert await asyncio.wait_for(task, timeout=1.0) is True
     finally:

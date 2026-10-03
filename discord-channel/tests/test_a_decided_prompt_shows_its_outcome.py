@@ -60,13 +60,22 @@ class _Asked:
 _BUTTONS = {"approve": "a0", "deny": "a1"}
 
 
-def _press(request_id: str, button: str = "approve", who: str = OWNER) -> dict:
+def _press(d: DiscordDelivery, request_id: str, button: str = "approve", who: str = OWNER) -> dict:
+    """A press on that button, from the latest prompt's message; with no prompt yet, from a
+    message of an earlier run (a prompt left from before a restart)."""
+    earlier = {"id": "1999", "channel_id": f"dm-{OWNER}"}
+    on = (
+        d._api.press_on_prompt()
+        if any(m["components"] for m in d._api.sent)
+        else {"channel_id": earlier["channel_id"], "message": earlier}
+    )
     return {
         "id": "i-1",
         "token": "t-1",
         "type": INTERACTION_TYPE_COMPONENT,
         "data": {"custom_id": f"{_BUTTONS[button]}:{request_id}"},
         "user": {"id": who},
+        **on,
     }
 
 
@@ -123,7 +132,7 @@ async def test_a_press_after_the_approval_ended_is_told_how_it_ended():
     asked.pending["it"].future.set_result("expired")
     await asyncio.wait_for(asked.wait, timeout=2)
 
-    await d.resolve_interaction(_press("req-1"))
+    await d.resolve_interaction(_press(d, "req-1"))
 
     assert _told(d) == "Nobody answered in time, so it did not run. This press changes nothing."
 
@@ -131,7 +140,7 @@ async def test_a_press_after_the_approval_ended_is_told_how_it_ended():
 @pytest.mark.asyncio
 async def test_a_press_on_a_prompt_from_before_a_restart_is_told_it_is_no_longer_waiting():
     d = _delivery()
-    await d.resolve_interaction(_press("req-old"))
+    await d.resolve_interaction(_press(d, "req-old"))
     assert _told(d) == "This approval is no longer waiting. This press changes nothing."
 
 
@@ -140,7 +149,7 @@ async def test_someone_else_s_press_is_told_it_answers_nothing():
     d = _delivery()
     asked = await _Asked(d).prompted()
     with patch("discord_runtime.delivery.sel"):
-        await d.resolve_interaction(_press("req-1", who="999"))
+        await d.resolve_interaction(_press(d, "req-1", who="999"))
     assert _told(d) == "Only the owner can answer this."
     assert not asked.wait.done(), "someone who is not the owner answered it"
     asked.wait.cancel()
@@ -151,7 +160,7 @@ async def test_the_owner_s_press_on_a_waiting_prompt_is_still_the_answer():
     """The floor: a live prompt takes the owner's press, acknowledged without a message."""
     d = _delivery()
     asked = await _Asked(d).prompted()
-    await d.resolve_interaction(_press("req-1", "deny"))
+    await d.resolve_interaction(_press(d, "req-1", "deny"))
     assert await asyncio.wait_for(asked.wait, timeout=2) is False
     assert d._api.acks[-1]["type"] == 6 and d._api.acks[-1]["data"] is None
 

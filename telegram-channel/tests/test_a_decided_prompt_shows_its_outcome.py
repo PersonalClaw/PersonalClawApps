@@ -68,8 +68,12 @@ class _Asked:
 _BUTTONS = {"approve": "a0", "deny": "a1"}
 
 
-def _press(request_id: str, button: str = "approve", who: str = OWNER) -> dict:
-    return {"id": "cq-1", "data": f"{_BUTTONS[button]}:{request_id}", "from": {"id": who}}
+def _press(d: TelegramDelivery, request_id: str, button: str = "approve", who: str = OWNER) -> dict:
+    """A press on that button, from the latest prompt's message; with no prompt yet, from a
+    message of an earlier run (a prompt left from before a restart)."""
+    earlier = {"message": {"message_id": 1999, "chat": {"id": int(OWNER)}}}
+    on = d._api.press_on_prompt() if any(m["reply_markup"] for m in d._api.sent) else earlier
+    return {"id": "cq-1", "data": f"{_BUTTONS[button]}:{request_id}", "from": {"id": who}, **on}
 
 
 @pytest.mark.asyncio
@@ -116,7 +120,7 @@ async def test_a_press_after_the_approval_ended_is_told_how_it_ended():
     asked.pending["it"].future.set_result("approved")  # answered in PersonalClaw
     await asyncio.wait_for(asked.wait, timeout=2)
 
-    await d.resolve_callback(_press("req-1", "deny"))
+    await d.resolve_callback(_press(d, "req-1", "deny"))
 
     assert d._api.answers[-1]["text"] == "Already approved. This press changes nothing."
 
@@ -124,7 +128,7 @@ async def test_a_press_after_the_approval_ended_is_told_how_it_ended():
 @pytest.mark.asyncio
 async def test_a_press_on_a_prompt_from_before_a_restart_is_told_it_is_no_longer_waiting():
     d = _delivery()
-    await d.resolve_callback(_press("req-old"))
+    await d.resolve_callback(_press(d, "req-old"))
     assert d._api.answers[-1]["text"] == (
         "This approval is no longer waiting. This press changes nothing."
     ), "a press that decided nothing was told Recorded"
@@ -135,7 +139,7 @@ async def test_the_owner_s_press_on_a_waiting_prompt_is_still_the_answer():
     """The floor: a live prompt still takes the owner's press."""
     d = _delivery()
     asked = await _Asked(d).prompted()
-    await d.resolve_callback(_press("req-1", "deny"))
+    await d.resolve_callback(_press(d, "req-1", "deny"))
     assert await asyncio.wait_for(asked.wait, timeout=2) is False
     assert d._api.answers[-1]["text"] == "Recorded"
 

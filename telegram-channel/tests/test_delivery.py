@@ -29,6 +29,13 @@ class FakeAPI(TelegramAPI):
         self._mid += 1
         return self._mid
 
+    def press_on_prompt(self) -> dict:
+        """Where a press on the latest prompt's keyboard comes from, as Telegram hands it back
+        with the callback query: the message the keyboard is on, in its chat (by its id)."""
+        prompt = [m for m in self.sent if m["reply_markup"]][-1]
+        chat = {"id": int(prompt["chat_id"])}
+        return {"message": {"message_id": prompt["message_id"], "chat": chat}}
+
     async def get_me(self):
         return {"id": 1, "username": "bot"}
 
@@ -327,7 +334,9 @@ class TestApproval:
         assert [b["callback_data"] for b in buttons] == ["a0:reqX", "a1:reqX"]
 
         # A button press (callback_query) resolves the same pending future.
-        await d.resolve_callback({"id": "cbq1", "data": "a0:reqX", "from": {"id": 42}})
+        await d.resolve_callback(
+            {"id": "cbq1", "data": "a0:reqX", "from": {"id": 42}, **d._api.press_on_prompt()}
+        )
         approved = await asyncio.wait_for(task, timeout=1.0)
         assert approved is True
         # button spinner acknowledged
@@ -340,7 +349,9 @@ class TestApproval:
         d = _delivery(owner="42")
         task = asyncio.ensure_future(d.request_approval(_Event("reqY"), source="tool"))
         await asyncio.sleep(0)
-        await d.resolve_callback({"id": "c2", "data": "a1:reqY", "from": {"id": 42}})
+        await d.resolve_callback(
+            {"id": "c2", "data": "a1:reqY", "from": {"id": 42}, **d._api.press_on_prompt()}
+        )
         assert await asyncio.wait_for(task, timeout=1.0) is False
 
     @pytest.mark.asyncio
@@ -357,14 +368,20 @@ class TestApproval:
         task = asyncio.ensure_future(d.request_approval(_Event("reqG", "rm -rf"), source="tool"))
         await asyncio.sleep(0)
 
-        await d.resolve_callback({"id": "m1", "data": "a0:reqG", "from": {"id": 5151}})
-        await d.resolve_callback({"id": "m2", "data": "a0:reqG"})  # no presser at all
+        await d.resolve_callback(
+            {"id": "m1", "data": "a0:reqG", "from": {"id": 5151}, **d._api.press_on_prompt()}
+        )
+        await d.resolve_callback(  # no presser at all
+            {"id": "m2", "data": "a0:reqG", **d._api.press_on_prompt()}
+        )
         await asyncio.sleep(0)
         assert not task.done(), "a member's press answered the owner's approval"
         assert [a["text"] for a in d._api.answers[-2:]] == ["Only the owner can answer this."] * 2
 
         # Floor: the owner's press, on the same prompt, does answer it.
-        await d.resolve_callback({"id": "o1", "data": "a0:reqG", "from": {"id": 42}})
+        await d.resolve_callback(
+            {"id": "o1", "data": "a0:reqG", "from": {"id": 42}, **d._api.press_on_prompt()}
+        )
         assert await asyncio.wait_for(task, timeout=1.0) is True
         assert d._api.answers[-1] == {"id": "o1", "text": "Recorded"}
 
@@ -377,11 +394,15 @@ class TestApproval:
         d = _delivery(owner="42")
         task = asyncio.ensure_future(d.request_approval(_Event("reqS"), source="tool"))
         await asyncio.sleep(0)
-        await d.resolve_callback({"id": "m1", "data": "a1:reqS", "from": {"id": 5151}})
+        await d.resolve_callback(
+            {"id": "m1", "data": "a1:reqS", "from": {"id": 5151}, **d._api.press_on_prompt()}
+        )
         assert [(e["caller"], e["outcome"], e["resources"]) for e in events] == [
             ("telegram:5151", "denied", "reqS")
         ]
-        await d.resolve_callback({"id": "o1", "data": "a1:reqS", "from": {"id": 42}})
+        await d.resolve_callback(
+            {"id": "o1", "data": "a1:reqS", "from": {"id": 42}, **d._api.press_on_prompt()}
+        )
         assert await asyncio.wait_for(task, timeout=1.0) is False
         assert len(events) == 1, "the owner's press is not an event"
 
@@ -409,7 +430,9 @@ class TestApproval:
         assert prompt["text"] == to_markdown_v2(source)
         assert prompt["parse_mode"] == "MarkdownV2"
 
-        await d.resolve_callback({"id": "c", "data": "a0:reqB", "from": {"id": 42}})
+        await d.resolve_callback(
+            {"id": "c", "data": "a0:reqB", "from": {"id": 42}, **d._api.press_on_prompt()}
+        )
         assert await asyncio.wait_for(task, timeout=1.0) is True
         # Answered, the prompt keeps what was approved, with the outcome under it.
         assert d._api.edits[-1]["text"] == to_markdown_v2(f"{source}\n✅ Approved")
@@ -434,7 +457,9 @@ class TestApproval:
             "Can: runs a command · Risk: Destructive\n"
             f"{_REACH}"
         )
-        await d.resolve_callback({"id": "c", "data": "a1:reqR", "from": {"id": 42}})
+        await d.resolve_callback(
+            {"id": "c", "data": "a1:reqR", "from": {"id": 42}, **d._api.press_on_prompt()}
+        )
         assert await asyncio.wait_for(task, timeout=1.0) is False
 
     @pytest.mark.asyncio
@@ -449,7 +474,9 @@ class TestApproval:
         assert prompt["text"] == to_markdown_v2(
             "🔐 [t] Approve `execute_bash`?\n```\necho `\u200b`\u200b`; echo done\n```"
         )
-        await d.resolve_callback({"id": "c", "data": "a1:reqF", "from": {"id": 42}})
+        await d.resolve_callback(
+            {"id": "c", "data": "a1:reqF", "from": {"id": 42}, **d._api.press_on_prompt()}
+        )
         assert await asyncio.wait_for(task, timeout=1.0) is False
 
     @pytest.mark.asyncio
@@ -474,7 +501,9 @@ class TestApproval:
         for i in range(700):
             assert f"echo step-{i}\n" in shown, f"step {i} was not shown"
 
-        await d.resolve_callback({"id": "c", "data": "a0:reqL", "from": {"id": 42}})
+        await d.resolve_callback(
+            {"id": "c", "data": "a0:reqL", "from": {"id": 42}, **d._api.press_on_prompt()}
+        )
         assert await asyncio.wait_for(task, timeout=1.0) is True
         final = d._api.edits[-1]
         assert final["message_id"] == sent[-1]["message_id"], "the buttons' message was not the one answered"
@@ -519,13 +548,17 @@ class TestApproval:
         )
         assert prompt["text"] == to_markdown_v2(source)
 
-        await d.resolve_callback({"id": "c", "data": "a1:reqT", "from": {"id": 42}})
+        await d.resolve_callback(
+            {"id": "c", "data": "a1:reqT", "from": {"id": 42}, **d._api.press_on_prompt()}
+        )
         assert await asyncio.wait_for(task, timeout=1.0) is True, "this call is approved too"
         assert seen["p"].future.result() == "trust", "core is told which answer was pressed"
         assert d._api.edits[-1]["text"] == to_markdown_v2(
             f"{source}\n✅ Approved. {_THIS_CHAT_PROMISE}"
         )
-        await d.resolve_callback({"id": "late", "data": "a0:reqT", "from": {"id": 42}})
+        await d.resolve_callback(
+            {"id": "late", "data": "a0:reqT", "from": {"id": 42}, **d._api.press_on_prompt()}
+        )
         assert d._api.answers[-1]["text"] == "Already approved. This press changes nothing."
 
     @pytest.mark.asyncio
@@ -533,13 +566,17 @@ class TestApproval:
         d = _delivery(owner="42")
         task = asyncio.ensure_future(d.request_approval(_Event("reqN"), source="tool"))
         await asyncio.sleep(0)
-        await d.resolve_callback({"id": "c", "data": "a7:reqN", "from": {"id": 42}})
+        await d.resolve_callback(
+            {"id": "c", "data": "a7:reqN", "from": {"id": 42}, **d._api.press_on_prompt()}
+        )
         await asyncio.sleep(0)
         assert not task.done()
         assert d._api.answers[-1]["text"] == (
             "That is not an answer this approval offers. This press changes nothing."
         )
-        await d.resolve_callback({"id": "o", "data": "a1:reqN", "from": {"id": 42}})
+        await d.resolve_callback(
+            {"id": "o", "data": "a1:reqN", "from": {"id": 42}, **d._api.press_on_prompt()}
+        )
         assert await asyncio.wait_for(task, timeout=1.0) is False
 
     @pytest.mark.asyncio
@@ -554,6 +591,61 @@ class TestApproval:
         d = _delivery()
         await d.resolve_callback({"id": "c3", "data": "a0:ghost"})
         assert d._api.answers[-1]["id"] == "c3"  # acked, no crash
+
+    @pytest.mark.asyncio
+    async def test_a_press_off_its_prompt_answers_nothing(self, monkeypatch):
+        """The keyboard this app sent on a prompt answers its approval, and nothing else does: a
+        button naming that approval on any other message decides nothing, even the owner's
+        press, and is told so and logged."""
+        import telegram_runtime.delivery as mod
+
+        events = []
+        log = type("S", (), {"log_api_access": lambda self, **kw: events.append(kw)})
+        monkeypatch.setattr(mod, "sel", lambda: log())
+        d = _delivery(owner="42")
+        task = asyncio.ensure_future(d.request_approval(_Event("reqO"), source="tool"))
+        await asyncio.sleep(0)
+        on = d._api.press_on_prompt()
+        elsewhere = {"message": {**on["message"], "message_id": on["message"]["message_id"] + 50}}
+
+        await d.resolve_callback({"id": "x", "data": "a0:reqO", "from": {"id": 42}, **elsewhere})
+        await asyncio.sleep(0)
+        assert not task.done(), "a button off the prompt answered its approval"
+        assert d._api.answers[-1]["text"] == (
+            "That is not an answer this approval offers. This press changes nothing."
+        )
+        assert [(e["outcome"], e["resources"], e["error"]) for e in events] == [
+            ("denied", "reqO", "not on its prompt")
+        ]
+
+        # Floor: the same press, from the prompt's own message, answers it.
+        await d.resolve_callback({"id": "o", "data": "a0:reqO", "from": {"id": 42}, **on})
+        assert await asyncio.wait_for(task, timeout=1.0) is True
+
+    @pytest.mark.asyncio
+    async def test_a_prompt_sent_to_a_public_chat_by_its_name_takes_a_press_from_it(self):
+        """A press names its chat by the id, which a prompt sent to a public chat's @username
+        never saw: that chat's username is its name too."""
+
+        class Sessions:
+            def get_channel(self, key):
+                return "@ExampleUpdates"
+
+        d = _delivery(owner="42")
+        task = asyncio.ensure_future(
+            d.request_approval(
+                _Event("reqP"), source="tool", parent_session_key="s1", sessions=Sessions()
+            )
+        )
+        await asyncio.sleep(0)
+        (prompt,) = d._api.sent
+        assert prompt["chat_id"] == "@ExampleUpdates"
+        chat = {"id": -1001234567890, "type": "channel", "username": "exampleupdates"}
+        message = {"message_id": prompt["message_id"], "chat": chat}
+        await d.resolve_callback(
+            {"id": "c", "data": "a0:reqP", "from": {"id": 42}, "message": message}
+        )
+        assert await asyncio.wait_for(task, timeout=1.0) is True
 
 
 # ── core masks what it hands this channel ──────────────────────────────────────────────────

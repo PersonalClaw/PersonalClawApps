@@ -10,6 +10,7 @@ one a Slack turn posts itself (``_request_approval``) and the one core asks thro
 from __future__ import annotations
 
 import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,7 +19,10 @@ from slack_helpers import MockSlackClient
 from slack_runtime.handler import (
     _PendingApproval,
     _pending_approvals,
+    _trust_offers,
     _trusted_sessions,
+    _TrustOffer,
+    _offer_trust,
     handle_interaction,
     set_allowed_users,
     set_owner_id,
@@ -28,6 +32,16 @@ OWNER = "U_OWNER"
 COLLEAGUE = "U_ALLOWED"  # on the allowlist: may talk to the agent, may not answer for the owner
 CHANNEL = "C_TEAM"
 PROMPT_TS = "1700000000.000100"
+THREAD = "1.0"
+#: What a prompt's Trust session button carries: the nonce this app minted as it posted it.
+NONCE = "minted-for-this-prompt"
+
+
+def _offered(channel: str, session_key: str) -> None:
+    """The Trust session this app keeps for its prompt at *channel* ``PROMPT_TS``."""
+    _offer_trust(
+        f"{channel}:{PROMPT_TS}", _TrustOffer(NONCE, THREAD, session_key, time.monotonic() + 60)
+    )
 
 
 class _Provider:
@@ -46,11 +60,11 @@ class _Provider:
 def _owner_and_a_colleague():
     set_owner_id(OWNER)
     set_allowed_users({OWNER, COLLEAGUE})
-    _pending_approvals.clear()
-    _trusted_sessions.clear()
+    for state in (_pending_approvals, _trusted_sessions, _trust_offers):
+        state.clear()
     yield
-    _pending_approvals.clear()
-    _trusted_sessions.clear()
+    for state in (_pending_approvals, _trusted_sessions, _trust_offers):
+        state.clear()
     set_owner_id("")
     set_allowed_users(set())
 
@@ -101,8 +115,12 @@ async def test_a_colleagues_press_answers_nothing(action):
 )
 async def test_the_owner_still_answers(action, approved, rejected, outcome):
     pending, provider = _prompt()
+    _offered(CHANNEL, "thread-1")
+    value = NONCE if action == "trust_tool" else "req-1"  # what the pressed button carries
     with patch("slack_runtime.handler.sel"):
-        result = await handle_interaction(CHANNEL, PROMPT_TS, action, user_id=OWNER)
+        result = await handle_interaction(
+            CHANNEL, PROMPT_TS, action, user_id=OWNER, thread_ts=THREAD, value=value
+        )
 
     assert result == action
     assert pending.future.result() == outcome
@@ -112,13 +130,14 @@ async def test_the_owner_still_answers(action, approved, rejected, outcome):
 
 @pytest.mark.asyncio
 async def test_a_colleagues_late_trust_trusts_nothing():
-    """Trust pressed after the approval ended still grants trust to the thread, so it is an
-    answer too: a colleague who started the thread cannot give it."""
+    """Trust pressed after the approval ended still trusts the thread, on the prompt that offered
+    it, so it is an answer too: a colleague's press on that very prompt gives none."""
     slack = MockSlackClient()
-    slack.fetch_thread_replies = AsyncMock(return_value=[{"user": COLLEAGUE}])
+    _offered("D_COLLEAGUE", THREAD)
     with patch("slack_runtime.handler.sel") as sel:
         result = await handle_interaction(
-            "D_COLLEAGUE", PROMPT_TS, "trust_tool", user_id=COLLEAGUE, thread_ts="1.0", slack=slack
+            "D_COLLEAGUE", PROMPT_TS, "trust_tool", user_id=COLLEAGUE, thread_ts=THREAD,
+            slack=slack, value=NONCE,
         )
 
     assert result is None
@@ -128,19 +147,19 @@ async def test_a_colleagues_late_trust_trusts_nothing():
 
 @pytest.mark.asyncio
 async def test_the_owners_late_trust_still_trusts_their_thread():
+    """On the prompt that offered it, with the nonce its button carries, after the approval it
+    came with ended. A late Trust on anything else trusts nothing (see
+    ``test_trust_session_trusts_only_through_its_own_prompt.py``)."""
     slack = MockSlackClient()
-    slack.fetch_thread_replies = AsyncMock(return_value=[{"user": OWNER}])
-    with (
-        patch("slack_runtime.handler.sel"),
-        patch("personalclaw.sdk.channel.SessionMap") as session_map,
-    ):
-        session_map.return_value.get_session_for_thread.return_value = None
+    _offered("D_OWNER", THREAD)
+    with patch("slack_runtime.handler.sel"):
         result = await handle_interaction(
-            "D_OWNER", PROMPT_TS, "trust_tool", user_id=OWNER, thread_ts="1.0", slack=slack
+            "D_OWNER", PROMPT_TS, "trust_tool", user_id=OWNER, thread_ts=THREAD, slack=slack,
+            value=NONCE,
         )
 
     assert result == "trust_tool"
-    assert _trusted_sessions == {"1.0"}
+    assert _trusted_sessions == {THREAD}
 
 
 @pytest.mark.asyncio

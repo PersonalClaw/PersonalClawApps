@@ -174,7 +174,7 @@ async def test_a_press_on_a_prompt_from_before_a_restart_closes_it(monkeypatch):
 
     slack = MockSlackClient()
     monkeypatch.setattr(interactions, "_orch", SimpleNamespace(slack=slack))
-    stale = H._approval_messages(_event(), is_dm=True)[-1]
+    stale = H._approval_messages(_event())[-1]
     payload = {"message": {"ts": "9.000", "blocks": stale}, "response_url": ""}
 
     with patch("slack_runtime.handler.sel"):
@@ -195,7 +195,7 @@ async def test_a_colleague_s_late_press_changes_nothing(monkeypatch):
     slack = MockSlackClient()
     monkeypatch.setattr(interactions, "_orch", SimpleNamespace(slack=slack))
     H.set_allowed_users({OWNER, "U_COLLEAGUE"})
-    stale = H._approval_messages(_event(), is_dm=True)[-1]
+    stale = H._approval_messages(_event())[-1]
     payload = {"message": {"ts": "9.000", "blocks": stale}, "response_url": ""}
 
     with patch("slack_runtime.handler.sel"):

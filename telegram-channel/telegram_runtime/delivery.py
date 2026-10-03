@@ -234,7 +234,8 @@ class TelegramDelivery:
         #: approval prompt to nobody until the next restart.
         self._owner = owner
         self._streams: dict[str, _StreamState] = {}
-        # keyed by "chat_id:message_id" of the prompt message the buttons live on.
+        # Each waiting approval, keyed by "req:<request_id>": what its buttons' callback data name
+        # it by. A press answers it only from its own prompt (:func:`_on_its_prompt`).
         self._pending: dict[str, _PendingApproval] = {}
         # How each ended approval ended, by its request id, for a press that comes after.
         self._ended: OrderedDict[str, str] = OrderedDict()
@@ -470,10 +471,7 @@ class TelegramDelivery:
             )
             or 0
         )
-        key = f"{chat_id}:{mid}"
         pending = _PendingApproval(request_id, chat_id, mid, answers)
-        self._pending[key] = pending
-        # Index by request_id too so resolve_callback can find it from callback_data.
         self._pending[f"req:{request_id}"] = pending
         if on_prompted:
             try:
@@ -487,7 +485,6 @@ class TelegramDelivery:
             self._close_later(chat_id, mid, parts, request_id, "cancelled")
             raise
         finally:
-            self._pending.pop(key, None)
             self._pending.pop(f"req:{request_id}", None)
 
         pressed = pending.answer(outcome)
@@ -541,7 +538,8 @@ class TelegramDelivery:
 
         Only the owner's press answers it. A prompt for a chat linked to a tracked group is posted
         in that group, where every member sees the buttons, and a member must not approve what
-        the owner's agent runs. Anyone else's press is refused and logged."""
+        the owner's agent runs. Anyone else's press is refused and logged, and so is a press
+        naming the approval from anything but its prompt."""
         data = cq.get("data", "") or ""
         cq_id = cq.get("id", "")
         action, _, request_id = data.partition(":")
@@ -553,6 +551,18 @@ class TelegramDelivery:
                 # A press after the approval ended: told how it ended, not "Recorded".
                 ended = self._ended.get(request_id, "")
                 answer = _LATE_ANSWERS.get(ended) or _NO_LONGER_WAITING
+            elif not _on_its_prompt(cq, pending):
+                answer = _NOT_OFFERED
+                presser = str((cq.get("from") or {}).get("id", "") or "")
+                logger.warning("telegram: refused a press for %s off its prompt", request_id)
+                sel().log_api_access(
+                    caller=f"telegram:{presser or 'unknown'}",
+                    operation="telegram.approval_press",
+                    outcome="denied",
+                    source="telegram",
+                    resources=request_id,
+                    error="not on its prompt",
+                )
             elif int(place) >= len(pending.answers):
                 answer = _NOT_OFFERED
             else:
@@ -598,10 +608,28 @@ def _approval_text(brief: dict, source: str) -> str:
     return "\n".join(lines)
 
 
+def _on_its_prompt(cq: dict[str, Any], pending: _PendingApproval) -> bool:
+    """Whether a press came from the message *pending*'s keyboard was sent on, in the chat it was
+    sent to (which Telegram names by its id, and a public one by its ``@username`` too). That
+    keyboard answers the approval; a button naming it on any other message answers nothing."""
+    message = cq.get("message") or {}
+    chat = message.get("chat") or {}
+    names = {str(chat.get("id", ""))}
+    if chat.get("username"):
+        names.add(f"@{chat['username']}".lower())
+    pressed_on = message.get("message_id")
+    return (
+        bool(pending.message_id)
+        and pressed_on == pending.message_id
+        and str(pending.chat_id).lower() in names
+    )
+
+
 def _approval_markup(answers: list[dict[str, str]], request_id: str) -> dict[str, Any]:
     """The prompt's inline keyboard: one button per answer the brief offers, in its order, each
     on a row of its own so a phone shows its words whole. A button names its answer by its place
-    (:data:`_ANSWER`), which fits Telegram's 64-byte cap whatever the request id is."""
+    (:data:`_ANSWER`), which fits Telegram's 64-byte cap whatever the request id is, and counts
+    on a press from this keyboard's own message alone (:func:`_on_its_prompt`)."""
     return {
         "inline_keyboard": [
             [

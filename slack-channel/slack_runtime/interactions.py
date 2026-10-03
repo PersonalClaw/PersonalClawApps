@@ -2035,9 +2035,14 @@ async def _handle_tool_approval(
             return
 
     thread_ts = payload.get("message", {}).get("thread_ts", "")
+    # What the pressed button carries back: a Trust session's, the nonce its prompt was posted with.
+    value = str((payload.get("actions") or [{}])[0].get("value") or "")
     slack_ops = _orch.slack if _orch else None
     was_waiting = f"{channel}:{msg_ts}" in _pending_approvals
-    effective_action = await handle_interaction(channel, msg_ts, action_id, user_id=user_id, thread_ts=thread_ts, slack=slack_ops)
+    effective_action = await handle_interaction(
+        channel, msg_ts, action_id, user_id=user_id, thread_ts=thread_ts, slack=slack_ops,
+        value=value,
+    )
 
     # A press that answered a waiting prompt changes nothing here: the one waiting on it closes the
     # prompt with how the approval ended (`close_prompt`), whoever or whatever ended it. A press
@@ -2049,7 +2054,7 @@ async def _handle_tool_approval(
     if effective_action == LATE_PRESS:
         ended = ended_prompt(f"{channel}:{msg_ts}")
         line = outcome_line(ended) if ended else "This approval is no longer waiting."
-    else:  # a late Trust, which still trusts the thread
+    else:  # a late Trust on the prompt that offered it, which still trusts that thread
         line = "🤝 Trusted: the rest of this thread's tool calls run without asking"
     blocks = payload.get("message", {}).get("blocks") or []
     try:

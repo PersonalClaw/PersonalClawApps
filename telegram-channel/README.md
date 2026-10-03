@@ -43,7 +43,9 @@ ships as a self-contained directory:
     the approval is no longer waiting. The wait is PersonalClaw's (*Settings → Agent defaults →
     Approval wait*, up to a week); the prompt keeps no clock of its own.
     Only the owner's press answers an approval: in a tracked group every member sees
-    the buttons, and anyone else's press is refused and logged.
+    the buttons, and anyone else's press is refused and logged. And only a press on the
+    prompt's own buttons does: a button naming the approval on any other message answers
+    nothing, and is logged.
   - `format.py` — the MarkdownV2 renderer (the classic Telegram footgun, contained), and
     the splitter that cuts a long reply into messages BEFORE rendering them, so every
     part is MarkdownV2 Telegram accepts and a code block stays code on both sides of a
