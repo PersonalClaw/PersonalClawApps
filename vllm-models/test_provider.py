@@ -221,8 +221,9 @@ def test_a_vllm_instance_on_this_machine_is_a_local_model(monkeypatch: pytest.Mo
     monkeypatch.setattr(core_registry, "get_default_registry", lambda: reg)
 
     assert VLLM_CAPABILITY.hosts_model is True
-    assert core_registry.served_on_this_machine("gpu-here") is True
-    assert core_registry.served_on_this_machine("gpu-there") is False
+    # Where a model runs is asked per model; vLLM answers every model it serves where it is.
+    assert core_registry.served_on_this_machine("gpu-here", "meta-llama/Llama-3-8B") is True
+    assert core_registry.served_on_this_machine("gpu-there", "meta-llama/Llama-3-8B") is False
 
 
 def test_vllm_registers_with_default_registry() -> None:
