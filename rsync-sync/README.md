@@ -29,7 +29,9 @@ above it.
      mounted path instead.
    - **Sync root path** — the absolute path **on the target**, e.g. `/srv/personalclaw-sync`.
    - **SSH port** / **SSH identity file** — only if they differ from your ssh defaults.
-   - **Local working directory** — where the local mirror lives (see Performance).
+   - **Local working directory** — where the local mirror lives (see Performance). Left
+     empty, it is `sync/rsync-sync` in PersonalClaw's home: the one `PERSONALCLAW_HOME` names,
+     else `~/.personalclaw`.
 3. **Mark the sync root**: run `personalclaw setup --app rsync-sync` on any one machine. It
    asks whether the disk or share the sync root is on is mounted, then puts a
    `.personalclaw-sync-root` file in it, and nothing else. Rsync Sync syncs only with a folder

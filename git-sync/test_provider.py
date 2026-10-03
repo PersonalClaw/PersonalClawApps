@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -707,12 +708,55 @@ def test_create_provider_expands_env(tmp_path, monkeypatch):
 
 
 def test_create_provider_defaults(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PERSONALCLAW_HOME", str(tmp_path / "pclaw-home"))
+    monkeypatch.setenv("HOME", str(tmp_path / "account"))
     p = create_provider(None)
     assert p._repo_url == ""
     assert p._branch == "main"
-    assert p._clone == str(tmp_path / ".personalclaw" / "sync" / "git-sync")
+    assert p._clone == str((tmp_path / "pclaw-home").resolve() / "sync" / "git-sync")
     assert p.test().ok is False
+
+
+#: The settings the manifest declares, as the Configure page reads them.
+_SETTINGS = json.loads((Path(git_sync.__file__).parent / "app.json").read_text(encoding="utf-8"))[
+    "provider"
+]["settingsSchema"]["properties"]
+
+
+def _saved_with_defaults(repo_url: str) -> dict:
+    """What the Configure page saves when only Git remote URL is filled in: every other setting
+    at the default the manifest gives it."""
+    defaults = {k: v["default"] for k, v in _SETTINGS.items() if "default" in v}
+    return {**defaults, "repo_url": repo_url}
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda url: create_provider({"repo_url": url}),
+        lambda url: create_provider(_saved_with_defaults(url)),
+        lambda url: GitSyncProvider(repo_url=url),
+    ],
+    ids=["not-set", "saved-with-the-defaults", "constructed"],
+)
+def test_an_empty_local_working_clone_is_in_the_home_in_use(remote, tmp_path, monkeypatch, build):
+    """Left empty, the working clone is sync/git-sync in the PersonalClaw home in use — the one
+    PERSONALCLAW_HOME names — and not a ``~/.personalclaw`` worked out from the account's home,
+    which the Configure page used to save as the setting's value. The account's home is the
+    ``ssh_url`` fixture's own (``HOME``), so it can be looked in."""
+    home = tmp_path / "pclaw-home"
+    monkeypatch.setenv("PERSONALCLAW_HOME", str(home))
+    account = Path(os.environ["HOME"])
+    clone = home.resolve() / "sync" / "git-sync"
+
+    p = build(remote)
+    r = p.push([SyncObject("machines/A/k", b"v")])
+
+    assert p._clone == str(clone)
+    assert r.outcome == "delivered" and r.pushed == 1, r
+    assert (clone / "machines" / "A" / "k").read_bytes() == b"v"
+    assert "machines/A/k" in _files_in_fresh_remote_checkout(remote, tmp_path)
+    assert not (account / ".personalclaw").exists(), "the clone was made in the account's home"
 
 
 # ── what a failure says ──────────────────────────────────────────────────────────────

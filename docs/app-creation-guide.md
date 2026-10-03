@@ -191,8 +191,21 @@ a row per entry. An `object` with `properties` is a control per field (a field
 typed `["string", "null"]` gets a switch, off storing `null`); an `object` whose
 entries are keyed is a row per entry, its `additionalProperties` saying what each
 value is and its `propertyNames` `x-meta` naming the key. Values the user saves land in
-`~/.personalclaw/apps/<name>/data/config.json` and are read back via
+`<home>/apps/<name>/data/config.json` and are read back via
 `personalclaw.sdk.settings.ProviderSettings`.
+
+#### A folder in PersonalClaw's home is asked for, never spelled
+
+PersonalClaw runs on the home `PERSONALCLAW_HOME` names (a second instance, a test's, a dev
+gateway's), else `~/.personalclaw`, and only core works out which. A path your app keeps there
+comes from `personalclaw.sdk.util`, asked when the path is used: `config_dir()` for the home,
+`app_data_dir(<name>)` for your app's own folder in it. A setting that names such a folder
+defaults to empty, and your code fills the empty value in from those: a default of
+`~/.personalclaw/…` is the account's home whatever home PersonalClaw runs on, and the Configure
+page shows it as the setting's value and saves it. `rsync-sync`'s Local working directory is the
+worked example. `.github/scripts/check_active_home.py` fails an app whose code reads
+`PERSONALCLAW_HOME`, builds `~/.personalclaw` from the account's home, or spells a path under it
+in its code or its manifest.
 
 #### Advanced and required — the one convention
 
@@ -792,7 +805,8 @@ export function mount(el, ctx) {
   `PERSONALCLAW_HOME` to `tmp_path`. The repository's `conftest.py` is the floor
   under that: every test starts with `PERSONALCLAW_HOME` pointing at a scratch
   directory of its own, so a test that forgets still does not resolve the real home
-  through core. Code that builds `Path.home() / ".personalclaw"` itself is not covered.
+  through core. Code that works the home out itself would not be covered, which is one reason
+  none may ([a folder in PersonalClaw's home](#a-folder-in-personalclaws-home-is-asked-for-never-spelled)).
   It also turns the OS keychain off for the run, with
   `personalclaw.sdk.testing.keychain_off()`: one keychain serves every home on the
   machine, so a scratch home alone would leave the owner's secrets in reach.

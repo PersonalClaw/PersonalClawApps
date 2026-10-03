@@ -30,8 +30,11 @@ from pathlib import Path
 
 from aiohttp import web
 from personalclaw.sdk.security import require_proxy_signature
+from personalclaw.sdk.util import app_data_dir
 
-DATA_DIR = Path(os.environ.get("PERSONALCLAW_APP_DATA_DIR", os.path.expanduser("~/.personalclaw/apps/minutes/data")))
+# The data folder PersonalClaw names when it starts this server; started by hand without one,
+# this app's own folder in the PersonalClaw home in use (the one PERSONALCLAW_HOME names).
+DATA_DIR = Path(os.environ.get("PERSONALCLAW_APP_DATA_DIR") or app_data_dir("minutes"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "meetings.db"
 

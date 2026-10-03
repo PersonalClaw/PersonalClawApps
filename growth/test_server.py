@@ -78,6 +78,37 @@ async def env(tmp_path, monkeypatch):
     await c.close()
 
 
+async def test_started_without_a_data_folder_it_keeps_its_data_in_the_home_in_use(
+    tmp_path, monkeypatch
+):
+    """PersonalClaw names this server's data folder when it starts it
+    (``PERSONALCLAW_APP_DATA_DIR``). Started without one, by hand, the server keeps its data in
+    this app's folder in the PersonalClaw home in use, the one ``PERSONALCLAW_HOME`` names, and
+    not in a ``~/.personalclaw`` worked out from the account's home. ``HOME`` is a folder of the
+    test's own, so the account's home can be looked in."""
+    home, account = tmp_path / "pclaw-home", tmp_path / "account"
+    account.mkdir()
+    monkeypatch.setenv("PERSONALCLAW_HOME", str(home))
+    monkeypatch.setenv("HOME", str(account))
+    monkeypatch.delenv("PERSONALCLAW_APP_DATA_DIR", raising=False)
+    monkeypatch.setenv("PERSONALCLAW_APP_SECRET", _SECRET)
+    monkeypatch.syspath_prepend(str(Path(__file__).parent / "backend"))
+    monkeypatch.delitem(sys.modules, "server", raising=False)
+    server = importlib.import_module("server")
+    c = TestClient(TestServer(server.make_app()))
+    await c.start_server()
+    try:
+        made = await _SignedClient(c, _SECRET).post("/artifacts", json={"title": "Shipped it"})
+        assert made.status == 200, await made.text()
+    finally:
+        await c.close()
+
+    data = home.resolve() / "apps" / "growth" / "data"
+    assert server.DATA_DIR == data
+    assert (data / "growth.db").is_file()
+    assert sorted(account.rglob("*")) == [], "the server wrote into the account's home"
+
+
 async def test_health(env):
     c, _ = env
     assert (await (await c.get("/health")).json())["ok"] is True

@@ -66,6 +66,7 @@ from personalclaw.sdk.sync import (
     is_path_in_store,
     is_safe_relative_path,
 )
+from personalclaw.sdk.util import config_dir
 
 # The single shared registry object every machine compare-and-swaps.
 _REGISTRY_KEY = "registry.json"
@@ -482,6 +483,16 @@ _NO_GIT = (
 )
 
 
+def _default_clone() -> str:
+    """The Local working clone when none is set: ``sync/git-sync`` in the PersonalClaw home in
+    use, the one ``PERSONALCLAW_HOME`` names, asked of the SDK when a provider is built.
+
+    Never a ``~/.personalclaw/…`` worked out from the account's home: whatever home PersonalClaw
+    ran on, a second home's clone went there, outside the home in use and shared with every other
+    home on the account."""
+    return str(config_dir() / "sync" / "git-sync")
+
+
 class GitSyncFailed(RuntimeError):
     """A step Git Sync can't go on from, said as what is wrong and what to do: its text is that
     sentence, with git's words, masked, as its detail — never a failed git run's own text, which
@@ -499,16 +510,16 @@ class GitSyncProvider(SyncTransportProvider):
     def __init__(
         self,
         repo_url: str = "",
-        local_clone: str = "~/.personalclaw/sync/git-sync",
+        local_clone: str = "",
         branch: str = "main",
         token: str = "",
         username: str = "",
     ) -> None:
         self._repo_url = repo_url or ""
-        # Expand ``~`` and ``$VARS`` so a configured "~/.personalclaw/sync/git-sync" or
-        # "$HOME/sync" resolves to a real path. An empty clone path leaves the transport
-        # idle rather than crashing.
-        self._clone = os.path.expandvars(os.path.expanduser(local_clone)) if local_clone else ""
+        # A folder the owner names is theirs, ``~`` and ``$VARS`` expanded ("~/sync/clone",
+        # "$HOME/sync"); left empty, it is PersonalClaw's own, in the home in use.
+        clone = (local_clone or "").strip()
+        self._clone = os.path.expandvars(os.path.expanduser(clone)) if clone else _default_clone()
         self._branch = branch or "main"
         # Access token (a sensitive setting, so it is kept in the credential store) and the user
         # name it signs in with. Pasted text can end in a newline; a token never does.
@@ -519,8 +530,8 @@ class GitSyncProvider(SyncTransportProvider):
 
     @property
     def _idle(self) -> bool:
-        """No remote (or nowhere to clone it) → the transport is idle, not broken."""
-        return not self._repo_url or not self._clone
+        """No remote → the transport is idle, not broken."""
+        return not self._repo_url
 
     @property
     def _refused(self) -> str:
@@ -1744,9 +1755,7 @@ class GitSyncProvider(SyncTransportProvider):
             # A folder every sync would refuse is said here too, read without changing it: a
             # green probe beside a sync that can't run says nothing true.
             refused = (
-                bool(self._clone)
-                and os.path.isdir(os.path.join(self._clone, ".git"))
-                and self._standing() == "refuse"
+                os.path.isdir(os.path.join(self._clone, ".git")) and self._standing() == "refuse"
             )
             if refused:
                 return ConnectionResult(ok=False, detail=self._not_ours())
@@ -1767,7 +1776,7 @@ def create_provider(config: dict[str, Any] | None = None) -> GitSyncProvider:
     config = config or {}
     return GitSyncProvider(
         repo_url=str(config.get("repo_url", "") or ""),
-        local_clone=str(config.get("local_clone", "") or "~/.personalclaw/sync/git-sync"),
+        local_clone=str(config.get("local_clone", "") or ""),
         branch=str(config.get("branch", "") or "main"),
         token=str(config.get("token", "") or ""),
         username=str(config.get("username", "") or ""),

@@ -158,6 +158,12 @@ jobs:
         # pass-through, a stale entry, an unreadable file and a lost floor app each red it; a clean
         # tree is green.
         run: python -m pytest .github/tests/test_egress_policy.py -q
+      - name: The active-home rail reds on a planted defect
+        # Drives the rail's own script against seeded trees: a path in the default home spelled in
+        # a default or a fallback, one built from the account's home, the variable read, a setting
+        # whose manifest default names one, the shell's resolution outside a client install, an
+        # unreadable file and a lost floor app each red it; a clean tree is green.
+        run: python -m pytest .github/tests/test_active_home.py -q
       - name: Run each bundle's tests (per-bundle)
         # The repository runner is the single definition shared by CI and local use:
         # it discovers tested app bundles, installs each manifest's declared
@@ -360,6 +366,21 @@ jobs:
           python-version: "3.12"
       - name: Every app that reaches the network declares it
         run: python .github/scripts/check_network_declared.py
+
+  active-home:
+    # Every path an app keeps in PersonalClaw's home comes from the SDK (config_dir, app_data_dir),
+    # asked when it is used: an app that reads PERSONALCLAW_HOME, builds ~/.personalclaw from the
+    # account's home, or spells a path under it in its code or a manifest default writes the
+    # account's home whatever home PersonalClaw runs on. Pure-stdlib AST rail, no core install, the
+    # same script run locally.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Every path an app keeps in PersonalClaw's home comes from the SDK
+        run: python .github/scripts/check_active_home.py
 
   egress-policy:
     # Every request an app makes through the SDK's egress guard runs under a policy built with

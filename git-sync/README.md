@@ -42,7 +42,7 @@ other app. (Or [install it from a shell](../docs/third-party-install.md#installi
 | Key | Label | Notes |
 |---|---|---|
 | `repo_url` | Git remote URL | The ssh or https URL of a git remote you own (both machines point at the same one). A remote at a local path is refused, and so is an https URL with a user name or token written into it (put the token in Access token), or an ssh one — written as a URL or scp-like — with a password (ssh signs in with your key). Leave empty to configure later — the transport stays idle until set. |
-| `local_clone` | Local working clone | Where the working clone lives on this machine (default `~/.personalclaw/sync/git-sync`). Supports `~` and `$VARS`. Cloned on first use, reused after. |
+| `local_clone` | Local working clone | Where the working clone lives on this machine. Left empty, it is `sync/git-sync` in PersonalClaw's home: the one `PERSONALCLAW_HOME` names, else `~/.personalclaw`. Supports `~` and `$VARS`. Cloned on first use, reused after. |
 | `branch` | Branch | The branch to sync on (default `main`). Both machines must use the same branch. A branch the remote doesn't have yet starts empty. |
 | `token` | Access token | For an https remote that needs a token to sign in (sensitive: kept in PersonalClaw's credential store). Handed to git by its own credential helper, never written into the working clone or onto a command line; only an https remote is given it, or an http one on this machine. Leave empty for ssh. |
 | `username` | User name | The user name to sign in with alongside Access token, if your host wants one. Empty signs in as `x-access-token`, which a host that checks only the token accepts. Leave empty for ssh. |

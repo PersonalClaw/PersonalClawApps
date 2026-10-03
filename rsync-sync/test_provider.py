@@ -669,6 +669,70 @@ class TestFailureHandling:
         )
 
 
+# ── where the local working directory is ─────────────────────────────────────────────
+#
+# Left empty, the Local working directory is sync/rsync-sync in the PersonalClaw home in use: the
+# one PERSONALCLAW_HOME names (a second home, a test's, a dev gateway's), else ~/.personalclaw. It
+# was ~/.personalclaw/sync/rsync-sync worked out from the account's home, whatever home
+# PersonalClaw ran on, and the Configure page saved that path as the setting's value: a second
+# home's sync kept its mirror in the account's ~/.personalclaw, shared with every other home
+# there. HOME is a folder of each test's own here, so the account's home can be looked in.
+
+#: The settings the manifest declares, as the Configure page reads them.
+_SETTINGS = json.loads(
+    (pathlib.Path(provider_mod.__file__).parent / "app.json").read_text(encoding="utf-8")
+)["provider"]["settingsSchema"]["properties"]
+
+
+def _saved_with_defaults(path: str) -> dict[str, Any]:
+    """What the Configure page saves when only Sync root path is filled in: every other setting
+    at the default the manifest gives it."""
+    return {**{k: v["default"] for k, v in _SETTINGS.items() if "default" in v}, "path": path}
+
+
+@needs_rsync
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda root: create_provider({"path": root}),
+        lambda root: create_provider(_saved_with_defaults(root)),
+        lambda root: RsyncSyncProvider(path=root),
+    ],
+    ids=["not-set", "saved-with-the-defaults", "constructed"],
+)
+def test_an_empty_local_working_directory_is_in_the_home_in_use(
+    tmp_path, monkeypatch, isolated_home, target, build
+):
+    account = tmp_path / "account"
+    account.mkdir()
+    monkeypatch.setenv("HOME", str(account))
+    workdir = isolated_home.resolve() / "sync" / "rsync-sync"
+
+    p = build(str(target))
+    pushed = p.push([SyncObject(key="machines/A/k", data=b"v")])
+    pulled = p.pull(p.list_remote())
+
+    assert p._staging_root == str(workdir)
+    assert pushed.outcome == "delivered" and pushed.pushed == 1, pushed
+    assert [(o.key, o.data) for o in pulled] == [("machines/A/k", b"v")]
+    assert (workdir / "mirror" / "machines" / "A" / "k").read_bytes() == b"v"
+    assert sorted(account.rglob("*")) == [], "the sync wrote into the account's home"
+
+
+def test_a_local_working_directory_that_is_set_is_used_as_written(tmp_path, monkeypatch):
+    """A folder the owner names is theirs to name, ``~`` and ``$VARS`` included: only the
+    empty setting means PersonalClaw's own folder."""
+    monkeypatch.setenv("HOME", str(tmp_path / "account"))
+    monkeypatch.setenv("RS_WORK", str(tmp_path / "elsewhere"))
+
+    assert create_provider({"path": "/srv/sync", "staging_dir": "~/rs-work"})._staging_root == (
+        str(tmp_path / "account" / "rs-work")
+    )
+    assert create_provider({"path": "/srv/sync", "staging_dir": "$RS_WORK/w"})._staging_root == (
+        str(tmp_path / "elsewhere" / "w")
+    )
+
+
 # ── the local working directory ──────────────────────────────────────────────────────
 #
 # The local half of a sync — the staging trees and the mirror under Local working directory —

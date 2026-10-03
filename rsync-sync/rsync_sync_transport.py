@@ -72,7 +72,7 @@ from personalclaw.sdk.sync import (
     SyncObject,
     SyncTransportProvider,
 )
-from personalclaw.sdk.util import child_process_env
+from personalclaw.sdk.util import child_process_env, config_dir
 
 #: The single shared registry object every machine compare-and-swaps.
 _REGISTRY_KEY = "registry.json"
@@ -221,6 +221,16 @@ def validate_remote_path(path: str) -> str:
     return p
 
 
+def _default_workdir() -> str:
+    """The Local working directory when none is set: ``sync/rsync-sync`` in the PersonalClaw home
+    in use, the one ``PERSONALCLAW_HOME`` names, asked of the SDK when a provider is built.
+
+    Never a ``~/.personalclaw/…`` worked out from the account's home: whatever home PersonalClaw
+    ran on, a second home's mirror went there, outside the home in use and shared with every other
+    home on the account."""
+    return str(config_dir() / "sync" / "rsync-sync")
+
+
 class RsyncSyncProvider(SyncTransportProvider):
     """A durability sync transport backed by ``rsync``, over ssh or to a local path."""
 
@@ -234,7 +244,7 @@ class RsyncSyncProvider(SyncTransportProvider):
         *,
         port: int = 22,
         ssh_key: str = "",
-        staging_dir: str = "~/.personalclaw/sync/rsync-sync",
+        staging_dir: str = "",
         timeout_secs: int = 300,
         rsync_bin: str = "rsync",
     ) -> None:
@@ -264,8 +274,11 @@ class RsyncSyncProvider(SyncTransportProvider):
             )
             key = ""
         self._ssh_key = os.path.expanduser(key) if key else ""
-        self._staging_root = os.path.expandvars(
-            os.path.expanduser(staging_dir or "~/.personalclaw/sync/rsync-sync")
+        # A folder the owner names is theirs, ``~`` and ``$VARS`` expanded; left empty, it is
+        # PersonalClaw's own, in the home in use.
+        workdir = (staging_dir or "").strip()
+        self._staging_root = (
+            os.path.expandvars(os.path.expanduser(workdir)) if workdir else _default_workdir()
         )
         self._timeout = max(1, int(timeout_secs) if timeout_secs else 300)
         self._rsync = rsync_bin or "rsync"
@@ -1146,6 +1159,6 @@ def create_provider(config: dict[str, Any] | None = None) -> RsyncSyncProvider:
         path=str(config.get("path", "") or ""),
         port=int(config.get("port") or 22),
         ssh_key=str(config.get("ssh_key", "") or ""),
-        staging_dir=str(config.get("staging_dir", "") or "~/.personalclaw/sync/rsync-sync"),
+        staging_dir=str(config.get("staging_dir", "") or ""),
         timeout_secs=int(config.get("timeout_secs") or 300),
     )
