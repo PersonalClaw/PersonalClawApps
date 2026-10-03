@@ -269,7 +269,7 @@ yours — follow the nearest peer app rather than inventing a new pattern.
   "storage": true,                               // get a persistent DATA_DIR
   "network": false,                              // DECLARED intent only — see note
   "memory": "",                                  // "" | "app-scoped" | "shared"
-  "cron": true,                                  // may register manifest crons
+  "cron": true,                                  // may register manifest crons (needs `agent`)
   "agent": "text"                                // what its agent tasks may use: "text" | "read" | "tools"
 }
 ```
@@ -292,8 +292,9 @@ stack; the flag discloses intent to the user rather than fencing it). See the
 
 No tier lets your app approve its agent's calls: a task starts on the owner's install consent,
 and every call that needs approval asks her, whatever her own approval settings are. A turn in a
-conversation your app started needs `tools` and asks the same way. `"agent": true` names no tier
-and is refused at install.
+conversation your app started needs `tools` and asks the same way, and so does each of your
+scheduled jobs: its agent runs at your app's tier (see [Crons](#crons)). `"agent": true` names no
+tier and is refused at install.
 
 In Python, a parsed manifest holds the tier as `Permissions.agent_tier`, `""` when the app runs no
 agent work, and `personalclaw.sdk.manifest.AGENT_TIERS` lists the tiers, narrowest first. The field
@@ -338,17 +339,22 @@ it refuses the app rather than installing one that cannot load.
 "crons": [{
   "name": "heartbeat",             // required
   "cron_expr": "*/30 * * * *",     // OR "every": <seconds> — one is required
-  "agent": "",                     // agent to run (empty = default)
-  "message": "Record a heartbeat timestamp",
-  "persistent_session": false,     // carry context between runs (default true)
-  "silent": true                   // advisory; app crons are always headless/silent
+  "agent": "",                     // agent to run (empty = default; none at the text tier)
+  "message": "Record a heartbeat timestamp"
 }]
 ```
 
-Requires the `cron` permission. Jobs register as `app:<app>:<cron>` and
-reconcile on boot + every lifecycle transition. They run unattended
-(auto-approve, no owner-channel delivery) — surface results through your backend
-or the `send_message` tool.
+Requires the `cron` permission and an agent tier (`permissions.agent`): each job's agent runs at
+your app's tier, so a manifest that declares jobs, or `cron`, without one is refused at install.
+Jobs register as `app:<app>:<cron>`, named for the owner by your app's display name, and
+reconcile on boot + every lifecycle transition. Each run is your app's agent work, held as an
+agent task is: at `text` its model is handed the job's message alone, with no tools, so a `text`
+job names no `agent`; at `read` it gets read-only tools and sends no message; at `tools` it gets
+the owner's tools. It approves none of its calls, so each one that needs approval asks the owner,
+and nobody is there on a schedule to answer at once: give a job the least tier its tools need, and
+prefer tools of your own that need no approval for what it does on every run (Ops' sweep is the
+worked example). Install consent says each job's tier. A job has no conversation to post to:
+surface its results through your backend, or your own tools' state.
 
 ### MCP servers
 

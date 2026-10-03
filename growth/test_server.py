@@ -261,6 +261,21 @@ def _ui_code_lines() -> str:
     )
 
 
+def test_growth_schedules_no_job_its_tier_could_not_run():
+    """A scheduled job runs its agent at its app's agent tier, and Growth's is ``text``: a job's
+    model would be handed its message and nothing else, with no tools, so a capture could neither
+    read the day nor file an artifact. So Growth declares no job and no permission for one, its
+    page's tasks keep the tier they need, and nothing the manifest says goes unread."""
+    from personalclaw.sdk.manifest import AppManifest
+
+    raw = _json.loads((_APP_DIR / "app.json").read_text(encoding="utf-8"))
+    assert raw["permissions"]["agent"] == "text"
+    assert "crons" not in raw and "cron" not in raw["permissions"]
+    assert "sidebar" not in raw["ui"], "nothing reads ui.sidebar"
+    assert not (_APP_DIR / "DAILY_CAPTURE.md").exists(), "the capture's instructions outlived it"
+    assert AppManifest.from_dict(raw).validate() == []
+
+
 def test_ui_declares_the_capability_its_import_depends_on():
     """The bundle imports ``@personalclaw/app-sdk/ui``, and the host's loader leaves that
     specifier UNREWRITTEN (so it fails to resolve at mount) unless the manifest declares

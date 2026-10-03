@@ -1,6 +1,6 @@
 {
   "name": "ops",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Ops",
   "description": "An on-call first responder that walks the shift with you. It files each alarm your monitor writes as an incident, ranks the queue by what needs a human first, and works each one with you — claim, investigate against your own runbook, record findings, propose a fix. Proposing changes nothing, and running a fix is off by default, needs an explicit confirm, and can only ever be a command your own runbook already declared.",
   "icon": "Siren",
@@ -19,6 +19,7 @@
   "permissions": {
     "storage": true,
     "cron": true,
+    "agent": "tools",
     "network": false
   },
   "launches": [
@@ -39,8 +40,6 @@
     {
       "name": "ops-sweep",
       "cron_expr": "*/10 * * * *",
-      "silent": true,
-      "persistent_session": false,
       "message": "Take one on-call sweep.\n\n1. Call ops_watch. If it opened and reopened nothing, stop — say nothing and end the turn.\n2. For each incident it opened or reopened at severity high or critical, or that paged: ops_claim it, then ops_investigate to get its plan.\n3. Walk that plan with your own READ-ONLY tools. Call ops_record once per check with what you actually saw, including the ones that came back clean — a ruled-out cause is worth as much to the next responder as a found one.\n4. When you can name a fix, call ops_propose_fix with the fix, its blast radius and its rollback. If the incident's runbook declares an action that is the fix, name it.\n5. NEVER call ops_apply_fix. An unattended turn does not get to change the system — leave the proposal and its confirm token for a human.\n\nIf you cannot name a fix, record why not and leave the incident claimed. An honest 'not diagnosed, here is what was ruled out' is the useful outcome."
     }
   ],

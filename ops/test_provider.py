@@ -1260,7 +1260,13 @@ def test_the_manifest_declares_the_minimum_permissions_and_round_trips() -> None
     raw = json.loads((HERE / "app.json").read_text(encoding="utf-8"))
     manifest = AppManifest.from_dict(raw)
     assert AppManifest.from_dict(manifest.to_dict()).to_dict() == manifest.to_dict()
-    assert raw["permissions"] == {"storage": True, "cron": True, "network": False}
+    assert raw["permissions"] == {
+        "storage": True,
+        "cron": True,
+        "agent": "tools",
+        "network": False,
+    }
+    assert manifest.validate() == []
     assert raw["provider"]["type"] == "tool"
     assert raw["provider"]["implementation"] == "provider:create_provider"
     assert raw["provider"]["capabilities"] == ["ops"]
@@ -1287,7 +1293,36 @@ def test_the_unattended_cron_tells_the_agent_never_to_apply() -> None:
     message = crons[0]["message"]
     assert "ops_watch" in message and "ops_propose_fix" in message
     assert "NEVER call ops_apply_fix" in message
-    assert crons[0]["silent"] is True and crons[0]["persistent_session"] is False
+    # What it declares is what runs it: a cadence and a message, and no field nothing reads.
+    assert set(crons[0]) == {"name", "cron_expr", "message"}
+
+
+#: The tools the sweep's message has its agent call, in the order it calls them.
+_SWEEP_CALLS = ["ops_watch", "ops_claim", "ops_investigate", "ops_record", "ops_propose_fix"]
+
+
+@pytest.mark.asyncio
+async def test_the_sweep_runs_at_the_least_agent_tier_its_tools_need(app: OpsProvider) -> None:
+    """The sweep's agent runs at the app's agent tier, and core holds it there: ``read`` admits
+    only tools that read (``RiskLevel.SAFE``), ``tools`` admits every tool and asks the owner for
+    each call that needs approval, since an app's agent approves none of its own calls. The
+    sweep writes the ledger, so ``read`` would refuse its first call: the least tier it needs is
+    ``tools``. At that tier its own calls ask nobody (none needs approval, each changes only the
+    ledger), and the one call that could change anything outside it asks the owner."""
+    raw = json.loads((HERE / "app.json").read_text(encoding="utf-8"))
+    assert raw["permissions"]["agent"] == "tools"
+    message = raw["crons"][0]["message"]
+    tools = {tool.name: tool for tool in await app.list_tools()}
+    named = sorted(name for name in tools if name in message)
+    assert named == sorted([*_SWEEP_CALLS, "ops_apply_fix"]), named
+    assert set(_SWEEP_CALLS) <= set(tools)
+    writes = [name for name in _SWEEP_CALLS if tools[name].risk_level is not RiskLevel.SAFE]
+    assert writes, "every tool the sweep calls reads, so it needs only the read tier"
+    assert "ops_watch" in writes, "the read tier would refuse the sweep's very first call"
+    asks = [name for name in _SWEEP_CALLS if tools[name].requires_approval]
+    assert asks == [], f"the sweep would ask the owner on every tick for {asks}"
+    apply = tools["ops_apply_fix"]
+    assert apply.requires_approval and apply.risk_level is RiskLevel.DESTRUCTIVE
 
 
 # ── CLI seams ─────────────────────────────────────────────────────────────────

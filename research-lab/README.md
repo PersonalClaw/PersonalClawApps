@@ -69,9 +69,9 @@ finding through `research_record`. That is the same seam `code-review` calls its
 fan-out, and it is the only leg in this repo that gets genuinely isolated per-item
 subagents.
 
-Which is why the manifest declares `storage` + `cron` and nothing else. No `network`, no
-`agent`, no `api`. If you were expecting a web-search provider, that is a different app;
-this one composes with whichever one you have.
+Which is why the manifest declares `storage`, `cron` and the agent tier the cycle runs at,
+`tools`, and nothing else. No `network`, no `api`. If you were expecting a web-search
+provider, that is a different app; this one composes with whichever one you have.
 
 ## The unattended loop
 
@@ -84,9 +84,15 @@ cycle per tick:
 3. `research_record` per answered sub-question, with sources and any follow-ups.
 4. Stop. The next tick runs the next cycle.
 
-App crons are headless and auto-approved (`delivery: none`, `persistent_session: false`),
-so nothing waits for you and no cycle drags the previous one's context along. Disable or
-uninstall the app and the cron goes with it.
+Each tick starts a fresh agent at the app's agent tier, `tools`, as the app's work, so no cycle
+drags the previous one's context along. The cycle needs that tier: `research_next`,
+`research_record` and `research_report` write the campaign, and starting a subagent is no read,
+and the `read` tier refuses all of them. The campaign tools run without asking (none needs
+approval). The cycle's agent approves nothing on its own: each of its calls that needs approval
+asks you, whatever your own approval settings say. A subagent it starts for one sub-question is
+the app's work too and approves nothing on its own either; several at once run as one batch, which
+asks you once before it starts unless your own settings let a batch start without asking. The job
+is headless (`delivery: none`). Disable or uninstall the app and the cron goes with it.
 
 ### Why it terminates
 
@@ -140,6 +146,7 @@ is posted anywhere: the app has no network permission with which to post it.
 |---|---|
 | `storage` | campaigns and reports live under the app's own data dir |
 | `cron` | the `advance-campaigns` job is what makes "unattended" real |
+| `agent` | `tools`: each cycle's agent writes the campaign and starts subagents, and the `read` tier refuses both |
 | `network` | declared **false** — the app opens no connection of its own |
 
 ## Tests
@@ -166,8 +173,8 @@ contract, per the capability table in
 [`docs/app-creation-guide.md`](../docs/app-creation-guide.md).
 
 The multi-cycle half is not a provider type at all. It is a **declared cron**
-(`crons[]` in `app.json`), which is how an app gets an unattended, headless, auto-approved
-turn without inventing a scheduler of its own.
+(`crons[]` in `app.json`), which is how an app gets an unattended, headless turn at its own
+agent tier without inventing a scheduler of its own.
 
 ### Why there is no `test_server.py`
 
@@ -199,7 +206,8 @@ Stated plainly, because the difference matters.
   so the install/quarantine/scan path and the Settings → Providers rendering of this manifest
   are unverified in the real UI.
 - **The cron actually firing.** `reconcile_app_crons` was confirmed to accept this app
-  (the `cron` permission is granted, the entry has a schedule and a message), but no clock
+  (the `cron` permission and its agent tier are granted, the entry has a schedule and a
+  message), and a Run now of the job ran its agent at the `tools` tier, but no clock
   tick has driven a real cycle. The multi-cycle walk is exercised by calling the tools in
   the order the cron's prompt calls them, not by the scheduler.
 - **Real subagents on real research.** No host has spawned per-sub-question subagents from

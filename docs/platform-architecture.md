@@ -166,7 +166,7 @@ Declared in the manifest `permissions` block; enforced server-side per
 | `events` (list of event types) | which WebSocket events the app's connection receives | the WS fan-out filter — an app-scoped WS connection only receives events matching its declared set | **Enforced** |
 | `mcpTools` (list of tool names) | which MCP tools the app may invoke directly | the direct tool-invoke endpoint | **Enforced** |
 | `memory` (`""` / `"app-scoped"` / `"shared"`) | memory tier access | app-permission middleware gates any `/api/memory` path; empty = none, `app-scoped` = own scope only, `shared` = both | **Enforced** |
-| `cron` (bool) | may register manifest crons | cron reconciliation registers an app's crons only when held; without it the declaration is inert | **Enforced** |
+| `cron` (bool) | may register manifest crons | cron reconciliation registers an app's crons only when held, with an agent tier for their agents to run at; without it the declaration is inert, and a manifest declaring jobs or `cron` with no tier is refused at install | **Enforced** |
 | `storage` (bool) | gets a persistent data dir | the backend launcher hands `PERSONALCLAW_APP_DATA_DIR` only when held | **Enforced** |
 | `agent` (`"text"` / `"read"` / `"tools"`) | what the app's agent work may use: `text` hands the model only the task the app sends, with no tools; `read` an agent with read-only tools; `tools` an agent with the owner's tools | the app agent-run endpoint (`POST /api/apps/{name}/agent-run`) runs a task at the calling app's tier, or a narrower `tier` the task asks for, and refuses a wider one `403 agent_tier_exceeded`; the run is held to the tier where its calls are decided (a `text` task on the worker with no tools, a `read` task only on PersonalClaw's own agent), and no tier approves a call, so each one that needs approval asks the owner. A turn in the app's own conversation needs `tools`. `true` is refused at install | **Enforced** |
 | `network` (bool) | intends to reach the network | **DECLARATION-ONLY — unenforced by design.** An app backend is an OS subprocess with its own network stack; there is no in-process egress hook the gateway can intercept. The flag records intent so the Store's install-consent surface can show it ("network access: yes/no"); a future OS-level isolation layer (cgroups/nftables/seccomp) may enforce it. Every gateway-MEDIATED reach is still bounded by `api`. Treat `network: true` as an honest declaration, not a security boundary. | **Declared-only** |
@@ -178,19 +178,22 @@ surface BEFORE install, so the user sees what they're granting.
 
 Manifest `crons` entries are scheduled agent jobs (`apps/app_crons.py`):
 
-- Only honored when the app holds the `cron` permission.
-- Registered as jobs named `app:<app-name>:<cron-name>`, tagged
-  `created_by="app:<name>"`.
+- Only honored when the app holds the `cron` permission and an agent tier.
+- Registered as jobs with the id `app:<app-name>:<cron-name>`, named by the app's display name,
+  tagged `created_by="app:<name>"`.
 - **Reconciliation is declarative and idempotent**: the desired set (enabled
   apps × permitted manifest crons) is diffed against registered `app:*` jobs
   and added/pruned to match. It runs **at gateway boot** and again **on every
   lifecycle transition** (install / enable / disable / uninstall / update) — so
   a disabled app's cron stops immediately, not at the next restart.
-- App crons run **headless**: `approval_mode="auto"` (an unattended run can't
-  wedge on a human) and always `silent=True` (there is no owner conversation to
-  deliver into — an app surfaces results itself, via its backend or the
-  `send_message` tool). The manifest `silent` flag is advisory; silent is
-  already the effective behavior.
+- Each fire runs the job's agent **at the app's agent tier**, as the app's work
+  (`app_crons.start_job`): it carries the app's name, so it approves none of its
+  calls and each call that needs approval asks the owner, and its result is the
+  app's, handed to no turn of the owner's own agent. The trigger's own step sets
+  no approval or write access for it.
+- App crons run **headless**: delivery `none` (there is no owner conversation to
+  deliver into — an app surfaces results itself, via its backend or its own
+  tools' state).
 
 ## MCP bridge
 

@@ -236,10 +236,18 @@ reaches whatever the command reaches: `kubectl` your cluster, `ssh` another mach
 
 ## Permissions
 
-`storage: true` (the incident ledger), `cron: true` (the ten-minute sweep), `network:
-false`. That is the whole declaration — there is no remote and no wire call anywhere in this
-bundle. The one command it can start is a remediation from your own runbook, and what that
-command reaches is what you wrote into it.
+`storage: true` (the incident ledger), `cron: true` (the ten-minute sweep), `agent:
+"tools"` (the tier the sweep's agent runs at), `network: false`. That is the whole declaration —
+there is no remote and no wire call anywhere in this bundle. The one command it can start is a
+remediation from your own runbook, and what that command reaches is what you wrote into it.
+
+The sweep needs `tools`, the widest tier, because it writes the ledger: `ops_watch` files
+incidents, `ops_claim` takes one, `ops_record` and `ops_propose_fix` write findings and plans.
+The `read` tier admits only tools that read, and refuses each of those. At `tools` the four
+run without asking (none needs approval: each changes only the ledger), the sweep's agent
+approves nothing on its own, so any other call that needs approval (a shell command, a file
+change) asks you, whatever your own approval settings say, and `ops_apply_fix`, which the
+sweep is told never to call, would ask you too, on top of its own gates.
 
 ## Tests
 
@@ -276,9 +284,10 @@ contract, per the capability table in
 
 The shift loop itself is a **declared cron**, not a loop in this bundle: `ops-sweep` runs
 every ten minutes and hands the agent a fixed instruction (watch, triage, claim,
-investigate, record, propose — and never apply). That is the same shape `research-lab` uses
-for its unattended cycles, and it is why this app needs no background thread of its own.
-Edit or disable it in Triggers like any other schedule.
+investigate, record, propose — and never apply), at the app's `tools` tier (see
+[Permissions](#permissions)). That is the same shape `research-lab` uses for its unattended
+cycles, and it is why this app needs no background thread of its own. Pause it in Triggers
+like any other schedule.
 
 ### Why there is no `test_server.py`
 

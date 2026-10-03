@@ -13,6 +13,10 @@ tier never widens without someone reading what the app's tasks use. The ``manife
 refuses a value that names no tier (``true`` among them) with core's own parser; this checks the
 same per app, so a failure names the app.
 
+An app's scheduled jobs (``crons``) are agent work too: each job's agent runs at the app's tier,
+so an app that declares jobs, or the ``cron`` permission, names one, and core refuses it at
+install when it does not.
+
 Run locally exactly as CI does:
 
     python -m pytest .github/tests/test_agent_tiers.py -q
@@ -40,7 +44,18 @@ CENSUS: dict[str, tuple[str, str]] = {
     "growth": (
         "text",
         "its artifact draft and its digest hand the model the evidence and the artifacts the page "
-        "sends, and ask for JSON or Markdown back",
+        "sends, and ask for JSON or Markdown back; it schedules no job, which at text could read "
+        "nothing and file nothing",
+    ),
+    "ops": (
+        "tools",
+        "its ten-minute sweep writes the incident ledger (ops_watch, ops_claim, ops_record, "
+        "ops_propose_fix), and the read tier admits only tools that read",
+    ),
+    "research-lab": (
+        "tools",
+        "its hourly cycle writes the campaign (research_next, research_record, research_report) "
+        "and starts a subagent per sub-question, none of which the read tier admits",
     ),
 }
 
@@ -76,6 +91,21 @@ def test_each_app_declares_the_tier_its_tasks_need(app):
     manifest = AppManifest.from_dict(raw)
     assert manifest.permissions.agent_tier == tier
     assert [e for e in manifest.validate() if "permissions.agent" in e] == []
+
+
+def test_every_app_that_schedules_jobs_names_the_tier_they_run_at():
+    """Each job's agent runs at its app's tier, so jobs, or the permission for them, with no tier
+    could never run, and core refuses such a manifest at install. Read from the manifests as
+    written, so a failure names the app on any core."""
+    scheduling = {}
+    for manifest in sorted(ROOT.glob("*/app.json")):
+        raw = json.loads(manifest.read_text(encoding="utf-8"))
+        permissions = raw.get("permissions") or {}
+        if raw.get("crons") or permissions.get("cron"):
+            scheduling[manifest.parent.name] = permissions.get("agent")
+    assert scheduling, "no app.json declares a scheduled job: the walk read nothing"
+    untiered = {app: tier for app, tier in scheduling.items() if tier not in AGENT_TIERS}
+    assert untiered == {}, f"apps that schedule jobs at no agent tier: {untiered}"
 
 
 @pytest.mark.parametrize("written", [True, False, "yes"])

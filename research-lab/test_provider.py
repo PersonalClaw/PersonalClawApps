@@ -15,8 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
+from personalclaw.sdk.manifest import AppManifest
+from personalclaw.sdk.tool import RiskLevel
 from provider import MAX_DEPTH, MAX_FOLLOW_UPS, ResearchLabProvider, create_provider
 
 CONTRACT_METHODS = ("display_name", "invoke", "list_tools", "name")
@@ -100,6 +103,31 @@ def test_every_tool_names_its_provider_and_takes_an_object() -> None:
     for definition in tools(create_provider({})):
         assert definition.provider == "research-lab"
         assert definition.parameters["type"] == "object"
+
+
+#: The tools the hourly cycle's message has its agent call.
+CYCLE_CALLS = ["research_next", "research_record", "research_report"]
+
+
+def test_the_cycle_runs_at_the_least_agent_tier_its_work_needs() -> None:
+    """The cycle's agent runs at the app's agent tier, and core holds it there: ``read`` admits
+    only tools that read (``RiskLevel.SAFE``), ``tools`` admits every tool and asks the owner for
+    each call that needs approval, since an app's agent approves none of its own calls. The cycle
+    writes the campaign and starts a subagent per sub-question, which is no read either, so the
+    least tier it needs is ``tools``. Its own calls ask nobody: none needs approval."""
+    raw = json.loads((Path(__file__).parent / "app.json").read_text(encoding="utf-8"))
+    assert raw["permissions"] == {"storage": True, "cron": True, "agent": "tools", "network": False}
+    assert AppManifest.from_dict(raw).validate() == []
+    (cron,) = raw["crons"]
+    assert set(cron) == {"name", "cron_expr", "message"}, "no field nothing reads"
+    message = cron["message"]
+    declared = {tool.name: tool for tool in tools(create_provider({}))}
+    assert sorted(name for name in declared if name in message) == sorted(CYCLE_CALLS)
+    assert "subagent" in message, "the cycle hands each sub-question to a subagent"
+    writes = [name for name in CYCLE_CALLS if declared[name].risk_level is not RiskLevel.SAFE]
+    assert writes == CYCLE_CALLS, "a read-tier agent would be refused every call of the cycle"
+    asks = [name for name in CYCLE_CALLS if declared[name].requires_approval]
+    assert asks == [], f"the cycle would ask the owner on every tick for {asks}"
 
 
 def test_an_unknown_tool_fails_legibly() -> None:

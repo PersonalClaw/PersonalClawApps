@@ -32,8 +32,19 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 - `backend/server.py` — the app's own API, launched as a subprocess and reached through the gateway proxy (`/apps/growth/api/*`).
 - `ui/` — the contributed Growth page (route `/apps/growth`).
-- A daily `daily-capture` cron (18:03) scans your recent work and files growth artifacts per `DAILY_CAPTURE.md`.
-- Declared permissions: core `api` paths (projects/tasks/knowledge), `events`, `storage`, `agent` at the `text` tier (drafting an artifact from its evidence and writing a digest hand the model the evidence and artifacts the page sends, with no tools), and `cron`.
+- Declared permissions: core `api` paths (projects/tasks/knowledge), `events`, `storage`, and `agent` at the `text` tier (drafting an artifact from its evidence and writing a digest hand the model the evidence and artifacts the page sends, with no tools).
+
+### No scheduled capture
+
+Growth no longer declares a daily `daily-capture` job, or the `cron` permission for one. A
+scheduled job runs its agent at its app's agent tier, and at Growth's, `text`, the agent is
+handed the job's message and nothing else, with no tools: it could neither read your day nor
+file an artifact. The job also did none of its work before: the memory-history file it was told
+to read is no longer where it looked, and its read-only agent was refused the call that files an
+artifact. Widening Growth to the `tools` tier and to your memory, only to keep a job, would grant
+far more than the page needs. Capture from the **Sources** tab instead: it offers your completed
+projects and closed tasks as candidates, and drafts an artifact from the one you pick at the
+`text` tier.
 
 ## License
 
