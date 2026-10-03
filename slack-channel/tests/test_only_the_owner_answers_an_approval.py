@@ -1,4 +1,4 @@
-"""Only the owner answers an approval on Slack: Approve, Trust session and Reject alike.
+"""Only the owner answers an approval on Slack: Allow once, Allow for this chat and Deny alike.
 
 An allowlisted user may talk to the agent and run the "any allowed user" commands, but a press
 on an approval decides what runs with the owner's authority, and a prompt in a linked channel
@@ -10,7 +10,6 @@ one a Slack turn posts itself (``_request_approval``) and the one core asks thro
 from __future__ import annotations
 
 import asyncio
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -19,10 +18,6 @@ from slack_helpers import MockSlackClient
 from slack_runtime.handler import (
     _PendingApproval,
     _pending_approvals,
-    _trust_offers,
-    _trusted_sessions,
-    _TrustOffer,
-    _offer_trust,
     handle_interaction,
     set_allowed_users,
     set_owner_id,
@@ -33,15 +28,6 @@ COLLEAGUE = "U_ALLOWED"  # on the allowlist: may talk to the agent, may not answ
 CHANNEL = "C_TEAM"
 PROMPT_TS = "1700000000.000100"
 THREAD = "1.0"
-#: What a prompt's Trust session button carries: the nonce this app minted as it posted it.
-NONCE = "minted-for-this-prompt"
-
-
-def _offered(channel: str, session_key: str) -> None:
-    """The Trust session this app keeps for its prompt at *channel* ``PROMPT_TS``."""
-    _offer_trust(
-        f"{channel}:{PROMPT_TS}", _TrustOffer(NONCE, THREAD, session_key, time.monotonic() + 60)
-    )
 
 
 class _Provider:
@@ -60,18 +46,31 @@ class _Provider:
 def _owner_and_a_colleague():
     set_owner_id(OWNER)
     set_allowed_users({OWNER, COLLEAGUE})
-    for state in (_pending_approvals, _trusted_sessions, _trust_offers):
-        state.clear()
+    _pending_approvals.clear()
     yield
-    for state in (_pending_approvals, _trusted_sessions, _trust_offers):
-        state.clear()
+    _pending_approvals.clear()
     set_owner_id("")
     set_allowed_users(set())
 
 
-#: What a turn this app runs itself offers: Allow once and Deny (core's brief for the event).
-_ONE_CALL = [
+@pytest.fixture
+def kept():
+    """What PersonalClaw is handed for a press on this app's own prompt (``answer_in_chat``)."""
+    with patch("slack_runtime.handler.answer_in_chat", return_value=True) as answer_in_chat:
+        yield answer_in_chat
+
+
+#: What a turn this app runs itself offers in a DM, where PersonalClaw can hold the chat's Trust:
+#: Allow once, Allow for this chat and Deny (core's brief for the event, in its conversation).
+_IN_ITS_CHAT = [
     {"key": "approved", "label": "Allow once", "ends": "approved", "word": "APPROVE", "promise": ""},
+    {
+        "key": "trust",
+        "label": "Allow for this chat",
+        "ends": "approved",
+        "word": "TRUST",
+        "promise": "Every tool in this chat runs without asking, until you change it back.",
+    },
     {"key": "rejected", "label": "Deny", "ends": "rejected", "word": "DENY", "promise": ""},
 ]
 
@@ -79,14 +78,14 @@ _ONE_CALL = [
 def _prompt(session_key: str = "thread-1") -> tuple[_PendingApproval, _Provider]:
     """A turn's approval prompt, pending on ``CHANNEL`` at ``PROMPT_TS``."""
     provider = _Provider()
-    pending = _PendingApproval(provider, "req-1", session_key, answers=_ONE_CALL)  # type: ignore[arg-type]
+    pending = _PendingApproval(provider, "req-1", session_key, answers=_IN_ITS_CHAT)  # type: ignore[arg-type]
     _pending_approvals[f"{CHANNEL}:{PROMPT_TS}"] = pending
     return pending, provider
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["approve_tool", "trust_tool", "reject_tool"])
-async def test_a_colleagues_press_answers_nothing(action):
+@pytest.mark.parametrize("action", ["approve_tool", "pc_answer_trust", "reject_tool"])
+async def test_a_colleagues_press_answers_nothing(action, kept):
     pending, provider = _prompt()
     slack = MockSlackClient()
     with patch("slack_runtime.handler.sel") as sel:
@@ -95,7 +94,7 @@ async def test_a_colleagues_press_answers_nothing(action):
     assert result is None
     assert not pending.future.done(), "the colleague decided the owner's approval"
     assert provider.approved == [] and provider.rejected == []
-    assert "thread-1" not in _trusted_sessions
+    kept.assert_not_called()
     assert f"{CHANNEL}:{PROMPT_TS}" in _pending_approvals, "the owner can still answer it"
     row = sel.return_value.log_api_access.call_args.kwargs
     assert row["caller"] == COLLEAGUE and row["outcome"] == "denied"
@@ -109,57 +108,44 @@ async def test_a_colleagues_press_answers_nothing(action):
     ("action", "approved", "rejected", "outcome"),
     [
         ("approve_tool", ["req-1"], [], "approved"),
-        ("trust_tool", ["req-1"], [], "approved"),
+        ("pc_answer_trust", ["req-1"], [], "trust"),
         ("reject_tool", [], ["req-1"], "rejected"),
     ],
 )
-async def test_the_owner_still_answers(action, approved, rejected, outcome):
+async def test_the_owner_still_answers(action, approved, rejected, outcome, kept):
     pending, provider = _prompt()
-    _offered(CHANNEL, "thread-1")
-    value = NONCE if action == "trust_tool" else "req-1"  # what the pressed button carries
     with patch("slack_runtime.handler.sel"):
         result = await handle_interaction(
-            CHANNEL, PROMPT_TS, action, user_id=OWNER, thread_ts=THREAD, value=value
+            CHANNEL, PROMPT_TS, action, user_id=OWNER, thread_ts=THREAD
         )
 
     assert result == action
     assert pending.future.result() == outcome
     assert provider.approved == approved and provider.rejected == rejected
-    assert ("thread-1" in _trusted_sessions) is (action == "trust_tool")
+    (handed,) = kept.call_args_list
+    assert handed.args == ("thread-1", outcome)
+    assert handed.kwargs == {"channel": "slack", "request_id": "req-1"}
 
 
 @pytest.mark.asyncio
-async def test_a_colleagues_late_trust_trusts_nothing():
-    """Trust pressed after the approval ended still trusts the thread, on the prompt that offered
-    it, so it is an answer too: a colleague's press on that very prompt gives none."""
+@pytest.mark.parametrize("who", [OWNER, COLLEAGUE])
+async def test_a_late_press_of_allow_for_this_chat_trusts_nothing(who, kept):
+    """Once the approval has ended nothing waits on its prompt, and a press there, the owner's or
+    anyone's, answers nothing and trusts nothing."""
     slack = MockSlackClient()
-    _offered("D_COLLEAGUE", THREAD)
     with patch("slack_runtime.handler.sel") as sel:
         result = await handle_interaction(
-            "D_COLLEAGUE", PROMPT_TS, "trust_tool", user_id=COLLEAGUE, thread_ts=THREAD,
-            slack=slack, value=NONCE,
+            "D_OWNER", PROMPT_TS, "pc_answer_trust", user_id=who, thread_ts=THREAD, slack=slack
         )
 
-    assert result is None
-    assert not _trusted_sessions
-    assert sel.return_value.log_api_access.call_args.kwargs["error"] == "not the owner"
-
-
-@pytest.mark.asyncio
-async def test_the_owners_late_trust_still_trusts_their_thread():
-    """On the prompt that offered it, with the nonce its button carries, after the approval it
-    came with ended. A late Trust on anything else trusts nothing (see
-    ``test_trust_session_trusts_only_through_its_own_prompt.py``)."""
-    slack = MockSlackClient()
-    _offered("D_OWNER", THREAD)
-    with patch("slack_runtime.handler.sel"):
-        result = await handle_interaction(
-            "D_OWNER", PROMPT_TS, "trust_tool", user_id=OWNER, thread_ts=THREAD, slack=slack,
-            value=NONCE,
-        )
-
-    assert result == "trust_tool"
-    assert _trusted_sessions == {THREAD}
+    kept.assert_not_called()
+    row = sel.return_value.log_api_access.call_args.kwargs
+    if who == OWNER:
+        assert result == "late_press"
+        assert row["error"] == "no_pending_approval"
+    else:
+        assert result is None
+        assert row["error"] == "not the owner"
 
 
 @pytest.mark.asyncio

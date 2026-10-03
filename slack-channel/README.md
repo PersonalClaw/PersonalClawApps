@@ -79,26 +79,36 @@ a message only you see, with how it ended; on a prompt left from before a restar
 approval is no longer waiting, and the buttons come off. PersonalClaw decides how long its
 approvals wait; this app keeps no clock of its own for them.
 
-A prompt PersonalClaw asks offers the answers its approval card offers for that call: **Allow
-once** and **Deny**, and **Allow for this chat** on a prompt in the chat that is asking (never
-for a call that may destroy something, or for a command that reaches a host off your allowed
-hosts, which is asked about every time), which the prompt explains first, in the card's words.
-That one trusts the chat in PersonalClaw, as the card's *This chat* does: its header shows it and
-you turn it off there. **Trust session** is on the prompts of a thread this app runs itself (in
-a DM), where it lets the rest of that thread's tool calls run without asking. Such a prompt waits as long as PersonalClaw's approval wait, and goes once it
-has ended. If nobody answers in that time, the call does not run and the thread says *⌛ Nobody
-answered in time, so it did not run*: that is not a Reject, and the security log records it as
-decided by nobody. Trust session counts only on the prompt that offered it, in its thread, for
-that same wait: pressed after the approval ended, on a client still showing the prompt, it still
-trusts the thread. Pressed on a prompt from before a restart, or once that wait has run out, it
-trusts nothing, and you are told, in a message only you see, that the prompt is no longer valid.
+A prompt offers the answers PersonalClaw's approval card offers for that call: **Allow once**
+and **Deny**, and **Allow for this chat** on a prompt in the chat that is asking (never for a
+call that may destroy something, or for a command that reaches a host off your allowed hosts,
+which is asked about every time), which the prompt explains first, in the card's words. That one
+trusts the chat in PersonalClaw, as the card's *This chat* does: its Permission mode shows Trust
+and you switch it off there.
 
-The answers come from PersonalClaw, so the app declares the core feature that hands them over
-(`requiresCoreFeatures`: `approval-answers`), and a PersonalClaw without it will not install or
-update the app. A PersonalClaw from before that check sends no answers. A prompt it asks for
-then has no buttons and says so, telling you to answer it in PersonalClaw and to update
-PersonalClaw; a call in a thread this app runs itself, which nothing else can ask you about,
-does not run, and the thread says why. The gateway log says it once.
+That holds for a thread this app runs itself too, in a DM. Allow for this chat there is the Trust
+of the chat PersonalClaw lists for the thread (under Slack in your chat history): open it and its
+Permission mode shows **Trust**. The rest of the thread's tool calls run without asking while it
+is on, and once you switch it back to Normal there, the thread's next call asks again. The
+security log records the grant, and the switch-off, as for any chat. This app keeps no trust of
+its own, so nothing survives a switch-off, and a restart of PersonalClaw ends the Trust as it
+does any chat's. Allow for this chat is not offered in a channel thread (the thread is in front
+of everyone in it), nor when PersonalClaw has no dashboard to show the chat in, or the thread is
+Incognito or Temporary, whose chats are never listed. Such a prompt waits as long as
+PersonalClaw's approval wait, and goes once it has ended. If nobody answers in that time, the call
+does not run and the thread says *⌛ Nobody answered in time, so it did not run*: that is not a
+Reject, and the security log records it as decided by nobody. A press after the approval has
+ended, on a client still showing the prompt, changes nothing, and you are told how it ended.
+The chat PersonalClaw opens for the thread is given each turn the app writes, and the title it
+gives the thread, so it shows the thread as it is.
+
+The answers come from PersonalClaw, so the app declares the core features that hand them over
+and hold the chat's Trust (`requiresCoreFeatures`: `approval-answers`, `chat-trust`), and a
+PersonalClaw without them will not install or update the app. A PersonalClaw from before that
+check sends no answers. A prompt it asks for then has no buttons and says so, telling you to
+answer it in PersonalClaw and to update PersonalClaw; a call in a thread this app runs itself,
+which nothing else can ask you about, does not run, and the thread says why. The gateway log says
+it once.
 
 ## Compaction
 

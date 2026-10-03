@@ -32,10 +32,10 @@ EXPIRED_LINE = "Nobody answered in time, so it did not run"
 def _an_owner():
     H.set_owner_id(OWNER)
     H.set_allowed_users({OWNER})
-    for state in (H._pending_approvals, H._ended_prompts, H._trusted_sessions, H._thread_agents):
+    for state in (H._pending_approvals, H._ended_prompts, H._thread_agents):
         state.clear()
     yield
-    for state in (H._pending_approvals, H._ended_prompts, H._trusted_sessions, H._thread_agents):
+    for state in (H._pending_approvals, H._ended_prompts, H._thread_agents):
         state.clear()
     H.set_owner_id("")
     H.set_allowed_users(set())

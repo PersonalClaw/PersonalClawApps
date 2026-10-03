@@ -536,12 +536,14 @@ and say so when it is missing.
 | Feature | What it is | Declared by |
 |---|---|---|
 | `approval-answers` | the answers an approval prompt offers, handed over in the approval brief (`approval_brief_for(event)["answers"]`) | a channel app whose prompt offers them: `telegram-channel`, `slack-channel`, `discord-channel`, `email-channel` |
+| `chat-trust` | a channel that runs a conversation itself keeps no trust of its own: its prompt offers the chat's answers (`approval_brief_for(event, chat=...)`), Allow for this chat becomes the Trust of PersonalClaw's chat for the conversation (`answer_in_chat`), and each call asks which of that chat's grants answers it (`chat_grant`) | a channel app that runs its own turns: `slack-channel` |
 
 A PersonalClaw from before core features cannot read the field, so an app also checks what it
 relies on where it uses it: a channel app handed a brief with no answers says so on the prompt,
 with nothing to press, and logs it once. `.github/tests/test_core_features_declared.py` holds
-every bundle's names to the ones the installed PersonalClaw offers, and every app whose prompt
-offers the brief's answers to declaring `approval-answers`.
+every bundle's names to the ones the installed PersonalClaw offers, every app whose prompt
+offers the brief's answers to declaring `approval-answers`, and every app that gives or reads a
+chat's Trust to declaring `chat-trust`.
 
 ### What it starts, installs and writes outside PersonalClaw (`launches`, `npmPackages`, `writes`)
 

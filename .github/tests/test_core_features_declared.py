@@ -7,13 +7,16 @@ the channel then arrived as a notice with nothing to press, and nothing had chec
 fitted that PersonalClaw. An app names the core features it relies on in ``requiresCoreFeatures``,
 and PersonalClaw refuses to review, install, update or switch on one it cannot host.
 
-Three rails over every bundle, against the installed core:
+Four rails over every bundle, against the installed core:
 
 1. every name an app declares is a core feature the installed PersonalClaw offers: a misspelt name,
    or one from a PersonalClaw that does not exist yet, would make the app installable nowhere;
 2. every app whose shipped code reads the approval brief's answers declares ``approval-answers``;
 3. every app whose shipped code downloads with ``personalclaw.sdk.net.open_url`` declares
-   ``guarded-download``: on a PersonalClaw without it the app would not load at all.
+   ``guarded-download``: on a PersonalClaw without it the app would not load at all;
+4. every app whose shipped code gives or reads a chat's Trust for a conversation it runs itself
+   (``answer_in_chat``, ``chat_grant`` from ``personalclaw.sdk.channel``) declares ``chat-trust``:
+   on a PersonalClaw without it the app would not load at all.
 """
 
 from __future__ import annotations
@@ -39,6 +42,12 @@ KNOWN_READERS = {"telegram-channel", "slack-channel", "discord-channel", "email-
 
 #: The apps that download with ``open_url``, for rail 3 the same way.
 KNOWN_DOWNLOADERS = {"diarization-onnx"}
+
+#: The apps that keep a conversation's Trust in PersonalClaw's chat for it, for rail 4.
+KNOWN_CHAT_TRUSTERS = {"slack-channel"}
+
+#: What a channel imports to give and read the chat's Trust (rail 4).
+_CHAT_TRUST_NAMES = frozenset({"answer_in_chat", "chat_grant"})
 
 
 @pytest.fixture(autouse=True)
@@ -168,3 +177,45 @@ def test_the_scan_tells_a_downloader_from_an_app_that_only_fetches(tmp_path):
     (other / "provider.py").write_text("from personalclaw.sdk.net import fetch\n")
     assert _downloads_through_the_guard(downloader) is True
     assert _downloads_through_the_guard(other) is False
+
+
+def _keeps_the_chats_trust(bundle: Path) -> bool:
+    """Whether the bundle's shipped code takes ``answer_in_chat`` or ``chat_grant`` from the SDK."""
+    for path in sdk_contract.shipped_sources(bundle):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "personalclaw.sdk.channel":
+                if any(alias.name in _CHAT_TRUST_NAMES for alias in node.names):
+                    return True
+    return False
+
+
+def test_every_app_that_keeps_a_conversations_trust_in_its_chat_declares_it():
+    from personalclaw.sdk.features import CHAT_TRUST
+
+    trusters = {bundle.name for bundle in BUNDLES if _keeps_the_chats_trust(bundle)}
+    assert KNOWN_CHAT_TRUSTERS <= trusters, (
+        f"the scan no longer sees these apps give or read a chat's Trust: "
+        f"{sorted(KNOWN_CHAT_TRUSTERS - trusters)}"
+    )
+    undeclared = sorted(name for name in trusters if CHAT_TRUST not in _declared(ROOT / name))
+    assert undeclared == [], (
+        f"these apps give or read a chat's Trust without declaring "
+        f"'requiresCoreFeatures': ['{CHAT_TRUST}'] in app.json: {undeclared}"
+    )
+
+
+def test_the_scan_tells_an_app_that_keeps_the_chats_trust_from_one_that_does_not(tmp_path):
+    """Positive and negative control for rail 4."""
+    truster = tmp_path / "truster-app"
+    truster.mkdir()
+    (truster / "app.json").write_text('{"name": "truster-app", "version": "0.1.0"}')
+    (truster / "handler.py").write_text(
+        "from personalclaw.sdk.channel import approval_brief_for, chat_grant\n", encoding="utf-8"
+    )
+    other = tmp_path / "other-app"
+    other.mkdir()
+    (other / "app.json").write_text('{"name": "other-app", "version": "0.1.0"}')
+    (other / "handler.py").write_text("from personalclaw.sdk.channel import approval_brief_for\n")
+    assert _keeps_the_chats_trust(truster) is True
+    assert _keeps_the_chats_trust(other) is False

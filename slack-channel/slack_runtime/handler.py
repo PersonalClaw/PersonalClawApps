@@ -21,7 +21,6 @@ import asyncio
 import json
 import logging
 import re
-import secrets
 import sys
 import time
 import uuid
@@ -59,7 +58,8 @@ from personalclaw.sdk.channel import (
     ModelProvider,
 )
 from personalclaw.sdk.channel import parse_title, session_restrictions, trust_mode
-from personalclaw.sdk.channel import approval_brief_for, approval_window_secs
+from personalclaw.sdk.channel import answer_in_chat, approval_brief_for, approval_window_secs
+from personalclaw.sdk.channel import chat_grant
 from personalclaw.sdk.channel import is_sensitive_path, redact_credentials, redact_exfiltration_urls
 from personalclaw.sdk.channel import sel
 from personalclaw.sdk.channel import SessionManager
@@ -155,9 +155,6 @@ _LATE_ANSWERS = {
 }
 # ...and when this process never saw it end (the prompt is older than the gateway's last start).
 _NO_LONGER_WAITING = "This approval is no longer waiting. This press changes nothing."
-# What a Trust session press is told once nothing waits on its prompt, when the prompt is not one
-# this app offered it on in that thread, or the offer is past its time (`_trust_offered`).
-_TRUST_NO_LONGER_VALID = "This prompt is no longer valid. This press changes nothing."
 
 # Background closes of prompts whose wait was cancelled, kept so they are not collected mid-send.
 _closing: "set[asyncio.Task[None]]" = set()
@@ -468,72 +465,13 @@ class StatusReactionController:
             pass
 
 
-# Trust state
-# trust: auto-approve tools for a specific Slack thread (via Trust button) —
-#   Slack-specific, owned here.
-# yolo: auto-approve all tools globally — process-global trust posture owned by
-#   personalclaw.trust_mode (single source of truth). The Slack !yolo command
-#   delegates there; _trusted_sessions is cleared when YOLO turns off via the
-#   registered on_disable callback below.
-_trusted_sessions: set[str] = set()
+# YOLO (auto-approve every tool, everywhere) is the process-global posture owned by
+# personalclaw.trust_mode; the Slack !yolo command delegates there. A thread this app runs itself
+# keeps no trust here: Allow for this chat on its prompt is the Trust of PersonalClaw's chat for the
+# thread (`answer_in_chat`), and each call asks which of that chat's grants answers it
+# (`chat_grant`), so the chat shows the Trust and the owner switches it off there.
 _YOLO_TTL_SECS = trust_mode.YOLO_CHANNEL_TTL_SECS  # 30 min for !yolo on command
 _YOLO_DASHBOARD_TTL_SECS = trust_mode.YOLO_DASHBOARD_TTL_SECS  # 6h dashboard button
-
-
-def _clear_trusted_sessions_on_yolo_disable(reason: str) -> None:
-    """trust_mode callback — drop per-thread trust when global YOLO turns off."""
-    _trusted_sessions.clear()
-
-
-trust_mode.register_on_disable(_clear_trusted_sessions_on_yolo_disable)
-
-
-@dataclass(frozen=True)
-class _TrustOffer:
-    """The "Trust session" a prompt this app posted offers (:data:`_trust_offers`)."""
-
-    #: Minted for the prompt; its button carries it back on a press.
-    nonce: str
-    #: The thread the prompt was posted in.
-    thread_ts: str
-    #: The session that thread's turns run in: what a press trusts.
-    session_key: str
-    #: ``time.monotonic()`` when its approval's wait runs out, and the offer with it.
-    expires: float
-
-
-# What each prompt this app posted offers as Trust session, by the prompt's key
-# (``channel:ts``). A press trusts a thread only through one of these (`_trust_offered`): a
-# button this app did not post, or posted before this process started, trusts nothing. Kept in
-# this process alone, as the trust it grants is, and bounded like `_ended_prompts`.
-_trust_offers: "OrderedDict[str, _TrustOffer]" = OrderedDict()
-_TRUST_OFFERS_KEPT = 256
-
-
-def _offer_trust(key: str, offer: _TrustOffer) -> None:
-    """Keep the Trust session the prompt at *key* offers, and drop those past their time."""
-    now = time.monotonic()
-    for ended in [k for k, kept in _trust_offers.items() if kept.expires <= now]:
-        del _trust_offers[ended]
-    _trust_offers[key] = offer
-    while len(_trust_offers) > _TRUST_OFFERS_KEPT:
-        _trust_offers.popitem(last=False)
-
-
-def _trust_offered(key: str, nonce: str, thread_ts: str) -> tuple[_TrustOffer | None, str]:
-    """The Trust session the prompt at *key* offers, when a press on it names that offer: the
-    nonce its button carries, in the thread it was posted in, before its approval's wait ran out.
-    Otherwise None, and why: ``no_trust_offer`` (this process posted no Trust session there),
-    ``trust_offer_expired``, or ``not_this_trust_offer`` (another nonce, or another thread)."""
-    offer = _trust_offers.get(key)
-    if offer is None:
-        return None, "no_trust_offer"
-    if time.monotonic() >= offer.expires:
-        return None, "trust_offer_expired"
-    named = nonce.isascii() and secrets.compare_digest(offer.nonce, nonce)
-    if not named or offer.thread_ts != thread_ts:
-        return None, "not_this_trust_offer"
-    return offer, ""
 
 
 # Allowed user IDs for Slack access (set by gateway at startup).
@@ -930,9 +868,8 @@ LATE_PRESS = "late_press"
 
 # Block Kit action IDs. An answer the brief offers is a button whose action id names its key:
 # Allow once and Deny keep the ids every prompt has had, and any other answer is
-# ``_ACTION_ANSWER`` + its key. "Trust session" is this app's own, for the threads it runs itself.
+# ``_ACTION_ANSWER`` + its key (Allow for this chat: ``pc_answer_trust``).
 _ACTION_APPROVE = "approve_tool"
-_ACTION_TRUST = "trust_tool"
 _ACTION_REJECT = "reject_tool"
 _ACTION_ANSWER = "pc_answer_"
 _ANSWER_ACTIONS = {_OUTCOME_APPROVED: _ACTION_APPROVE, _OUTCOME_REJECTED: _ACTION_REJECT}
@@ -1083,8 +1020,7 @@ def is_owner(user_id: str) -> bool:
 
 
 def disable_yolo() -> None:
-    """Disable YOLO mode (global auto-approve). Delegates to trust_mode; the
-    registered callback clears ``_trusted_sessions``."""
+    """Disable YOLO mode (global auto-approve). Delegates to trust_mode."""
     trust_mode.disable_yolo()
 
 
@@ -2618,15 +2554,14 @@ async def handle_message(
                     )
                     continue
 
-                # Trust mode (per-session) or YOLO mode (owner-only global) → auto-approve
-                _yolo_now = is_yolo_mode()  # delegates to trust_mode (expires on read)
-                if _yolo_now or session_key in _trusted_sessions:
+                # The thread's chat in PersonalClaw decides whether a grant answers this call:
+                # YOLO, the chat's Trust (Allow for this chat, here or in the dashboard) or its
+                # Trust reads, read now, so the owner switching the chat's Trust off there makes
+                # this call ask.
+                grant = chat_grant(session_key, event)
+                if grant:
                     await client.approve_tool(event.request_id)
-                    logger.info(
-                        "Auto-approved %s (%s)",
-                        event.title,
-                        "yolo" if _yolo_now else "trust",
-                    )
+                    logger.info("Auto-approved %s (%s)", event.title, grant)
                     sel().log_tool_invocation(
                         session_key=session_key,
                         source="slack",
@@ -2634,7 +2569,7 @@ async def handle_message(
                         tool_kind=event.tool_kind,
                         outcome="auto_approved",
                         request_id=event.request_id,
-                        metadata={"reason": "yolo" if _yolo_now else "trust"},
+                        metadata={"reason": grant, "decided_by": grant},
                     )
                     continue
 
@@ -2907,6 +2842,8 @@ async def handle_message(
 
     # ── Update task banner with final state ──
     # ── Persist conversation history ──
+    # (and the chat PersonalClaw has open for this thread, if it has one, is given the turn too:
+    # save_conversation_turn keeps it in step with what this app writes)
     _skip_writes = _is_slack_restricted(session_key)
     if conversation_log and not _skip_writes:
         save_conversation_turn(
@@ -2920,21 +2857,6 @@ async def handle_message(
         if consolidator and _stop_reason != STOP_REASON_CANCELLED:
             consolidator.maybe_consolidate(session_key)
 
-    # ── Bidirectional sync: mirror to dashboard if routed to a dashboard session ──
-    if linked_session_key and _dashboard_state and accumulated and not _skip_writes:
-        try:
-            ds = _dashboard_state
-            session_name = linked_session_key.removeprefix("dashboard:")
-            session = getattr(ds, "_sessions", {}).get(session_name)
-            if session:
-                session.append("user", text, "msg msg-u")
-                session.append("assistant", accumulated, "msg msg-a")
-                if session._on_message:
-                    session._on_message(session.key, {"role": "user", "content": text, "cls": "msg msg-u"})
-                    session._on_message(session.key, {"role": "assistant", "content": accumulated, "cls": "msg msg-a"})
-                ds.push_sessions_update()  # type: ignore[attr-defined]
-        except Exception:
-            logger.debug("Failed to mirror Slack message to dashboard", exc_info=True)
     # ── Auto-title Slack thread (fire-and-forget) ──
     # Claim-early-unclaim-on-failure pattern: mark titled immediately to prevent
     # duplicate tasks from concurrent messages. If the background task fails or
@@ -3034,11 +2956,13 @@ async def _request_approval(
     ones. The prompt goes once it has ended; if it cannot be deleted it is closed instead, saying
     how, so no button is left that answers nothing.
 
-    In a DM the prompt also offers Trust session, for the session this thread's turns run in. Its
-    button carries a nonce minted here, and the offer is kept (:func:`_offer_trust`) for as long as
-    the approval waits, so a press trusts the thread only on this very prompt, and only in that
-    time; it is offered nowhere else (group channels, to limit its blast radius)."""
-    brief = approval_brief_for(event)
+    In a DM the prompt offers what the chat's approval card in PersonalClaw offers for the call,
+    for the conversation this thread's turns run in (*session_key*): Allow for this chat too, where
+    the card would. Pressed, it is that chat's Trust in PersonalClaw (:func:`handle_interaction`),
+    which the chat shows and where the owner switches it off. It is offered nowhere else (group
+    channels, to limit its blast radius)."""
+    chat = session_key if is_dm else ""
+    brief = approval_brief_for(event, chat=chat)
     if brief is not None and not _offered(brief):
         # Nothing to offer, and nothing but this prompt asks for a turn this app runs itself, so
         # the call cannot be approved: it does not run, and the thread says why, rather than a
@@ -3048,12 +2972,9 @@ async def _request_approval(
         _audit_ending(event, session_key, _OUTCOME_UNASKED)
         return _OUTCOME_UNASKED
     window = approval_window_secs()
-    nonce = secrets.token_urlsafe(16) if is_dm and session_key else ""
-    approval_ts = await _post_approval(slack, channel, thread_ts, event, trust=nonce)
+    approval_ts = await _post_approval(slack, channel, thread_ts, event, chat=chat)
 
     key = f"{channel}:{approval_ts}"
-    if nonce:
-        _offer_trust(key, _TrustOffer(nonce, thread_ts, session_key, time.monotonic() + window))
     pending = _PendingApproval(
         provider,
         event.request_id,
@@ -3063,23 +2984,36 @@ async def _request_approval(
     _pending_approvals[key] = pending
 
     try:
-        ended = await asyncio.wait_for(pending.future, timeout=window)
+        pressed = await asyncio.wait_for(pending.future, timeout=window)
     except asyncio.TimeoutError:
-        ended = _OUTCOME_EXPIRED
+        pressed = _OUTCOME_EXPIRED
         await provider.reject_tool(event.request_id)
     except asyncio.CancelledError:
         _audit_ending(event, session_key, _OUTCOME_CANCELLED)
-        _close_prompt_later(slack, channel, approval_ts, event, outcome=_OUTCOME_CANCELLED)
+        _close_prompt_later(
+            slack, channel, approval_ts, event, outcome=_OUTCOME_CANCELLED, chat=chat
+        )
         raise
     finally:
         _pending_approvals.pop(key, None)
 
+    # A press resolves the wait with the key of the answer pressed; it ends as that answer does.
+    answer = pending.answer(pressed)
+    ended = answer["ends"] if answer else pressed
     _audit_ending(event, session_key, ended)
     _record_ending(key, ended)
     try:
         await slack.delete_message(channel, approval_ts)
     except Exception:
-        await close_prompt(slack, channel, approval_ts, event, outcome=ended)
+        await close_prompt(
+            slack,
+            channel,
+            approval_ts,
+            event,
+            outcome=ended,
+            kept=(answer or {}).get("promise", ""),
+            chat=chat,
+        )
 
     return ended
 
@@ -3111,6 +3045,7 @@ async def close_prompt(
     outcome: str,
     source: str = "",
     kept: str = "",
+    chat: str = "",
 ) -> None:
     """Show how the approval prompted at *ts* ended, on the prompt's last message, and take its
     buttons off.
@@ -3119,10 +3054,12 @@ async def close_prompt(
     replaced, not only its text: an update that sets the text alone keeps the blocks, and so the
     buttons, and a notification or a screen reader then says one thing while the message shows
     another. *kept* is the promise of the standing answer the owner pressed, which the line then
-    says it kept. A press on it after this is answered with *outcome* (:func:`late_answer`)."""
+    says it kept. *chat* is the conversation a prompt for this app's own turn was posted in, as it
+    was posted (:func:`_approval_messages`). A press on it after this is answered with *outcome*
+    (:func:`late_answer`)."""
     _record_ending(f"{channel}:{ts}", outcome)
     line = outcome_line(outcome) + (f". {escape_mrkdwn(kept)}" if kept else "")
-    blocks = _closed_blocks(_approval_messages(event, source=source)[-1], line)
+    blocks = _closed_blocks(_approval_messages(event, source=source, chat=chat)[-1], line)
     tool = escape_mrkdwn(str((approval_brief_for(event) or {}).get("tool") or "") or "a tool")
     try:
         await slack.update_message(channel, ts, text=f"🔐 {tool}: {line}", blocks=blocks)
@@ -3150,27 +3087,24 @@ async def handle_interaction(
     user_id: str = "",
     thread_ts: str = "",
     slack: SlackClientOps | None = None,
-    value: str = "",
 ) -> str | None:
     """Handle a Block Kit button click for tool approval.
 
-    Answers with the button pressed: one of the answers the prompt offers (core's brief, whose
+    Answers with the button pressed, one of the answers the prompt offers (core's brief, whose
     action ids :func:`_answer_action` names: ``approve_tool`` for Allow once, ``reject_tool`` for
-    Deny, ``pc_answer_<key>`` for any other), or ``trust_tool``, this app's own "Trust session",
-    which auto-approves all tools for a thread it runs itself. *value* is the pressed button's
-    value: Trust session's carries the nonce its prompt was posted with.
+    Deny, ``pc_answer_<key>`` for any other, ``pc_answer_trust`` for Allow for this chat). A press
+    that names no answer the prompt offers decides nothing.
 
-    Only the owner answers: Approve, Trust and Reject alike, and a late Trust too. An allowlisted
-    user may talk to the agent, but a press decides what runs with the owner's authority, and a
-    prompt in a linked channel thread is in front of everyone in it. Anyone else's press answers
-    nothing, is logged to the SEL, and is told so. Trust also requires a DM (verified via
-    conversations.info by the gateway caller).
+    Only the owner answers. An allowlisted user may talk to the agent, but a press decides what
+    runs with the owner's authority, and a prompt in a linked channel thread is in front of
+    everyone in it. Anyone else's press answers nothing, is logged to the SEL, and is told so.
 
-    Trust session trusts only through the offer this app kept as it posted the prompt
-    (:func:`_trust_offered`): a press on that prompt, with its nonce, in its thread, while the
-    approval it came with could still wait. Pressed after that approval ended it still trusts the
-    thread. Any other Trust press trusts nothing, is logged, and, once nothing waits on the
-    prompt, is told the prompt is no longer valid.
+    On a prompt for a thread this app runs itself, the answer pressed is handed to PersonalClaw
+    first (``answer_in_chat``), before the call is approved: Allow for this chat is then the Trust
+    of PersonalClaw's chat for the thread, which the chat shows, which the owner switches off there,
+    and which answers the thread's next calls (``chat_grant``). An answer PersonalClaw does not take
+    decides nothing and the approval keeps waiting. On a prompt PersonalClaw asked, the answer
+    resolves the prompt and PersonalClaw decides it, as for every channel.
     """
 
     if not user_id or not is_owner(user_id):
@@ -3196,69 +3130,54 @@ async def handle_interaction(
 
     key = f"{channel}:{msg_ts}"
     pending = _pending_approvals.get(key)
-    trust = action_id == _ACTION_TRUST
-    offer, refused = _trust_offered(key, value, thread_ts) if trust else (None, "")
     if not pending:
-        if offer is not None:
-            # Trust pressed after its approval ended, on the prompt that offered it: it still
-            # trusts the thread that prompt was posted in.
-            _trusted_sessions.add(offer.session_key)
-            logger.info("Trust mode ON (late click) for session %s", offer.session_key)
-            sel().log_api_access(
-                caller=user_id,
-                operation="slack.interactive.trust_late",
-                outcome="allowed",
-                source="slack",
-                resources=offer.session_key,
-            )
-            return _ACTION_TRUST
         # A press after the approval ended: the owner is told how it ended, which is what the
-        # prompt says once it is closed, rather than hearing nothing and pressing again. A Trust
-        # this app kept no offer for is told its prompt is no longer valid.
+        # prompt says once it is closed, rather than hearing nothing and pressing again.
         logger.info("No pending approval for %s", key)
-        sel().log_api_access(
-            caller=user_id,
-            operation="slack.interactive.trust_late" if trust else "slack.interactive.approval",
-            outcome="denied",
-            source="slack",
-            resources=key,
-            error=refused or "no_pending_approval",
-        )
-        if slack is not None:
-            try:
-                await slack.post_ephemeral(
-                    channel,
-                    user_id,
-                    _TRUST_NO_LONGER_VALID if trust else late_answer(ended_prompt(key)),
-                    thread_ts=thread_ts or None,
-                )
-            except Exception:
-                logger.debug("Failed to tell the owner their press came late", exc_info=True)
-        return LATE_PRESS
-
-    answered = pending.answer(_answer_of_action(action_id))
-    if (offer if trust else answered) is None:
-        # A button that names no answer this prompt offers decides nothing.
-        logger.warning("Refusing a press on %s that names no offered answer (%s)", key, action_id)
         sel().log_api_access(
             caller=user_id,
             operation="slack.interactive.approval",
             outcome="denied",
             source="slack",
             resources=key,
-            error=refused or "not_an_offered_answer",
+            error="no_pending_approval",
+        )
+        if slack is not None:
+            try:
+                await slack.post_ephemeral(
+                    channel, user_id, late_answer(ended_prompt(key)), thread_ts=thread_ts or None
+                )
+            except Exception:
+                logger.debug("Failed to tell the owner their press came late", exc_info=True)
+        return LATE_PRESS
+
+    answered = pending.answer(_answer_of_action(action_id))
+    if answered is None:
+        refused = "not_an_offered_answer"
+    elif pending.provider and not answer_in_chat(
+        pending.session_key, answered["key"], channel="slack", request_id=str(pending.request_id)
+    ):
+        # PersonalClaw could not take it: its chat for the thread cannot hold a Trust now.
+        refused = "answer_not_taken"
+    else:
+        refused = ""
+    if answered is None or refused:
+        logger.warning("Refusing a press on %s (%s): %s", key, action_id, refused)
+        sel().log_api_access(
+            caller=user_id,
+            operation="slack.interactive.approval",
+            outcome="denied",
+            source="slack",
+            resources=key,
+            error=refused,
         )
         return None
-    if trust or (answered or {}).get("ends") == _OUTCOME_APPROVED:
-        # Set trust state BEFORE approving (so subsequent tools auto-approve)
-        if offer is not None:
-            _trusted_sessions.add(offer.session_key)
-            logger.info("Trust mode ON for session %s", offer.session_key)
+    if answered.get("ends") == _OUTCOME_APPROVED:
         if pending.provider:
             await pending.provider.approve_tool(pending.request_id)
         if not pending.future.done():
             # The answer pressed, so the one asking can tell a standing answer from Allow once.
-            pending.future.set_result(answered["key"] if answered else _OUTCOME_APPROVED)
+            pending.future.set_result(answered["key"])
         sel().log_api_access(
             caller=user_id,
             operation="slack.interactive.approval",
@@ -3283,7 +3202,7 @@ async def handle_interaction(
     return action_id
 
 
-def _approval_messages(event: LLMEvent, source: str = "", *, trust: str = "") -> list[list[dict]]:
+def _approval_messages(event: LLMEvent, source: str = "", *, chat: str = "") -> list[list[dict]]:
     """The approval prompt, as the Block Kit messages it takes: what will run, then the decision.
 
     Everything shown comes from core's brief (``approval_brief_for``): the tool, its arguments,
@@ -3297,29 +3216,17 @@ def _approval_messages(event: LLMEvent, source: str = "", *, trust: str = "") ->
 
     The buttons are the answers the brief offers, in its order (:func:`_answer_action`): Allow
     once and Deny, and Allow for this chat where core offers it, for an approval core asks in its
-    own chat. Given *trust*, the nonce of the Trust session this app offers on the prompt (a DM
-    thread it runs itself: :func:`_request_approval`), it offers that too, before the refusal,
-    the button carrying the nonce. Without one there is no Trust session: not in a group channel
-    (to limit its blast radius: it escalates permissions for the session), and not on a prompt
-    core asks, whose approval belongs to a chat this app's trust never reaches, so the button
-    would approve once and say it trusted. YOLO is owner-only via ``!yolo on``: no button.
+    own chat and for one of this app's own turns asked in the conversation it runs (*chat*, the
+    session key its turns run under: :func:`_request_approval`, in a DM only, to limit its blast
+    radius). This app adds no answer of its own. YOLO is owner-only via ``!yolo on``: no button.
     """
-    brief = approval_brief_for(event) or {}
+    brief = approval_brief_for(event, chat=chat) or {}
     tool = str(brief.get("tool") or "") or "a tool"
     tag = f"[{source}] " if source else ""
     answers = _offered(brief)
     approving = [a for a in answers if a.get("ends") == _OUTCOME_APPROVED]
     refusing = [a for a in answers if a.get("ends") != _OUTCOME_APPROVED]
     buttons: list[dict] = [_answer_button(a, event.request_id) for a in approving]
-    if trust:
-        buttons.append(
-            {
-                "type": "button",
-                "text": {"type": "plain_text", "text": "Trust session"},
-                "action_id": _ACTION_TRUST,
-                "value": trust,
-            },
-        )
     buttons += [_answer_button(a, event.request_id) for a in refusing]
 
     blocks: list[dict] = [
@@ -3402,14 +3309,20 @@ def _approval_fallback(event: LLMEvent, source: str = "") -> str:
 
 
 async def _post_approval(
-    slack: SlackClientOps, channel: str, thread_ts: str | None, event: LLMEvent, *,
-    source: str = "", trust: str = "",
+    slack: SlackClientOps,
+    channel: str,
+    thread_ts: str | None,
+    event: LLMEvent,
+    *,
+    source: str = "",
+    chat: str = "",
 ) -> str:
-    """Post the approval prompt (:func:`_approval_messages`, *trust* the nonce of the Trust
-    session it offers, if any) and return the ts of its last message, the one with the buttons."""
+    """Post the approval prompt (:func:`_approval_messages`, *chat* the conversation of this
+    app's own turn it is asked in, if any) and return the ts of its last message, the one with the
+    buttons."""
     fallback = _approval_fallback(event, source)
     ts = ""
-    for blocks in _approval_messages(event, source=source, trust=trust):
+    for blocks in _approval_messages(event, source=source, chat=chat):
         ts = await slack.post_blocks(channel, blocks, fallback, thread_ts)
     return ts
 

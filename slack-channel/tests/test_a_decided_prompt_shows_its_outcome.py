@@ -359,25 +359,27 @@ async def test_a_prompt_in_its_chat_offers_allow_for_this_chat():
 
 @pytest.mark.asyncio
 async def test_allow_for_this_chat_pressed_here_answers_with_it():
-    """The chat's Trust is core's to set: the press tells core which answer it was, approves this
-    call, and leaves this app's own thread trust alone."""
+    """The chat's Trust is core's to set on a prompt core asked: the press tells core which answer
+    it was, through the prompt, and approves this call; the app hands nothing on itself."""
     asked = await _asked_in_its_chat(MockSlackClient()).prompted()
-    H._trusted_sessions.clear()
-    with patch("slack_runtime.handler.sel"):
+    with patch("slack_runtime.handler.sel"), patch("slack_runtime.handler.answer_in_chat") as kept:
         assert await H.handle_interaction(asked.channel, asked.ts, "pc_answer_trust", user_id=OWNER)
     assert await asyncio.wait_for(asked.wait, timeout=2) is True
     assert asked.pending["it"].future.result() == "trust"
-    assert not H._trusted_sessions, "the app trusted a thread of its own for core's chat"
+    kept.assert_not_called()
     assert f"✅ Approved. {_THIS_CHAT_PROMISE}" in _says(asked.closed_with())
 
 
 @pytest.mark.asyncio
 async def test_a_press_naming_no_offered_answer_answers_nothing():
-    """Core's prompt offers no Trust session; a press on one decides nothing."""
+    """A press naming an answer the prompt does not offer decides nothing."""
     asked = await _asked_in_its_chat(MockSlackClient()).prompted()
     with patch("slack_runtime.handler.sel"):
-        assert await H.handle_interaction(asked.channel, asked.ts, "trust_tool", user_id=OWNER) is None
-        assert await H.handle_interaction(asked.channel, asked.ts, "pc_answer_yolo", user_id=OWNER) is None
+        for unoffered in ("pc_answer_trust_agent", "pc_answer_yolo"):
+            assert (
+                await H.handle_interaction(asked.channel, asked.ts, unoffered, user_id=OWNER)
+                is None
+            )
     await asyncio.sleep(0)
     assert not asked.pending["it"].future.done()
     asked.wait.cancel()

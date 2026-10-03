@@ -1,13 +1,14 @@
 {
   "name": "slack-channel",
-  "version": "0.1.32",
+  "version": "0.1.33",
   "displayName": "Slack Channel",
   "description": "Slack workspace integration. Monitor channels, respond to mentions, and interact via Slack.",
   "icon": "Slack",
   "author": "PersonalClaw",
   "license": "MIT",
   "requiresCoreFeatures": [
-    "approval-answers"
+    "approval-answers",
+    "chat-trust"
   ],
   "tags": [
     "channel",

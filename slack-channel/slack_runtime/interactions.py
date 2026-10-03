@@ -2025,39 +2025,24 @@ async def _handle_session_new(
 async def _handle_tool_approval(
     payload: dict, action_id: str, channel: str, msg_ts: str, user_id: str
 ) -> None:
-    """Route approve / trust / reject to the handler."""
-    # Trust is restricted to DMs — fail-closed if orchestrator not ready
-    if action_id == "trust_tool":
-        if not _orch or not _orch.slack:
-            logger.warning("trust_tool: orchestrator not ready — rejecting")
-            return
-        is_dm = await _orch.slack.is_dm(channel)
-        if not is_dm:
-            logger.warning("Rejecting trust_tool in non-DM channel %s (user=%s)", channel, user_id)
-            return
-
+    """Route the answer pressed on an approval prompt to the handler."""
     thread_ts = payload.get("message", {}).get("thread_ts", "")
-    # What the pressed button carries back: a Trust session's, the nonce its prompt was posted with.
-    value = str((payload.get("actions") or [{}])[0].get("value") or "")
     slack_ops = _orch.slack if _orch else None
     was_waiting = f"{channel}:{msg_ts}" in _pending_approvals
     effective_action = await handle_interaction(
-        channel, msg_ts, action_id, user_id=user_id, thread_ts=thread_ts, slack=slack_ops,
-        value=value,
+        channel, msg_ts, action_id, user_id=user_id, thread_ts=thread_ts, slack=slack_ops
     )
 
     # A press that answered a waiting prompt changes nothing here: the one waiting on it closes the
     # prompt with how the approval ended (`close_prompt`), whoever or whatever ended it. A press
-    # refused (not the owner) leaves the buttons for the owner. The owner's press on a prompt whose
-    # approval had already ended — one still showing buttons, say from before a restart — closes
-    # that message now, with how it ended when that is known.
-    if not (_orch and _orch.slack) or was_waiting or not effective_action:
+    # refused (not the owner, or not an answer the prompt offers) leaves the buttons for the
+    # owner. The owner's press on a prompt whose approval had already ended — one still showing
+    # buttons, say from before a restart — closes that message now, with how it ended when that
+    # is known.
+    if not (_orch and _orch.slack) or was_waiting or effective_action != LATE_PRESS:
         return
-    if effective_action == LATE_PRESS:
-        ended = ended_prompt(f"{channel}:{msg_ts}")
-        line = outcome_line(ended) if ended else "This approval is no longer waiting."
-    else:  # a late Trust on the prompt that offered it, which still trusts that thread
-        line = "🤝 Trusted: the rest of this thread's tool calls run without asking"
+    ended = ended_prompt(f"{channel}:{msg_ts}")
+    line = outcome_line(ended) if ended else "This approval is no longer waiting."
     blocks = payload.get("message", {}).get("blocks") or []
     try:
         await _orch.slack.update_message(

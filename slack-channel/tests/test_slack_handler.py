@@ -18,7 +18,6 @@ from slack_runtime.handler import (
     _build_phase_emojis,
     _pending_approvals,
     _thread_agents,
-    _trusted_sessions,
     handle_interaction,
     handle_message,
     set_allowed_users,
@@ -30,11 +29,9 @@ from slack_runtime.handler import (
 def _clean_approval_state():
     """Clear module-level approval state between tests to prevent xdist cross-contamination."""
     _pending_approvals.clear()
-    _trusted_sessions.clear()
     _thread_agents.clear()
     yield
     _pending_approvals.clear()
-    _trusted_sessions.clear()
     _thread_agents.clear()
 
 
@@ -375,13 +372,10 @@ class TestToolApproval:
     @pytest.fixture(autouse=True)
     def _reset_globals(self):
         import slack_runtime.handler as _h
-        from slack_runtime.handler import _trusted_sessions
         _h._yolo_mode = False
-        _trusted_sessions.clear()
         set_owner_id("U1")
         yield
         _h._yolo_mode = False
-        _trusted_sessions.clear()
 
     @pytest.mark.asyncio
     async def test_approval_posts_blocks_and_approves(self):
@@ -783,25 +777,31 @@ class TestApprovalBriefLine:
         (blocks,) = _approval_messages(event)
         assert self._context_lines(blocks) == [composed]
 
-    def test_both_decisions_stay_offered_with_or_without_trust_session(self):
-        """The brief informs the prompt; it must not reshape it. Trust session is there only when
-        the prompt offers it (a DM thread this app runs itself), its button carrying the offer's
-        nonce."""
-        from slack_runtime.handler import (
-            _ACTION_APPROVE,
-            _ACTION_REJECT,
-            _ACTION_TRUST,
-            _approval_messages,
-        )
+    def test_the_buttons_are_the_briefs_answers_and_nothing_of_the_apps_own(self):
+        """The brief informs the prompt; it must not reshape it. Its answers are the buttons, in
+        its order, Allow for this chat among them where the brief offers it, and the app adds no
+        trust button of its own, whether or not the prompt is in a conversation it runs."""
+        from slack_runtime.handler import _ACTION_APPROVE, _ACTION_REJECT, _approval_messages
 
-        for trust, expected in (("n0nce", [_ACTION_APPROVE, _ACTION_TRUST, _ACTION_REJECT]),
-                                ("", [_ACTION_APPROVE, _ACTION_REJECT])):
-            (blocks,) = _approval_messages(self._event(self._BRIEF), trust=trust)
-            actions = next(b for b in blocks if b["type"] == "actions")
-            assert [e["action_id"] for e in actions["elements"]] == expected
-            assert [e["value"] for e in actions["elements"] if e["action_id"] == _ACTION_TRUST] == (
-                [trust] if trust else []
-            )
+        trust = {
+            "key": "trust",
+            "label": "Allow for this chat",
+            "ends": "approved",
+            "word": "TRUST",
+            "promise": "Every tool in this chat runs without asking, until you change it back.",
+        }
+        in_its_chat = {
+            **self._BRIEF,
+            "answers": [*self._BRIEF["answers"][:1], trust, *self._BRIEF["answers"][1:]],
+        }
+        for brief, expected in (
+            (in_its_chat, [_ACTION_APPROVE, "pc_answer_trust", _ACTION_REJECT]),
+            (self._BRIEF, [_ACTION_APPROVE, _ACTION_REJECT]),
+        ):
+            for chat in ("1700000300.000300", ""):
+                (blocks,) = _approval_messages(self._event(brief), chat=chat)
+                actions = next(b for b in blocks if b["type"] == "actions")
+                assert [e["action_id"] for e in actions["elements"]] == expected
 
     def test_malformed_brief_renders_rather_than_raising(self):
         """A brief this renderer cannot use is composed again from the event, never a traceback:
@@ -820,12 +820,9 @@ class TestAllowedUsers:
     @pytest.fixture(autouse=True)
     def _reset_globals(self):
         import slack_runtime.handler as _h
-        from slack_runtime.handler import _trusted_sessions
         _h._yolo_mode = False
-        _trusted_sessions.clear()
         yield
         _h._yolo_mode = False
-        _trusted_sessions.clear()
 
     @pytest.mark.asyncio
     async def test_allowed_user_can_approve(self):
@@ -869,7 +866,6 @@ class TestAllowedUsers:
         set_allowed_users({"U1"})
         import slack_runtime.handler as _h
         monkeypatch.setattr(_h, "_yolo_mode", False)
-        monkeypatch.setattr(_h, "_trusted_sessions", type(_h._trusted_sessions)())
         slack = MockSlackClient()
         gate = asyncio.Event()
 

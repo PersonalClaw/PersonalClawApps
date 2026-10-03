@@ -49,19 +49,20 @@ def _an_owner(monkeypatch):
     H.set_owner_id(OWNER)
     H.set_allowed_users({OWNER})
     monkeypatch.setattr(H, "_said_no_answers", False)
-    for state in (H._pending_approvals, H._ended_prompts, H._trusted_sessions, H._thread_agents):
+    for state in (H._pending_approvals, H._ended_prompts, H._thread_agents):
         state.clear()
     yield
-    for state in (H._pending_approvals, H._ended_prompts, H._trusted_sessions, H._thread_agents):
+    for state in (H._pending_approvals, H._ended_prompts, H._thread_agents):
         state.clear()
     H.set_owner_id("")
     H.set_allowed_users(set())
 
 
 def _older_core(monkeypatch, brief=_NO_ANSWERS_BRIEF):
-    """Both modules read the brief by name: the prompt's renderer and the delivery."""
-    monkeypatch.setattr(H, "approval_brief_for", lambda event: dict(brief))
-    monkeypatch.setattr(D, "approval_brief_for", lambda event: dict(brief))
+    """Both modules read the brief by name: the prompt's renderer and the delivery. The brief is
+    the one a core without the answers hands over, however it is asked (``chat=`` included)."""
+    monkeypatch.setattr(H, "approval_brief_for", lambda event, **_asked: dict(brief))
+    monkeypatch.setattr(D, "approval_brief_for", lambda event, **_asked: dict(brief))
 
 
 def _said_once(caplog) -> list[str]:

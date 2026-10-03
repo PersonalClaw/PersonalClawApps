@@ -318,8 +318,8 @@ class SlackDelivery:
             return None
 
         # What will run, as the dashboard's card shows it, over as many messages as it takes;
-        # the buttons are on the last one, whose ts this is. No Trust session: that trust is this
-        # app's own, for the threads it runs itself (`_approval_messages`).
+        # the buttons are on the last one, whose ts this is, and they are the answers core's
+        # brief offers for this call (`_approval_messages`).
         approval_ts = await _post_approval(self._client, channel, thread_ts, event, source=source)
 
         pending = _PendingApproval(
