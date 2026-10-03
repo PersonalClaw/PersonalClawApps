@@ -200,10 +200,14 @@ class WebToolProvider(ToolProvider):
         except Exception as exc:
             # Both the bound provider AND the keyless fallback failed.
             logger.warning("web_search failed (incl. fallback): %s", exc, exc_info=True)
+            refused = _guard_refusal_behind(exc)
             return ToolResult(
                 success=False, error=f"Search failed: {exc}",
                 metadata={"use_case": use_case},
-                recovery_hints=[
+                # A search PersonalClaw's own network settings stopped before it was sent is not
+                # the provider's fault: the guard's hints say what decides it (for a run with no
+                # network, where its egress tier is set), and the provider's key is not one.
+                recovery_hints=list(refused.recovery_hints) if refused is not None else [
                     "Check the bound provider's endpoint/API key in Settings → Providers.",
                     "Retry, or bind a different provider for this use-case in Settings → Search.",
                 ],
@@ -322,6 +326,24 @@ class WebToolProvider(ToolProvider):
                 "citations": [outcome.url],
             },
         )
+
+
+def _guard_refusal_behind(exc: BaseException):
+    """The egress guard's refusal a failed search was raised from, or ``None``.
+
+    A search app says the guard's refusal in its own sentence and raises that ``from`` the
+    refusal, and a search that fell back to another engine is raised ``from`` what that engine
+    raised, so the refusal is one of the error's causes when the guard stopped the search."""
+    from personalclaw.sdk.net import EgressBlocked
+
+    seen: set[int] = set()
+    cause: BaseException | None = exc
+    while cause is not None and id(cause) not in seen:
+        if isinstance(cause, EgressBlocked):
+            return cause
+        seen.add(id(cause))
+        cause = cause.__cause__
+    return None
 
 
 def _fence_search_payload(payload: dict) -> None:

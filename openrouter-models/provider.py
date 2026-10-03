@@ -493,11 +493,16 @@ def _blocked_message(error: EgressBlocked, *, what: str) -> str:
     The guard's reason names its rule, not a setting, and which setting to change depends on
     what it refused: a host that could not be found (this computer is offline, or Base URL
     names no real host), a host on the Denied hosts list, a host on this computer or a private
-    network (which Allowed hosts can vouch for), or an address that is never reachable.
+    network (which Allowed hosts can vouch for), a host off the list a run's egress tier holds it
+    to, a run that may not reach the network at all, or an address that is never reachable.
     """
     decision = error.decision
     host = decision.host or "its host"
     place = _OWNER_ALLOWABLE_PLACES.get(decision.category, "")
+    if decision.category == "egress_off":
+        # The run's own tier, not this address: Base URL and the host lists change nothing, so
+        # the sentence is the guard's reason and names no step.
+        return f"OpenRouter {what} was not sent: {decision.reason}."
     if decision.category == "unresolvable":
         sentence = (
             f"OpenRouter {what} was not sent: {host} could not be found. Check this computer's "
@@ -508,6 +513,12 @@ def _blocked_message(error: EgressBlocked, *, what: str) -> str:
         sentence = (
             f"OpenRouter {what} was not sent: {host} is blocked by the Denied hosts list in "
             f"{_EGRESS_SETTINGS}. Remove it from that list, or {_BASE_URL_STEP}."
+        )
+    elif decision.category == "not_listed":
+        sentence = (
+            f"OpenRouter {what} was not sent: this run reaches only the hosts it lists, and "
+            f"{host} is not one of them. If that server is yours, add {host} to Allowed hosts in "
+            f"{_EGRESS_SETTINGS}; otherwise {_BASE_URL_STEP}."
         )
     elif place:
         sentence = (

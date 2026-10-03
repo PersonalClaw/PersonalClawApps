@@ -144,6 +144,46 @@ async def test_web_search_surfaces_provider_error():
 
 
 @pytest.mark.asyncio
+async def test_a_search_the_network_settings_stopped_says_what_decides_it():
+    """A search app raises its own sentence from the guard's refusal. A run whose egress tier is
+    off was told to check the provider's API key, which has nothing to do with it; it gets the
+    guard's hints, and a search that failed upstream keeps the provider's."""
+    from personalclaw.sdk.net import EgressBlocked, GuardDecision
+
+    reason = "egress is off for this run (safety profile egress tier 'off')"
+    hints = ["This run's safety settings give it no network access, so nothing was sent."]
+
+    class _Stopped(_Fake):
+        async def search(self, *a, **k):
+            decision = GuardDecision(
+                allow=False, reason=reason, recovery_hints=hints, category="egress_off",
+            )
+            try:
+                raise EgressBlocked(decision)
+            except EgressBlocked as e:
+                raise RuntimeError(f"https://search.example/api was not reached: {reason}.") from e
+
+    reg.register_provider(_Stopped("stopped"))
+    res = await WebToolProvider().invoke("web_search", {"query": "q"})
+
+    assert res.success is False
+    assert res.error == f"Search failed: https://search.example/api was not reached: {reason}."
+    assert res.recovery_hints == hints
+
+
+@pytest.mark.asyncio
+async def test_a_search_that_failed_upstream_keeps_the_providers_hints():
+    class _Boom(_Fake):
+        async def search(self, *a, **k):
+            raise RuntimeError("upstream 500")
+
+    reg.register_provider(_Boom("boom"))
+    res = await WebToolProvider().invoke("web_search", {"query": "q"})
+
+    assert any("API key" in hint for hint in res.recovery_hints), res.recovery_hints
+
+
+@pytest.mark.asyncio
 async def test_a_search_that_fell_back_says_so_to_the_agent():
     """The bound provider refused the search and the keyless engine answered. The result says
     that, in PersonalClaw's words, and carries the refused provider's own words as data."""

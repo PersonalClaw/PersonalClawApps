@@ -808,6 +808,12 @@ def test_a_pixel_size_request_that_fails_for_another_reason_lists_no_sizes(monke
      "OpenRouter image generation was not sent: PersonalClaw's egress guard refused the "
      "address it would have reached. Check Base URL on this OpenRouter instance in Settings → "
      "Providers (under Advanced)."),
+    ("not_listed", "openrouter.ai",
+     "host 'openrouter.ai' is not on the 'connector' egress allow-list (0 host(s) allowed)",
+     "OpenRouter image generation was not sent: this run reaches only the hosts it lists, and "
+     "openrouter.ai is not one of them. If that server is yours, add openrouter.ai to Allowed "
+     "hosts in Settings → Security → Network egress; otherwise check Base URL on this "
+     "OpenRouter instance in Settings → Providers (under Advanced)."),
 ])
 def test_an_egress_refusal_names_the_setting_that_decides_it(
     monkeypatch, category, host, reason, sentence,
@@ -822,6 +828,20 @@ def test_an_egress_refusal_names_the_setting_that_decides_it(
     with pytest.raises(ImageGenError) as ei:
         _run(_image_provider().generate("x", model="google/gemini-3-pro-image"))
     assert str(ei.value) == f"{sentence} Details: {reason}"
+
+
+def test_a_run_with_no_network_is_told_so_and_sent_to_no_setting(monkeypatch):
+    """A run whose egress tier is off is refused every host, so neither Base URL nor a host list
+    lifts it: the sentence says why it was not sent and names no step."""
+    from personalclaw.sdk.net import EgressBlocked, GuardDecision
+
+    reason = "egress is off for this run (safety profile egress tier 'off')"
+    _fake_fetch(monkeypatch, [EgressBlocked(GuardDecision(
+        allow=False, host="openrouter.ai", reason=reason, category="egress_off",
+    ))])
+    with pytest.raises(ImageGenError) as ei:
+        _run(_image_provider().generate("x", model="google/gemini-3-pro-image"))
+    assert str(ei.value) == f"OpenRouter image generation was not sent: {reason}."
 
 
 @pytest.mark.parametrize(("error", "sentence"), [
