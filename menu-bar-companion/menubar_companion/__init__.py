@@ -9,7 +9,10 @@ The module split is the design:
 
 ``settings``  local preferences + credentials on the user's machine (0600).
 ``api``       the HTTP surface: ``GET /api/loops``, ``GET /api/approvals``,
-              ``POST /api/approvals/{id}/{action}``. stdlib only.
+              ``POST /api/approvals/{id}/{action}``. stdlib only. The token rides
+              the ``Authorization`` header; no URL it builds carries it.
+``brief``     what a pending approval shows before Approve: the dashboard's brief
+              of the call, every part whole or said to be too long.
 ``model``     the rendered view. Every number it shows is DERIVED from the last
               HTTP read — there is no counter maintained beside a list.
 ``doorbell``  the socket. It is a doorbell, not a data channel: the frame reader
@@ -23,4 +26,4 @@ Nothing in this package imports PersonalClaw core. A client app must run on a Ma
 whose only PersonalClaw is the gateway it is pointed at, which may be another host.
 """
 
-__all__ = ["api", "doorbell", "model", "notify", "settings", "tray"]
+__all__ = ["api", "brief", "doorbell", "model", "notify", "settings", "tray"]

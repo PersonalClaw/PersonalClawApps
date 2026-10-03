@@ -1,8 +1,8 @@
 {
   "name": "menu-bar-companion",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "displayName": "Menu Bar Companion",
-  "description": "A macOS menu-bar companion for a PersonalClaw you already run. It lives in the status bar on YOUR Mac (not on the server), shows the loops running right now, the tool approvals waiting on you with one-click Approve/Deny, and deep-links a loop that needs your input straight into the PersonalClaw dashboard. A badge counts what is actually blocked on you. It holds ONE /api/ws connection and treats every frame as nothing but a doorbell — it re-reads state over HTTP and never renders anything out of a socket payload. Native notifications can be muted from its Settings menu. Your gateway URL and token are stored locally in a 0600 file on your own machine, or supplied by environment variable and never persisted.",
+  "description": "A macOS menu-bar companion for a PersonalClaw you already run. It lives in the status bar on YOUR Mac (not on the server), shows the loops running right now and the tool approvals waiting on you, each with what it would run, where it came from and what it can touch before you Approve or Deny it, and deep-links a loop that needs your input straight into the PersonalClaw dashboard. A badge counts what is actually blocked on you. It holds ONE /api/ws connection and treats every frame as nothing but a doorbell — it re-reads state over HTTP and never renders anything out of a socket payload. Native notifications can be muted from its Settings menu. Your gateway URL and token are stored locally in a 0600 file on your own machine, or supplied by environment variable and never persisted, and the token travels only in a request header, never in a link it opens.",
   "icon": "PanelTop",
   "author": "PersonalClaw",
   "license": "MIT",
@@ -31,7 +31,7 @@
   "launches": [
     {
       "program": "open",
-      "why": "The companion opens a loop that needs your input in the PersonalClaw dashboard, in your browser, when you pick it from its menu."
+      "why": "The companion opens the PersonalClaw dashboard in your browser when you pick a loop that needs your input, or Review in PersonalClaw on an approval, from its menu."
     },
     {
       "program": "osascript",

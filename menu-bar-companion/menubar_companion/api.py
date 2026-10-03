@@ -6,9 +6,16 @@ Three calls, and they are the whole contract:
 * ``GET  /api/approvals``                 → ``[...]`` (a bare JSON array)
 * ``POST /api/approvals/{id}/{action}``   → ``{"ok": true}``
 
-Auth rides the query string as ``?token=`` — that is the only owner-auth path the
-gateway's token middleware honours (an ``Authorization: Bearer`` header is the
-app-token NARROWING path and does not authenticate on its own).
+The owner token rides the ``Authorization: Bearer`` header, on these three calls and on the
+``/api/ws`` upgrade (``doorbell.handshake``). That is the gateway's carrier for a client that is
+not a browser: it sets no cookie and binds no address, it is judged against the whole lifetime of
+the session (a ``?token=`` is a browser's sign-in link, refused once its link window has passed),
+and it keeps the token out of the URL, where every log that records a request line would keep it.
+
+No URL built here carries the token. The two the menu opens in a browser, a loop that needs your
+input and an approval to review, open the dashboard with no credential in them: the browser signs
+in the way it always does there, with the session it already holds, else on the gateway's own
+sign-in page, which keeps the page it was opened at.
 
 Every request also carries an explicit ``Origin`` equal to the configured base URL's
 own origin. The gateway CSRF-checks state-changing requests against an allowlist that
@@ -61,6 +68,22 @@ def _origin_of(base_url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}"
 
 
+def bearer(token: str) -> str:
+    """The ``Authorization`` header value that carries *token*.
+
+    A PersonalClaw token is one word of printable ASCII. Anything else (a space, a comma, a line
+    break, a character outside ASCII) raises :class:`GatewayError` before a request is built: the
+    gateway refuses such a Bearer anyway, and a line break would end the header it rides in.
+    """
+    word = token.strip()
+    if not word or any(not "!" <= ch <= "~" or ch == "," for ch in word):
+        raise GatewayError(
+            "the configured token is not a PersonalClaw token; configure the token from the "
+            "link `personalclaw token` prints"
+        )
+    return f"Bearer {word}"
+
+
 class GatewayClient:
     """A thin authenticated client for one gateway."""
 
@@ -72,15 +95,13 @@ class GatewayClient:
         # transport instead of asserting on a mock of this class.
         self._opener = opener or urllib.request.urlopen
 
-    # ── URLs ──
+    # ── URLs: none of them carries the token ──
 
-    def url(self, path: str, **query: str) -> str:
-        q = {"token": self.token, **{k: v for k, v in query.items() if v}}
-        sep = "&" if "?" in path else "?"
-        return f"{self.base_url}{path}{sep}{urllib.parse.urlencode(q)}"
+    def url(self, path: str) -> str:
+        return f"{self.base_url}{path}"
 
     def socket_url(self) -> str:
-        """``/api/ws`` as a ``ws://``/``wss://`` URL with the token attached."""
+        """``/api/ws`` as a ``ws://``/``wss://`` URL. The upgrade carries the token's header."""
         http_url = self.url("/api/ws")
         if http_url.startswith("https://"):
             return "wss://" + http_url[len("https://") :]
@@ -90,14 +111,24 @@ class GatewayClient:
         return _origin_of(self.base_url)
 
     def deep_link(self, loop_id: str) -> str:
-        """The dashboard deep link for a loop that needs input.
+        """The dashboard page of a loop that needs input: ``#/loops/<id>``.
 
-        ``#/loops/<id>`` is a real routable deep link (core ``web/src/app/App.tsx``
-        keeps ``loops`` in ``ROUTABLE`` precisely so these survive). The token goes in
-        the query string, BEFORE the fragment, so a browser that has never talked to
-        this gateway still lands authenticated instead of on the token prompt.
+        A route core's ``web/src/app/App.tsx`` keeps routable precisely so a link like this
+        survives. It carries no credential: a browser without a session signs in on the
+        gateway's sign-in page, which lands it on this route afterwards.
         """
-        return f"{self.base_url}/?{urllib.parse.urlencode({'token': self.token})}#/loops/{loop_id}"
+        return f"{self.base_url}/#/loops/{urllib.parse.quote(loop_id, safe='')}"
+
+    def review_link(self, approval_id: str) -> str:
+        """Where an approval is reviewed whole and answered: ``#/companion?approval=<id>``.
+
+        The dashboard's approvals page shows every pending approval with all of its arguments,
+        and ``?approval=`` brings this one into view (or says it was already answered). No
+        credential in it, for the same reason as :meth:`deep_link`.
+        """
+        if not approval_id:
+            return f"{self.base_url}/#/companion"
+        return f"{self.base_url}/#/companion?approval={urllib.parse.quote(approval_id, safe='')}"
 
     # ── requests ──
 
@@ -109,6 +140,7 @@ class GatewayClient:
                 "Accept": "application/json",
                 "Content-Type": "application/json",
                 "Origin": self.origin(),
+                "Authorization": bearer(self.token),
             },
         )
         try:

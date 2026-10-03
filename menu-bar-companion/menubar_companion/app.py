@@ -102,6 +102,7 @@ def build_companion(
             url=client.socket_url(),
             origin=client.origin(),
             on_ring=lambda: None,  # replaced below; see the note
+            token=client.token,
             connect=connect,
             sleep=sleep,
         ),

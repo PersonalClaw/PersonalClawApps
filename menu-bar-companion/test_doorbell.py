@@ -67,9 +67,10 @@ def test_ws_frame_payload_never_reaches_the_rendered_menu():
     model = _model(opener)
     sock = FakeSocket(HANDSHAKE_OK + server_frame(OP_TEXT, WS_LIE) + server_frame(OP_CLOSE))
     bell = Doorbell(
-        "ws://127.0.0.1:10000/api/ws?token=tok",
+        "ws://127.0.0.1:10000/api/ws",
         "http://127.0.0.1:10000",
         on_ring=lambda: model.refresh(),
+        token="tok",
         connect=lambda _url: sock,
         sleep=lambda _s: None,
     )
@@ -131,17 +132,17 @@ def _read_frame_returning_payload(sock) -> bytes:
 
 def test_a_payload_consuming_ring_callback_is_refused_at_construction():
     with pytest.raises(TypeError, match="refetch signal, not a payload"):
-        Doorbell("ws://x/api/ws", "http://x", on_ring=lambda payload: None)
+        Doorbell("ws://x/api/ws", "http://x", on_ring=lambda payload: None, token="tok")
 
 
 def test_the_zero_argument_callback_is_accepted():
     """Vacuity floor for the refusal above: the gate is not rejecting everything."""
-    bell = Doorbell("ws://x/api/ws", "http://x", on_ring=lambda: None)
+    bell = Doorbell("ws://x/api/ws", "http://x", on_ring=lambda: None, token="tok")
     assert bell.rings == 0
 
 
 def test_set_ring_goes_through_the_same_gate():
-    bell = Doorbell("ws://x/api/ws", "http://x", on_ring=lambda: None)
+    bell = Doorbell("ws://x/api/ws", "http://x", on_ring=lambda: None, token="tok")
     with pytest.raises(TypeError):
         bell.set_ring(lambda frame: None)
     bell.set_ring(lambda: None)  # and still accepts the legal shape
@@ -158,6 +159,7 @@ def test_a_ping_is_answered_and_does_not_ring():
         "ws://x/api/ws",
         "http://x",
         on_ring=lambda: rings.append(1),
+        token="tok",
         connect=lambda _u: sock,
         sleep=lambda _s: None,
     )
@@ -181,6 +183,7 @@ def test_one_socket_for_the_process_and_refreshes_do_not_open_more():
         "ws://x/api/ws",
         "http://x",
         on_ring=lambda: model.refresh(),
+        token="tok",
         connect=lambda _u: sock,
         sleep=lambda _s: None,
     )
@@ -193,6 +196,64 @@ def test_one_socket_for_the_process_and_refreshes_do_not_open_more():
         model.refresh()
     assert bell.connect_count == 1
     assert len(opener.calls) == (3 + 5) * 2, "every refresh is TWO HTTP GETs, not a socket read"
+
+
+def test_the_upgrade_signs_in_with_the_header_and_its_url_carries_no_token():
+    """The socket's upgrade carries the owner token as every HTTP call does: in its header.
+
+    Driven through ``build_companion``, so it is the wiring the app runs that is measured: the
+    URL it connects to and the request it writes.
+    """
+    from menubar_companion.app import build_companion
+    from menubar_companion.settings import Settings
+
+    token = "fake-owner-token"
+    connected: list[str] = []
+    sock = FakeSocket(HANDSHAKE_OK + server_frame(OP_CLOSE))
+
+    def connect(url):
+        connected.append(url)
+        return sock
+
+    companion = build_companion(
+        Settings(url="http://127.0.0.1:10000", token=token),
+        connect=connect,
+        sleep=lambda _s: None,
+        opener=_opener(),
+        runner=lambda _argv: None,
+    )
+    companion.doorbell.run_forever(_StopAfter(1))
+
+    assert connected == ["ws://127.0.0.1:10000/api/ws"], connected
+    request = bytes(sock.sent).split(b"\r\n\r\n", 1)[0].decode("ascii").split("\r\n")
+    assert request[0] == "GET /api/ws HTTP/1.1", request[0]
+    assert f"Authorization: Bearer {token}" in request
+    assert "Origin: http://127.0.0.1:10000" in request
+    # The header is the one place the token is written.
+    assert bytes(sock.sent).count(token.encode()) == 1
+
+
+def test_an_upgrade_with_a_token_that_cannot_be_a_header_is_never_written():
+    """A token pasted across two lines would end the header it rides in: nothing is sent.
+
+    A line break only around it (a paste's trailing newline) is not part of it, and is fine.
+    """
+    for token, sent in (("fake-owner\ntoken", False), ("fake-owner-token\n", True)):
+        sock = FakeSocket(HANDSHAKE_OK + server_frame(OP_CLOSE))
+        bell = Doorbell(
+            "ws://127.0.0.1:10000/api/ws",
+            "http://127.0.0.1:10000",
+            on_ring=lambda: None,
+            token=token,
+            connect=lambda _u, s=sock: s,
+            sleep=lambda _s: None,
+        )
+        bell.run_forever(_StopAfter(1))
+        if sent:
+            assert b"Authorization: Bearer fake-owner-token\r\n" in bytes(sock.sent)
+        else:
+            assert bytes(sock.sent) == b"", "no part of the upgrade was written"
+            assert "is not a PersonalClaw token" in bell.last_error
 
 
 def test_build_companion_constructs_exactly_one_doorbell(monkeypatch):
@@ -239,6 +300,7 @@ def test_backoff_grows_reconnects_and_resets_after_a_good_connect():
         "ws://x/api/ws",
         "http://x",
         on_ring=lambda: None,
+        token="tok",
         connect=connect,
         sleep=slept.append,
     )

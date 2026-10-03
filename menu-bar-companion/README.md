@@ -5,9 +5,10 @@ on **your** Mac, shows what is happening and — more to the point — what is *
 you*:
 
 - **Live run rows** — every loop that has not ended, with its status.
-- **Pending approvals** with one-click **Approve** / **Deny**.
-- **Needs-input deep links** — one click lands you on `#/loops/<id>` in the dashboard,
-  already authenticated.
+- **Pending approvals**, each opening the brief of the call — what it would run, where it
+  came from, what it can touch, what **Deny** does — above its **Approve** and **Deny**.
+- **Needs-input deep links** — what the loop asks, and one click to its page
+  (`#/loops/<id>`) in the dashboard.
 - **A badge** counting exactly what is blocked on you: pending approvals + runs needing
   input. Nothing else.
 - **Mute notifications** from the Settings item.
@@ -55,6 +56,37 @@ read. There is no counter kept beside them — a count maintained next to a list
 facts that can disagree, and the one the user sees is the wrong one.
 `model.INSTANCE_ATTRS` pins the model's whole attribute set so that adding a cache later
 fails a test instead of drifting quietly.
+
+## Nothing is approved blind
+
+Each pending approval is a row that opens a submenu, and **Approve** is only ever inside it,
+under the brief of the call. The brief is what the dashboard's approval card shows, from the
+same fields of `GET /api/approvals`, in the same words:
+
+```
+Permission needed to run bash
+  {"command": "rm -rf build/cache"}
+Clear the stale build cache                              ← the purpose the runner gave
+From loop “Fix the README”                               ← where it came from
+Can: writes files, runs a command · Risk: Destructive    ← what it can touch, its risk
+It reaches packages.example.com, which is not on your …  ← when it reaches past your hosts
+The agent CLI offers no way to skip only this step: …    ← when Deny does more than decline
+Approve
+Deny
+Review in PersonalClaw
+```
+
+A menu holds less than a card, so every part is shown **whole or not at all**:
+
+- What will run is shown character for character. A line wider than the menu goes on in
+  the lines under it, each starting `↪`, so a wrapped line never reads like a line break in
+  the command. A character that prints nothing, or moves the text around it, is shown as its
+  code point, such as `\u200b` for a zero-width space.
+- A part too long for the menu (a long script, a file's whole contents) is replaced by a line
+  saying so, and **Approve** is not offered: **Review in PersonalClaw** opens the approval in
+  the dashboard, which shows all of it. **Deny** stays while what Deny does is shown whole.
+- A row the menu cannot read — no tool, a field of the wrong kind, a risk or a facet this
+  version has no words for — says so and offers only **Review in PersonalClaw**.
 
 ## Approve / Deny is a write, and a failed write says so
 
@@ -110,8 +142,15 @@ Settings live on your Mac, not in the gateway's home:
 Override the directory with `PERSONALCLAW_COMPANION_HOME`.
 
 That file holds your **gateway token**, which is a bearer credential for the whole
-gateway — hence 0600. If you would rather not persist it, supply both by environment
-instead and nothing is written:
+gateway — hence 0600. It is sent only in the `Authorization: Bearer` header of each request
+and of the socket's upgrade, never in a URL: not in a request line a log keeps, not in the
+output of `--check`, and not in a link the menu opens. A loop's link and **Review in
+PersonalClaw** open the dashboard with no credential in them, so your browser signs in the way
+it always does there: with the session it already has, else on the gateway's sign-in page,
+which takes you on to the same page afterwards.
+
+If you would rather not persist the token, supply both by environment instead and nothing is
+written:
 
 ```sh
 export PERSONALCLAW_COMPANION_URL=http://localhost:10000
@@ -133,7 +172,8 @@ python3 run.py                                              # live in the menu b
 ```
 
 `--check` is the honest smoke test: it proves the token works, prints exactly what the
-menu would show, and reports whether a status-item backend is present.
+menu would show (each approval's brief and the answers it offers included), and reports
+whether a status-item backend is present.
 
 ## The status-item host
 
@@ -167,6 +207,7 @@ PersonalClaw desktop app; it is a small client of the same gateway.
 - `run.py` — the launcher (`--configure` / `--check` / live).
 - `menubar_companion/settings.py` — local preferences + credentials (0600).
 - `menubar_companion/api.py` — the three gateway calls, stdlib `urllib` only.
+- `menubar_companion/brief.py` — what an approval shows before Approve, whole or not at all.
 - `menubar_companion/model.py` — the rendered state; every number derived.
 - `menubar_companion/doorbell.py` — the one socket, payload-blind, backoff-reconnecting.
 - `menubar_companion/notify.py` — native notifications and the mute gate.
@@ -180,16 +221,18 @@ PersonalClaw desktop app; it is a small client of the same gateway.
 python3 -m pytest menu-bar-companion -q
 ```
 
-No PersonalClaw core import anywhere outside `test_manifest.py` (which checks the
-manifest against core's own `AppManifest.from_dict`, and skips when core is absent).
+No PersonalClaw core import anywhere outside two tests, each of which skips when core is
+absent: `test_manifest.py` checks the manifest against core's own `AppManifest.from_dict`,
+and `test_brief.py` checks the brief's risk and facet words, and its summary line, against
+core's own (`personalclaw.approval_brief`), so the menu cannot drift from the dashboard.
 
 ## What it starts
 
 Install consent names these before anything installs (the manifest's `launches`). Both run on
 your Mac, from the companion's own process:
 
-- `open` opens a loop that needs your input in the PersonalClaw dashboard, in your browser,
-  when you pick it from the menu.
+- `open` opens the PersonalClaw dashboard in your browser when you pick a loop that needs
+  your input, or **Review in PersonalClaw** on an approval, from the menu.
 - `osascript` shows a macOS notification, unless you mute notifications in its Settings
   menu.
 

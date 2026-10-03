@@ -68,14 +68,17 @@ class FakeOpener:
 
     ``routes`` maps a path prefix to either bytes (the JSON body) or an exception to
     raise. Every call is recorded, so a test can assert that a refetch actually happened
-    rather than inferring it from rendered output.
+    rather than inferring it from rendered output, and so is every request as it was built
+    (``requests``: its whole URL and its headers), so a test can read what it carried.
     """
 
     def __init__(self, routes: dict[str, object]):
         self.routes = routes
         self.calls: list[tuple[str, str]] = []
+        self.requests: list = []
 
     def __call__(self, req, timeout=None):
+        self.requests.append(req)
         path = req.full_url.split("?", 1)[0]
         for prefix in sorted(self.routes, key=len, reverse=True):
             if prefix in path:

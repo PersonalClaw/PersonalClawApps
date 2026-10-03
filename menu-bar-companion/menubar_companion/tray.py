@@ -20,7 +20,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from menubar_companion.model import CompanionModel, render
+from menubar_companion.model import (
+    APPROVE,
+    DENY,
+    REVIEW,
+    ApprovalRow,
+    CompanionModel,
+    render,
+)
 from menubar_companion.settings import Settings
 
 
@@ -34,9 +41,11 @@ class MenuItem:
 
     title: str
     action: Callable[[], None] | None = None
-    #: A URL to open (needs-input deep links). Kept as data so the menu is assertable
-    #: without a browser and without a toolkit.
+    #: A URL to open (needs-input deep links, an approval's review). Kept as data so the
+    #: menu is assertable without a browser and without a toolkit.
     url: str = ""
+    #: The submenu this item opens, in order (an approval's brief and its answers).
+    children: tuple["MenuItem", ...] = ()
 
 
 def build_menu(
@@ -57,37 +66,34 @@ def build_menu(
 
     approvals = model.pending_approvals
     items.append(MenuItem(title=f"Approvals waiting ({len(approvals)})"))
-    for row in approvals:
-        items.append(MenuItem(title=f"  {row.label}"))
+    for approval in approvals:
+        # Each approval opens a submenu: its brief first, then what may answer it. There
+        # is no way to Approve except from under the brief.
         items.append(
             MenuItem(
-                title="    Approve",
-                action=lambda rid=row.id: on_resolve(rid, "approve"),
-            )
-        )
-        items.append(
-            MenuItem(
-                title="    Deny",
-                action=lambda rid=row.id: on_resolve(rid, "deny"),
+                title=f"  {approval.title}",
+                children=_approval_menu(approval, on_resolve, open_url),
             )
         )
 
     blocked = model.needs_input
     items.append(MenuItem(title=f"Needs your input ({len(blocked)})"))
-    for row in blocked:
+    for run in blocked:
         # The deep link is the point of this section: one click lands on the loop.
         items.append(
             MenuItem(
-                title=f"  {row.label}",
-                action=lambda url=row.deep_link: open_url(url),
-                url=row.deep_link,
+                title=f"  {run.label}",
+                action=_opener(open_url, run.deep_link),
+                url=run.deep_link,
             )
         )
+        # What it asks, under it: the first lines, the whole of it a click away.
+        items.extend(MenuItem(title=f"    {line}") for line in run.question_lines)
 
     running = [r for r in model.runs if not r.needs_input]
     items.append(MenuItem(title=f"Running ({len(running)})"))
-    for row in running:
-        items.append(MenuItem(title=f"  {row.label} — {row.status}"))
+    for run in running:
+        items.append(MenuItem(title=f"  {run.label} — {run.status}"))
 
     if model.last_error:
         # A failed write or read is shown IN THE MENU the click happened in.
@@ -102,6 +108,32 @@ def build_menu(
         )
     )
     return items
+
+
+def _approval_menu(
+    approval: ApprovalRow,
+    on_resolve: Callable[[str, str], None],
+    open_url: Callable[[str], None],
+) -> tuple[MenuItem, ...]:
+    """One approval's submenu: the brief's lines (read-only), then the answers it offers."""
+    answer: dict[str, MenuItem] = {
+        APPROVE: MenuItem(title=APPROVE, action=lambda: on_resolve(approval.id, "approve")),
+        DENY: MenuItem(title=DENY, action=lambda: on_resolve(approval.id, "deny")),
+        REVIEW: MenuItem(
+            title=REVIEW,
+            action=_opener(open_url, approval.review_link),
+            url=approval.review_link,
+        ),
+    }
+    return (
+        *(MenuItem(title=line) for line in approval.brief),
+        *(answer[a] for a in approval.answers),
+    )
+
+
+def _opener(open_url: Callable[[str], None], url: str) -> Callable[[], None]:
+    """The click that opens *url*: bound now, so each item opens its own link."""
+    return lambda: open_url(url)
 
 
 def resolve_host() -> tuple[object | None, str]:

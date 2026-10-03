@@ -71,9 +71,11 @@ Skip that and `token` prints an error where the URL should be, both `export`s st
 text, and step 5 dies inside curl (`curl: (3) bad range in URL`) rather than telling you about
 the port.
 
-The gateway takes the owner token as a `?token=` **query parameter**. An
-`Authorization: Bearer` header is only accepted for app-scoped narrowing tokens, so using
-one here answers `{"error": "Token required"}`.
+The link carries the owner token as a `?token=` query parameter, which is how a browser signs
+in: the gateway accepts it there only inside the link's window (24 hours at most). A shell, a
+script or a client app sends the same token as an `Authorization: Bearer` header instead. The
+gateway accepts that for the token's whole lifetime, and it keeps the token out of URLs, shell
+history and request logs.
 
 **5 — review it, install it from that local path, and enable it.** An install is two
 calls: the review says what the app gets and what the security scanner found, and installs
@@ -81,14 +83,15 @@ nothing; the install carries the review's `consent` digest, so it installs exact
 you reviewed (anything else — `"confirm": true` included — answers 409 with a fresh review).
 
 ```bash
-review="$(curl -sS -X POST "$PERSONALCLAW_URL/api/apps/preview?token=$PERSONALCLAW_TOKEN" \
+auth="Authorization: Bearer $PERSONALCLAW_TOKEN"
+review="$(curl -sS -X POST "$PERSONALCLAW_URL/api/apps/preview" -H "$auth" \
   -H 'Content-Type: application/json' -d "{\"source\": \"$PWD/my-tool\"}")"
 echo "$review" | python3 -m json.tool      # read it: permissions, jobs, packages, the scan
 consent="$(echo "$review" | python3 -c 'import json, sys; print(json.load(sys.stdin)["consent"])')"
-curl -sS -X POST "$PERSONALCLAW_URL/api/apps?token=$PERSONALCLAW_TOKEN" \
+curl -sS -X POST "$PERSONALCLAW_URL/api/apps" -H "$auth" \
   -H 'Content-Type: application/json' \
   -d "{\"source\": \"$PWD/my-tool\", \"consent\": \"$consent\"}"
-curl -sS -X POST "$PERSONALCLAW_URL/api/apps/my-tool/enable?token=$PERSONALCLAW_TOKEN"
+curl -sS -X POST "$PERSONALCLAW_URL/api/apps/my-tool/enable" -H "$auth"
 ```
 
 Prefer clicking? **Store → Add source → local path**, point it at `my-tool`, then install
@@ -97,7 +100,7 @@ and enable. Same review, same supply-chain scan gate, same consent — there is 
 **6 — confirm it is live.**
 
 ```bash
-curl -sS "$PERSONALCLAW_URL/api/apps/my-tool?token=$PERSONALCLAW_TOKEN"
+curl -sS "$PERSONALCLAW_URL/api/apps/my-tool" -H "$auth"
 ```
 
 In the response, the `installed` block reports `"enabled": true` and `manifest.provider.type`

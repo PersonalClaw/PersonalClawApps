@@ -33,6 +33,9 @@ import struct
 import time
 import urllib.parse
 from collections.abc import Callable
+from typing import Any
+
+from menubar_companion.api import bearer
 
 #: Opcodes we care about (RFC 6455 §5.2).
 OP_CONTINUATION = 0x0
@@ -126,8 +129,13 @@ def read_frame(sock) -> int:
     return opcode
 
 
-def handshake(sock, url: str, origin: str) -> None:
-    """Perform the RFC 6455 upgrade for *url* (``ws://``/``wss://`` with ``?token=``).
+def handshake(sock, url: str, origin: str, token: str) -> None:
+    """Perform the RFC 6455 upgrade for *url* (``ws://``/``wss://``), signed in by *token*.
+
+    The token rides the ``Authorization`` header, as on every HTTP call (``api.bearer``, which
+    refuses a token that is not one header-safe word): the gateway's token middleware reads an
+    upgrade's headers like any request's, and a token in the URL would be in the request line
+    every log of it records.
 
     ``Origin`` is sent explicitly. The gateway admits an origin in its allowlist, which
     contains the dashboard's own origin — the same header a browser on that URL sends.
@@ -147,6 +155,7 @@ def handshake(sock, url: str, origin: str) -> None:
         f"Sec-WebSocket-Key: {key}\r\n"
         "Sec-WebSocket-Version: 13\r\n"
         f"Origin: {origin}\r\n"
+        f"Authorization: {bearer(token)}\r\n"
         "\r\n"
     )
     sock.sendall(request.encode("ascii"))
@@ -189,15 +198,18 @@ class Doorbell:
         self,
         url: str,
         origin: str,
-        on_ring: Callable[[], None],
+        on_ring: Callable[[], object],
         *,
-        connect: Callable[[str], object] | None = None,
+        token: str,
+        connect: Callable[[str], Any] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         on_state: Callable[[str], None] | None = None,
     ):
         _reject_payload_consuming(on_ring)
         self.url = url
         self.origin = origin
+        #: The owner token the upgrade signs in with, in its header (never in ``url``).
+        self._token = token
         self._on_ring = on_ring
         self._connect = connect or (lambda u: tcp_connect(u))
         self._sleep = sleep
@@ -211,7 +223,7 @@ class Doorbell:
         self.rings = 0
         self.last_error = ""
 
-    def set_ring(self, on_ring: Callable[[], None]) -> None:
+    def set_ring(self, on_ring: Callable[[], object]) -> None:
         """Replace the ring callback, through the SAME zero-argument gate.
 
         Needed because the callback wants the object that owns this doorbell. Routing it
@@ -231,7 +243,7 @@ class Doorbell:
         sock = self._connect(self.url)
         self.connect_count += 1
         try:
-            handshake(sock, self.url, self.origin)
+            handshake(sock, self.url, self.origin, self._token)
             self.attempt = 0  # connected: the ladder starts over next time
             self._on_state("connected")
             while True:
@@ -268,7 +280,7 @@ class Doorbell:
             self._sleep(delay)
 
 
-def _reject_payload_consuming(on_ring: Callable[[], None]) -> None:
+def _reject_payload_consuming(on_ring: Callable[[], object]) -> None:
     """Refuse a ring callback that wants an argument.
 
     The only thing it could want is the frame, and the frame is not data here. Failing

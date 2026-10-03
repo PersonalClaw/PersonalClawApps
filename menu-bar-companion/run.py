@@ -96,16 +96,28 @@ def _run_status_item(host, companion, settings: Settings) -> int:
                 open_url=_open_url,
             )
             self.menu.clear()
-            for item in items:
-                if item.action is None:
-                    self.menu.add(host.MenuItem(item.title))
-                else:
-                    action = item.action
-                    self.menu.add(host.MenuItem(item.title, callback=lambda _s, a=action: a()))
+            for key, item in enumerate(items):
+                self.menu[str(key)] = _native_item(host, item)
 
     start_background(companion)
     CompanionApp().run()
     return 0
+
+
+def _native_item(host, item):
+    """*item* as a ``rumps`` menu item, with its submenu.
+
+    Every item goes in under its place in its menu, not under its title (``rumps`` keys a
+    menu by title when an item is ``add``-ed): two items that read the same, such as two
+    lines of a script or two approvals of one tool, are both drawn.
+    """
+    if item.action is None:
+        native = host.MenuItem(item.title)
+    else:
+        native = host.MenuItem(item.title, callback=lambda _sender, act=item.action: act())
+    for key, child in enumerate(item.children):
+        native[str(key)] = _native_item(host, child)
+    return native
 
 
 def _open_url(url: str) -> None:

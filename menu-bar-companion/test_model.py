@@ -3,6 +3,9 @@
 Two properties get explicit vacuity floors, because both are the kind that pass for the
 wrong reason: the badge (a stored counter agrees with the list right up until it doesn't)
 and the failed write (a swallowed error looks exactly like no error).
+
+And what every request carries: the owner token in its ``Authorization`` header, never in
+its URL.
 """
 
 from __future__ import annotations
@@ -10,12 +13,31 @@ from __future__ import annotations
 import io
 import json
 import urllib.error
+import urllib.parse
 
+import pytest
+from _rows import approval, radius
 from _ws_fakes import FakeOpener
 from menubar_companion.api import WIRE_ACTION, GatewayClient
 from menubar_companion.model import INSTANCE_ATTRS, CompanionModel, render
 
-APPROVALS = [{"id": "a1", "tool": "bash"}, {"id": "a2", "tool": "write_file"}]
+TOKEN = "fake-owner-token"
+APPROVALS = [
+    approval(id="a1"),
+    approval(
+        id="a2",
+        tool="write_file",
+        tool_input='{"path": "notes/todo.md"}',
+        risk="caution",
+        blast_radius=radius(writes=True),
+    ),
+]
+#: What a loop waiting on you carries, as core sends it: ``{question, ts, why?}``.
+ASKED = {
+    "question": "prod or dev?",
+    "ts": 1_700_000_000.0,
+    "why": "The deploy target decides the database.",
+}
 LOOPS = {
     "loops": [
         {"id": "L1", "name": "ship the thing", "status": "running"},
@@ -23,7 +45,7 @@ LOOPS = {
             "id": "L2",
             "name": "which database?",
             "status": "needs_input",
-            "pending_question": "prod or dev?",
+            "pending_question": ASKED,
         },
         {"id": "L3", "name": "finished", "status": "complete"},
         {"id": "L4", "name": "stopped one", "status": "stopped"},
@@ -31,7 +53,7 @@ LOOPS = {
 }
 
 
-def _build(routes: dict | None = None) -> tuple[CompanionModel, FakeOpener]:
+def _build(routes: dict | None = None, token: str = TOKEN) -> tuple[CompanionModel, FakeOpener]:
     opener = FakeOpener(
         {
             "/api/approvals": json.dumps(APPROVALS).encode(),
@@ -39,7 +61,7 @@ def _build(routes: dict | None = None) -> tuple[CompanionModel, FakeOpener]:
             **(routes or {}),
         }
     )
-    client = GatewayClient("http://127.0.0.1:10000", "tok", opener=opener)
+    client = GatewayClient("http://127.0.0.1:10000", token, opener=opener)
     return CompanionModel(client), opener
 
 
@@ -58,14 +80,88 @@ def test_needs_input_rows_carry_a_dashboard_deep_link():
     model.refresh()
     (blocked,) = model.needs_input
     assert blocked.id == "L2"
-    assert blocked.deep_link.endswith("#/loops/L2"), blocked.deep_link
-    # The token rides the query string BEFORE the fragment, or a cold browser lands on
-    # the token prompt instead of the loop.
-    assert "?token=tok#/loops/L2" in blocked.deep_link
+    # The loop's page, with no credential in it: a browser without a session signs in on
+    # the gateway's own sign-in page, which lands it on this route afterwards.
+    assert blocked.deep_link == "http://127.0.0.1:10000/#/loops/L2"
+    assert TOKEN not in blocked.deep_link
     assert blocked.question == "prod or dev?"
     # A running loop is not decorated with a link it does not need.
     running = [r for r in model.runs if not r.needs_input]
     assert [r.deep_link for r in running] == [""]
+
+
+@pytest.mark.parametrize(
+    ("asked", "shown"),
+    [
+        (ASKED, "prod or dev?"),
+        (
+            {"question": "  Which branch should it merge into?  ", "ts": 1.0},
+            "Which branch should it merge into?",
+        ),
+        ({"ts": 1.0, "why": "a question with no text"}, ""),
+        ({"question": ["not", "text"], "ts": 1.0}, ""),
+        (None, ""),
+    ],
+    ids=["a question", "padded", "no question text", "a question that is not text", "none"],
+)
+def test_the_loop_question_reads_as_its_text(asked, shown):
+    """Core sends ``{question, ts, why?}``: the row shows the question, never the dict."""
+    row = {"id": "L2", "name": "which?", "status": "needs_input", "pending_question": asked}
+    loops = {"loops": [row]}
+    model, _ = _build({"/api/loops": json.dumps(loops).encode()})
+    model.refresh()
+    (blocked,) = model.needs_input
+    assert blocked.question == shown
+    lines = render(model).lines
+    assert not [line for line in lines if "'question'" in line or "'ts'" in line], lines
+    if shown:
+        assert f"      {shown}" in lines, lines
+
+
+# ── what every request carries ──
+
+
+def test_every_request_carries_the_token_in_its_header_and_no_url_carries_it():
+    """``Authorization: Bearer`` is the gateway's carrier for a client that is not a browser.
+
+    It is judged against the session's whole lifetime and sets no cookie, and it keeps the
+    token out of the request line every log records.
+    """
+    model, opener = _build({"/api/approvals/": b'{"ok": true}'})
+    model.refresh()
+    assert model.resolve("a1", "deny").ok
+
+    sent = [(req.get_method(), urllib.parse.urlsplit(req.full_url).path) for req in opener.requests]
+    assert sent == [
+        ("GET", "/api/loops"),
+        ("GET", "/api/approvals"),
+        ("POST", "/api/approvals/a1/reject"),
+        ("GET", "/api/loops"),
+        ("GET", "/api/approvals"),
+    ], sent
+    for req in opener.requests:
+        assert urllib.parse.urlsplit(req.full_url).query == "", req.full_url
+        assert TOKEN not in req.full_url
+        assert req.get_header("Authorization") == f"Bearer {TOKEN}"
+        assert req.get_header("Origin") == "http://127.0.0.1:10000"
+
+
+@pytest.mark.parametrize("token", ["two words", "tokén", ""], ids=["a space", "not ascii", "empty"])
+def test_a_token_that_cannot_be_a_header_is_refused_before_anything_is_sent(token):
+    model, opener = _build({"/api/approvals/": b'{"ok": true}'}, token=token)
+
+    assert model.refresh().ok is False
+    assert "is not a PersonalClaw token" in model.last_error, model.last_error
+    outcome = model.resolve("a1", "approve")
+    assert outcome.ok is False and "is not a PersonalClaw token" in outcome.error
+    assert opener.requests == [], "nothing was sent"
+
+
+def test_vacuity_floor_the_same_requests_go_out_with_a_usable_token():
+    model, opener = _build({"/api/approvals/": b'{"ok": true}'}, token="a-usable-fake-token")
+    assert model.refresh().ok
+    assert model.resolve("a1", "approve").ok
+    assert len(opener.requests) == 5
 
 
 # ── the badge is derived ──

@@ -1,6 +1,6 @@
 """The rendered state of the menu, and the only place it is computed.
 
-Two rules hold this file together.
+Three rules hold this file together.
 
 **Everything shown is DERIVED from the last HTTP read.** ``badge`` is a property over
 ``approvals`` and ``needs_input``, not an integer kept beside them. A count maintained
@@ -10,6 +10,11 @@ later fails a test instead of quietly drifting.
 
 **Nothing in here ever sees a WebSocket payload.** ``refresh()`` takes no arguments
 carrying server data; the socket's only power is to call it. See ``doorbell``.
+
+**Approve is offered only under the whole brief.** Each pending approval carries the
+dashboard's brief of the call (``brief``) and the answers it may be given from here:
+Approve only when every part of the brief is shown whole, Deny only when what Deny does
+is, and "Review in PersonalClaw" always.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from menubar_companion.api import GatewayClient, ResolveOutcome
+from menubar_companion.brief import brief_of, excerpt
 
 #: Loop statuses that mean the run is over (``personalclaw.loop.loop.LOOP_PHASES``
 #: calls these ENDED). Everything else is live enough to belong in the menu.
@@ -30,9 +36,24 @@ NEEDS_INPUT = "needs_input"
 #: second source of truth for a number already derivable, and it fails here first.
 INSTANCE_ATTRS = frozenset({"client", "loops", "approvals", "last_error", "_seen"})
 
+#: The answers an approval's menu offers, in its order.
+APPROVE = "Approve"
+DENY = "Deny"
+REVIEW = "Review in PersonalClaw"
+
+#: How many lines of a loop's question the menu shows under the loop; the rest is a click away.
+QUESTION_LINES = 3
+
 
 def _row_id(row: dict) -> str:
     return str(row.get("id", "")).strip()
+
+
+def _question_text(asked: object) -> str:
+    """The question a loop waits on, as its text: core sends ``{question, ts, why?}``."""
+    if isinstance(asked, dict) and isinstance(asked.get("question"), str):
+        return asked["question"].strip()
+    return ""
 
 
 @dataclass(frozen=True)
@@ -46,14 +67,28 @@ class RunRow:
     deep_link: str = ""
     question: str = ""
 
+    @property
+    def question_lines(self) -> tuple[str, ...]:
+        """The question as the menu shows it under the loop: its first lines."""
+        return excerpt(self.question, QUESTION_LINES)
+
 
 @dataclass(frozen=True)
 class ApprovalRow:
-    """One pending approval, as the menu shows it."""
+    """One pending approval, as the menu shows it (``brief.brief_of``)."""
 
     id: str
-    label: str
-    detail: str = ""
+    title: str
+    brief: tuple[str, ...] = ()
+    can_approve: bool = False
+    can_deny: bool = False
+    review_link: str = ""
+
+    @property
+    def answers(self) -> tuple[str, ...]:
+        """What this approval's menu offers under its brief, in order."""
+        offered = ((APPROVE, self.can_approve), (DENY, self.can_deny), (REVIEW, True))
+        return tuple(answer for answer, on_offer in offered if on_offer)
 
 
 @dataclass(frozen=True)
@@ -134,7 +169,7 @@ class CompanionModel:
                     # Only a blocked run gets a deep link: the link exists to take the
                     # owner to the thing waiting on them, not to decorate every row.
                     deep_link=self.client.deep_link(loop_id) if blocked and loop_id else "",
-                    question=str(row.get("pending_question") or "") if blocked else "",
+                    question=_question_text(row.get("pending_question")) if blocked else "",
                 )
             )
         return out
@@ -147,9 +182,18 @@ class CompanionModel:
     def pending_approvals(self) -> list[ApprovalRow]:
         out: list[ApprovalRow] = []
         for row in self.approvals:
-            label = str(row.get("tool") or row.get("title") or row.get("name") or "approval")
-            detail = str(row.get("summary") or row.get("description") or "")
-            out.append(ApprovalRow(id=_row_id(row), label=label, detail=detail))
+            approval_id = _row_id(row)
+            brief = brief_of(row)
+            out.append(
+                ApprovalRow(
+                    id=approval_id,
+                    title=brief.title,
+                    brief=brief.lines,
+                    can_approve=brief.approvable,
+                    can_deny=brief.deniable,
+                    review_link=self.client.review_link(approval_id),
+                )
+            )
         return out
 
     @property
@@ -200,16 +244,22 @@ def render(model: CompanionModel, muted: bool = False) -> MenuText:
     lines: list[str] = []
     approvals = model.pending_approvals
     lines.append(f"Approvals waiting: {len(approvals)}")
-    for row in approvals:
-        lines.append(f"  • {row.label} [Approve] [Deny]  ({row.id})")
+    for approval in approvals:
+        lines.append(f"  • {approval.title}  ({approval.id})")
+        lines.extend(f"      {line}" for line in approval.brief)
+        answers = [
+            f"[{a} → {approval.review_link}]" if a == REVIEW else f"[{a}]" for a in approval.answers
+        ]
+        lines.append(f"      {' '.join(answers)}")
     blocked = model.needs_input
     lines.append(f"Needs your input: {len(blocked)}")
-    for row in blocked:
-        lines.append(f"  • {row.label} → {row.deep_link}")
+    for run in blocked:
+        lines.append(f"  • {run.label} → {run.deep_link}")
+        lines.extend(f"      {line}" for line in run.question_lines)
     runs = [r for r in model.runs if not r.needs_input]
     lines.append(f"Running: {len(runs)}")
-    for row in runs:
-        lines.append(f"  • {row.label} ({row.status})")
+    for run in runs:
+        lines.append(f"  • {run.label} ({run.status})")
     lines.append(f"Notifications: {'muted' if muted else 'on'}")
     if model.last_error:
         # The failure is shown on the surface that caused it, not only in a log.

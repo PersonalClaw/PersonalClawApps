@@ -34,6 +34,7 @@ import urllib.error
 from pathlib import Path
 
 import pytest
+from _rows import approval
 from _ws_fakes import FakeOpener
 from menubar_companion.settings import Settings
 
@@ -41,7 +42,7 @@ APP_DIR = Path(__file__).resolve().parent
 RAW = json.loads((APP_DIR / "app.json").read_text(encoding="utf-8"))
 CLIENT_INSTALL = RAW["platform"]["clientInstall"]
 
-APPROVALS = [{"id": "a1", "tool": "bash"}]
+APPROVALS = [approval(id="a1")]
 LOOPS = {"loops": [{"id": "L2", "name": "which db?", "status": "needs_input"}]}
 
 
@@ -127,9 +128,7 @@ def test_every_flag_the_manifest_runs_on_install_is_a_flag_the_launcher_dispatch
         _configure_home()  # configured, so a fall-through would reach the LIVE path
         called: list[str] = []
         monkeypatch.setattr(launcher, "_check", lambda: called.append("check") or 0)
-        monkeypatch.setattr(
-            launcher, "_run_status_item", lambda *_a: called.append("live") or 0
-        )
+        monkeypatch.setattr(launcher, "_run_status_item", lambda *_a: called.append("live") or 0)
         monkeypatch.setattr(launcher, "_run_headless", lambda *_a: called.append("live") or 0)
 
         assert launcher.main([flag]) == 0
@@ -211,9 +210,7 @@ def test_check_exits_2_and_says_how_to_configure_when_there_are_no_credentials(c
     assert "--configure" in err, "the message names the command that fixes it"
 
 
-def test_check_exits_1_and_shows_the_reason_when_the_gateway_is_unreachable(
-    monkeypatch, capsys
-):
+def test_check_exits_1_and_shows_the_reason_when_the_gateway_is_unreachable(monkeypatch, capsys):
     """A wrong URL or a stopped gateway is a FAILED check, and the reason is printed."""
     import run as launcher
 
@@ -244,6 +241,24 @@ def test_check_exits_0_and_prints_the_menu_it_would_show(monkeypatch, capsys):
     assert "Needs your input: 1" in out
     # It also reports whether this machine can draw the item, rather than assuming.
     assert "status-item host:" in out
+
+
+def test_check_prints_the_brief_it_would_show_and_never_the_token(monkeypatch, capsys):
+    """What ``--check`` prints may be pasted anywhere: it never carries the owner token.
+
+    It used to print every needs-input link with the token in it.
+    """
+    import run as launcher
+
+    token = "fake-owner-token"
+    Settings(url="http://127.0.0.1:10000", token=token).save()
+    _inject_opener(monkeypatch, launcher, _healthy_opener())
+
+    assert launcher.main(["--check"]) == 0
+    out = capsys.readouterr().out
+    assert "Permission needed to run bash" in out
+    assert "• which db? → http://127.0.0.1:10000/#/loops/L2" in out
+    assert token not in out
 
 
 def test_a_bare_launch_without_credentials_checks_instead_of_opening_a_menu_bar_item(
