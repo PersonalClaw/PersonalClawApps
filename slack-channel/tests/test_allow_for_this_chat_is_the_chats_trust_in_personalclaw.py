@@ -222,7 +222,6 @@ def _turn(slack, sessions, dashboard, text: str, *, first: bool = False):
             None if first else THREAD,
             THREAD if first else next(_LATER),
             OWNER,
-            approval_mode="interactive",
             conversation_log=dashboard.conversation_log,
         )
     )

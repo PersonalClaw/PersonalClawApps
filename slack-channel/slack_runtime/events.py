@@ -58,7 +58,6 @@ from slack_runtime.enterprise import (
 from slack_runtime.files import process_slack_files
 from slack_runtime.format import slack_text
 from slack_runtime.handler import (
-    APPROVAL_INTERACTIVE,
     claim_owner,
     get_owner_id,
     handle_message,
@@ -1410,7 +1409,6 @@ async def _dispatch_queued(
         msg_ts,
         kwargs.get("sender_id", ""),
         team_id=kwargs.get("team_id", ""),
-        approval_mode=APPROVAL_INTERACTIVE,
         context_builder=orch.ctx_builder,
         conversation_log=orch.conv_log,
         consolidator=orch.consolidator,
@@ -1883,7 +1881,6 @@ async def _route_message(
                 msg_ts,
                 sender_id,
                 team_id=team_id,
-                approval_mode=APPROVAL_INTERACTIVE,
                 context_builder=orch.ctx_builder,
                 conversation_log=orch.conv_log,
                 consolidator=orch.consolidator,

@@ -102,6 +102,16 @@ ended, on a client still showing the prompt, changes nothing, and you are told h
 The chat PersonalClaw opens for the thread is given each turn the app writes, and the title it
 gives the thread, so it shows the thread as it is.
 
+**A thread's call runs without asking only when PersonalClaw says so.** For each call a thread this
+app runs itself asks about, the app asks PersonalClaw who approves it without asking, and approves
+on nothing else: a pattern in PersonalClaw's hook settings (`hooks.auto_approve_tools`) that names
+the call, a call to a PersonalClaw tool that only reads, the call that starts a subagent (whose start
+asks you itself, or starts on the spawn setting), and the thread's chat's Trust, Trust reads or YOLO.
+Each is held to PersonalClaw's operator ceiling and your allowed hosts, as in PersonalClaw's own
+chat: under a ceiling saying every call asks, none of them runs a call here, and a command that
+reaches a host off your allowed hosts is asked about whatever would have approved it. Any other call
+is asked on the thread's prompt.
+
 The answers come from PersonalClaw, so the app declares the core features that hand them over
 and hold the chat's Trust (`requiresCoreFeatures`: `approval-answers`, `chat-trust`), and a
 PersonalClaw without them will not install or update the app. A PersonalClaw from before that

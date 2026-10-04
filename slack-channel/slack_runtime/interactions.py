@@ -39,7 +39,6 @@ from slack_runtime.format import (
     to_slack_mrkdwn,
 )
 from slack_runtime.handler import (
-    APPROVAL_INTERACTIVE,
     LATE_PRESS,
     _closed_blocks,
     _pending_approvals,
@@ -851,7 +850,6 @@ async def _route_action_to_session(
             new_ts,
             user_id,
             team_id=team_id,
-            approval_mode=APPROVAL_INTERACTIVE,
             context_builder=_orch.ctx_builder,
             conversation_log=_orch.conv_log,
             consolidator=_orch.consolidator,
@@ -1021,7 +1019,6 @@ async def _handle_options_submit(payload: dict, channel: str, msg_ts: str) -> No
             new_ts,
             user_id,
             team_id=team_id,
-            approval_mode=APPROVAL_INTERACTIVE,
             context_builder=_orch.ctx_builder,
             conversation_log=_orch.conv_log,
             consolidator=_orch.consolidator,
@@ -1171,7 +1168,6 @@ async def _handle_options(payload: dict, action: dict, channel: str, msg_ts: str
             new_ts,
             user_id,
             team_id=team_id,
-            approval_mode=APPROVAL_INTERACTIVE,
             context_builder=_orch.ctx_builder,
             conversation_log=_orch.conv_log,
             consolidator=_orch.consolidator,
@@ -2451,7 +2447,6 @@ async def _handle_review_revise_submit(payload: dict) -> None:
                 thread_ts,
                 thread_ts,  # msg_ts = thread_ts for revision
                 caller,
-                approval_mode=APPROVAL_INTERACTIVE,
                 context_builder=_orch.ctx_builder,
                 conversation_log=_orch.conv_log,
                 consolidator=_orch.consolidator,

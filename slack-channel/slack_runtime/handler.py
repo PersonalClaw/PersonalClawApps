@@ -44,7 +44,7 @@ from personalclaw.sdk.channel import (
 )
 from personalclaw.sdk.channel import ConversationLog, HistoryConsolidator
 from personalclaw.sdk.channel import chore_usage, run_chore
-from personalclaw.sdk.channel import HOOK_REPLY, TOOL_AUTO_APPROVE, TOOL_DENY, validate_file_path
+from personalclaw.sdk.channel import HOOK_REPLY, TOOL_DENY, validate_file_path
 from personalclaw.sdk.channel import save_conversation_turn
 from personalclaw.sdk.channel import (
     COMPACTION_AUTOMATIC,
@@ -93,20 +93,6 @@ _BANG_TO_SLASH: dict[str, str] = {
     "!channel": "/personalclaw channel",
     "!link-to-dashboard": "/personalclaw link-to-dashboard",
 }
-
-# Approval modes (UX-level, not provider-specific)
-APPROVAL_AUTO = "auto"
-APPROVAL_INTERACTIVE = "interactive"
-
-
-def _should_auto_approve_spawn(context_builder, event_title: str) -> bool:
-    """Check if a subagent_run tool call should be auto-approved."""
-    return bool(
-        context_builder
-        and context_builder.hooks
-        and context_builder.hooks.auto_approve_subagent_spawn
-        and event_title == "subagent_run"
-    )
 
 
 # Min interval between Slack message edits (avoid rate limits)
@@ -1838,7 +1824,6 @@ async def handle_message(
     msg_ts: str,
     user_id: str,
     team_id: str = "",
-    approval_mode: str = APPROVAL_AUTO,
     context_builder: ContextBuilder | None = None,
     conversation_log: ConversationLog | None = None,
     consolidator: HistoryConsolidator | None = None,
@@ -2498,21 +2483,8 @@ async def handle_message(
                     accumulated = ""
 
             elif event.kind == EVENT_PERMISSION_REQUEST:
-                # Check tool hooks for auto-approve
                 if context_builder:
                     tool_result = context_builder.hooks.on_tool_call(event.title)
-                    if tool_result.action == TOOL_AUTO_APPROVE:
-                        await client.approve_tool(event.request_id)
-                        sel().log_tool_invocation(
-                            session_key=session_key,
-                            source="slack",
-                            tool_name=event.title,
-                            tool_kind=event.tool_kind,
-                            outcome="auto_approved",
-                            request_id=event.request_id,
-                            metadata={"reason": "hook_auto_approve"},
-                        )
-                        continue
                     if tool_result.action == TOOL_DENY:
                         await client.reject_tool(event.request_id)
                         accumulated += f"\n🚫 _Tool `{event.title}` blocked by hooks._"
@@ -2527,37 +2499,12 @@ async def handle_message(
                         )
                         continue
 
-                # auto_approve_subagent_spawn → auto-approve subagent_run tool calls
-                if _should_auto_approve_spawn(context_builder, event.title or ""):
-                    await client.approve_tool(event.request_id)
-                    sel().log_tool_invocation(
-                        session_key=session_key,
-                        source="slack",
-                        tool_name=event.title,
-                        tool_kind=event.tool_kind,
-                        outcome="auto_approved",
-                        request_id=event.request_id,
-                        metadata={"reason": "auto_approve_subagent_spawn"},
-                    )
-                    continue
-
-                if approval_mode == APPROVAL_AUTO:
-                    await client.approve_tool(event.request_id)
-                    sel().log_tool_invocation(
-                        session_key=session_key,
-                        source="slack",
-                        tool_name=event.title,
-                        tool_kind=event.tool_kind,
-                        outcome="auto_approved",
-                        request_id=event.request_id,
-                        metadata={"reason": "approval_mode_auto"},
-                    )
-                    continue
-
-                # The thread's chat in PersonalClaw decides whether a grant answers this call:
-                # YOLO, the chat's Trust (Allow for this chat, here or in the dashboard) or its
-                # Trust reads, read now, so the owner switching the chat's Trust off there makes
-                # this call ask.
+                # PersonalClaw says who approves this call without asking, and this app approves
+                # no call on an answer of its own: an operator's pattern in the hook settings, what
+                # the call's tool declares, and the thread's chat's YOLO, Trust (Allow for this
+                # chat, here or in the dashboard) or Trust reads, each held to the operator
+                # ceiling and the allowed hosts, as in PersonalClaw's own chat. Read now, so a
+                # pattern removed or the chat's Trust switched off there makes this call ask.
                 grant = chat_grant(session_key, event)
                 if grant:
                     await client.approve_tool(event.request_id)

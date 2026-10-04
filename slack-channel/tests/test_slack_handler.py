@@ -415,7 +415,7 @@ class TestToolApproval:
 
         await asyncio.gather(
             handle_message(
-                slack, sessions, "C1", "write it", None, "msg1", "U1", approval_mode="interactive"
+                slack, sessions, "C1", "write it", None, "msg1", "U1"
             ),
             _click_approve(),
         )
@@ -470,7 +470,7 @@ class TestToolApproval:
 
         await asyncio.gather(
             handle_message(
-                slack, sessions, "C1", "delete it", None, "msg1", "U1", approval_mode="interactive"
+                slack, sessions, "C1", "delete it", None, "msg1", "U1"
             ),
             _click_reject(),
         )
@@ -514,7 +514,7 @@ class TestToolApproval:
 
         await asyncio.gather(
             handle_message(
-                slack, sessions, "C1", "read it", None, "msg1", "U1", approval_mode="interactive"
+                slack, sessions, "C1", "read it", None, "msg1", "U1"
             ),
             _click_approve(),
         )
@@ -560,7 +560,7 @@ class TestToolApproval:
 
         await asyncio.gather(
             handle_message(
-                slack, sessions, "C1", "run it", None, "msg1", "U1", approval_mode="interactive"
+                slack, sessions, "C1", "run it", None, "msg1", "U1"
             ),
             _click_approve(),
         )
@@ -853,7 +853,7 @@ class TestAllowedUsers:
 
         await asyncio.gather(
             handle_message(
-                slack, sessions, "C1", "go", None, "msg1", "U1", approval_mode="interactive"
+                slack, sessions, "C1", "go", None, "msg1", "U1"
             ),
             _click(),
         )
@@ -899,7 +899,7 @@ class TestAllowedUsers:
 
         task = asyncio.ensure_future(
             handle_message(
-                slack, sessions, "C1", "go", None, "msg2", "U1", approval_mode="interactive"
+                slack, sessions, "C1", "go", None, "msg2", "U1"
             )
         )
         await _click_as_intruder()
@@ -949,7 +949,7 @@ class TestAllowedUsers:
 
         await asyncio.gather(
             handle_message(
-                slack, sessions, "C1", "go", None, "msg3", "U1234", approval_mode="interactive"
+                slack, sessions, "C1", "go", None, "msg3", "U1234"
             ),
             _click(),
         )

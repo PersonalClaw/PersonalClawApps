@@ -91,7 +91,6 @@ async def _turn(slack, provider) -> None:
     await asyncio.wait_for(
         H.handle_message(
             slack, FakeSessionManager(provider), DM, "write it", None, "msg1", OWNER,
-            approval_mode="interactive",
         ),
         timeout=5,
     )
