@@ -197,7 +197,7 @@ class A2AActionProvider(ActionProvider):
         # docstring for why this app does not build its own. `with_overrides` narrows the
         # timeout to the caller's and touches nothing else; it cannot widen the host reach,
         # because `allow_only` and `allow_hosts` are not among the fields set here.
-        from personalclaw.sdk.net import EgressBlocked, a2a_outbound_policy
+        from personalclaw.sdk.net import EgressBlocked, a2a_outbound_policy, egress_refusal
         from personalclaw.sdk.net import fetch as net_fetch
         from personalclaw.sdk.security import fence_untrusted
 
@@ -213,11 +213,16 @@ class A2AActionProvider(ActionProvider):
             )
         except EgressBlocked as exc:
             # Deny-by-default landing here is the NORMAL first experience, so the message
-            # names the remedy: the operator has not allow-listed this agent's host yet.
+            # names the remedy: the operator has not allow-listed this agent's host yet. A run
+            # whose egress tier is off is refused every host, an allowed one included, and no
+            # host setting lifts that: the guard's own sentence says so and names none.
+            off = getattr(exc.decision, "category", "") == "egress_off"
             return ActionResult(
                 success=False,
                 error=(
-                    f"{exc} — add the agent's host to Settings › Security › Network "
+                    egress_refusal(url, exc.decision)
+                    if off
+                    else f"{exc} — add the agent's host to Settings › Security › Network "
                     "egress to allow it."
                 ),
                 duration_ms=int((time.monotonic() - start) * 1000),

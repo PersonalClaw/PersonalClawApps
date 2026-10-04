@@ -139,6 +139,33 @@ def test_a_non_allowlisted_public_host_is_refused(monkeypatch):
     assert "network" in (r.error or "").lower() and "egress" in (r.error or "").lower()
 
 
+def test_a_run_whose_egress_is_off_is_not_told_to_allow_the_host(monkeypatch):
+    """A run's egress tier refuses every host, and no entry on Allowed hosts lifts it: the refusal
+    says why in the guard's own words and offers no host to add, though this one is allowed."""
+    import personalclaw.mcp_core as mcp_core
+    from personalclaw.guardrails.ceiling import ceiling_path, reset_ceiling
+
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_dns({_HOST: [_PUBLIC_IP]}))
+    _allow(monkeypatch, [_HOST])
+    ceiling = ceiling_path()
+    ceiling.parent.mkdir(parents=True, exist_ok=True)
+    ceiling.write_text(
+        json.dumps({"version": 1, "scopes": {"egress": {"value": "off"}}}), encoding="utf-8"
+    )
+    reset_ceiling()
+    token = mcp_core.set_current_session_key("unattended:trigger:clock:hand-off")  # its run
+    try:
+        r = _run(A2AActionProvider().execute({"url": f"https://{_HOST}/a2a"}, _ctx()))
+    finally:
+        mcp_core.reset_current_session_key(token)
+        reset_ceiling()
+    assert r.success is False
+    assert r.error == (
+        f"https://{_HOST}/a2a was not reached: "
+        "egress is off for this run (safety profile egress tier 'off')."
+    )
+
+
 def test_an_allowlisted_host_is_delivered_to(monkeypatch):
     """Vacuity floor for the refusal above: it is the ALLOW-LIST, not a blanket no."""
     monkeypatch.setattr(socket, "getaddrinfo", _fake_dns({_HOST: [_PUBLIC_IP]}))
