@@ -46,10 +46,10 @@ class FakeSession:
         self.appended: list[tuple] = []
         self.queued: list[str] = []
 
-    def append(self, role, text, cls):
+    def append(self, role, text, cls, *, source=None):
         self.appended.append((role, text, cls))
 
-    def queue_append(self, text, *, channel=""):
+    def queue_append(self, text, *, channel="", source=None):
         self.queued.append(text)
 
 

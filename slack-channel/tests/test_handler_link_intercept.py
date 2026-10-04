@@ -260,8 +260,13 @@ class TestLinkedThreadIntercept:
             import asyncio as _aio
 
             await _aio.sleep(0)
-            # UI gets redacted text
-            session.append.assert_called_once_with("user", "[REDACTED]", "msg msg-u")
+            # UI gets redacted text, recorded as the thread's sender's
+            session.append.assert_called_once_with(
+                "user",
+                "[REDACTED]",
+                "msg msg-u",
+                source={"source_thread": "t1", "source_user": "U1"},
+            )
             # LLM gets original text
             assert [t[1] for t in services.turns] == ["hello http://evil.com"]
 
@@ -274,7 +279,7 @@ class TestLinkedThreadIntercept:
         type(session).running = PropertyMock(return_value=True)
         session.key = "session1"
         session._queue = []
-        session.queue_append = lambda content, *, channel="": (session._queue.append({"id": "test", "content": content}) or "test")
+        session.queue_append = lambda content, *, channel="", source=None: (session._queue.append({"id": "test", "content": content}) or "test")
         ds = MagicMock()
         ds.get_linked_session = MagicMock(return_value=session)
         ds.broadcast_ws = MagicMock()

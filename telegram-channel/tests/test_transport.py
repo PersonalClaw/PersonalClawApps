@@ -32,7 +32,7 @@ class FakeSession:
         self.task = None
         self.appended: list[tuple] = []
 
-    def append(self, role, text, cls):
+    def append(self, role, text, cls, *, source=None):
         self.appended.append((role, text, cls))
 
 
