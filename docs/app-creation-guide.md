@@ -129,7 +129,7 @@ field.
 ```json
 {
   "name": "my-app",              // unique id, kebab-case (validated)
-  "version": "1.0.0",            // semver (validated)
+  "version": "1.0.0",            // MAJOR.MINOR.PATCH, a pre-release as 1.0.0-rc.1 (validated)
   "displayName": "My App",
   "description": "One or two sentences shown on the Store card."
 }
@@ -526,12 +526,15 @@ example.
 
 PersonalClaw refuses to review, install, update or switch on an app it cannot host, and the
 refusal names what it lacks, so the owner is told to update PersonalClaw instead of finding the
-app quietly doing less. Every PersonalClaw built between two releases reads the same version, so
-`minPersonalClawVersion` cannot tell a build that has a contract your app relies on from one
-made before it. A core feature can: each names one contract, and `personalclaw.sdk.features`
-lists the ones the running PersonalClaw offers (`CORE_FEATURES`; `core_has(name)` asks about
-one). Declare each one your app cannot work without. For one it can do without, ask `core_has`
-and say so when it is missing.
+app quietly doing less. The floor and PersonalClaw's own version are read by the packaging
+standard (PEP 440), so a release candidate or a dev build is older than its release: `0.3.0rc1`
+refuses an app that needs `0.3.0`. A floor that is not a version (`latest`, `>=0.2`) refuses the
+app everywhere, naming the value. Every PersonalClaw built between two releases reads the same
+version, so `minPersonalClawVersion` cannot tell a build that has a contract your app relies on
+from one made before it. A core feature can: each names one contract, and
+`personalclaw.sdk.features` lists the ones the running PersonalClaw offers (`CORE_FEATURES`;
+`core_has(name)` asks about one). Declare each one your app cannot work without. For one it can
+do without, ask `core_has` and say so when it is missing.
 
 | Feature | What it is | Declared by |
 |---|---|---|

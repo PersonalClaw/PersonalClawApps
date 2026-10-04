@@ -6,7 +6,7 @@ contract is the bar, not core's full doctrine. Long form: [CONTRIBUTING.md](CONT
 
 ## What an app is
 
-A directory with an `app.json` manifest (`name` kebab-case, `version` semver,
+A directory with an `app.json` manifest (`name` kebab-case, `version` `MAJOR.MINOR.PATCH`,
 `displayName`, `description` required) plus its implementation, extending a
 PersonalClaw gateway via the platform's typed provider contracts. Full contract:
 `docs/app-creation-guide.md`, `docs/platform-architecture.md`.

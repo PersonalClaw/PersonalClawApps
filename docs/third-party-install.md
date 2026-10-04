@@ -87,7 +87,9 @@ the gate, and never auto-forced for an unattended/agent-initiated install.
   `requiresCoreFeatures` it does not offer. The sentence names the version and each missing
   feature. Update PersonalClaw (`personalclaw update`), then install again; nothing was
   installed. An update to such a version is refused the same way, and the installed version
-  keeps running.
+  keeps running. A release candidate of PersonalClaw is older than its release, so `0.3.0rc1`
+  refuses an app that needs `0.3.0`; and an app whose `minPersonalClawVersion` is not a version
+  is refused the same way, naming the value, until its author fixes it.
 
 ## Installing from a shell
 

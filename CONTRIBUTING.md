@@ -10,7 +10,7 @@ Agents should read [AGENTS.md](AGENTS.md) for the compressed version.
 ## What an app is
 
 A directory with an `app.json` manifest (required: `name` kebab-case, `version`
-semver, `displayName`, `description`) plus its implementation. An app extends a
+`MAJOR.MINOR.PATCH`, `displayName`, `description`) plus its implementation. An app extends a
 PersonalClaw gateway through the platform's typed provider contracts.
 
 ## The front-door bar
