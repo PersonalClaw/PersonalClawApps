@@ -47,6 +47,8 @@ off-surface), so the fan-out is built from what the SDK does publish. Three mode
   only that file's brief, torn down afterwards. Context isolation is total — a test asserts
   no brief can contain another file's path. Process isolation is *not*: these are model
   calls in this process, and the report labels them `model:<entry>`, never `subagent`.
+  Each call's stream is read inside the SDK's `closing_stream`, so a review stopped part way
+  closes it before its provider is torn down (`requiresCoreFeatures`: `closing-streams`).
 - **`fanout="plan"`.** No model call. `review_pr` returns one review brief per file in
   `metadata.briefs` and the host agent spawns **one real subagent per brief** with its own
   spawn surface, each reporting through `record_finding`. This is the leg that gets

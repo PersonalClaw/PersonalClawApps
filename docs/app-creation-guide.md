@@ -539,6 +539,7 @@ and say so when it is missing.
 | `chat-trust` | a channel that runs a conversation itself keeps no trust of its own: its prompt offers the chat's answers (`approval_brief_for(event, chat=...)`), Allow for this chat becomes the Trust of PersonalClaw's chat for the conversation (`answer_in_chat`), and each call asks which of that chat's grants answers it (`chat_grant`) | a channel app that runs its own turns: `slack-channel` |
 | `links-name-their-channel` | a chat's link to a channel thread names the channel it is on, where the chat answers: `link_channel(chat, thread, channel_id, provider=...)` links a chat on your channel (moving it off any thread it was on; the owner's own DM it left is told where it went), and `SessionManager.get_channel_provider(key)` says which channel a chat is on | a channel app that links a chat to one of its threads itself: `slack-channel` |
 | `tool-call-screen` | a channel that runs a conversation itself asks PersonalClaw's deny-list about each call before it approves or asks about it (`screen_tool_call(hooks, event.title, event.tool_input)`, the hook chain's verdict read on the command the call would run as well as on its title) and refuses a call it refuses, never putting it on its prompt | a channel app that runs its own turns: `slack-channel` |
+| `closing-streams` | a model's stream your app reads is closed the moment it stops reading: read inside `personalclaw.sdk.model.closing_stream`, it is closed by any way out of the block, and an agent CLI's turn left part way is told to stop and its session takes the next prompt at once | an app that reads a model's stream (`stream`, `stream_command`, `complete`): `slack-channel`, `code-review`, `issue-radar` |
 
 A PersonalClaw from before core features cannot read the field, so an app also checks what it
 relies on where it uses it: a channel app handed a brief with no answers says so on the prompt,
@@ -546,8 +547,12 @@ with nothing to press, and logs it once. `.github/tests/test_core_features_decla
 every bundle's names to the ones the installed PersonalClaw offers, every app whose prompt
 offers the brief's answers to declaring `approval-answers`, every app that gives or reads a
 chat's Trust to declaring `chat-trust`, every app that links a chat on its own channel to
-declaring `links-name-their-channel`, and every app that screens a call with the deny-list to
-declaring `tool-call-screen`.
+declaring `links-name-their-channel`, every app that screens a call with the deny-list to
+declaring `tool-call-screen`, and every app that reads a model's stream inside `closing_stream`
+to declaring `closing-streams`.
+`.github/tests/test_model_streams_are_read_inside_closing_stream.py` holds every app to reading a
+model's stream that way: an `async for` over a provider's stream, or an `anext` of one, anywhere
+else fails it.
 
 ### What it starts, installs and writes outside PersonalClaw (`launches`, `npmPackages`, `writes`)
 

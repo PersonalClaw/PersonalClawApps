@@ -63,6 +63,7 @@ from personalclaw.sdk.channel import chat_grant, screen_tool_call
 from personalclaw.sdk.channel import is_sensitive_path, redact_credentials, redact_exfiltration_urls
 from personalclaw.sdk.channel import sel
 from personalclaw.sdk.channel import SessionManager
+from personalclaw.sdk.model import closing_stream
 from slack_runtime.blocks import deprecation_warning_block
 from slack_runtime.client import SlackClientOps
 from slack_runtime.format import (
@@ -1728,22 +1729,25 @@ async def _handle_compact_command(
     try:
         async def _run_compact_stream() -> None:
             nonlocal result_text, outcome
-            async for event in provider.stream_command("/compact"):
-                if event.kind == EVENT_COMPACTION_STATUS:
-                    if event.text == "completed":
-                        result_text = _compacted_line(event.title or "")
-                        outcome = "completed"
-                    elif event.text == "noop":
-                        # The pass ran and found nothing to reclaim: there is no later result to
-                        # wait for.
-                        result_text = _NOTHING_TO_COMPACT
-                        outcome = "noop"
-                    elif event.text == "failed":
-                        error = event.title or "unknown error"
-                        result_text = f"❌ Compaction failed: {error}"
-                        outcome = "failed"
-                elif event.kind == EVENT_COMPLETE:
-                    break
+            # Closed at once wherever the reading stops: at the terminal event, or on the
+            # timeout below, so the session is never held by a command nobody reads.
+            async with closing_stream(provider.stream_command("/compact")) as events:
+                async for event in events:
+                    if event.kind == EVENT_COMPACTION_STATUS:
+                        if event.text == "completed":
+                            result_text = _compacted_line(event.title or "")
+                            outcome = "completed"
+                        elif event.text == "noop":
+                            # The pass ran and found nothing to reclaim: there is no later result to
+                            # wait for.
+                            result_text = _NOTHING_TO_COMPACT
+                            outcome = "noop"
+                        elif event.text == "failed":
+                            error = event.title or "unknown error"
+                            result_text = f"❌ Compaction failed: {error}"
+                            outcome = "failed"
+                    elif event.kind == EVENT_COMPLETE:
+                        break
 
         await asyncio.wait_for(_run_compact_stream(), timeout=120)
 
@@ -2366,247 +2370,256 @@ async def handle_message(
             await slack.set_thread_status(channel, reply_ts, "")
             return
 
-        async for event in client.stream(full_message):
-            if event.kind == EVENT_TEXT_CHUNK:
-                if _tool_gap and accumulated and accumulated[-1:] not in ("\n", " "):
-                    first = event.text[:1]
-                    if first and first not in ("\n", " "):
-                        event.text = "\n\n" + event.text
-                event.text, _ = redact_exfiltration_urls(event.text)
-                event.text, _ = redact_credentials(event.text)
+        # Read inside closing_stream: whichever way the loop is left (the terminal event, a call
+        # whose approval was not given, an error, a stop), the turn's stream is closed at once.
+        # That tells an agent CLI to stop the turn nobody reads any more, and gives the thread's
+        # session back for its next message; a stream left open held it until the interpreter
+        # collected the stream, which can be never.
+        async with closing_stream(client.stream(full_message)) as events:
+            async for event in events:
+                if event.kind == EVENT_TEXT_CHUNK:
+                    if _tool_gap and accumulated and accumulated[-1:] not in ("\n", " "):
+                        first = event.text[:1]
+                        if first and first not in ("\n", " "):
+                            event.text = "\n\n" + event.text
+                    event.text, _ = redact_exfiltration_urls(event.text)
+                    event.text, _ = redact_credentials(event.text)
 
-                if event.text:
-                    _tool_gap = False
-                status_ctrl.set_phase("thinking")
-                status_ctrl.on_progress()
-                accumulated += event.text
+                    if event.text:
+                        _tool_gap = False
+                    status_ctrl.set_phase("thinking")
+                    status_ctrl.on_progress()
+                    accumulated += event.text
 
-                if _status_dirty and use_slack_stream:
-                    await slack.set_thread_status(channel, reply_ts, _STATUS_WORKING)
-                    _status_dirty = False
+                    if _status_dirty and use_slack_stream:
+                        await slack.set_thread_status(channel, reply_ts, _STATUS_WORKING)
+                        _status_dirty = False
 
-                # ── Bracket hold-back: filter [OPTIONS: ...] from stream ──
-                # When inside a bracket, accumulate into bracket_hold.
-                # On ']', release if not OPTIONS, suppress if it is.
-                if use_slack_stream:
-                    bracket_hold, stream_buffer = _filter_options_brackets(
-                        event.text, bracket_hold, stream_buffer
-                    )
-                else:
-                    stream_buffer += event.text
-
-                await _ensure_stream_started()
-
-                now = time.monotonic()
-                if now - last_edit >= _EDIT_INTERVAL:
+                    # ── Bracket hold-back: filter [OPTIONS: ...] from stream ──
+                    # When inside a bracket, accumulate into bracket_hold.
+                    # On ']', release if not OPTIONS, suppress if it is.
                     if use_slack_stream:
+                        bracket_hold, stream_buffer = _filter_options_brackets(
+                            event.text, bracket_hold, stream_buffer
+                        )
+                    else:
+                        stream_buffer += event.text
+
+                    await _ensure_stream_started()
+
+                    now = time.monotonic()
+                    if now - last_edit >= _EDIT_INTERVAL:
+                        if use_slack_stream:
+                            if stream_buffer:
+                                stream_buffer, _ = strip_thinking_tags(
+                                    stream_buffer, strip_whitespace=False
+                                )
+                                await _append_stream(stream_buffer)
+                                stream_buffer = ""
+                        else:
+                            assert stream_ts is not None
+                            if channel_activation != ACTIVATION_REVIEW:
+                                await _safe_update(slack, channel, stream_ts, accumulated + _CURSOR)
+                        last_edit = now
+
+                elif event.kind == EVENT_THINKING_CHUNK:
+                    # The reasoning moves the status reaction and nothing else: it is the
+                    # model's own, and never goes to the channel.
+                    status_ctrl.set_phase("thinking")
+                    status_ctrl.on_progress()
+
+                elif event.kind == EVENT_COMPACTION_STATUS and event.text == COMPACTION_AUTOMATIC:
+                    # The agent compacted the conversation on its own between two steps. The answer
+                    # streamed so far stays, and this is its own message after the reply rather than
+                    # a line inside it, so the answer the thread keeps is only the answer.
+                    status_ctrl.on_progress()
+                    compacted_on_its_own.append(event.title or "")
+
+                elif event.kind == EVENT_TOOL_CALL:
+                    _tool_gap = True
+                    # Check tool hooks
+                    if context_builder:
+                        tool_result = context_builder.hooks.on_tool_call(event.title)
+                        if tool_result.action == TOOL_DENY:
+                            accumulated += f"\n🚫 _Tool `{event.title}` blocked by hooks._"
+                            sel().log_tool_invocation(
+                                session_key=session_key,
+                                source="slack",
+                                tool_name=event.title,
+                                tool_kind=event.tool_kind,
+                                outcome="denied",
+                                error="hook_deny",
+                            )
+                            continue
+
+                    sel().log_tool_invocation(
+                        session_key=session_key,
+                        source="slack",
+                        tool_name=event.title,
+                        tool_kind=event.tool_kind,
+                        outcome="invoked",
+                    )
+
+                    tool_name = event.title.removeprefix("Running: ")
+                    tool_name, _ = redact_exfiltration_urls(tool_name)
+                    tool_name, _ = redact_credentials(tool_name)
+                    tool_kind = event.tool_kind or ""
+                    status_ctrl.set_phase(_tool_to_phase(tool_name, tool_kind))
+                    status_ctrl.on_progress()
+                    tool_detail = event.tool_purpose or tool_kind
+                    tool_status = f"\n🫆 `{tool_name}`\n"
+                    await _ensure_stream_started()
+                    if use_slack_stream:
+                        await slack.set_thread_status(channel, reply_ts, f"is using {tool_name}")
+                        _status_dirty = True
+                    if use_slack_stream:
+                        # Flush any buffered text before the tool status
                         if stream_buffer:
                             stream_buffer, _ = strip_thinking_tags(
                                 stream_buffer, strip_whitespace=False
                             )
                             await _append_stream(stream_buffer)
                             stream_buffer = ""
+                        # Mark previous task complete, start new one
+                        if _active_task_id:
+                            await _append_task(_active_task_id, _active_task_title, "complete")
+                        _task_counter += 1
+                        _active_task_id = f"tool_{_task_counter}"
+                        _active_task_title = event.tool_purpose or tool_name
+                        _active_task_title, _ = redact_exfiltration_urls(_active_task_title)
+                        _active_task_title, _ = redact_credentials(_active_task_title)
+                        await _append_task(
+                            _active_task_id,
+                            title=_active_task_title,
+                            status="in_progress",
+                            details=tool_name if tool_detail else "",
+                        )
                     else:
+                        accumulated += tool_status
                         assert stream_ts is not None
                         if channel_activation != ACTIVATION_REVIEW:
                             await _safe_update(slack, channel, stream_ts, accumulated + _CURSOR)
-                    last_edit = now
+                    last_edit = time.monotonic()
 
-            elif event.kind == EVENT_THINKING_CHUNK:
-                # The reasoning moves the status reaction and nothing else: it is the model's own,
-                # and never goes to the channel.
-                status_ctrl.set_phase("thinking")
-                status_ctrl.on_progress()
+                    # wait tool blocks MCP for up to 30min — finalize the
+                    # streaming message now so Slack doesn't show an error.
+                    # _ensure_stream_started() will open a new message when
+                    # the next text chunk arrives after wait returns.
+                    if tool_name == "wait" and use_slack_stream and stream_ts:
+                        if _active_task_id:
+                            await _append_task(_active_task_id, _active_task_title, "complete")
+                            _active_task_id = ""
+                        await slack.stop_stream(channel, stream_ts)
+                        stream_ts = None
+                        accumulated = ""
 
-            elif event.kind == EVENT_COMPACTION_STATUS and event.text == COMPACTION_AUTOMATIC:
-                # The agent compacted the conversation on its own between two steps. The answer
-                # streamed so far stays, and this is its own message after the reply rather than
-                # a line inside it, so the answer the thread keeps is only the answer.
-                status_ctrl.on_progress()
-                compacted_on_its_own.append(event.title or "")
-
-            elif event.kind == EVENT_TOOL_CALL:
-                _tool_gap = True
-                # Check tool hooks
-                if context_builder:
-                    tool_result = context_builder.hooks.on_tool_call(event.title)
+                elif event.kind == EVENT_PERMISSION_REQUEST:
+                    # PersonalClaw's deny-list first, read on the command the call would run as well
+                    # as on its title, which need not carry it: the screen PersonalClaw's own chat
+                    # asks. A call it refuses is refused, never approved and never asked about.
+                    tool_result = screen_tool_call(
+                        context_builder.hooks if context_builder else None,
+                        event.title,
+                        event.tool_input,
+                    )
                     if tool_result.action == TOOL_DENY:
+                        await client.reject_tool(event.request_id)
                         accumulated += f"\n🚫 _Tool `{event.title}` blocked by hooks._"
+                        # One of the shell's own controls (its denylist, a credential path) is a
+                        # `refused` row naming the control and its rule.
+                        control = tool_result.audit()
                         sel().log_tool_invocation(
                             session_key=session_key,
                             source="slack",
                             tool_name=event.title,
                             tool_kind=event.tool_kind,
-                            outcome="denied",
+                            outcome="refused" if control else "denied",
+                            request_id=event.request_id,
+                            tool_input=event.tool_input,
                             error="hook_deny",
+                            metadata={"decided_by": control.get("control", "hook_deny"), **control},
                         )
                         continue
 
-                sel().log_tool_invocation(
-                    session_key=session_key,
-                    source="slack",
-                    tool_name=event.title,
-                    tool_kind=event.tool_kind,
-                    outcome="invoked",
-                )
-
-                tool_name = event.title.removeprefix("Running: ")
-                tool_name, _ = redact_exfiltration_urls(tool_name)
-                tool_name, _ = redact_credentials(tool_name)
-                tool_kind = event.tool_kind or ""
-                status_ctrl.set_phase(_tool_to_phase(tool_name, tool_kind))
-                status_ctrl.on_progress()
-                tool_detail = event.tool_purpose or tool_kind
-                tool_status = f"\n🫆 `{tool_name}`\n"
-                await _ensure_stream_started()
-                if use_slack_stream:
-                    await slack.set_thread_status(channel, reply_ts, f"is using {tool_name}")
-                    _status_dirty = True
-                if use_slack_stream:
-                    # Flush any buffered text before the tool status
-                    if stream_buffer:
-                        stream_buffer, _ = strip_thinking_tags(
-                            stream_buffer, strip_whitespace=False
+                    # PersonalClaw says who approves this call without asking, and this app
+                    # approves no call on an answer of its own: an operator's pattern in the hook
+                    # settings, what the call's tool declares, and the thread's chat's YOLO, Trust
+                    # (Allow for this chat, here or in the dashboard) or Trust reads, each held to
+                    # the operator ceiling and the allowed hosts, as in PersonalClaw's own chat.
+                    # Read now, so a pattern removed or the chat's Trust switched off there makes
+                    # this call ask.
+                    grant = chat_grant(session_key, event)
+                    if grant:
+                        await client.approve_tool(event.request_id)
+                        logger.info("Auto-approved %s (%s)", event.title, grant)
+                        sel().log_tool_invocation(
+                            session_key=session_key,
+                            source="slack",
+                            tool_name=event.title,
+                            tool_kind=event.tool_kind,
+                            outcome="auto_approved",
+                            request_id=event.request_id,
+                            metadata={"reason": grant, "decided_by": grant},
                         )
-                        await _append_stream(stream_buffer)
-                        stream_buffer = ""
-                    # Mark previous task complete, start new one
-                    if _active_task_id:
-                        await _append_task(_active_task_id, _active_task_title, "complete")
-                    _task_counter += 1
-                    _active_task_id = f"tool_{_task_counter}"
-                    _active_task_title = event.tool_purpose or tool_name
-                    _active_task_title, _ = redact_exfiltration_urls(_active_task_title)
-                    _active_task_title, _ = redact_credentials(_active_task_title)
-                    await _append_task(
-                        _active_task_id,
-                        title=_active_task_title,
-                        status="in_progress",
-                        details=tool_name if tool_detail else "",
+                        continue
+
+                    logger.info(
+                        "Permission request: tool=%s req_id=%s", event.title, event.request_id
                     )
-                else:
-                    accumulated += tool_status
-                    assert stream_ts is not None
-                    if channel_activation != ACTIVATION_REVIEW:
-                        await _safe_update(slack, channel, stream_ts, accumulated + _CURSOR)
-                last_edit = time.monotonic()
-
-                # wait tool blocks MCP for up to 30min — finalize the
-                # streaming message now so Slack doesn't show an error.
-                # _ensure_stream_started() will open a new message when
-                # the next text chunk arrives after wait returns.
-                if tool_name == "wait" and use_slack_stream and stream_ts:
-                    if _active_task_id:
-                        await _append_task(_active_task_id, _active_task_title, "complete")
-                        _active_task_id = ""
-                    await slack.stop_stream(channel, stream_ts)
-                    stream_ts = None
-                    accumulated = ""
-
-            elif event.kind == EVENT_PERMISSION_REQUEST:
-                # PersonalClaw's deny-list first, read on the command the call would run as well
-                # as on its title, which need not carry it: the screen PersonalClaw's own chat
-                # asks. A call it refuses is refused, never approved and never asked about.
-                tool_result = screen_tool_call(
-                    context_builder.hooks if context_builder else None,
-                    event.title,
-                    event.tool_input,
-                )
-                if tool_result.action == TOOL_DENY:
-                    await client.reject_tool(event.request_id)
-                    accumulated += f"\n🚫 _Tool `{event.title}` blocked by hooks._"
-                    # One of the shell's own controls (its denylist, a credential path) is a
-                    # `refused` row naming the control and its rule.
-                    control = tool_result.audit()
-                    sel().log_tool_invocation(
-                        session_key=session_key,
-                        source="slack",
-                        tool_name=event.title,
-                        tool_kind=event.tool_kind,
-                        outcome="refused" if control else "denied",
-                        request_id=event.request_id,
-                        tool_input=event.tool_input,
-                        error="hook_deny",
-                        metadata={"decided_by": control.get("control", "hook_deny"), **control},
-                    )
-                    continue
-
-                # PersonalClaw says who approves this call without asking, and this app approves
-                # no call on an answer of its own: an operator's pattern in the hook settings, what
-                # the call's tool declares, and the thread's chat's YOLO, Trust (Allow for this
-                # chat, here or in the dashboard) or Trust reads, each held to the operator
-                # ceiling and the allowed hosts, as in PersonalClaw's own chat. Read now, so a
-                # pattern removed or the chat's Trust switched off there makes this call ask.
-                grant = chat_grant(session_key, event)
-                if grant:
-                    await client.approve_tool(event.request_id)
-                    logger.info("Auto-approved %s (%s)", event.title, grant)
-                    sel().log_tool_invocation(
-                        session_key=session_key,
-                        source="slack",
-                        tool_name=event.title,
-                        tool_kind=event.tool_kind,
-                        outcome="auto_approved",
-                        request_id=event.request_id,
-                        metadata={"reason": grant, "decided_by": grant},
-                    )
-                    continue
-
-                logger.info("Permission request: tool=%s req_id=%s", event.title, event.request_id)
-                status_ctrl.pause_stall_watchdog()
-                task.await_approval()
-                await _ensure_stream_started()
-                if use_slack_stream:
-                    await slack.set_thread_status(channel, reply_ts, "Waiting for approval…")
-                    _status_dirty = True
-                    # Flush buffered text before approval pause
-                    if stream_buffer:
-                        stream_buffer, _ = strip_thinking_tags(
-                            stream_buffer, strip_whitespace=False
-                        )
-                        await _append_stream(stream_buffer)
-                        stream_buffer = ""
-
-                ended = await _request_approval(
-                    slack,
-                    client,
-                    channel,
-                    reply_ts,
-                    event,
-                    session_key,
-                    is_dm=channel.startswith("D"),
-                )
-                task.resume()
-                status_ctrl.resume_stall_watchdog()
-                if ended != _OUTCOME_APPROVED:
-                    # The thread says why the call did not run, streamed or not: an expired
-                    # prompt is gone by now, and nobody pressed anything to know it ended. The
-                    # line is part of the reply, which the turn's final text replaces the live
-                    # stream with, so the reply keeps saying it once the turn has ended.
-                    unrun = f"\n{_UNRUN_LINES[ended]}"
-                    accumulated += unrun
+                    status_ctrl.pause_stall_watchdog()
+                    task.await_approval()
+                    await _ensure_stream_started()
                     if use_slack_stream:
-                        if _active_task_id:
-                            assert stream_ts is not None
-                            await _append_task(_active_task_id, _active_task_title, "error")
-                            _active_task_id = ""
-                        await _append_stream(unrun)
-                    break
+                        await slack.set_thread_status(channel, reply_ts, "Waiting for approval…")
+                        _status_dirty = True
+                        # Flush buffered text before approval pause
+                        if stream_buffer:
+                            stream_buffer, _ = strip_thinking_tags(
+                                stream_buffer, strip_whitespace=False
+                            )
+                            await _append_stream(stream_buffer)
+                            stream_buffer = ""
 
-            elif event.kind == EVENT_COMPLETE:
-                status_ctrl.on_progress()
-                _stop_reason = event.stop_reason
-                if (
-                    _stop_reason
-                    and _stop_reason != STOP_REASON_END_TURN
-                    and _stop_reason != STOP_REASON_CANCELLED
-                ):
-                    logger.warning(
-                        "Unexpected stop_reason %r for %s — treating as normal completion",
-                        _stop_reason,
+                    ended = await _request_approval(
+                        slack,
+                        client,
+                        channel,
+                        reply_ts,
+                        event,
                         session_key,
+                        is_dm=channel.startswith("D"),
                     )
-                break
+                    task.resume()
+                    status_ctrl.resume_stall_watchdog()
+                    if ended != _OUTCOME_APPROVED:
+                        # The thread says why the call did not run, streamed or not: an expired
+                        # prompt is gone by now, and nobody pressed anything to know it ended. The
+                        # line is part of the reply, which the turn's final text replaces the live
+                        # stream with, so the reply keeps saying it once the turn has ended.
+                        unrun = f"\n{_UNRUN_LINES[ended]}"
+                        accumulated += unrun
+                        if use_slack_stream:
+                            if _active_task_id:
+                                assert stream_ts is not None
+                                await _append_task(_active_task_id, _active_task_title, "error")
+                                _active_task_id = ""
+                            await _append_stream(unrun)
+                        break
+
+                elif event.kind == EVENT_COMPLETE:
+                    status_ctrl.on_progress()
+                    _stop_reason = event.stop_reason
+                    if (
+                        _stop_reason
+                        and _stop_reason != STOP_REASON_END_TURN
+                        and _stop_reason != STOP_REASON_CANCELLED
+                    ):
+                        logger.warning(
+                            "Unexpected stop_reason %r for %s — treating as normal completion",
+                            _stop_reason,
+                            session_key,
+                        )
+                    break
 
         if _stop_reason == STOP_REASON_CANCELLED:
             logger.info("Turn cancelled by user for %s", session_key)

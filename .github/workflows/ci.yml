@@ -126,6 +126,11 @@ jobs:
         # and an app whose prompt offers the approval brief's answers must declare approval-answers,
         # so a PersonalClaw that does not hand them over refuses it instead of quietly doing less.
         run: python -m pytest .github/tests/test_core_features_declared.py -q
+      - name: Every app reads a model's stream inside closing_stream
+        # A stream an app stops reading part way and leaves open holds what its turn holds, an agent
+        # CLI's session among them, until the interpreter collects it: a Slack thread's next message
+        # waited, unsent, behind one. This refuses an app that reads a provider's stream another way.
+        run: python -m pytest .github/tests/test_model_streams_are_read_inside_closing_stream.py -q
       - name: Every test runs against a scratch PersonalClaw home
         # conftest.py gives every test its own; pytest.ini makes pytest load it however it starts.
         run: python -m pytest .github/tests/test_scratch_home.py -q

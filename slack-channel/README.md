@@ -127,6 +127,13 @@ says so, telling you to answer it in PersonalClaw and to update PersonalClaw; a 
 this app runs itself, which nothing else can ask you about, does not run, and the thread says why.
 The gateway log says it once.
 
+**A turn that stops lets the thread's next message go at once.** A turn ends before the agent
+has finished when a call's approval is not given (you press Reject, or nobody answers in time) or
+when a Slack call fails part way. The app then closes the turn at once: an agent CLI is told to
+stop the turn nobody reads any more, and your next message in the thread goes out as soon as the
+agent has answered, where it could wait, unsent, until the session was let go on its own. The app
+declares the core feature that does it (`requiresCoreFeatures`: `closing-streams`).
+
 ## Compaction
 
 `!compact` compacts the thread's conversation and says how much that freed (*✅ Compacted: freed

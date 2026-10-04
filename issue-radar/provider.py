@@ -622,15 +622,18 @@ class IssueRadarProvider(ToolProvider):
         self, entry: str, brief: IssueBrief, have: list[str]
     ) -> tuple[list[Suggestion], str]:
         """Build a provider, label ONE issue, tear it down. Nothing crosses between issues."""
-        from personalclaw.sdk.model import EVENT_TEXT_CHUNK, get_default_registry
+        from personalclaw.sdk.model import EVENT_TEXT_CHUNK, closing_stream, get_default_registry
 
         provider = get_default_registry().build(entry)
         chunks: list[str] = []
         try:
             await provider.start()
-            async for event in provider.stream(brief.prompt):
-                if event.kind == EVENT_TEXT_CHUNK and event.text:
-                    chunks.append(event.text)
+            # Closed wherever the reading stops (a cancelled triage, a failed call), before the
+            # provider is torn down.
+            async with closing_stream(provider.stream(brief.prompt)) as events:
+                async for event in events:
+                    if event.kind == EVENT_TEXT_CHUNK and event.text:
+                        chunks.append(event.text)
         finally:
             try:
                 await provider.shutdown()

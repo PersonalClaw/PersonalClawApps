@@ -32,7 +32,10 @@ The rails over every bundle, against the installed core:
    services handle has no such method, so every direct message the app offers would fail;
 8. every app whose shipped code asks PersonalClaw's deny-list about a call before it approves or
    asks about it (``screen_tool_call`` from ``personalclaw.sdk.channel``) declares
-   ``tool-call-screen``: on a PersonalClaw without it the app would not load at all.
+   ``tool-call-screen``: on a PersonalClaw without it the app would not load at all;
+9. every app whose shipped code reads a model's stream inside ``closing_stream`` (imported from
+   ``personalclaw.sdk.model``) declares ``closing-streams``: on a PersonalClaw without it the app
+   would not load at all.
 """
 
 from __future__ import annotations
@@ -80,6 +83,9 @@ KNOWN_DIGEST_ANSWERERS = {"slack-channel"}
 
 #: The apps that ask PersonalClaw's deny-list about a call before they approve or ask, for rail 8.
 KNOWN_SCREENERS = {"slack-channel"}
+
+#: The apps that read a model's stream inside ``closing_stream``, for rail 9.
+KNOWN_STREAM_CLOSERS = {"code-review", "issue-radar", "slack-channel"}
 
 
 @pytest.fixture(autouse=True)
@@ -479,3 +485,49 @@ def test_the_scan_tells_an_app_that_screens_a_call_from_one_that_does_not(tmp_pa
     (other / "handler.py").write_text("from personalclaw.sdk.channel import chat_grant\n")
     assert _screens_each_call(screener) is True
     assert _screens_each_call(other) is False
+
+
+def _closes_its_streams(bundle: Path) -> bool:
+    """Whether the bundle's shipped code takes ``closing_stream`` from the SDK."""
+    for path in sdk_contract.shipped_sources(bundle):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "personalclaw.sdk.model":
+                if any(alias.name == "closing_stream" for alias in node.names):
+                    return True
+    return False
+
+
+def test_every_app_that_reads_a_stream_inside_closing_stream_declares_it():
+    from personalclaw.sdk.features import CLOSING_STREAMS
+
+    closers = {bundle.name for bundle in BUNDLES if _closes_its_streams(bundle)}
+    assert KNOWN_STREAM_CLOSERS <= closers, (
+        f"the scan no longer sees these apps read a stream inside closing_stream: "
+        f"{sorted(KNOWN_STREAM_CLOSERS - closers)}"
+    )
+    undeclared = sorted(name for name in closers if CLOSING_STREAMS not in _declared(ROOT / name))
+    assert undeclared == [], (
+        f"these apps read a model's stream inside closing_stream without declaring "
+        f"'requiresCoreFeatures': ['{CLOSING_STREAMS}'] in app.json: {undeclared}"
+    )
+
+
+def test_the_scan_tells_an_app_that_closes_its_streams_from_one_that_does_not(tmp_path):
+    """Positive and negative control for rail 9."""
+    closer = tmp_path / "closer-app"
+    closer.mkdir()
+    (closer / "app.json").write_text('{"name": "closer-app", "version": "0.1.0"}')
+    (closer / "provider.py").write_text(
+        "async def review(provider, prompt):\n"
+        "    from personalclaw.sdk.model import EVENT_TEXT_CHUNK, closing_stream\n\n"
+        "    async with closing_stream(provider.stream(prompt)) as events:\n"
+        "        return [e.text async for e in events if e.kind == EVENT_TEXT_CHUNK]\n",
+        encoding="utf-8",
+    )
+    other = tmp_path / "other-app"
+    other.mkdir()
+    (other / "app.json").write_text('{"name": "other-app", "version": "0.1.0"}')
+    (other / "provider.py").write_text("from personalclaw.sdk.model import EVENT_TEXT_CHUNK\n")
+    assert _closes_its_streams(closer) is True
+    assert _closes_its_streams(other) is False

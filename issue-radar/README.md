@@ -101,7 +101,7 @@ The report always names the leg, because "no suggestions" must never be confusab
 
 | `label_source` | What happens |
 |---|---|
-| `model` (default) | One isolated model call per issue: a fresh provider built from the registry, given only that issue's fenced text and the repository's label list, torn down after. |
+| `model` (default) | One isolated model call per issue: a fresh provider built from the registry, given only that issue's fenced text and the repository's label list, torn down after. Its stream is read inside the SDK's `closing_stream`, so a sweep stopped part way closes it before the provider is torn down (`requiresCoreFeatures`: `closing-streams`). |
 | `plan` | No model call. One brief per issue is returned for **your** agent to spawn a real subagent from, each reporting back through `record_investigation`. |
 | `rules` | The deterministic pass alone. |
 
