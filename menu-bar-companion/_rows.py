@@ -14,6 +14,13 @@ REACH = (
     "this chat or its agent allows."
 )
 
+#: Who asked for a call's turn when it was not the owner, in the words core says it
+#: (``approval_grants.asked_for_line``).
+ASKED_FOR = (
+    "Jonas (U0JONASCOL) on teamchat asked for this, not you. Your Trust, Trust reads, YOLO and "
+    "an agent's Always allow answer only what you ask for, so this call waits for your answer."
+)
+
 #: A Deny that ends an agent's turn, in the words core says it (``turn_endings.deny_effect``).
 DENY_ENDS_THE_TURN = (
     "The agent CLI offers no way to skip only this step: Deny ends its turn, and PersonalClaw "
@@ -47,6 +54,7 @@ def approval(**fields: object) -> dict[str, object]:
         "grant_agent": "agent-cli",
         "reach": "",
         "deny_effect": "",
+        "asked_for": "",
         "trigger": "",
         "trigger_name": "",
         "source_label": "chat “Release prep”",

@@ -223,6 +223,7 @@ def _parts(row: Mapping[str, object]) -> list[_Part]:
         _part("Where it came from", f"From {source}" if source.strip() else "", PART_LINES, prose),
         _part("What it can touch", _summary(row), PART_LINES, prose),
         _part("Where it reaches", _text(row, "reach"), PART_LINES, prose),
+        _part("Who asked", _text(row, "asked_for"), PART_LINES, prose),
         _part("What Deny does", _text(row, "deny_effect"), PART_LINES, prose),
     ]
 

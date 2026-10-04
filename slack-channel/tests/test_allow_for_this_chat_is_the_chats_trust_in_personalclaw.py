@@ -32,6 +32,7 @@ from test_slack_handler import FakeSessionManager
 import slack_runtime.handler as H
 import slack_runtime.interactions as interactions
 from personalclaw.llm.base import LLMEvent
+from personalclaw.sdk.channel import owner_id_credential
 
 OWNER = "U0OWNER"
 DM = "D0OWNER"
@@ -43,6 +44,10 @@ _LATER = (f"1700000100.{n:06d}" for n in itertools.count(200))
 
 @pytest.fixture(autouse=True)
 def _the_owners_dm(monkeypatch):
+    # The owner this app pairs is the one PersonalClaw keeps for the channel, as on a gateway
+    # (``owner_id_for``): PersonalClaw reads a thread's turn as hers by it, and her Trust answers
+    # only her own turns.
+    monkeypatch.setenv(owner_id_credential("slack"), OWNER)
     H.set_owner_id(OWNER)
     H.set_allowed_users({OWNER})
     for state in (H._pending_approvals, H._ended_prompts, H._thread_agents):

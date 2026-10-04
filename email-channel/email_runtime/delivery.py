@@ -840,7 +840,7 @@ def _approval_text(brief: dict, source: str) -> str:
     if arguments:
         indented = "\n".join(f"    {line}" for line in arguments.split("\n"))
         parts.append(f"What will run:\n\n{indented}")
-    extra = [str(brief[k]) for k in ("purpose", "summary", "reach") if brief.get(k)]
+    extra = [str(brief[k]) for k in ("purpose", "summary", "reach", "asked_for") if brief.get(k)]
     if extra:
         parts.append("\n".join(extra))
     return "\n\n".join(parts)

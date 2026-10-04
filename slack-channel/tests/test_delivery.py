@@ -349,6 +349,34 @@ class TestApprovalBriefOnTheNotification:
             "🔐 [cron] Approval needed: bash — Can: writes files, runs a command · Risk: Destructive"
         )
 
+    @pytest.mark.asyncio
+    async def test_a_call_someone_else_asked_for_names_them_on_a_line_of_its_own(self):
+        """Core names who asked for a call's turn when it was not the owner; the prompt says it on
+        a line of its own under the summary, in core's words, as the card does."""
+        from slack_runtime.format import escape_mrkdwn
+
+        asked_for = (
+            "Jonas (U0JONASCOL) on teamchat asked for this, not you. Your Trust, Trust reads, "
+            "YOLO and an agent's Always allow answer only what you ask for, so this call waits "
+            "for your answer."
+        )
+        client = MagicMock()
+        client.open_dm = AsyncMock(return_value="D1")
+        client.post_blocks = AsyncMock(return_value="1.1")
+        client.update_message = AsyncMock()
+        await _delivery(client).request_approval(
+            self._event({**self._BRIEF, "purpose": "clear the old build", "asked_for": asked_for}),
+            source="cron",
+            on_prompted=lambda pending: pending.future.set_result("rejected"),
+        )
+        blocks = client.post_blocks.call_args[0][1]
+        context = [e["text"] for b in blocks if b["type"] == "context" for e in b["elements"]]
+        assert context == [
+            "clear the old build",
+            "Can: writes files, runs a command · Risk: Destructive",
+            escape_mrkdwn(asked_for),
+        ]
+
 
     @pytest.mark.asyncio
     async def test_the_source_core_names_is_shown_as_written(self):

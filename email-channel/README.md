@@ -273,11 +273,13 @@ Approvals arrive as a **reply token**. The prompt mail names where the call came
 (*from loop “Fix the README”*) and says what will run, as PersonalClaw's
 own approval card does: the tool, its arguments, why the agent is calling it, what the call can
 touch with its risk and, for a command that reaches a host off your allowed hosts, a line saying
-so (masked by PersonalClaw). It lists the answers PersonalClaw's approval card offers for that
+so (masked by PersonalClaw), as there is for a call someone else asked for, naming who. It lists
+the answers PersonalClaw's approval card offers for that
 call, each with the word to reply with: `APPROVE <token>` (Allow once) and
 `DENY <token>`, and `TRUST <token>` (Allow for this chat, explained in the card's words) on a mail
-in the chat that is asking, never for a call that may destroy something or for a command that
-reaches a host off your allowed hosts, which is asked about every time. That one trusts the chat
+in the chat that is asking, never for a call that may destroy something, for a command that
+reaches a host off your allowed hosts, which is asked about every time, or for a call someone
+else asked for, which none of your grants answers. That one trusts the chat
 in PersonalClaw, as the card's *This chat* does: its header shows it and you turn it off there.
 The answers come from PersonalClaw, so the app declares the core feature that hands them over
 (`requiresCoreFeatures`: `approval-answers`), and a PersonalClaw without it will not install or

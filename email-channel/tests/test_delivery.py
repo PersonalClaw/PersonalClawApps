@@ -529,6 +529,37 @@ class TestApprovalReplyToken:
         await asyncio.wait_for(task, timeout=1.0)
 
     @pytest.mark.asyncio
+    async def test_a_call_someone_else_asked_for_names_them_on_a_line_of_its_own(self, wired):
+        """Core names who asked for a call's turn when it was not the owner; the mail says it on a
+        line of its own under the summary, in core's words, as the card does."""
+        delivery, smtp, _ = wired
+        asked_for = (
+            "Jonas (U0JONASCOL) on teamchat asked for this, not you. Your Trust, Trust reads, "
+            "YOLO and an agent's Always allow answer only what you ask for, so this call waits "
+            "for your answer."
+        )
+        brief = {
+            "tool": "write_file",
+            "input": '{"path": "notes.md"}',
+            "purpose": "write the offsite notes",
+            "risk": "caution",
+            "summary": "Can: writes files · Risk: Caution",
+            "answers": _ONE_CALL,
+            "asked_for": asked_for,
+        }
+        task = asyncio.ensure_future(delivery.request_approval(self._Event(brief=brief), source="t"))
+        await asyncio.sleep(0)
+        token = next(iter(delivery._pending))
+        assert (
+            "write the offsite notes\n"
+            "Can: writes files · Risk: Caution\n"
+            f"{asked_for}\n\n"
+            "Reply to this message with exactly one of:\n"
+        ) in smtp.body_text()
+        delivery.resolve_reply_token(f"{DENY_WORD} {token}", OWNER)
+        await asyncio.wait_for(task, timeout=1.0)
+
+    @pytest.mark.asyncio
     async def test_prompt_carries_both_verbs_and_a_token(self, wired):
         delivery, smtp, _ = wired
         task = asyncio.ensure_future(delivery.request_approval(self._Event(), source="tool"))

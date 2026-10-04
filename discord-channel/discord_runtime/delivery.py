@@ -842,7 +842,7 @@ def _approval_text(brief: dict, source: str, answers: list[dict[str, str]]) -> s
     arguments = str(brief.get("input") or "")
     if arguments:
         lines += ["```", _unfenced(arguments), "```"]
-    lines += [str(brief[k]) for k in ("purpose", "summary", "reach") if brief.get(k)]
+    lines += [str(brief[k]) for k in ("purpose", "summary", "reach", "asked_for") if brief.get(k)]
     # What each standing answer does, in the dashboard card's words, read before it is pressed.
     lines += [f"{a['label']}: {a['promise']}" for a in answers if a.get("promise")]
     return "\n".join(lines)

@@ -13,7 +13,7 @@ import random
 import string
 
 import pytest
-from _rows import DENY_ENDS_THE_TURN, approval, radius
+from _rows import ASKED_FOR, DENY_ENDS_THE_TURN, approval, radius
 from menubar_companion import brief as brief_mod
 from menubar_companion.brief import (
     ARGUMENT_LINES,
@@ -88,6 +88,16 @@ def test_every_part_that_fits_is_shown_and_answers_are_offered():
     assert all(len(line) <= WIDTH for line in shown.lines)
 
 
+def test_a_call_someone_else_asked_for_names_them_before_the_answers():
+    """Core names who asked for a call's turn when it was not the owner; the menu says it, as the
+    dashboard's card does, and says nothing of the kind for her own call."""
+    theirs = brief_of(approval(asked_for=ASKED_FOR))
+    hers = brief_of(approval())
+    assert " ".join(theirs.lines).count("Jonas (U0JONASCOL) on teamchat asked for this") == 1
+    assert theirs.approvable and theirs.deniable
+    assert not any("asked for this" in line for line in hers.lines)
+
+
 @pytest.mark.parametrize(
     ("field", "value", "said"),
     [
@@ -95,6 +105,7 @@ def test_every_part_that_fits_is_shown_and_answers_are_offered():
         ("tool_purpose", "Why it asks. " * 60, "Its purpose"),
         ("source_label", "chat “" + "long name " * 60 + "”", "Where it came from"),
         ("reach", "It reaches a host. " * 40, "Where it reaches"),
+        ("asked_for", "Someone else asked for this. " * 40, "Who asked"),
     ],
 )
 def test_a_part_too_long_is_said_to_be_and_approve_goes(field, value, said):

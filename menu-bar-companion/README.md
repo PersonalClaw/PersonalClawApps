@@ -70,6 +70,7 @@ Clear the stale build cache                              ← the purpose the run
 From loop “Fix the README”                               ← where it came from
 Can: writes files, runs a command · Risk: Destructive    ← what it can touch, its risk
 It reaches packages.example.com, which is not on your …  ← when it reaches past your hosts
+Jonas (U0JONASCOL) on teamchat asked for this, not you…  ← when someone else asked for it
 The agent CLI offers no way to skip only this step: …    ← when Deny does more than decline
 Approve
 Deny

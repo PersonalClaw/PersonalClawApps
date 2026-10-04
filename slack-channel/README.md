@@ -65,7 +65,8 @@ When an agent asks to run a tool, the prompt says what will run, as PersonalClaw
 approval card does: where the call came from (*[loop “Fix the README”]*, *[workflow
 “deep-research” · step “sweep”]*), shown as written, the tool, its arguments, why the agent is
 calling it, what the call can touch with its risk (*Can: runs a command · Risk: Destructive*)
-and, for a command that reaches a host off your allowed hosts, a line saying so. Keys and
+and, for a command that reaches a host off your allowed hosts, a line saying so, as there is
+for a call someone else asked for, naming who. Keys and
 exfiltration links in the arguments are masked by PersonalClaw before they reach Slack. Long
 arguments are split over as many code blocks, and messages, as they take, the buttons on the
 last.
@@ -82,8 +83,9 @@ approvals wait; this app keeps no clock of its own for them.
 
 A prompt offers the answers PersonalClaw's approval card offers for that call: **Allow once**
 and **Deny**, and **Allow for this chat** on a prompt in the chat that is asking (never for a
-call that may destroy something, or for a command that reaches a host off your allowed hosts,
-which is asked about every time), which the prompt explains first, in the card's words. That one
+call that may destroy something, for a command that reaches a host off your allowed hosts,
+which is asked about every time, or for a call someone else asked for, which none of your
+grants answers), which the prompt explains first, in the card's words. That one
 trusts the chat in PersonalClaw, as the card's *This chat* does: its Permission mode shows Trust
 and you switch it off there.
 
@@ -107,7 +109,9 @@ gives the thread, so it shows the thread as it is.
 app runs itself asks about, the app asks PersonalClaw who approves it without asking, and approves
 on nothing else: a pattern in PersonalClaw's hook settings (`hooks.auto_approve_tools`) that names
 the call, a call to a PersonalClaw tool that only reads, the call that starts a subagent (whose start
-asks you itself, or starts on the spawn setting), and the thread's chat's Trust, Trust reads or YOLO.
+asks you itself, or starts on the spawn setting), and the thread's chat's Trust, Trust reads or YOLO,
+which answer only what you ask for: a call in a turn a colleague in the thread asked for is asked
+of you, the prompt naming them.
 Each is held to PersonalClaw's operator ceiling and your allowed hosts, as in PersonalClaw's own
 chat: under a ceiling saying every call asks, none of them runs a call here, and a command that
 reaches a host off your allowed hosts is asked about whatever would have approved it. Any other call

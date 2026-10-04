@@ -549,6 +549,11 @@ _BRIEF = {
     "answers": _ONE_CALL,
 }
 #: What core says, on a line of its own, of a command reaching a host off the allowed hosts.
+_ASKED_FOR = (
+    "Jonas (U0JONASCOL) on teamchat asked for this, not you. Your Trust, Trust reads, YOLO and "
+    "an agent's Always allow answer only what you ask for, so this call waits for your answer."
+)
+
 _REACH = (
     "It reaches pkgs.example.com, which is not on Allowed hosts in Settings → Security → Network "
     "egress. A command that reaches a host off that list, or one it does not name, is always asked "
@@ -646,6 +651,27 @@ class TestApprovalRoundTrip:
         await d.resolve_interaction({
             "id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
             "data": {"custom_id": "a1:reqR"}, "user": {"id": "42"}, **d._api.press_on_prompt(),
+        })
+        assert await asyncio.wait_for(task, timeout=1.0) is False
+
+    @pytest.mark.asyncio
+    async def test_a_call_someone_else_asked_for_names_them_on_a_line_of_its_own(self):
+        """Core names who asked for a call's turn when it was not the owner; the prompt says it on
+        a line of its own under the summary, in core's words, as the card does."""
+        d = _delivery(owner="42")
+        brief = {**_BRIEF, "asked_for": _ASKED_FOR}
+        task = asyncio.ensure_future(
+            d.request_approval(_Event("reqA", "execute_bash", brief=brief), source="subagent")
+        )
+        for _ in range(4):
+            await asyncio.sleep(0)
+        (prompt,) = d._api.sent
+        assert prompt["content"].endswith(
+            "Can: runs a command · Risk: Destructive\n" + _ASKED_FOR
+        ), prompt["content"]
+        await d.resolve_interaction({
+            "id": "i", "token": "t", "type": INTERACTION_TYPE_COMPONENT,
+            "data": {"custom_id": "a1:reqA"}, "user": {"id": "42"}, **d._api.press_on_prompt(),
         })
         assert await asyncio.wait_for(task, timeout=1.0) is False
 

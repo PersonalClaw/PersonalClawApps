@@ -3256,7 +3256,7 @@ def _approval_messages(event: LLMEvent, source: str = "", *, chat: str = "") -> 
         {"type": "context", "elements": [
             {"type": "mrkdwn", "text": escape_mrkdwn(str(brief[k]))},
         ]}
-        for k in ("purpose", "summary", "reach")
+        for k in ("purpose", "summary", "reach", "asked_for")
         if brief.get(k)
     ]
     tail += [

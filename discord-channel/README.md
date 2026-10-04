@@ -42,12 +42,14 @@ ships as a self-contained directory:
     message of its own. An approval prompt says what will run, as
     PersonalClaw's own approval card does: the tool, its arguments in a code block, why the
     agent is calling it, what the call can touch with its risk and, for a command that reaches a
-    host off your allowed hosts, a line saying so (from core's brief, already masked). One too
-    long for one message is split like a reply, its buttons on the last part.
+    host off your allowed hosts, a line saying so (from core's brief, already masked), as there is
+    for a call someone else asked for, naming who. One too long for one message is split like
+    a reply, its buttons on the last part.
     Its buttons are the answers PersonalClaw's approval card offers for that call, in one
     row: **Allow once** and **Deny**, and **Allow for this chat** on a prompt in the
-    chat that is asking (never for a call that may destroy something, or for a command that
-    reaches a host off your allowed hosts, which is asked about every time), which the prompt
+    chat that is asking (never for a call that may destroy something, for a command that
+    reaches a host off your allowed hosts, which is asked about every time, or for a call
+    someone else asked for, which none of your grants answers), which the prompt
     explains first, in the card's words. That one trusts the chat in PersonalClaw, as the card's
     *This chat* does: its header shows it and you turn it off there.
     The answers come from PersonalClaw, so the app declares the core feature that hands them
