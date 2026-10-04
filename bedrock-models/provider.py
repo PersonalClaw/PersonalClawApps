@@ -37,6 +37,8 @@ from personalclaw.sdk.model import (
     CancelOutcome,
     LLMEvent,
     ModelProvider,
+    closing_stream,
+    until_terminal,
 )
 from personalclaw.sdk.model import CACHE_HINT_KEY, Capability, PromptCache, ProviderCapability
 from personalclaw.sdk.model import VOLATILE_KEY
@@ -111,6 +113,32 @@ _CACHE_WRITE_KEY = "cacheWriteInputTokens"
 
 # Sentinel pushed onto the bridge queue when the worker thread finishes.
 _STREAM_DONE = object()
+
+#: Whose stream this provider reads, and the event its answer ends with, as a cut-off names them.
+_ADAPTER = "Bedrock"
+_MESSAGE_STOP = "messageStop"
+
+
+async def _drained(
+    queue: "asyncio.Queue[Any]", fail: Callable[[Exception], NoReturn]
+) -> AsyncIterator[tuple[str, Any]]:
+    """What the worker thread puts on *queue*, an item each, until it is done. An error the
+    thread caught is raised here, as *fail* says it: a call that failed is that failure, never an
+    answer cut off."""
+    while True:
+        item = await queue.get()
+        if item is _STREAM_DONE:
+            return
+        kind, payload = item
+        if kind == "error":
+            fail(payload)
+        yield item
+
+
+def _answer_ended(item: tuple[str, Any]) -> bool:
+    """Whether *item* is the stream's ``messageStop``, which ends the answer: a stream that ends
+    before it was cut off (``until_terminal``), whatever text had arrived."""
+    return item[0] == "stop"
 
 # Streaming-read timeout (seconds). botocore's default is 60s applied PER socket
 # read — and during a ``converse_stream`` that fires on the GAP BETWEEN streamed
@@ -1013,29 +1041,33 @@ class BedrockProvider(ModelProvider):
         # How the answer ended (`messageStop.stopReason`), carried on the terminal event:
         # `max_tokens` is the one core must know, an answer cut at its Max Output Tokens.
         stop_reason = ""
-        error: Exception | None = None
+
+        def _fail(error: Exception) -> NoReturn:
+            _raise_friendly(error, self._model_id, region=self._region, profile=self._profile)
+
+        answer = until_terminal(
+            _drained(queue, _fail),
+            ends=_answer_ended,
+            adapter=_ADAPTER,
+            missing=_MESSAGE_STOP,
+            model=model_id,
+        )
         try:
-            while True:
-                item = await queue.get()
-                if item is _STREAM_DONE:
-                    break
-                kind, payload = item
-                if kind == "text":
-                    assistant_text += payload
-                    yield LLMEvent(kind=EVENT_TEXT_CHUNK, text=payload)
-                elif kind == "stop":
-                    stop_reason = payload
-                elif kind == "usage":
-                    input_tokens = int(payload.get("inputTokens", input_tokens) or input_tokens)
-                    output_tokens = int(payload.get("outputTokens", output_tokens) or output_tokens)
-                    cache_creation_tokens, cache_read_tokens = _read_cache_usage(payload)
-                elif kind == "error":
-                    error = payload
+            async with closing_stream(answer) as items:
+                async for kind, payload in items:
+                    if kind == "text":
+                        assistant_text += payload
+                        yield LLMEvent(kind=EVENT_TEXT_CHUNK, text=payload)
+                    elif kind == "stop":
+                        stop_reason = payload
+                    elif kind == "usage":
+                        input_tokens = int(payload.get("inputTokens", input_tokens) or input_tokens)
+                        output_tokens = int(
+                            payload.get("outputTokens", output_tokens) or output_tokens
+                        )
+                        cache_creation_tokens, cache_read_tokens = _read_cache_usage(payload)
         finally:
             await worker  # ensure the thread is joined even on cancellation
-
-        if error is not None:
-            _raise_friendly(error, self._model_id, region=self._region, profile=self._profile)
 
         if input_tokens > 0:
             ctx = _model_window(self._model_id, _DEFAULT_CONTEXT_WINDOW)
@@ -1074,9 +1106,11 @@ class BedrockProvider(ModelProvider):
 
         Converse streams ``toolUse`` calls as a ``contentBlockStart`` (carrying
         ``toolUseId`` + ``name``) followed by ``contentBlockDelta`` input JSON
-        fragments and a ``contentBlockStop``; the completed block emits one
-        :data:`EVENT_TOOL_CALL`. The blocking boto stream is bridged onto an
-        :class:`asyncio.Queue` so the event loop is never stalled (mirrors
+        fragments and a ``contentBlockStop``; each call is emitted as one
+        :data:`EVENT_TOOL_CALL` once the stream's ``messageStop`` has said how the
+        answer ended, and a stream that ends before it raises ``AnswerCutOff``
+        (``until_terminal``) and emits none. The blocking boto stream is bridged
+        onto an :class:`asyncio.Queue` so the event loop is never stalled (mirrors
         :meth:`stream`).
         """
         model_id = require_model(_bare_model_id(model, self._model_id))
@@ -1144,9 +1178,6 @@ class BedrockProvider(ModelProvider):
                                 queue.put_nowait,
                                 ("tool_delta", (block_index, tool_delta.get("input", ""))),
                             )
-                    elif "contentBlockStop" in event:
-                        block_index = event["contentBlockStop"].get("contentBlockIndex", 0)
-                        loop.call_soon_threadsafe(queue.put_nowait, ("block_stop", block_index))
                     elif "messageStop" in event:
                         reason = str(event["messageStop"].get("stopReason") or "")
                         loop.call_soon_threadsafe(queue.put_nowait, ("stop", reason))
@@ -1162,7 +1193,6 @@ class BedrockProvider(ModelProvider):
 
         # Per content-block-index accumulators for toolUse blocks.
         tool_blocks: dict[int, dict[str, str]] = {}
-        emitted_tool_calls: set[int] = set()
         input_tokens = 0
         output_tokens = 0
         cache_creation_tokens = 0
@@ -1170,63 +1200,58 @@ class BedrockProvider(ModelProvider):
         # How the answer ended (`messageStop.stopReason`), carried on the terminal event:
         # `max_tokens` is the one core must know, an answer cut at its Max Output Tokens.
         stop_reason = ""
-        error: Exception | None = None
+
+        def _fail(error: Exception) -> NoReturn:
+            _raise_friendly(error, model_id, region=self._region, profile=self._profile)
+
+        answer = until_terminal(
+            _drained(queue, _fail),
+            ends=_answer_ended,
+            adapter=_ADAPTER,
+            missing=_MESSAGE_STOP,
+            model=model_id,
+        )
         try:
-            while True:
-                item = await queue.get()
-                if item is _STREAM_DONE:
-                    break
-                kind, payload = item
-                if kind == "text":
-                    yield LLMEvent(kind=EVENT_TEXT_CHUNK, text=payload)
-                elif kind == "tool_start":
-                    block_index, tool_use = payload
-                    tool_blocks[block_index] = {
-                        "id": str(tool_use.get("toolUseId", "") or ""),
-                        "name": str(tool_use.get("name", "") or ""),
-                        "arguments": "",
-                    }
-                elif kind == "tool_delta":
-                    block_index, frag = payload
-                    bucket = tool_blocks.get(block_index)
-                    if bucket is not None and frag:
-                        bucket["arguments"] += frag
-                elif kind == "block_stop":
-                    bucket = tool_blocks.get(payload)
-                    if bucket is not None and payload not in emitted_tool_calls:
-                        emitted_tool_calls.add(payload)
-                        yield LLMEvent(
-                            kind=EVENT_TOOL_CALL,
-                            tool_call_id=bucket["id"],
-                            # Reverse-map the Bedrock-safe name back to the real
-                            # tool id so the loop dispatches the actual tool.
-                            title=tool_name_rev.get(bucket["name"], bucket["name"]),
-                            tool_input=bucket["arguments"],
+            async with closing_stream(answer) as items:
+                async for kind, payload in items:
+                    if kind == "text":
+                        yield LLMEvent(kind=EVENT_TEXT_CHUNK, text=payload)
+                    elif kind == "tool_start":
+                        block_index, tool_use = payload
+                        tool_blocks[block_index] = {
+                            "id": str(tool_use.get("toolUseId", "") or ""),
+                            "name": str(tool_use.get("name", "") or ""),
+                            "arguments": "",
+                        }
+                    elif kind == "tool_delta":
+                        block_index, frag = payload
+                        bucket = tool_blocks.get(block_index)
+                        if bucket is not None and frag:
+                            bucket["arguments"] += frag
+                    elif kind == "stop":
+                        stop_reason = payload
+                    elif kind == "usage":
+                        input_tokens = int(payload.get("inputTokens", input_tokens) or input_tokens)
+                        output_tokens = int(
+                            payload.get("outputTokens", output_tokens) or output_tokens
                         )
-                elif kind == "stop":
-                    stop_reason = payload
-                elif kind == "usage":
-                    input_tokens = int(payload.get("inputTokens", input_tokens) or input_tokens)
-                    output_tokens = int(payload.get("outputTokens", output_tokens) or output_tokens)
-                    cache_creation_tokens, cache_read_tokens = _read_cache_usage(payload)
-                elif kind == "error":
-                    error = payload
+                        cache_creation_tokens, cache_read_tokens = _read_cache_usage(payload)
         finally:
             await worker  # ensure the thread is joined even on cancellation
 
-        if error is not None:
-            _raise_friendly(error, model_id, region=self._region, profile=self._profile)
-
-        # Defensive flush — emit any unfinalized tool blocks.
-        for block_index, bucket in tool_blocks.items():
-            if block_index in emitted_tool_calls:
-                continue
-            emitted_tool_calls.add(block_index)
+        # The answer's calls, once its `messageStop` has said how it ended, in the order they
+        # opened, each carrying that reason: `max_tokens` is what tells the runtime a call cut at
+        # the cap from a malformed one. A stream that ended before its `messageStop` raised above
+        # and emits none, since a call's arguments may never have finished.
+        for _block_index, bucket in sorted(tool_blocks.items()):
             yield LLMEvent(
                 kind=EVENT_TOOL_CALL,
                 tool_call_id=bucket["id"],
+                # Reverse-map the Bedrock-safe name back to the real tool id so the loop
+                # dispatches the actual tool.
                 title=tool_name_rev.get(bucket["name"], bucket["name"]),
                 tool_input=bucket["arguments"],
+                stop_reason=stop_reason,
             )
 
         context_pct = 0.0

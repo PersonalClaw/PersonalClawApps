@@ -81,6 +81,11 @@ def _usage_event(in_tok: int, out_tok: int) -> dict[str, Any]:
     return {"metadata": {"usage": {"inputTokens": in_tok, "outputTokens": out_tok}}}
 
 
+def _stop_event(reason: str = "end_turn") -> dict[str, Any]:
+    """The ``messageStop`` a Converse answer ends with, before its ``metadata``."""
+    return {"messageStop": {"stopReason": reason}}
+
+
 # ── Tests ────────────────────────────────────────────────────────────────
 
 
@@ -102,6 +107,7 @@ async def test_stream_emits_text_then_complete_with_tokens(monkeypatch: pytest.M
     events = [
         _text_event("Hello"),
         _text_event(", world"),
+        _stop_event(),
         _usage_event(120, 8),
     ]
     _install_fake_boto3(monkeypatch, events)
@@ -182,7 +188,9 @@ async def test_an_unpinned_provider_picks_no_model_and_sends_nothing(
 async def test_system_prompt_and_history_forwarded(monkeypatch: pytest.MonkeyPatch) -> None:
     from provider import BedrockProvider
 
-    client = _install_fake_boto3(monkeypatch, [_text_event("ok"), _usage_event(10, 2)])
+    client = _install_fake_boto3(
+        monkeypatch, [_text_event("ok"), _stop_event(), _usage_event(10, 2)]
+    )
     provider = BedrockProvider(model="m", system_prompt="Be terse.")
     await provider.start()
     _ = [ev async for ev in provider.stream("first")]
@@ -286,7 +294,9 @@ async def test_stream_always_sends_max_tokens_cap(monkeypatch: pytest.MonkeyPatc
     """
     from provider import _DEFAULT_MAX_TOKENS, BedrockProvider
 
-    client = _install_fake_boto3(monkeypatch, [_text_event("ok"), _usage_event(10, 2)])
+    client = _install_fake_boto3(
+        monkeypatch, [_text_event("ok"), _stop_event(), _usage_event(10, 2)]
+    )
     provider = BedrockProvider(model="m")  # no max_tokens configured
     await provider.start()
     _ = [ev async for ev in provider.stream("hi")]
@@ -318,6 +328,7 @@ async def test_complete_sends_max_tokens_and_accumulates_large_tool_args(
                for f in frags]
     events += [
         {"contentBlockStop": {"contentBlockIndex": 0}},
+        _stop_event("tool_use"),
         _usage_event(10, 2),
     ]
     client = _install_fake_boto3(monkeypatch, events)
@@ -371,6 +382,121 @@ async def test_a_finished_answer_says_how_it_finished(monkeypatch: pytest.Monkey
     await provider.start()
     seen = [ev async for ev in provider.complete([{"role": "user", "content": "hi"}])]
     assert [ev.stop_reason for ev in seen if ev.kind == EVENT_COMPLETE] == ["end_turn"]
+
+
+
+# ── An answer cut off before its messageStop ──
+
+
+def _tool_start(index: int = 0, name: str = "write_file") -> dict[str, Any]:
+    return {
+        "contentBlockStart": {
+            "contentBlockIndex": index,
+            "start": {"toolUse": {"toolUseId": "tu1", "name": name}},
+        }
+    }
+
+
+def _tool_input(fragment: str, index: int = 0) -> dict[str, Any]:
+    delta = {"toolUse": {"input": fragment}}
+    return {"contentBlockDelta": {"contentBlockIndex": index, "delta": delta}}
+
+
+async def _read(events) -> tuple[list, BaseException | None]:
+    seen: list = []
+    try:
+        async for event in events:
+            seen.append(event)
+    except Exception as exc:  # noqa: BLE001 — the test asserts on what it was
+        return seen, exc
+    return seen, None
+
+
+_WRITE = [{"name": "write_file", "description": "w", "parameters": {"type": "object"}}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["stream", "complete"])
+async def test_an_answer_cut_before_its_message_stop_is_cut_off(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    """A Converse stream that ends before its ``messageStop`` (a connection closed part way, a
+    body cut short) was read as a finished answer: an EVENT_COMPLETE with no stop reason, and in
+    ``complete()`` a call whose arguments never finished. Now the stream is cut off: what arrived
+    is passed on, then it raises, and nothing that waits for the answer's end is emitted."""
+    from personalclaw.llm.base import EVENT_TOOL_CALL
+    from provider import BedrockProvider
+
+    _install_fake_boto3(
+        monkeypatch,
+        [_text_event("Here is the first half"), _tool_start(), _tool_input('{"path": "PLAN')],
+    )
+    provider = BedrockProvider(model="m")
+    await provider.start()
+    events = (
+        provider.stream("plan it")
+        if path == "stream"
+        else provider.complete([{"role": "user", "content": "plan it"}], tools=_WRITE)
+    )
+    seen, raised = await _read(events)
+
+    assert [e.kind for e in seen] == [EVENT_TEXT_CHUNK], [e.kind for e in seen]
+    assert not [e for e in seen if e.kind in (EVENT_TOOL_CALL, EVENT_COMPLETE)]
+    assert type(raised).__name__ == "AnswerCutOff", raised
+    assert str(raised) == (
+        "the Bedrock stream for m ended before messageStop arrived: the answer was cut off"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_call_that_failed_is_still_its_own_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stream that RAISED ends before its messageStop too, and is said as what it was."""
+    from provider import BedrockProvider
+
+    class _Fails:
+        def __iter__(self):
+            yield _text_event("Here is")
+            raise ConnectionResetError("the connection was reset")
+
+    client = _install_fake_boto3(monkeypatch, [])
+    client.converse_stream = lambda **_kw: {"stream": _Fails()}  # type: ignore[method-assign]
+    provider = BedrockProvider(model="m")
+    await provider.start()
+    seen, raised = await _read(provider.complete([{"role": "user", "content": "hi"}]))
+
+    assert [e.text for e in seen] == ["Here is"]
+    assert isinstance(raised, ConnectionResetError), raised
+
+
+@pytest.mark.asyncio
+async def test_a_whole_answers_call_carries_how_the_answer_ended(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from personalclaw.llm.base import EVENT_TOOL_CALL
+    from provider import BedrockProvider
+
+    events = [
+        _tool_start(),
+        _tool_input('{"path": "PLAN.md"}'),
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+        _stop_event("tool_use"),
+        _usage_event(10, 2),
+    ]
+    _install_fake_boto3(monkeypatch, events)
+    provider = BedrockProvider(model="m")
+    await provider.start()
+    seen, raised = await _read(
+        provider.complete([{"role": "user", "content": "plan it"}], tools=_WRITE)
+    )
+
+    assert raised is None, raised
+    assert [e.kind for e in seen] == [EVENT_TOOL_CALL, EVENT_COMPLETE]
+    assert (seen[0].title, seen[0].tool_input, seen[0].stop_reason) == (
+        "write_file",
+        '{"path": "PLAN.md"}',
+        "tool_use",
+    )
+    assert seen[1].stop_reason == "tool_use"
 
 
 # ── Friendly error mapping (data-retention policy restriction) ──
@@ -900,6 +1026,7 @@ async def test_complete_sends_the_cache_point_on_the_wire_and_reports_cache_read
 
     events: list[dict[str, Any]] = [
         _text_event("second turn"),
+        _stop_event(),
         {
             "metadata": {
                 "usage": {
@@ -961,7 +1088,9 @@ async def test_a_per_call_temperature_and_output_budget_reach_inference_config(
     """best-of-N builds each candidate with a ``temperature`` build kwarg and core derives a
     per-model ``max_tokens``; Converse takes both in ``inferenceConfig``. The factory dropped
     both, so core reported every candidate "not sent at its requested temperature"."""
-    client = _install_fake_boto3(monkeypatch, [_text_event("ok"), _usage_event(10, 2)])
+    client = _install_fake_boto3(
+        monkeypatch, [_text_event("ok"), _stop_event(), _usage_event(10, 2)]
+    )
     provider = _bedrock_built({"region": "us-west-2"}, temperature=0.8, max_tokens=2048)
     assert provider.sampling_temperature == 0.8
 
@@ -984,7 +1113,7 @@ def test_a_configured_max_tokens_wins_and_the_declared_zero_is_not_a_cap() -> No
 async def test_extended_thinking_drops_the_custom_temperature(monkeypatch: pytest.MonkeyPatch) -> None:
     """Thinking on Anthropic-on-Bedrock rejects a custom temperature, so a reasoning turn sends
     none; the output cap still goes."""
-    client = _install_fake_boto3(monkeypatch, [_usage_event(10, 2)])
+    client = _install_fake_boto3(monkeypatch, [_stop_event(), _usage_event(10, 2)])
     provider = _bedrock_built({}, temperature=0.8, max_tokens=2048)
     await provider.start()
 
@@ -995,7 +1124,9 @@ async def test_extended_thinking_drops_the_custom_temperature(monkeypatch: pytes
 
 @pytest.mark.asyncio
 async def test_no_per_call_temperature_sends_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = _install_fake_boto3(monkeypatch, [_text_event("ok"), _usage_event(10, 2)])
+    client = _install_fake_boto3(
+        monkeypatch, [_text_event("ok"), _stop_event(), _usage_event(10, 2)]
+    )
     provider = _bedrock_built({})
     assert provider.sampling_temperature is None
     await provider.start()

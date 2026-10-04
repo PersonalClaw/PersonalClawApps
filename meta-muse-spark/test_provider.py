@@ -109,11 +109,21 @@ def test_create_provider_without_any_key_raises(
 
 
 class _Stream:
+    """A finished answer with nothing in it: one chunk whose ``finish_reason`` ends it (a stream
+    that ends without one was cut off)."""
+
+    def __init__(self) -> None:
+        delta = types.SimpleNamespace(content=None, tool_calls=None)
+        choice = types.SimpleNamespace(delta=delta, finish_reason="stop")
+        self._chunks = [types.SimpleNamespace(choices=[choice], usage=None)]
+
     def __aiter__(self):
         return self
 
     async def __anext__(self):
-        raise StopAsyncIteration
+        if not self._chunks:
+            raise StopAsyncIteration
+        return self._chunks.pop(0)
 
 
 class _Completions:

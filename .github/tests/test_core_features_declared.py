@@ -44,6 +44,9 @@ The rails over every bundle, against the installed core:
 11. every app whose shipped code claims a message before it acts on it (``claim_message`` from
     ``personalclaw.sdk.channel``), so a delivery of it made again changes nothing, declares
     ``messages-run-once``: on a PersonalClaw without it the app would not load at all.
+12. every app whose shipped code reads its provider's own wire through ``until_terminal``
+    (imported from ``personalclaw.sdk.model``) declares ``cut-off-answers``: on a PersonalClaw
+    without it the app would not load at all.
 """
 
 from __future__ import annotations
@@ -93,10 +96,13 @@ KNOWN_DIGEST_ANSWERERS = {"slack-channel"}
 KNOWN_SCREENERS = {"slack-channel"}
 
 #: The apps that read a model's stream inside ``closing_stream``, for rail 9.
-KNOWN_STREAM_CLOSERS = {"code-review", "issue-radar", "slack-channel"}
+KNOWN_STREAM_CLOSERS = {"bedrock-models", "code-review", "issue-radar", "slack-channel"}
 
 #: The apps that claim each message before they act on it, for rail 11.
 KNOWN_CLAIMERS = {"email-channel", "slack-channel"}
+
+#: The apps that read their provider's own wire through ``until_terminal``, for rail 12.
+KNOWN_TERMINAL_READERS = {"bedrock-models"}
 
 
 @pytest.fixture(autouse=True)
@@ -634,3 +640,45 @@ def test_the_scan_tells_an_app_that_claims_its_messages_from_one_that_does_not(t
     (other / "transport.py").write_text("from personalclaw.sdk.channel import ChannelMessage\n")
     assert _claims_its_messages(claimer) is True
     assert _claims_its_messages(other) is False
+
+
+def _reads_to_the_answers_end(bundle: Path) -> bool:
+    """Whether the bundle's shipped code takes ``until_terminal`` from the SDK."""
+    for path in sdk_contract.shipped_sources(bundle):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "personalclaw.sdk.model":
+                if any(alias.name == "until_terminal" for alias in node.names):
+                    return True
+    return False
+
+
+def test_every_app_that_reads_its_wire_to_the_answers_end_declares_it():
+    from personalclaw.sdk.features import CUT_OFF_ANSWERS
+
+    readers = {bundle.name for bundle in BUNDLES if _reads_to_the_answers_end(bundle)}
+    assert KNOWN_TERMINAL_READERS <= readers, (
+        f"the scan no longer sees these apps read their wire through until_terminal: "
+        f"{sorted(KNOWN_TERMINAL_READERS - readers)}"
+    )
+    undeclared = sorted(name for name in readers if CUT_OFF_ANSWERS not in _declared(ROOT / name))
+    assert undeclared == [], (
+        f"these apps read their provider's wire through until_terminal without declaring "
+        f"'requiresCoreFeatures': ['{CUT_OFF_ANSWERS}'] in app.json: {undeclared}"
+    )
+
+
+def test_the_scan_tells_an_app_that_reads_to_the_answers_end_from_one_that_does_not(tmp_path):
+    """Positive and negative control for rail 12."""
+    reader = tmp_path / "reader-app"
+    reader.mkdir()
+    (reader / "app.json").write_text('{"name": "reader-app", "version": "0.1.0"}')
+    (reader / "provider.py").write_text(
+        "from personalclaw.sdk.model import closing_stream, until_terminal\n", encoding="utf-8"
+    )
+    other = tmp_path / "other-app"
+    other.mkdir()
+    (other / "app.json").write_text('{"name": "other-app", "version": "0.1.0"}')
+    (other / "provider.py").write_text("from personalclaw.sdk.model import closing_stream\n")
+    assert _reads_to_the_answers_end(reader) is True
+    assert _reads_to_the_answers_end(other) is False

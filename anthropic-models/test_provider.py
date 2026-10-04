@@ -473,7 +473,9 @@ async def test_a_per_call_temperature_and_output_budget_reach_the_request(
     )
     assert provider.sampling_temperature == 0.9  # what core's model-call record reads back
 
-    provider._client.messages = _FakeMessages(stream_events=[_ms_event(input_tokens=1), _message_stop()])
+    provider._client.messages = _FakeMessages(
+        stream_events=[_ms_event(input_tokens=1), _message_delta(0), _message_stop()]
+    )
     _ = [event async for event in provider.stream("hi")]
 
     sent = provider._client.messages.calls[-1]
