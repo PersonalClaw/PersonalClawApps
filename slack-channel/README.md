@@ -127,6 +127,17 @@ it once.
 the agent compacts the conversation on its own in the middle of a reply, the thread says so in the
 same words, in a message after the reply, and the reply keeps everything it said before.
 
+## Answering the Morning triage digest here
+
+When your notification rule sends PersonalClaw's Morning triage digest to your DM here, the DM
+says how to answer it: `3 yes` or `3 no` for an item, `always yes 3` or `always no 3` to also
+remember the pattern, `yes all` or `no all` for every item. A reply like that from you, in that DM,
+is PersonalClaw's to answer, not this conversation's: the app hands it over before it would run a
+turn (`services.answer_channel_reply`), PersonalClaw answers it exactly as a tap on the digest's
+card does and says here what it did, and no turn runs for it. Anything else you write there,
+and anyone else's message, is a message for the conversation as before. The app declares the core
+feature that takes it (`requiresCoreFeatures`: `digest-replies`).
+
 ## Results from your schedules
 
 A schedule can send its results here too. In the schedule's Advanced → Notify channel, pick

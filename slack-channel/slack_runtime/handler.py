@@ -1924,6 +1924,24 @@ async def handle_message(
         channel,
     )
 
+    # ── A reply to the Morning triage digest this DM received (`3 yes`) ──
+    # PersonalClaw's to answer, as it is on every channel whose messages cross its door: it takes
+    # the owner's answer, answers it as the digest's card does and says here what it did, and this
+    # conversation runs no turn for it. Anything else stays this conversation's.
+    if channel.startswith("D") and _gateway_services is not None:
+        from personalclaw.sdk.channel import ChannelMessage
+
+        _reply = ChannelMessage(
+            channel_id=channel,
+            text=text,
+            sender=user_id,
+            thread_id=session_key,
+            message_id=msg_ts,
+            metadata={"sender_name": user_display_name or ""},
+        )
+        if await _gateway_services.answer_channel_reply("slack", _reply, is_dm=True):
+            return
+
     # ── Hook: check for auto-reply before touching ACP ──
     if context_builder:
         hook_result = context_builder.hooks.on_message(text)

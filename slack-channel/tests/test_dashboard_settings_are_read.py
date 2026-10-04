@@ -158,6 +158,10 @@ def store_only_home(tmp_path, monkeypatch):
         monkeypatch.delenv(key, raising=False)
     cfg_path = tmp_path / "apps" / "slack-channel" / "data" / "config.json"
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    # `start_inbound` wires the services it is handed into the handler's module state: put that
+    # back afterwards, as the other wiring tests do, so no later test meets this file's stand-in.
+    for name in ("_gateway_services", "_orch_cfg"):
+        monkeypatch.setattr(H, name, getattr(H, name))
     return cfg_path
 
 

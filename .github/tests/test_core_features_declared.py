@@ -7,7 +7,7 @@ the channel then arrived as a notice with nothing to press, and nothing had chec
 fitted that PersonalClaw. An app names the core features it relies on in ``requiresCoreFeatures``,
 and PersonalClaw refuses to review, install, update or switch on one it cannot host.
 
-Four rails over every bundle, against the installed core:
+The rails over every bundle, against the installed core:
 
 1. every name an app declares is a core feature the installed PersonalClaw offers: a misspelt name,
    or one from a PersonalClaw that does not exist yet, would make the app installable nowhere;
@@ -27,6 +27,9 @@ Four rails over every bundle, against the installed core:
    (``source_user=``, ``source_channel=``): memory takes a line as the owner's own words only when
    its sender is the owner its channel keeps, so a turn saved without them is nobody's, and on a
    PersonalClaw without the feature the save is refused.
+7. every app whose shipped code offers a message to core's answer to the Morning triage digest
+   (``services.answer_channel_reply``) declares ``digest-replies``: on a PersonalClaw without it the
+   services handle has no such method, so every direct message the app offers would fail.
 """
 
 from __future__ import annotations
@@ -67,6 +70,10 @@ KNOWN_TURN_WRITERS = {"slack-channel"}
 
 #: What a channel calls to save its turns or record where a line came from (rail 6).
 _TURN_SOURCE_NAMES = frozenset({"save_conversation_turn", "arrived_on"})
+
+#: The apps that offer their direct messages to core's answer to the Morning triage digest, for
+#: rail 7.
+KNOWN_DIGEST_ANSWERERS = {"slack-channel"}
 
 
 @pytest.fixture(autouse=True)
@@ -378,3 +385,47 @@ def test_the_scan_tells_a_turn_that_names_its_channel_from_one_that_does_not(tmp
         for _where, call in _calls(writer, "save_conversation_turn")
     ]
     assert named == [True, False]
+
+
+def _offers_digest_replies(bundle: Path) -> bool:
+    """Whether the bundle's shipped code offers a message to ``answer_channel_reply``."""
+    return bool(_calls(bundle, "answer_channel_reply"))
+
+
+def test_every_app_that_offers_its_messages_to_the_digests_answer_declares_it():
+    from personalclaw.sdk.features import DIGEST_REPLIES
+
+    answerers = {bundle.name for bundle in BUNDLES if _offers_digest_replies(bundle)}
+    assert KNOWN_DIGEST_ANSWERERS <= answerers, (
+        f"the scan no longer sees these apps offer a message to answer_channel_reply: "
+        f"{sorted(KNOWN_DIGEST_ANSWERERS - answerers)}"
+    )
+    undeclared = sorted(
+        name for name in answerers if DIGEST_REPLIES not in _declared(ROOT / name)
+    )
+    assert undeclared == [], (
+        f"these apps offer a message to answer_channel_reply without declaring "
+        f"'requiresCoreFeatures': ['{DIGEST_REPLIES}'] in app.json: {undeclared}"
+    )
+
+
+def test_the_scan_tells_an_app_that_offers_the_digests_answer_from_one_that_does_not(tmp_path):
+    """Positive and negative control for rail 7."""
+    answerer = tmp_path / "answerer-app"
+    answerer.mkdir()
+    (answerer / "app.json").write_text('{"name": "answerer-app", "version": "0.1.0"}')
+    (answerer / "handler.py").write_text(
+        "async def on_dm(services, msg):\n"
+        "    return await services.answer_channel_reply('answerer', msg, is_dm=True)\n",
+        encoding="utf-8",
+    )
+    other = tmp_path / "other-app"
+    other.mkdir()
+    (other / "app.json").write_text('{"name": "other-app", "version": "0.1.0"}')
+    (other / "handler.py").write_text(
+        "async def on_dm(services, msg):\n"
+        "    return await services.deliver_channel_inbound('other', msg)\n",
+        encoding="utf-8",
+    )
+    assert _offers_digest_replies(answerer) is True
+    assert _offers_digest_replies(other) is False
