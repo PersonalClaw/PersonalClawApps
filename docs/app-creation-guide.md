@@ -537,13 +537,15 @@ and say so when it is missing.
 |---|---|---|
 | `approval-answers` | the answers an approval prompt offers, handed over in the approval brief (`approval_brief_for(event)["answers"]`) | a channel app whose prompt offers them: `telegram-channel`, `slack-channel`, `discord-channel`, `email-channel` |
 | `chat-trust` | a channel that runs a conversation itself keeps no trust of its own: its prompt offers the chat's answers (`approval_brief_for(event, chat=...)`), Allow for this chat becomes the Trust of PersonalClaw's chat for the conversation (`answer_in_chat`), and each call asks which of that chat's grants answers it (`chat_grant`) | a channel app that runs its own turns: `slack-channel` |
+| `links-name-their-channel` | a chat's link to a channel thread names the channel it is on, where the chat answers: `link_channel(chat, thread, channel_id, provider=...)` links a chat on your channel (moving it off any thread it was on; the owner's own DM it left is told where it went), and `SessionManager.get_channel_provider(key)` says which channel a chat is on | a channel app that links a chat to one of its threads itself: `slack-channel` |
 
 A PersonalClaw from before core features cannot read the field, so an app also checks what it
 relies on where it uses it: a channel app handed a brief with no answers says so on the prompt,
 with nothing to press, and logs it once. `.github/tests/test_core_features_declared.py` holds
 every bundle's names to the ones the installed PersonalClaw offers, every app whose prompt
-offers the brief's answers to declaring `approval-answers`, and every app that gives or reads a
-chat's Trust to declaring `chat-trust`.
+offers the brief's answers to declaring `approval-answers`, every app that gives or reads a
+chat's Trust to declaring `chat-trust`, and every app that links a chat on its own channel to
+declaring `links-name-their-channel`.
 
 ### What it starts, installs and writes outside PersonalClaw (`launches`, `npmPackages`, `writes`)
 

@@ -150,9 +150,17 @@ buttons on a message are this app's own.
 `!link-to-dashboard` in a thread, or **Link to dashboard** under an answer, brings the thread
 into a new chat in PersonalClaw and links the thread to it. A reply in the thread then continues
 that chat, with everything said before, and its answer comes back to the thread, after a
-PersonalClaw restart too: the chat is this channel's, as every chat a channel opens is, and
-PersonalClaw keeps which chat the thread continues. Asked again in the same thread, it keeps the
-chat it made rather than making a second one.
+PersonalClaw restart too: the chat is linked on this channel, as every chat a channel opens is,
+and PersonalClaw keeps which chat the thread continues and on which channel. Asked again in the
+same thread, it keeps the chat it made rather than making a second one.
+
+## A chat resumed here
+
+`!sessions` lists your recent chats, each with **Resume**, which offers a thread here or your DM.
+A chat already in a thread here is pointed to that thread. A chat on another channel (one you
+started on Telegram, say) is moved here: it continues in the thread Resume opens, and its answers
+come to that thread. The conversation it was on no longer reaches it, and when that was your own
+DM there, it is told where the chat went.
 
 ## What the agent reads
 

@@ -50,8 +50,9 @@ class FakeState:
         self.linked_app = app
         return self.session
 
-    def link_channel(self, key, thread_key, channel_id):
+    def link_channel(self, key, thread_key, channel_id, *, provider):
         self.linked[thread_key] = self.session
+        self.linked_on = provider
 
     def notify(self, *a, **k):
         self.notified.append((a, k))
@@ -189,6 +190,7 @@ class TestTrustHooks:
         await asyncio.sleep(0)
         assert captured.get("text") == "hello"
         assert state.linked_app == "telegram"
+        assert state.linked_on == "telegram", "the chat answers on another channel than its thread's"
 
     @pytest.mark.asyncio
     async def test_unknown_dm_sender_gets_canned_reply_not_routed(self, transport_with_capture):

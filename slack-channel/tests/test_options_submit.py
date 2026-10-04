@@ -301,7 +301,7 @@ class TestImportThreadToSession:
 
         assert result is session
         assert session.append.call_count == 2
-        ds.link_channel.assert_called_once_with("s1", "100.0", "C1")
+        ds.link_channel.assert_called_once_with("s1", "100.0", "C1", provider="slack")
         ds.push_sessions_update.assert_called_once()
 
     @pytest.mark.asyncio

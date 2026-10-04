@@ -141,8 +141,9 @@ class _FakeState:
     def get_or_create_session(self, app=""):
         return self.session
 
-    def link_channel(self, key, thread_key, channel_id):
+    def link_channel(self, key, thread_key, channel_id, *, provider):
         self.linked[thread_key] = self.session
+        self.linked_on = provider
 
     def notify(self, *a, **k):
         self.notified.append((a, k))

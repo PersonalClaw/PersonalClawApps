@@ -221,8 +221,9 @@ class FakeState:
         self.linked_app = app
         return self.session
 
-    def link_channel(self, key, thread_key, channel_id) -> None:
+    def link_channel(self, key, thread_key, channel_id, *, provider) -> None:
         self.linked[thread_key] = self.session
+        self.linked_on = provider
 
     def notify(self, *a, **k) -> None:
         self.notified.append((a, k))

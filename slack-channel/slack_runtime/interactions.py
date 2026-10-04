@@ -61,6 +61,10 @@ logger = logging.getLogger(__name__)
 # Module-level orchestrator reference — set by ``init()``.
 _orch: "GatewayServices | None" = None
 
+#: This channel, as PersonalClaw names it: the provider its messages reach the inbound door under,
+#: and the channel a chat linked to one of its threads answers on.
+_PROVIDER = "slack"
+
 
 def init(orchestrator: "GatewayServices") -> None:
     """Bind the orchestrator so interactive handlers can reach services."""
@@ -879,9 +883,10 @@ async def _import_thread_to_session(slack: Any, ds: Any, channel: str, thread_ts
     truncated = len(msgs) > 50
     if truncated:
         msgs = msgs[-50:]
-    # Made as this channel's chat, as the inbound door makes every chat it opens: its answers go
-    # back to the thread, and a reply there continues it, after a restart too.
-    session = ds.get_or_create_session(app="slack")
+    # Made as this channel's chat, as the inbound door makes every chat it opens, and linked to the
+    # thread on this channel (below): its answers go back to the thread, and a reply there
+    # continues it, after a restart too.
+    session = ds.get_or_create_session(app=_PROVIDER)
     session.title = f"Slack thread {thread_ts[:10]}" + (" (truncated)" if truncated else "")
     bot_id = getattr(ds, "_self_bot_id", None) or ""
     for m in msgs:
@@ -891,7 +896,7 @@ async def _import_thread_to_session(slack: Any, ds: Any, channel: str, thread_ts
         text_content, _ = redact_exfiltration_urls(text_content)
         text_content, _ = redact_credentials(text_content)
         session.append(role, text_content, f"msg msg-{'a' if is_bot else 'u'}")
-    ds.link_channel(session.key, thread_ts, channel)
+    ds.link_channel(session.key, thread_ts, channel, provider=_PROVIDER)
     save_session_to_history(ds, session)
     ds.push_sessions_update()
     return session
@@ -1682,10 +1687,32 @@ async def _handle_channel_remove(
             pass
 
 
+def _active_here(session_key: str) -> bool:
+    """Whether the conversation *session_key* is already in one of this channel's threads, so
+    resuming it here would open a second one.
+
+    A chat's link names the channel it is on, and a chat on another channel (one that came from
+    Telegram, say) is not here: resuming it moves it to a thread here, and a link to the Slack
+    conversation built from that channel's ids would open nothing. A chat whose link names no
+    channel is answered nowhere, and resuming it links it here. This app's own conversations are
+    linked to their threads without a channel, and are here when they are linked."""
+    if _orch is None or _orch.sessions is None:
+        return False
+    thread, channel = _orch.sessions.get_channel_link(session_key)
+    if not (thread and channel):
+        return False
+    on = _orch.sessions.get_channel_provider(session_key)
+    if session_key.startswith("dashboard:"):
+        return on == _PROVIDER
+    return on in ("", _PROVIDER)
+
+
 async def _handle_session_resume(
     payload: dict, action: dict, channel: str, msg_ts: str, user_id: str
 ) -> None:
-    """Show choice buttons for how to resume a session."""
+    """Show choice buttons for how to resume a session: a thread here or the owner's DM. A chat
+    already in a thread here is pointed to it; a chat on another channel is offered the choice,
+    and moves here."""
     import json
 
     if not is_owner(user_id):
@@ -1707,10 +1734,9 @@ async def _handle_session_resume(
     if not session_key:
         return
 
-    # Check if session already has a linked thread/channel
-    existing_thread, existing_channel = _orch.sessions.get_channel_link(session_key)
-
-    if existing_thread and existing_channel:
+    # Already in a thread here: pointed to it. A chat on another channel is moved here below.
+    if _active_here(session_key):
+        existing_thread, existing_channel = _orch.sessions.get_channel_link(session_key)
         link = f"https://slack.com/archives/{existing_channel}/p{existing_thread.replace('.', '')}"
         label = f"\U0001f9f5 This session is already active: <{link}|Go to conversation>"
         response_url = payload.get("response_url", "")
@@ -1824,9 +1850,9 @@ async def _handle_resume_choice(
 
     lock = _resume_locks.setdefault(session_key, asyncio.Lock())
     async with lock:
-        # Re-check: session may have been linked while user was choosing
-        existing_thread, existing_channel = _orch.sessions.get_channel_link(session_key)
-        if existing_thread and existing_channel:
+        # Re-check: session may have been linked here while user was choosing
+        if _active_here(session_key):
+            existing_thread, existing_channel = _orch.sessions.get_channel_link(session_key)
             link = f"https://slack.com/archives/{existing_channel}/p{existing_thread.replace('.', '')}"
             label = f"\U0001f9f5 Already active: <{link}|Go to conversation>"
             response_url = payload.get("response_url", "")
@@ -1881,8 +1907,18 @@ async def _handle_resume_choice(
         else:
             return
 
-        # Link session
-        _orch.sessions.set_channel_link(session_key, link_ts, link_channel)
+        # Link it here. A chat is linked where the inbound door reads it, on this channel, so its
+        # answers come to this thread, and the thread it was on (here or on another channel) is
+        # told where it went; one the dashboard no longer holds is brought back from disk. This
+        # app's own conversation is linked in the session store, which this app routes by.
+        if session_key.startswith("dashboard:") and _orch.dashboard_state is not None:
+            _orch.dashboard_state.link_channel(
+                session_key.removeprefix("dashboard:"), link_ts, link_channel, provider=_PROVIDER
+            )
+        else:
+            _orch.sessions.set_channel_link(
+                session_key, link_ts, link_channel, channel_provider=_PROVIDER
+            )
         sel().log_api_access(
             caller=user_id,
             operation="slack.session_resume",
@@ -1890,11 +1926,6 @@ async def _handle_resume_choice(
             source="slack",
             resources=session_key,
         )
-        if _orch.dashboard_state:
-            session_name = (
-                session_key.split(":", 1)[-1] if ":" in session_key else session_key
-            )
-            _orch.dashboard_state.link_channel(session_name, link_ts, link_channel)
 
         # Post last 5 messages as context
         try:

@@ -16,7 +16,11 @@ Four rails over every bundle, against the installed core:
    ``guarded-download``: on a PersonalClaw without it the app would not load at all;
 4. every app whose shipped code gives or reads a chat's Trust for a conversation it runs itself
    (``answer_in_chat``, ``chat_grant`` from ``personalclaw.sdk.channel``) declares ``chat-trust``:
-   on a PersonalClaw without it the app would not load at all.
+   on a PersonalClaw without it the app would not load at all;
+5. every app whose shipped code links a chat on its channel or asks which channel a chat is on
+   (``link_channel(…, provider=…)``, ``set_channel_link(…, channel_provider=…)``,
+   ``get_channel_provider``) declares ``links-name-their-channel``: on a PersonalClaw without it
+   the link is refused, and a chat resumed or imported there is linked nowhere.
 """
 
 from __future__ import annotations
@@ -48,6 +52,9 @@ KNOWN_CHAT_TRUSTERS = {"slack-channel"}
 
 #: What a channel imports to give and read the chat's Trust (rail 4).
 _CHAT_TRUST_NAMES = frozenset({"answer_in_chat", "chat_grant"})
+
+#: The apps that link a chat on their own channel, for rail 5.
+KNOWN_CHANNEL_LINKERS = {"slack-channel"}
 
 
 @pytest.fixture(autouse=True)
@@ -219,3 +226,60 @@ def test_the_scan_tells_an_app_that_keeps_the_chats_trust_from_one_that_does_not
     (other / "handler.py").write_text("from personalclaw.sdk.channel import approval_brief_for\n")
     assert _keeps_the_chats_trust(truster) is True
     assert _keeps_the_chats_trust(other) is False
+
+
+def _links_on_its_channel(bundle: Path) -> bool:
+    """Whether the bundle's shipped code links a chat naming the channel, or asks a link's channel:
+    a ``link_channel`` call given ``provider``, a ``set_channel_link`` call given
+    ``channel_provider``, or a ``get_channel_provider`` call."""
+    for path in sdk_contract.shipped_sources(bundle):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            named = {kw.arg for kw in node.keywords}
+            if (
+                node.func.attr == "get_channel_provider"
+                or (node.func.attr == "link_channel" and "provider" in named)
+                or (node.func.attr == "set_channel_link" and "channel_provider" in named)
+            ):
+                return True
+    return False
+
+
+def test_every_app_that_links_a_chat_on_its_channel_declares_it():
+    from personalclaw.sdk.features import LINKS_NAME_THEIR_CHANNEL
+
+    linkers = {bundle.name for bundle in BUNDLES if _links_on_its_channel(bundle)}
+    assert KNOWN_CHANNEL_LINKERS <= linkers, (
+        f"the scan no longer sees these apps link a chat on their channel: "
+        f"{sorted(KNOWN_CHANNEL_LINKERS - linkers)}"
+    )
+    undeclared = sorted(
+        name for name in linkers if LINKS_NAME_THEIR_CHANNEL not in _declared(ROOT / name)
+    )
+    assert undeclared == [], (
+        f"these apps link a chat on their channel without declaring "
+        f"'requiresCoreFeatures': ['{LINKS_NAME_THEIR_CHANNEL}'] in app.json: {undeclared}"
+    )
+
+
+def test_the_scan_tells_an_app_that_links_on_its_channel_from_one_that_does_not(tmp_path):
+    """Positive and negative control for rail 5."""
+    linker = tmp_path / "linker-app"
+    linker.mkdir()
+    (linker / "app.json").write_text('{"name": "linker-app", "version": "0.1.0"}')
+    (linker / "interactions.py").write_text(
+        "def resume(ds, chat, ts, channel):\n"
+        "    ds.link_channel(chat, ts, channel, provider='linker')\n",
+        encoding="utf-8",
+    )
+    other = tmp_path / "other-app"
+    other.mkdir()
+    (other / "app.json").write_text('{"name": "other-app", "version": "0.1.0"}')
+    (other / "handler.py").write_text(
+        "def own(sessions, key, channel):\n    sessions.set_channel_link(key, key, channel)\n",
+        encoding="utf-8",
+    )
+    assert _links_on_its_channel(linker) is True
+    assert _links_on_its_channel(other) is False

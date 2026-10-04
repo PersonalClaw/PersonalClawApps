@@ -184,6 +184,7 @@ class TestNewMailDetection:
         await asyncio.sleep(0)
         assert "please do the thing" in captured["text"]
         assert state.linked_app == "email"
+        assert state.linked_on == "email", "the chat answers on another channel than its thread's"
 
     @pytest.mark.asyncio
     async def test_an_empty_mailbox_routes_nothing(self, wired):

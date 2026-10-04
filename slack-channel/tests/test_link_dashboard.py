@@ -162,7 +162,7 @@ async def test_link_dashboard_creates_session_and_imports(link_orch: MagicMock, 
     assert session.append.call_count == 3
     roles = [c.args[0] for c in session.append.call_args_list]
     assert roles == ["user", "assistant", "user"]
-    ds.link_channel.assert_called_once_with("session_abc", "100.0", "C1")
+    ds.link_channel.assert_called_once_with("session_abc", "100.0", "C1", provider="slack")
     ds.push_sessions_update.assert_called_once()
     mock_sel_inst.log_tool_invocation.assert_called_once()
 
