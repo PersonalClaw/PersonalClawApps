@@ -74,6 +74,7 @@ from personalclaw.sdk.channel import (
     ChannelMessage,
     ChannelTransportProvider,
     OutboundMessage,
+    claim_message,
     redeem_owner_pairing_code,
     redeem_pairing_code,
 )
@@ -531,13 +532,16 @@ class EmailTransport(ChannelTransportProvider):
 
         ``channel_id`` is the correspondent's address — that IS how core addresses a
         reply back — and ``thread_id`` is the chain root, which is the session key. The
-        mail's attachments are its ``files``, which core keeps with what the mail becomes."""
+        mail's attachments are its ``files``, which core keeps with what the mail becomes.
+        ``message_id`` is the mail's own ``Message-ID``, which every copy of it keeps; a mail
+        that came without one is named by this mailbox's own name for it
+        (:meth:`_mailbox_id`), which a read of the folder again gives it again."""
         return ChannelMessage(
             channel_id=mail.from_addr,
             text=mail.body,
             sender=mail.from_addr,
             thread_id=mail.thread_root,
-            message_id=mail.message_id,
+            message_id=mail.message_id or self._mailbox_id(mail.uid),
             ts=mail.ts,
             metadata={
                 "sender_name": mail.from_name,
@@ -549,8 +553,14 @@ class EmailTransport(ChannelTransportProvider):
             files=list(mail.attachments),
         )
 
+    def _mailbox_id(self, uid: int) -> str:
+        """The mailbox's own name for the message at *uid*: its folder, the folder's
+        UIDVALIDITY and the UID, which name one message for as long as the folder keeps its
+        numbering, and the same one every time the folder is read."""
+        return f"imap:{get_settings().folder}:{self._uidvalidity}:{uid}"
+
     async def _dispatch(self, raw: bytes, uid: int, settings: EmailSettings) -> None:
-        """Run one raw message through parse → self-filter → trust → session."""
+        """Run one raw message through parse → self-filter → claim → trust → session."""
         mail = parse_inbound(raw, uid)
         if mail is None:
             return  # fail-closed: unparseable / no From ⇒ nothing surfaces
@@ -569,6 +579,12 @@ class EmailTransport(ChannelTransportProvider):
             return  # nothing to act on: no text and nothing attached
 
         cm = self._to_channel_message(mail)
+        # Claimed before anything acts on the mail: a folder read again from an older cursor
+        # (a crash before the cursor was saved) delivers it again, and every branch below acts
+        # on it (its automations, a pairing code in it, an approval's answer, the door). A
+        # delivery of it made again changes nothing; the door takes this claim, once.
+        if not claim_message(PROVIDER, cm):
+            return
 
         from personalclaw.sdk.channel import is_allowed_sender
 

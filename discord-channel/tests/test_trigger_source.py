@@ -12,10 +12,9 @@ would see no call at all here.
 
 Three hazards this file is shaped around.
 
-**Process-global state.** ``trigger_sources``' registry, the bus's router and the guarded
-door's admission cache are all process-global. Every fixture restores unconditionally, and the
-router is attached only inside :func:`_fire_through_the_gateway`, which detaches it on the way
-out.
+**Process-global state.** ``trigger_sources``' registry and the bus's router are
+process-global. Every fixture restores unconditionally, and the router is attached only inside
+:func:`_fire_through_the_gateway`, which detaches it on the way out.
 
 **A no-fire assertion needs the router attached too.** An event trigger fires only where the
 gateway's router is attached; anywhere else the event is spooled for the gateway's next tick. A
@@ -167,14 +166,10 @@ class _FakeServices:
 
 @pytest.fixture
 def transport():
-    from personalclaw.channel_inbound import reset_admissions
-
-    reset_admissions()
     t = DiscordTransport({"bot_token": "TEST"})
     t._services = _FakeServices()
     t._delivery = _FakeDelivery()
     yield t
-    reset_admissions()
 
 
 def _message_create(

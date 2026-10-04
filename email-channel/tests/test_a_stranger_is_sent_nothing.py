@@ -69,8 +69,6 @@ def mailbox(tmp_path):
     """A configured channel on the owner's mailbox, registered and connected as the gateway
     runs it."""
     from personalclaw import channel_delivery, channel_transports
-    from personalclaw.channel_inbound import reset_admissions
-
     ProviderSettings.update(
         _APP,
         {
@@ -80,7 +78,6 @@ def mailbox(tmp_path):
     )
     save_credential(CRED_IMAP_PASS, "app-password")
     reload_settings()
-    reset_admissions()
     imap, smtp, state, turns = FakeImapServer(), FakeSmtpServer(), _State(), []
     transport = EmailTransport()
     transport._client_factory = lambda settings, password: imap
@@ -96,7 +93,6 @@ def mailbox(tmp_path):
     yield transport, imap, smtp, state, turns
     channel_delivery.register(None, provider="email")
     channel_transports.unregister_transport(transport.name)
-    reset_admissions()
 
 
 ASKED = "Could I borrow your ladder on Saturday?"

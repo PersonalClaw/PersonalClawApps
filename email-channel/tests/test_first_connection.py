@@ -78,9 +78,6 @@ def fresh(tmp_path):
     )
     save_credential(CRED_IMAP_PASS, "app-password")
     reload_settings()
-    from personalclaw.channel_inbound import reset_admissions
-
-    reset_admissions()
     imap = FakeImapServer()
     for uid, (sender, headers) in enumerate(SEEDED, start=1):
         imap.add(
@@ -109,7 +106,6 @@ def fresh(tmp_path):
     channel_transports.register_transport(transport, app=_APP)
     yield transport, imap, smtp, state, captured
     channel_transports.unregister_transport(transport.name)
-    reset_admissions()
 
 
 @pytest.mark.asyncio

@@ -41,6 +41,9 @@ The rails over every bundle, against the installed core:
     ``turns-name-who-asked``: what the turn's tools would change of the owner's memory waits for
     her own word unless she sent it, and on a PersonalClaw without the feature the app does not
     load.
+11. every app whose shipped code claims a message before it acts on it (``claim_message`` from
+    ``personalclaw.sdk.channel``), so a delivery of it made again changes nothing, declares
+    ``messages-run-once``: on a PersonalClaw without it the app would not load at all.
 """
 
 from __future__ import annotations
@@ -91,6 +94,9 @@ KNOWN_SCREENERS = {"slack-channel"}
 
 #: The apps that read a model's stream inside ``closing_stream``, for rail 9.
 KNOWN_STREAM_CLOSERS = {"code-review", "issue-radar", "slack-channel"}
+
+#: The apps that claim each message before they act on it, for rail 11.
+KNOWN_CLAIMERS = {"email-channel", "slack-channel"}
 
 
 @pytest.fixture(autouse=True)
@@ -584,3 +590,47 @@ def test_the_scan_tells_an_app_that_names_who_asked_from_one_that_does_not(tmp_p
     (other / "handler.py").write_text("from personalclaw.sdk.channel import arrived_on\n")
     assert _names_who_asked(runner) is True
     assert _names_who_asked(other) is False
+
+
+def _claims_its_messages(bundle: Path) -> bool:
+    """Whether the bundle's shipped code takes ``claim_message`` from the SDK."""
+    for path in sdk_contract.shipped_sources(bundle):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "personalclaw.sdk.channel":
+                if any(alias.name == "claim_message" for alias in node.names):
+                    return True
+    return False
+
+
+def test_every_app_that_claims_its_messages_declares_it():
+    from personalclaw.sdk.features import MESSAGES_RUN_ONCE
+
+    claimers = {bundle.name for bundle in BUNDLES if _claims_its_messages(bundle)}
+    assert KNOWN_CLAIMERS <= claimers, (
+        f"the scan no longer sees these apps claim their messages: "
+        f"{sorted(KNOWN_CLAIMERS - claimers)}"
+    )
+    undeclared = sorted(
+        name for name in claimers if MESSAGES_RUN_ONCE not in _declared(ROOT / name)
+    )
+    assert undeclared == [], (
+        f"these apps claim a message with personalclaw.sdk.channel.claim_message without "
+        f"declaring 'requiresCoreFeatures': ['{MESSAGES_RUN_ONCE}'] in app.json: {undeclared}"
+    )
+
+
+def test_the_scan_tells_an_app_that_claims_its_messages_from_one_that_does_not(tmp_path):
+    """Positive and negative control for rail 11."""
+    claimer = tmp_path / "claimer-app"
+    claimer.mkdir()
+    (claimer / "app.json").write_text('{"name": "claimer-app", "version": "0.1.0"}')
+    (claimer / "transport.py").write_text(
+        "from personalclaw.sdk.channel import ChannelMessage, claim_message\n", encoding="utf-8"
+    )
+    other = tmp_path / "other-app"
+    other.mkdir()
+    (other / "app.json").write_text('{"name": "other-app", "version": "0.1.0"}')
+    (other / "transport.py").write_text("from personalclaw.sdk.channel import ChannelMessage\n")
+    assert _claims_its_messages(claimer) is True
+    assert _claims_its_messages(other) is False

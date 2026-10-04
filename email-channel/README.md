@@ -58,8 +58,9 @@ It imports core **only** via the PersonalClaw **SDK** (never core internals), so
 evolve without breaking it:
 
 - `personalclaw.sdk.channel` — the transport ABC, `ChannelMessage`, the sender-trust seam
-  (`guard_inbound`, `redeem_pairing_code`, `is_tracked_channel`), `run_chat`,
-  `ProviderSettings`, `AppConfig`, `atomic_write`.
+  (`guard_inbound`, `redeem_pairing_code`, `is_tracked_channel`), `claim_message` (each mail is
+  claimed before anything acts on it, so a folder read again after a crash answers nothing a
+  second time), `ProviderSettings`, `AppConfig`, `atomic_write`.
 - `personalclaw.sdk.util` — `app_data_dir` (the UID cursor, thread state and the approvals it
   mailed).
 - `personalclaw.sdk.cli` — `SetupContext` / `DoctorLine`.

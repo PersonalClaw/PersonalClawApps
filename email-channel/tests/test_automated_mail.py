@@ -82,9 +82,6 @@ def wired(tmp_path):
     )
     save_credential(CRED_IMAP_PASS, "app-password")
     reload_settings()
-    from personalclaw.channel_inbound import reset_admissions
-
-    reset_admissions()
     imap, smtp, state, captured = FakeImapServer(), FakeSmtpServer(), FakeState(), []
     transport = EmailTransport()
     transport._client_factory = lambda settings, password: imap
@@ -101,7 +98,6 @@ def wired(tmp_path):
     channel_transports.register_transport(transport, app=_APP)
     yield transport, imap, smtp, state, captured
     channel_transports.unregister_transport(transport.name)
-    reset_admissions()
 
 
 async def _deliver(transport, imap, sender, headers, *, uid=1, body="please answer"):

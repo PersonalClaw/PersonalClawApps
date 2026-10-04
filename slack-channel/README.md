@@ -37,7 +37,8 @@ Three things this deliberately does *not* do:
 
 - **It observes nothing your trust gate refused.** The publish happens at the one point
   where a message has cleared this app's allowlist / open-channel / tracked-channel gate,
-  its channel activation mode and its dedup cache. (This app predates core's guarded door —
+  its channel activation mode and its claim with PersonalClaw (`claim_message`), which a
+  message Slack delivers again does not pass. (This app predates core's guarded door —
   see `tests/test_conformance.py`'s strict xfail — so the gate here is its own.)
   A denied sender gets no session and arms no automation.
 - **The event name never comes from the message.** It is chosen in code from the frozen

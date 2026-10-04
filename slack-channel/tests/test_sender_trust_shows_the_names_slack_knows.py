@@ -91,11 +91,11 @@ def _orch(settings: SlackSettings, known: dict[str, str] | None = None) -> Magic
 
 
 async def _first_dm(orch, sender: str) -> None:
-    from slack_runtime.events import SeenCache, _route_message
+    from slack_runtime.events import _route_message
 
     event = {"user": sender, "channel": "D0ROBIN", "channel_type": "im", "text": "hi", "ts": "9.0", "team": "TTEST"}
     with patch("slack_runtime.events.handle_message", new_callable=AsyncMock):
-        await _route_message(orch, event, SeenCache(), is_mention=False)
+        await _route_message(orch, event, is_mention=False)
         await asyncio.sleep(0)
         await asyncio.gather(*list(orch._handler_tasks), return_exceptions=True)
 

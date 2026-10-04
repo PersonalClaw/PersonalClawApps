@@ -129,19 +129,6 @@ class TestLinkToDashboardCommand:
 # decision seam, keeping the tests hermetic to the trust store.
 
 
-@pytest.fixture(autouse=True)
-def _fresh_admission_cache():
-    """The guarded door caches verdicts per message id and these tests reuse ids like
-    "msg1", so a stale entry would answer the next test's admission. The reset lives
-    HERE and not in conftest because the apps boundary lint exempts only ``test_*.py``
-    files — the same placement the discord/telegram/email suites use."""
-    from personalclaw.channel_inbound import reset_admissions
-
-    reset_admissions()
-    yield
-    reset_admissions()
-
-
 def _door_services(state):
     from personalclaw.channel_inbound import deliver_inbound
 

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from slack_runtime.events import SeenCache, _route_message
+from slack_runtime.events import _route_message
 from slack_runtime.settings import SlackSettings
 
 
@@ -48,7 +48,6 @@ class TestUserResolutionFallback:
         )
         # get_user_info returns empty dict -> _sender_display = sender_id
         orch.slack.get_user_info = AsyncMock(return_value={})
-        seen = SeenCache()
         event = {
             "user": "U0EXAMPLE01",
             "channel": "D1234",
@@ -59,7 +58,7 @@ class TestUserResolutionFallback:
 
         with patch("slack_runtime.events.handle_message", new_callable=AsyncMock) as mock_hm:
             with patch("slack_runtime.events.is_allowed_user", return_value=True):
-                await _route_message(orch, event, seen, is_mention=False)
+                await _route_message(orch, event, is_mention=False)
                 await asyncio.sleep(0)
                 tasks = list(orch._handler_tasks)
                 assert len(tasks) == 1
@@ -80,7 +79,6 @@ class TestUserResolutionFallback:
             allowed_users=[{"slack_id": "U0EXAMPLE01", "name": "alice"}],
         )
         orch.slack.get_user_info = AsyncMock(return_value={"real_name": "Alice Example"})
-        seen = SeenCache()
         event = {
             "user": "U0EXAMPLE01",
             "channel": "D1234",
@@ -91,7 +89,7 @@ class TestUserResolutionFallback:
 
         with patch("slack_runtime.events.handle_message", new_callable=AsyncMock) as mock_hm:
             with patch("slack_runtime.events.is_allowed_user", return_value=True):
-                await _route_message(orch, event, seen, is_mention=False)
+                await _route_message(orch, event, is_mention=False)
                 await asyncio.sleep(0)
                 tasks = list(orch._handler_tasks)
                 assert len(tasks) == 1
@@ -107,7 +105,6 @@ class TestUserResolutionFallback:
             allowed_users=[{"slack_id": "U_OTHER", "name": "someone"}],
         )
         orch.slack.get_user_info = AsyncMock(return_value={})
-        seen = SeenCache()
         event = {
             "user": "U0EXAMPLE01",
             "channel": "D1234",
@@ -118,7 +115,7 @@ class TestUserResolutionFallback:
 
         with patch("slack_runtime.events.handle_message", new_callable=AsyncMock) as mock_hm:
             with patch("slack_runtime.events.is_allowed_user", return_value=True):
-                await _route_message(orch, event, seen, is_mention=False)
+                await _route_message(orch, event, is_mention=False)
                 await asyncio.sleep(0)
                 tasks = list(orch._handler_tasks)
                 assert len(tasks) == 1

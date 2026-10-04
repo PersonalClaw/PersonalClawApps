@@ -42,7 +42,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from slack_runtime import inbound_tap
-from slack_runtime.events import SeenCache, _route_message
+from slack_runtime.events import _route_message
 from slack_runtime.settings import ACTIVATION_ALWAYS, ChannelConfig, SlackSettings
 from slack_runtime.trigger_source import (
     APP_NAME,
@@ -303,7 +303,7 @@ def test_a_real_inbound_message_FIRES_AN_ARMED_TRIGGER_END_TO_END(
             "ts": "77.0", "team": "TTEST",
         }
         with patch("slack_runtime.events.handle_message", new_callable=AsyncMock):
-            await _route_message(orch, event, SeenCache(), is_mention=False)
+            await _route_message(orch, event, is_mention=False)
             # Drain the dispatched task so the patched coroutine is awaited rather than
             # surfacing as a "never awaited" RuntimeWarning in an otherwise-green run.
             await asyncio.gather(*list(orch._session_tasks.values()), return_exceptions=True)
@@ -345,7 +345,7 @@ def test_a_tracked_channel_message_fires_the_CHANNEL_event(
         event = {"user": "U1", "channel": "C1234", "text": "deploy now", "ts": "5.0",
                  "team": "TTEST"}
         with patch("slack_runtime.events.handle_message", new_callable=AsyncMock):
-            await _route_message(orch, event, SeenCache(), is_mention=False)
+            await _route_message(orch, event, is_mention=False)
             # Drain the dispatched task so the patched coroutine is awaited rather than
             # surfacing as a "never awaited" RuntimeWarning in an otherwise-green run.
             await asyncio.gather(*list(orch._session_tasks.values()), return_exceptions=True)
@@ -385,7 +385,7 @@ def test_an_UNAUTHORIZED_sender_arms_NOTHING(event_store, registered_source, gat
         event = {"user": "U9", "channel": "D1234", "text": "run this", "ts": "9.0",
                  "team": "TTEST"}
         with patch("slack_runtime.events.handle_message", new_callable=AsyncMock) as mock_hm:
-            await _route_message(orch, event, SeenCache(), is_mention=False)
+            await _route_message(orch, event, is_mention=False)
             for _ in range(50):
                 await asyncio.sleep(0)
             mock_hm.assert_not_called()
@@ -416,7 +416,7 @@ def test_an_untracked_channel_message_arms_NOTHING(
         orch = _orch()
         event = {"user": "U1", "channel": "C9999", "text": "spam", "ts": "3.0", "team": "TTEST"}
         with patch("slack_runtime.events.handle_message", new_callable=AsyncMock) as mock_hm:
-            await _route_message(orch, event, SeenCache(), is_mention=False)
+            await _route_message(orch, event, is_mention=False)
             for _ in range(50):
                 await asyncio.sleep(0)
             mock_hm.assert_not_called()

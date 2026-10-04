@@ -82,9 +82,6 @@ def _configure(**overrides) -> None:
 def wired(monkeypatch, tmp_path):
     """A configured transport with fake IMAP/SMTP, a fake state, and ``run_chat`` captured."""
     _configure()
-    from personalclaw.channel_inbound import reset_admissions
-
-    reset_admissions()
     captured: dict = {}
 
     imap = FakeImapServer()

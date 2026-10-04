@@ -95,11 +95,7 @@ def _msg(text="hi", chat_id="500", chat_type="private", from_id="42", first="Ada
 @pytest.fixture
 def transport_with_capture():
     """A transport wired to a fake state + delivery, with the turn captured at the
-    door. The admission cache is module-global and messages reuse ids across tests,
-    so it is reset per test."""
-    from personalclaw.channel_inbound import reset_admissions
-
-    reset_admissions()
+    door."""
     captured: dict = {}
     t = TelegramTransport({"bot_token": "TEST"})
     state = FakeState()

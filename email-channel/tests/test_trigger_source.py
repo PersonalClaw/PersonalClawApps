@@ -12,10 +12,9 @@ see no call at all here.
 
 Three hazards this file is shaped around.
 
-**Process-global state.** ``trigger_sources``' registry, the bus's router and the guarded
-door's admission cache are all process-global. Every fixture restores unconditionally, and the
-router is attached only inside :func:`_fire_through_the_gateway`, which detaches it on the way
-out.
+**Process-global state.** ``trigger_sources``' registry and the bus's router are
+process-global. Every fixture restores unconditionally, and the router is attached only inside
+:func:`_fire_through_the_gateway`, which detaches it on the way out.
 
 **A no-fire assertion needs the router attached too.** An event trigger fires only where the
 gateway's router is attached; anywhere else the event is spooled for the gateway's next tick. A
@@ -143,9 +142,6 @@ class _FakeServices:
 def wired(tmp_path):
     """A configured transport with fake IMAP/SMTP and the REAL core door behind it."""
     _configure()
-    from personalclaw.channel_inbound import reset_admissions
-
-    reset_admissions()
     imap = FakeImapServer()
     smtp = FakeSmtpServer()
     transport = EmailTransport()
@@ -163,7 +159,6 @@ def wired(tmp_path):
     channel_transports.register_transport(transport, app=APP_NAME)
     yield transport, imap, smtp
     channel_transports.unregister_transport(transport.name)
-    reset_admissions()
 
 
 def _mail(uid: int, imap: FakeImapServer, **kwargs) -> None:

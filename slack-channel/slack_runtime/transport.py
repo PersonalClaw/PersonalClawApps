@@ -48,7 +48,7 @@ from personalclaw.sdk.channel import (
 from slack_runtime.client import RealSlackClient
 from slack_runtime.delivery import SlackDelivery
 from slack_runtime.enterprise import REJECTED, UNREACHABLE
-from slack_runtime.events import SeenCache, bind_workspace, check_workspace, init_socket_mode
+from slack_runtime.events import bind_workspace, check_workspace, init_socket_mode
 from slack_runtime.handler import get_owner_id
 from slack_runtime.interactions import init as init_interactions
 from slack_runtime.runtime import SlackRuntime
@@ -194,8 +194,7 @@ class SlackTransport(ChannelTransportProvider):
         self._runtime = runtime
 
         init_interactions(runtime)
-        seen = SeenCache()
-        check = init_socket_mode(runtime, seen)
+        check = init_socket_mode(runtime)
 
         if runtime._socket_client is None:
             # The workspace check did not validate (init_socket_mode logs why). A refused token
@@ -204,17 +203,17 @@ class SlackTransport(ChannelTransportProvider):
             # for as long as this receiver runs; no message is accepted meanwhile.
             self._inbound_offline_reason = check.reason if check is not None else ""
             if check is not None and check.outcome == UNREACHABLE:
-                self._retry_later(runtime, seen, services)
+                self._retry_later(runtime, services)
             return
 
         self._attach_delivery(runtime, services)
         if await self._connect(runtime) == UNREACHABLE:
-            self._retry_later(runtime, seen, services)
+            self._retry_later(runtime, services)
 
-    def _retry_later(self, runtime: SlackRuntime, seen: SeenCache, services: Any) -> None:
+    def _retry_later(self, runtime: SlackRuntime, services: Any) -> None:
         """Start :meth:`_keep_trying`, with the time of its first try already known to health."""
         self._retry_at = asyncio.get_running_loop().time() + _RETRY_DELAYS[0]
-        self._retry = asyncio.create_task(self._keep_trying(runtime, seen, services))
+        self._retry = asyncio.create_task(self._keep_trying(runtime, services))
 
     def _attach_delivery(self, runtime: SlackRuntime, services: Any) -> None:
         """Hand core this channel's outbound delivery, once the workspace is validated."""
@@ -269,7 +268,7 @@ class SlackTransport(ChannelTransportProvider):
         self._inbound_started = True
         return _CONNECTED
 
-    async def _keep_trying(self, runtime: SlackRuntime, seen: SeenCache, services: Any) -> None:
+    async def _keep_trying(self, runtime: SlackRuntime, services: Any) -> None:
         """Bring inbound online after Slack could not be reached as it started.
 
         Asks again after each of :data:`_RETRY_DELAYS`: the workspace check first, while the
@@ -286,7 +285,7 @@ class SlackTransport(ChannelTransportProvider):
                     # ``auth.test`` blocks for as long as the network takes to fail, so it runs
                     # off the event loop the rest of the gateway shares.
                     check = bind_workspace(
-                        runtime, seen, await asyncio.to_thread(check_workspace, runtime)
+                        runtime, await asyncio.to_thread(check_workspace, runtime)
                     )
                     if check.outcome == REJECTED:
                         self._inbound_offline_reason = check.reason

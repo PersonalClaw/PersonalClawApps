@@ -193,7 +193,7 @@ _ROUTE_PATCHES = [
 class TestQueueRouting:
     @pytest.mark.asyncio
     async def test_busy_session_enqueues_with_force(self):
-        from slack_runtime.events import SeenCache, _route_message
+        from slack_runtime.events import _route_message
 
         orch = _make_route_orch()
         orch._session_tasks["ts_new"] = MagicMock()  # DM: session_key = msg_ts
@@ -203,7 +203,7 @@ class TestQueueRouting:
             for p in _ROUTE_PATCHES:
                 p.start()
             try:
-                await _route_message(orch, event, SeenCache(), is_mention=True)
+                await _route_message(orch, event, is_mention=True)
             finally:
                 for p in _ROUTE_PATCHES:
                     p.stop()
@@ -213,7 +213,7 @@ class TestQueueRouting:
 
     @pytest.mark.asyncio
     async def test_busy_session_falls_back_to_pending_queue(self):
-        from slack_runtime.events import SeenCache, _route_message
+        from slack_runtime.events import _route_message
 
         orch = _make_route_orch()
         orch._session_tasks["thread1"] = MagicMock()
@@ -223,7 +223,7 @@ class TestQueueRouting:
             for p in _ROUTE_PATCHES:
                 p.start()
             try:
-                await _route_message(orch, event, SeenCache(), is_mention=True)
+                await _route_message(orch, event, is_mention=True)
             finally:
                 for p in _ROUTE_PATCHES:
                     p.stop()
@@ -234,7 +234,7 @@ class TestQueueRouting:
     @pytest.mark.asyncio
     async def test_non_busy_enqueue_returns_true_queues(self):
         """elif branch: no task running but enqueue returns True (semaphore locked)."""
-        from slack_runtime.events import SeenCache, _route_message
+        from slack_runtime.events import _route_message
 
         orch = _make_route_orch()
         orch.sessions.enqueue.return_value = True  # semaphore locked
@@ -243,7 +243,7 @@ class TestQueueRouting:
             for p in _ROUTE_PATCHES:
                 p.start()
             try:
-                await _route_message(orch, event, SeenCache(), is_mention=True)
+                await _route_message(orch, event, is_mention=True)
             finally:
                 for p in _ROUTE_PATCHES:
                     p.stop()
@@ -253,7 +253,7 @@ class TestQueueRouting:
 class TestOnDoneDrain:
     @pytest.mark.asyncio
     async def test_drains_session_queue_after_task(self):
-        from slack_runtime.events import SeenCache, _route_message
+        from slack_runtime.events import _route_message
 
         orch = _make_route_orch()
         orch.sessions.enqueue.return_value = False
@@ -266,7 +266,7 @@ class TestOnDoneDrain:
         with patch("slack_runtime.events.handle_message", new_callable=AsyncMock), \
              patch("slack_runtime.events.is_allowed_user", return_value=True), \
              patch("slack_runtime.events.check_message_origin", return_value=True):
-            await _route_message(orch, event, SeenCache(), is_mention=True)
+            await _route_message(orch, event, is_mention=True)
             await asyncio.sleep(0.05)
             # Drain should have dispatched the queued message via _dispatch_queued
             tasks = list(orch._handler_tasks)
@@ -277,7 +277,7 @@ class TestOnDoneDrain:
 
     @pytest.mark.asyncio
     async def test_drains_pending_queue_after_task(self):
-        from slack_runtime.events import SeenCache, _route_message
+        from slack_runtime.events import _route_message
 
         orch = _make_route_orch()
         orch.sessions.enqueue.return_value = False
@@ -288,7 +288,7 @@ class TestOnDoneDrain:
         with patch("slack_runtime.events.handle_message", new_callable=AsyncMock), \
              patch("slack_runtime.events.is_allowed_user", return_value=True), \
              patch("slack_runtime.events.check_message_origin", return_value=True):
-            await _route_message(orch, event, SeenCache(), is_mention=True)
+            await _route_message(orch, event, is_mention=True)
             await asyncio.sleep(0.05)
             tasks = list(orch._handler_tasks)
             if tasks:

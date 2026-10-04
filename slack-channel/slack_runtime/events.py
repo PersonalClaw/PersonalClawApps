@@ -9,8 +9,10 @@ correct handler:
 - ``app_home_opened`` → publish Home Tab view
 - ``message`` / ``app_mention`` → :func:`handler.handle_message`
 
-Also contains the bounded dedup cache (``_SeenCache``) that prevents
-processing the same Slack event twice.
+Each message is claimed with PersonalClaw (``claim_message``) before anything acts on it: Slack
+announces a message that mentions the bot twice (``message`` and ``app_mention``) and delivers an
+event again when it is not sure its acknowledgement arrived, and PersonalClaw's record of messages
+already received, kept in its home, answers each such delivery once, across a restart too.
 """
 
 import asyncio
@@ -19,7 +21,6 @@ import logging
 import os
 import re
 import time
-from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Coroutine
 
@@ -191,31 +192,8 @@ def publish_inbound_for_trigger_source(
 # suppressing INFO (session established) and DEBUG (every message/ping).
 logging.getLogger("slack_sdk.socket_mode.websockets").setLevel(logging.WARNING)
 
-# ---------------------------------------------------------------------------
-# Dedup cache — bounded LRU to avoid processing duplicate Slack events
-# ---------------------------------------------------------------------------
-
-_MAX_SEEN = 5000
-
 # prevent GC of fire-and-forget tasks (Python event loop holds weak refs)
 _background_tasks: set[asyncio.Task] = set()  # type: ignore[type-arg]
-
-
-class SeenCache:
-    """Bounded set that remembers the last *maxlen* event IDs."""
-
-    def __init__(self, maxlen: int = _MAX_SEEN):
-        self._d: OrderedDict[str, None] = OrderedDict()
-        self._maxlen = maxlen
-
-    def check_and_add(self, key: str) -> bool:
-        """Return ``True`` if *key* was already seen, else mark it."""
-        if key in self._d:
-            return True
-        self._d[key] = None
-        if len(self._d) > self._maxlen:
-            self._d.popitem(last=False)
-        return False
 
 
 # ---------------------------------------------------------------------------
@@ -697,7 +675,7 @@ register_slash_command("status", _handle_status, "show runtime stats")
 # ---------------------------------------------------------------------------
 
 
-def init_socket_mode(orch: "GatewayServices", seen: SeenCache) -> WorkspaceCheck | None:
+def init_socket_mode(orch: "GatewayServices") -> WorkspaceCheck | None:
     """Wire up the Socket Mode client and attach the event listener, once the workspace checks.
 
     Does nothing when Slack is disabled (either token missing), and returns None. An EMPTY
@@ -735,7 +713,7 @@ def init_socket_mode(orch: "GatewayServices", seen: SeenCache) -> WorkspaceCheck
     if orch.dashboard_state:
         set_dashboard_state(orch.dashboard_state)
 
-    return bind_workspace(orch, seen, check_workspace(orch))
+    return bind_workspace(orch, check_workspace(orch))
 
 
 def check_workspace(orch: "GatewayServices") -> WorkspaceCheck:
@@ -746,9 +724,7 @@ def check_workspace(orch: "GatewayServices") -> WorkspaceCheck:
     return validate_enterprise(orch._bot_token, extra_ids=orch.settings.enterprise_ids())
 
 
-def bind_workspace(
-    orch: "GatewayServices", seen: SeenCache, check: WorkspaceCheck
-) -> WorkspaceCheck:
+def bind_workspace(orch: "GatewayServices", check: WorkspaceCheck) -> WorkspaceCheck:
     """Act on one workspace check, and return it.
 
     A refusal turns Slack off for this runtime: asking again gets the same answer. A Slack that
@@ -947,7 +923,6 @@ def bind_workspace(
         await _route_message(
             orch,
             event,
-            seen,
             is_mention=(event_type == "app_mention"),
             from_trusted_bot=bool(_trusted),
         )
@@ -1421,11 +1396,10 @@ async def _dispatch_queued(
 async def _route_message(
     orch: "GatewayServices",
     event: dict,
-    seen: SeenCache,
     is_mention: bool = False,
     from_trusted_bot: bool = False,
 ) -> None:
-    """Validate, dedup, check activation mode, and dispatch an incoming Slack message."""
+    """Validate, claim, check activation mode, and dispatch an incoming Slack message."""
     sender_id = event.get("user", "") or (event.get("bot_id", "") if from_trusted_bot else "")
     channel = event.get("channel", "")
     text = event.get("text", "")
@@ -1499,10 +1473,10 @@ async def _route_message(
             error="unauthorized sender",
         )
 
-    # ── Channel activation mode (checked BEFORE ephemeral & dedup) ──
+    # ── Channel activation mode (checked BEFORE the claim & the ephemeral) ──
     # When activation=mention, Slack sends both a `message` and an
     # `app_mention` event for the same msg_ts.  We must skip the plain
-    # `message` event *without* marking it as seen so the subsequent
+    # `message` event *without* claiming it so the subsequent
     # `app_mention` event is still processed.
     from slack_runtime.settings import get_settings
 
@@ -1607,6 +1581,27 @@ async def _route_message(
             )
             return
 
+    # ── One answer per message: claimed with PersonalClaw, after the activation checks ──
+    # When activation=mention, Slack sends both a `message` and an `app_mention` event for the
+    # same msg_ts, and the plain `message` returned above without claiming, so the `app_mention`
+    # is still taken. Claimed before anything below acts on the message (the not-authorized
+    # notice, a transcription, a turn), so a delivery Slack makes again, of an event whose
+    # acknowledgement it did not see, before or after a restart, changes nothing. A linked
+    # thread's message is then taken by the guarded door from this claim, once.
+    from personalclaw.sdk.channel import ChannelMessage, claim_message
+
+    if not claim_message(
+        "slack",
+        ChannelMessage(
+            channel_id=channel,
+            text=text,
+            sender=sender_id,
+            thread_id=thread_ts or msg_ts,
+            message_id=msg_ts,
+        ),
+    ):
+        return
+
     # ── Access control: send ephemeral rejection ──
     # Only reached for messages the bot would actually respond to,
     # preventing notification spam in observe/mention channels.
@@ -1628,11 +1623,6 @@ async def _route_message(
                     "Refused %s in %s, but the ephemeral notice failed to send — the "
                     "sender sees silence", sender_id, channel, exc_info=True,
                 )
-        return
-
-    # Dedup AFTER activation check — prevents the plain `message` event
-    # from poisoning the cache before the `app_mention` event arrives.
-    if seen.check_and_add(msg_ts):
         return
 
     # An @mention starts with Slack's mention of this bot, read off Slack's own spelling: there a

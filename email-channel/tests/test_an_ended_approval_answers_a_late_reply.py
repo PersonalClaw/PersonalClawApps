@@ -57,9 +57,6 @@ def _started(tmp_path):
     """A transport over fake IMAP and SMTP, as the gateway starts one, with the turn captured. Its
     delivery keeps its approvals where the app keeps them, so a second one started over the same
     home is this channel after a restart."""
-    from personalclaw.channel_inbound import reset_admissions
-
-    reset_admissions()
     captured: dict = {}
     imap, smtp = FakeImapServer(), FakeSmtpServer()
     transport = EmailTransport()

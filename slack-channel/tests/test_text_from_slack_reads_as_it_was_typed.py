@@ -71,7 +71,7 @@ def _orch() -> MagicMock:
 
 def _route(orch, event, *, is_mention=False):
     """Hand *event* to the app as Slack's socket would, and return what each consumer got."""
-    from slack_runtime.events import SeenCache, _route_message
+    from slack_runtime.events import _route_message
 
     with patch("slack_runtime.events.is_allowed_user", return_value=True), \
          patch("slack_runtime.events.check_message_origin", return_value=True), \
@@ -79,7 +79,7 @@ def _route(orch, event, *, is_mention=False):
          patch("slack_runtime.events.handle_message", new_callable=AsyncMock) as handled:
 
         async def go():
-            await _route_message(orch, event, SeenCache(), is_mention=is_mention)
+            await _route_message(orch, event, is_mention=is_mention)
             await asyncio.gather(*list(orch._handler_tasks), return_exceptions=True)
 
         asyncio.run(go())

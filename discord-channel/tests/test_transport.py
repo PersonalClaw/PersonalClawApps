@@ -114,11 +114,7 @@ def _msg(text="hi", channel_id="500", guild_id=None, author_id="42",
 @pytest.fixture
 def transport_with_capture():
     """A transport wired to a fake state + delivery, with the turn captured at the
-    door. The admission cache is module-global and `_msg()` reuses one message id,
-    so it is reset per test — otherwise one test's verdict answers the next's."""
-    from personalclaw.channel_inbound import reset_admissions
-
-    reset_admissions()
+    door."""
     captured: dict = {}
     t = DiscordTransport({"bot_token": "TEST"})
     state = FakeState()
