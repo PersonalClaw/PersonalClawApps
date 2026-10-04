@@ -53,6 +53,7 @@ from slack_runtime.trigger_source import (
     SlackTriggerSource,
     create_provider,
 )
+from slack_helpers import set_owner
 
 _MANIFEST = Path(__file__).resolve().parents[1] / "app.json"
 _TRIGGER_ID = "sl-app-trigger"
@@ -111,18 +112,17 @@ def registered_source():
 def gate():
     """This app's REAL allow/track gate, restored afterwards.
 
-    ``handler``'s owner id, allowlist and tracking set are module globals — a leak would make
-    an unrelated test's unauthorized sender suddenly allowed.
+    ``handler``'s allowlist and tracking set are module globals — a leak would make an
+    unrelated test's unauthorized sender suddenly allowed. The owner is core's, named with
+    ``set_owner`` and put back by the suite's conftest.
     """
     from slack_runtime import handler as h
 
-    saved = (h._owner_id, set(h._allowed_users), set(h._tracking_channels), set(h._open_channels))
+    saved = (set(h._allowed_users), set(h._tracking_channels))
     try:
         yield h
     finally:
-        h._owner_id, h._allowed_users, h._tracking_channels, h._open_channels = (
-            saved[0], saved[1], saved[2], saved[3],
-        )
+        h._allowed_users, h._tracking_channels = saved
 
 
 def _orch(channels: dict[str, ChannelConfig] | None = None) -> MagicMock:
@@ -293,7 +293,7 @@ def test_a_real_inbound_message_FIRES_AN_ARMED_TRIGGER_END_TO_END(
     monkeypatch.setattr(
         "personalclaw.action_providers.get_action_provider", lambda _n: _capturing_action(calls)
     )
-    gate.set_owner_id("U1")
+    set_owner("U1")
     gate.set_allowed_users({"U1"})
 
     async def _drive():
@@ -336,7 +336,7 @@ def test_a_tracked_channel_message_fires_the_CHANNEL_event(
     monkeypatch.setattr(
         "personalclaw.action_providers.get_action_provider", lambda _n: _capturing_action(calls)
     )
-    gate.set_owner_id("U1")
+    set_owner("U1")
     gate.set_allowed_users({"U1"})
     gate.set_tracking_channels({"C1234"})
 
@@ -377,7 +377,7 @@ def test_an_UNAUTHORIZED_sender_arms_NOTHING(event_store, registered_source, gat
         "personalclaw.action_providers.get_action_provider", lambda _n: _capturing_action(calls)
     )
     # An owner already exists, so the trust-on-first-use claim cannot make U9 the owner.
-    gate.set_owner_id("U1")
+    set_owner("U1")
     gate.set_allowed_users({"U1"})
     orch = _orch()
 
@@ -409,7 +409,7 @@ def test_an_untracked_channel_message_arms_NOTHING(
     monkeypatch.setattr(
         "personalclaw.action_providers.get_action_provider", lambda _n: _capturing_action(calls)
     )
-    gate.set_owner_id("U1")
+    set_owner("U1")
     gate.set_allowed_users({"U1"})
 
     async def _drive():

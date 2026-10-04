@@ -33,9 +33,7 @@ class TestCoercion:
     def test_load_hardens_fields(self, tmp_path):
         store = {
             "allowed_users": [{"slack_id": "U1"}, {"name": "no id"}, "bad"],
-            "open_channels": ["C1", 5],
             "trusted_bot_ids": ["B1", "B2"],
-            "allowed_enterprise_ids": ["E1", "X-bad"],
             "reactions": {"done": "white_check_mark", "bad": 5, "off": None},
             "reactions_enabled": False,
             "channels": {"C1": {"activation": "observe"}, "C2": {"activation": "bogus"}},
@@ -45,9 +43,7 @@ class TestCoercion:
              patch("slack_runtime.settings.migrate_from_core"):
             s = SlackSettings.load()
         assert s.allowed_users == [{"slack_id": "U1"}]
-        assert s.open_channels == ["C1"]
         assert s.trusted_bot_ids == {"B1", "B2"}
-        assert s.allowed_enterprise_ids == ["E1"]           # E-prefix only
         assert s.reactions == {"done": "white_check_mark", "off": None}  # bad value dropped
         assert s.reactions_enabled is False
         assert s.channels["C1"].activation == "observe"

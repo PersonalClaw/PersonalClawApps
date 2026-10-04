@@ -10,8 +10,8 @@ then how it ended, and no buttons. A press that arrives after that is answered w
 
 Also here, because they are the same prompt: core's prompt offers no Trust button (the trust it
 grants is this app's own, for threads core's approvals never belong to), its wait keeps no timer
-of its own (the window is core's), and the owner a fresh install claims on first contact is the
-one it prompts, before any restart.
+of its own (the window is core's), and the owner paired while the gateway runs is the one it
+prompts, before any restart.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from slack_helpers import MockSlackClient
+from slack_helpers import MockSlackClient, set_owner
 
 import slack_runtime.handler as H
 from personalclaw.llm.base import LLMEvent
@@ -32,14 +32,14 @@ OWNER = "U_OWNER"
 
 @pytest.fixture(autouse=True)
 def _an_owner():
-    H.set_owner_id(OWNER)
+    set_owner(OWNER)
     H.set_allowed_users({OWNER})
     H._pending_approvals.clear()
     H._ended_prompts.clear()
     yield
     H._pending_approvals.clear()
     H._ended_prompts.clear()
-    H.set_owner_id("")
+    set_owner("")
     H.set_allowed_users(set())
 
 
@@ -244,14 +244,15 @@ class _Socket:
 
 
 @pytest.mark.asyncio
-async def test_an_owner_claimed_after_the_start_is_prompted(monkeypatch):
-    """A fresh install has no owner until the first person messages the bot (``claim_owner``).
-    The delivery the transport registers at the start, when nobody could be prompted, prompts
-    that person once they are the owner, with no restart. Driven through the real transport."""
+async def test_an_owner_paired_after_the_start_is_prompted(monkeypatch):
+    """A fresh install has no owner until its owner pairs it from the Configure page. The
+    delivery the transport registers at the start, when nobody could be prompted, prompts her
+    once she has paired, with no restart. Driven through the real transport."""
     import slack_runtime.events as events_mod
     import slack_runtime.interactions as interactions_mod
     import slack_runtime.transport as transport_mod
     from slack_runtime.enterprise import VALIDATED, WorkspaceCheck
+    from personalclaw import channel_trust
     from personalclaw.sdk.channel import (
         CRED_SLACK_APP_TOKEN,
         CRED_SLACK_BOT_TOKEN,
@@ -262,8 +263,8 @@ async def test_an_owner_claimed_after_the_start_is_prompted(monkeypatch):
     for key in (owner_id_credential("slack"), "PERSONALCLAW_OWNER_ID"):
         monkeypatch.setenv(key, "")
         monkeypatch.delenv(key)
-    monkeypatch.setenv(CRED_SLACK_BOT_TOKEN, "fake-bot-token-claim")
-    monkeypatch.setenv(CRED_SLACK_APP_TOKEN, "fake-app-token-claim")
+    monkeypatch.setenv(CRED_SLACK_BOT_TOKEN, "fake-bot-token-pairing")
+    monkeypatch.setenv(CRED_SLACK_APP_TOKEN, "fake-app-token-pairing")
     slack = MockSlackClient()
     monkeypatch.setattr(transport_mod, "RealSlackClient", lambda token: slack)
     monkeypatch.setattr(
@@ -279,18 +280,19 @@ async def test_an_owner_claimed_after_the_start_is_prompted(monkeypatch):
     registered: list = []
     services = SimpleNamespace(
         config=AppConfig.load(),
-        owner_id="",
         register_channel_delivery=lambda d, provider="": registered.append(d),
         dashboard_state=None,
         channel_history=None,
     )
     transport = transport_mod.create_provider({})
-    await transport.start_inbound(services)  # no owner yet: first-contact claim mode
+    await transport.start_inbound(services)  # no owner yet
     await transport.stop_inbound()
     (delivery,) = registered
     assert await delivery.request_approval(_event(), source="chat") is None, "nobody to prompt"
 
-    assert H.claim_owner("U0CLAIMED")  # the first DM, while the gateway runs
+    # She pairs while the gateway runs: the Configure page's code, sent to the bot in a DM.
+    code = channel_trust.create_owner_pairing_code("slack")
+    assert channel_trust.redeem_owner_pairing_code("slack", "U0PAIRED", code, "Noor")
 
     told: dict = {}
     wait = asyncio.ensure_future(
@@ -302,8 +304,8 @@ async def test_an_owner_claimed_after_the_start_is_prompted(monkeypatch):
         if told:
             break
         await asyncio.sleep(0.01)
-    assert told, "the approval skipped Slack: the claimed owner was unknown until a restart"
-    assert ("open_dm", {"user_id": "U0CLAIMED"}) in slack.actions
+    assert told, "the approval skipped Slack: the paired owner was unknown until a restart"
+    assert ("open_dm", {"user_id": "U0PAIRED"}) in slack.actions
     told["it"].future.set_result("approved")
     assert await asyncio.wait_for(wait, timeout=2) is True
 

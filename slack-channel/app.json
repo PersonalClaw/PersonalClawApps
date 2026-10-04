@@ -1,6 +1,6 @@
 {
   "name": "slack-channel",
-  "version": "0.1.42",
+  "version": "0.1.43",
   "displayName": "Slack Channel",
   "description": "Slack workspace integration. Monitor channels, respond to mentions, and interact via Slack.",
   "icon": "Slack",
@@ -13,6 +13,7 @@
     "digest-replies",
     "links-name-their-channel",
     "messages-run-once",
+    "paired-owner",
     "tool-call-screen",
     "turns-name-their-channel",
     "turns-name-who-asked"
@@ -126,20 +127,6 @@
             "help": "Slack channels to monitor, each by channel ID, with a name to know it by."
           }
         },
-        "open_channels": {
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string",
-            "x-meta": {
-              "placeholder": "C0123456789"
-            }
-          },
-          "x-meta": {
-            "label": "Open Channels",
-            "help": "Channel IDs where all users are authorized without allowlist."
-          }
-        },
         "command": {
           "type": "string",
           "default": "personalclaw",
@@ -160,20 +147,6 @@
           "x-meta": {
             "label": "Trusted Bot IDs",
             "help": "Bot IDs allowed to bypass the bot filter for multi-node mesh."
-          }
-        },
-        "allowed_enterprise_ids": {
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string",
-            "x-meta": {
-              "placeholder": "E0123456789"
-            }
-          },
-          "x-meta": {
-            "label": "Allowed Enterprise IDs",
-            "help": "Slack Enterprise Grid org IDs to allow for workspace validation."
           }
         },
         "reactions": {

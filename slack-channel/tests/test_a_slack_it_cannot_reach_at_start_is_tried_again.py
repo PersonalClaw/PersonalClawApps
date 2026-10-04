@@ -111,7 +111,6 @@ def slack(monkeypatch):
     monkeypatch.setattr(events_mod, "AsyncWebClient", lambda **kw: SimpleNamespace())
     monkeypatch.setattr(transport_mod, "_RETRY_DELAYS", (0.01,), raising=False)
     monkeypatch.setattr(enterprise, "_validated_team_id", "")
-    monkeypatch.setattr(enterprise, "_validated_enterprise_id", "")
     for name in ("_gateway_services", "_orch_cfg"):
         monkeypatch.setattr(H, name, getattr(H, name))
     for name in ("global_enabled", "auto_speak", "auto_reply_to_voice"):

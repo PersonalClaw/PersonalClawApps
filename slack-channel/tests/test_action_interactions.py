@@ -10,6 +10,7 @@ from slack_runtime.interactions import (
     _extract_selected_value,
     _mark_button_clicked,
 )
+from slack_helpers import set_owner
 
 # ---------------------------------------------------------------------------
 # _mark_button_clicked
@@ -328,9 +329,9 @@ async def test_sel_audit_logged_for_action(orch_fixture: MagicMock) -> None:
 async def test_slack_kill_now_action_force_stops(orch_fixture: MagicMock) -> None:
     """stop_kill_now action calls sessions.stop_turn with force=True."""
     from slack_runtime import interactions
-    from slack_runtime.handler import set_allowed_users, set_owner_id
+    from slack_runtime.handler import set_allowed_users
 
-    set_owner_id("U123")
+    set_owner("U123")
     set_allowed_users({"U123"})
 
     orch = orch_fixture
@@ -372,9 +373,9 @@ async def test_slack_kill_now_posts_to_thread_not_session_key(
     valid Slack thread (e.g. ``dashboard:chat-xxx``) and would fail to post.
     """
     from slack_runtime import interactions
-    from slack_runtime.handler import set_allowed_users, set_owner_id
+    from slack_runtime.handler import set_allowed_users
 
-    set_owner_id("U123")
+    set_owner("U123")
     set_allowed_users({"U123"})
 
     orch = orch_fixture
@@ -457,9 +458,9 @@ async def test_handle_stop_kill_now_defense_in_depth(orch_fixture: MagicMock) ->
     callers. Direct handler invocation simulates that bypass.
     """
     from slack_runtime import interactions
-    from slack_runtime.handler import set_allowed_users, set_owner_id
+    from slack_runtime.handler import set_allowed_users
 
-    set_owner_id("U123")
+    set_owner("U123")
     set_allowed_users({"U123"})
 
     orch = orch_fixture
@@ -481,9 +482,9 @@ async def test_handle_stop_kill_now_defense_in_depth(orch_fixture: MagicMock) ->
 async def test_handle_stop_confirm_uses_stop_turn(orch_fixture: MagicMock) -> None:
     """/personalclaw stop confirm button routes through stop_turn, not bare reset."""
     from slack_runtime import interactions
-    from slack_runtime.handler import set_allowed_users, set_owner_id
+    from slack_runtime.handler import set_allowed_users
 
-    set_owner_id("U123")
+    set_owner("U123")
     set_allowed_users({"U123"})
 
     orch = orch_fixture
@@ -524,9 +525,9 @@ async def test_handle_stop_confirm_rejects_unauthorized(orch_fixture: MagicMock)
     authorization even though dispatch() also enforces it.
     """
     from slack_runtime import interactions
-    from slack_runtime.handler import set_allowed_users, set_owner_id
+    from slack_runtime.handler import set_allowed_users
 
-    set_owner_id("U123")
+    set_owner("U123")
     set_allowed_users({"U123"})  # U_RANDOM not allowlisted
 
     orch = orch_fixture

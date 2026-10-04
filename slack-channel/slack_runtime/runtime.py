@@ -23,8 +23,6 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from personalclaw.sdk.channel import owner_id_for
-
 from slack_runtime.client import RealSlackClient
 
 if TYPE_CHECKING:
@@ -44,11 +42,6 @@ class SlackRuntime:
         cfg = services.config
 
         creds = cfg.load_credentials()
-        # Slack's OWN owner: a member id stored for this channel. The one shared key every
-        # channel used to write could hold another platform's user id. This is the owner at
-        # start, which seeds the handler's (`set_owner_id`); a first-contact claim changes that one
-        # alone, so after start the owner is `handler.get_owner_id()`, never this copy.
-        self._owner_id: str = owner_id_for("slack")
 
         # Slack behavioral config comes from the app's OWN store (SlackSettings) —
         # core AppConfig defines no Slack config. get_settings() caches one live
@@ -65,23 +58,21 @@ class SlackRuntime:
         # inbound, and a dashboard-only install was silently deaf.
         self._bot_token, self._app_token = load_tokens(config, creds)
 
-        # Who may talk to this bot: the operator's allowlist — the dashboard's "Allowed
-        # Users" AND the in-Slack Approve button, which both persist to ``allowed_users``
-        # — plus the owner. #953: this was seeded from the owner ALONE, so an operator who
-        # listed three people had authorized none of them.
+        # Who may talk to this bot besides its owner: the operator's allowlist — the
+        # dashboard's "Allowed Users" AND the in-Slack Approve button, which both persist to
+        # ``allowed_users``. #953: this was seeded from the owner ALONE, so an operator who
+        # listed three people had authorized none of them. The owner is not copied in: she is
+        # who core's owner pairing named, read each time (``handler.get_owner_id``).
         #
-        # Fail-CLOSED by construction: no owner and an empty allowlist leaves this set
-        # empty, and ``is_allowed_user`` then refuses everyone. Widening is only ever
-        # explicit — an id the operator wrote down.
+        # Fail-CLOSED by construction: an empty allowlist leaves this set empty, and with no
+        # owner ``is_allowed_user`` refuses everyone whoever the set names. Widening is only
+        # ever explicit — an id the operator wrote down.
         self._allowed_users: set[str] = {
             u["slack_id"] for u in settings.allowed_users if u.get("slack_id")
         }
-        if self._owner_id:
-            self._allowed_users.add(self._owner_id)
         self._tracking_channels: set[str] = {
             c["channel_id"] for c in settings.tracking_channels if c.get("channel_id")
         }
-        self._open_channels: set[str] = set(settings.open_channels)
         self._slack_enabled: bool = bool(self._app_token and self._bot_token)
         self.slack_command: str = settings.command
 

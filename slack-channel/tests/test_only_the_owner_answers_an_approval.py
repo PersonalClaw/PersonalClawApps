@@ -13,14 +13,13 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from slack_helpers import MockSlackClient
+from slack_helpers import MockSlackClient, set_owner
 
 from slack_runtime.handler import (
     _PendingApproval,
     _pending_approvals,
     handle_interaction,
     set_allowed_users,
-    set_owner_id,
 )
 
 OWNER = "U_OWNER"
@@ -44,12 +43,12 @@ class _Provider:
 
 @pytest.fixture(autouse=True)
 def _owner_and_a_colleague():
-    set_owner_id(OWNER)
+    set_owner(OWNER)
     set_allowed_users({OWNER, COLLEAGUE})
     _pending_approvals.clear()
     yield
     _pending_approvals.clear()
-    set_owner_id("")
+    set_owner("")
     set_allowed_users(set())
 
 

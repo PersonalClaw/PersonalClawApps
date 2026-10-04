@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from slack_helpers import MockSlackClient
+from slack_helpers import MockSlackClient, set_owner
 from test_slack_handler import FakeSessionManager
 
 import slack_runtime.handler as H
@@ -46,11 +46,11 @@ class _Services:
 
 @pytest.fixture(autouse=True)
 def _the_owner(monkeypatch):
-    H.set_owner_id(OWNER)
+    set_owner(OWNER)
     H.set_allowed_users({OWNER})
     monkeypatch.setattr(H, "_dashboard_state", None)
     yield
-    H.set_owner_id("")
+    set_owner("")
     H.set_allowed_users(set())
 
 

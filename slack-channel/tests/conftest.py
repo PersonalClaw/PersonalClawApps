@@ -123,7 +123,6 @@ def _reset_trust_mode():
 def _enterprise_bypass(monkeypatch: pytest.MonkeyPatch) -> None:
     """Set a default validated team_id so _route_message doesn't reject messages."""
     monkeypatch.setattr("slack_runtime.enterprise._validated_team_id", "TTEST")
-    monkeypatch.setattr("slack_runtime.enterprise._validated_enterprise_id", "ETEST")
 
 
 @pytest.fixture(autouse=True)
@@ -139,21 +138,32 @@ def _clean_emojis():
 
 @pytest.fixture(autouse=True)
 def _reset_slack_allowlist():
-    """Reset the Slack handler's module-global allowlist/owner/channel state around
-    every test. These are process-globals (owner-claim, tracked channels, open
-    channels) that otherwise leak across test files and skew message-routing tests."""
+    """Reset the Slack handler's module-global allowlist and tracked-channel state around
+    every test. These are process-globals that otherwise leak across test files and skew
+    message-routing tests. The owner is not among them: it is core's, read from this test's
+    own home (``owner_id_for("slack")``), and a test names one with
+    ``slack_helpers.set_owner``."""
     import slack_runtime.handler as h
 
-    saved = (h._owner_id, set(h._allowed_users), set(h._tracking_channels), set(h._open_channels))
-    h._owner_id = ""
+    saved = (set(h._allowed_users), set(h._tracking_channels))
     h._allowed_users = set()
     h._tracking_channels = set()
-    h._open_channels = set()
     yield
-    h._owner_id, _au, _tc, _oc = saved
-    h._allowed_users = _au
-    h._tracking_channels = _tc
-    h._open_channels = _oc
+    h._allowed_users, h._tracking_channels = saved
+
+
+@pytest.fixture(autouse=True)
+def _no_owner_in_the_environment(monkeypatch):
+    """Every test starts with no owner key in the process environment, and leaves none behind.
+
+    ``owner_id_for`` reads the environment before the store, and a pairing mirrors the owner it
+    stores into the environment (``save_credential``), so an owner one test paired would
+    otherwise be the next test's owner, whatever its own home holds."""
+    from personalclaw.sdk.channel import CRED_OWNER_ID, owner_id_credential
+
+    for key in (owner_id_credential("slack"), CRED_OWNER_ID):
+        monkeypatch.setenv(key, "")
+        monkeypatch.delenv(key)
 
 
 @pytest.fixture(autouse=True)

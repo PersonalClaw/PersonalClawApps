@@ -35,10 +35,8 @@ REFUSAL = (
 @pytest.fixture(autouse=True)
 def owner(monkeypatch):
     """U001, who asks for every link here, is this channel's owner."""
-    import slack_runtime.handler as h
     from personalclaw.sdk.channel import owner_id_credential
 
-    monkeypatch.setattr(h, "_owner_id", "U001")
     monkeypatch.setenv(owner_id_credential("slack"), "U001")
 
 

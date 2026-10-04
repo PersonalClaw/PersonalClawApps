@@ -45,6 +45,7 @@ from personalclaw.sdk.channel import (
 # ``from slack_runtime.X import`` inside a method runs LATER — when the dir is off
 # the path — and fails with "No module named 'slack_runtime'". Binding them here,
 # during exec, captures them for the life of the transport instance.
+from slack_runtime.allowlist import forget_unpaired_owner
 from slack_runtime.client import RealSlackClient
 from slack_runtime.delivery import SlackDelivery
 from slack_runtime.enterprise import REJECTED, UNREACHABLE
@@ -52,7 +53,7 @@ from slack_runtime.events import bind_workspace, check_workspace, init_socket_mo
 from slack_runtime.handler import get_owner_id
 from slack_runtime.interactions import init as init_interactions
 from slack_runtime.runtime import SlackRuntime
-from slack_runtime.settings import LiveConfig, adopt_owner_id, load_tokens
+from slack_runtime.settings import LiveConfig, load_tokens
 from slack_runtime.writes import SendRefused, live_writes_disabled
 
 #: A Slack conversation id: C (channel), D (DM), G (private group) or W (enterprise channel), then
@@ -130,9 +131,14 @@ class SlackTransport(ChannelTransportProvider):
 
     def capabilities(self) -> ChannelCapabilities:
         # groups: a channel the bot is in crosses the door with is_dm=False (only a D… id is a DM).
+        # owner_pairing: the code Configure → Pair as owner shows, sent to the bot in a direct
+        #   message, goes to core's redeem_owner_pairing_code (this app runs its own turns, so its
+        #   DMs do not cross the door), and the owner is read with owner_id_for each time it is
+        #   needed (handler.get_owner_id), so a pairing reaches the running receiver at once.
         return ChannelCapabilities(
             inbound=True, threads=True, attachments=True, reactions=True,
             edits=True, rich_text=True, typing_indicator=True, max_text_len=40000, groups=True,
+            owner_pairing=True,
         )
 
     @property
@@ -169,9 +175,9 @@ class SlackTransport(ChannelTransportProvider):
     # ── Inbound: the gateway starts and stops this with the channel ──
     async def start_inbound(self, services: Any) -> None:
         """Build the Slack runtime, wire the socket receiver, connect (or keep trying)."""
-        # Before the runtime reads its owner, and before the token check, so a Slack given its
-        # tokens later keeps its owner too instead of starting in first-contact claim mode.
-        adopt_owner_id()
+        # Before anything reads the owner, and before the token check, so a Slack given its tokens
+        # later starts on no owner but the one its pairing named.
+        forget_unpaired_owner()
         # Pass this transport's own config through: without it the runtime re-derived the
         # tokens from core's credential store alone and a dashboard-configured install
         # never started inbound (#952).
@@ -221,8 +227,8 @@ class SlackTransport(ChannelTransportProvider):
         # attachments, streaming, identity lookups, approvals) — it never sees the Slack client.
         # Filed under "slack", the name core reads this channel's owner by
         # (``owner_id_for("slack")``). The delivery reads the owner each time it asks
-        # (``get_owner_id``), so one claimed by the first person to message a fresh install is
-        # the one it prompts, before any restart.
+        # (``get_owner_id``), so an owner paired while this receiver runs is the one it prompts,
+        # before any restart.
         delivery = SlackDelivery(runtime.slack, get_owner_id)
         if hasattr(services, "register_channel_delivery"):
             services.register_channel_delivery(delivery, provider="slack")

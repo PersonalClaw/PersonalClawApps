@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
+from slack_helpers import set_owner
 
 
 def _make_slack():
@@ -383,7 +384,10 @@ class TestChannelTrustWriteThrough:
         allowlist.persist_tracking_channel("C9", remove=True)
         assert not ct.is_tracked_channel("slack", "C9")
 
-    def test_sync_channel_trust_mirrors_owner_and_channels(self):
+    def test_sync_channel_trust_mirrors_the_channels_and_lets_nobody_in(self):
+        """The start mirrors the tracked channels. It trusts no one: the owner is trusted by
+        core's owner pairing when it names her, and the mirror used to write whatever owner id
+        was stored back into the trust list at every start, a Revoke included."""
         import personalclaw.channel_trust as ct
         from personalclaw.sel import sel
         from slack_runtime.allowlist import sync_channel_trust
@@ -393,28 +397,18 @@ class TestChannelTrustWriteThrough:
             ops = ("sender_paired", "channel_tracked")
             return sum(1 for e in sel().recent(500) if e.get("operation") in ops)
 
+        set_owner("UOWNER")
         settings = SlackSettings(tracking_channels=[{"channel_id": "C1"}, {"channel_id": "C2"}])
         before = grants()
-        sync_channel_trust("UOWNER", settings)
-        assert ct.is_allowed_sender("slack", "UOWNER")
+        sync_channel_trust(settings)
         assert ct.is_tracked_channel("slack", "C1")
         assert ct.is_tracked_channel("slack", "C2")
+        assert ct.provider_trust("slack")["allowed_senders"] == []
         first = grants()
-        assert first - before == 3
-        # Idempotent: a second boot's re-mirror lets nobody in again, so it audits nothing.
-        sync_channel_trust("UOWNER", settings)
+        assert first - before == 2
+        # Idempotent: a second boot's re-mirror tracks nothing again, so it audits nothing.
+        sync_channel_trust(settings)
         assert grants() == first
-
-    def test_claim_owner_seeds_channel_trust(self, monkeypatch):
-        import personalclaw.channel_trust as ct
-        from slack_runtime import handler
-
-        monkeypatch.setattr(handler, "_owner_id", "")
-        monkeypatch.setattr(
-            "personalclaw.sdk.channel.save_credential", lambda *a, **kw: None
-        )
-        assert handler.claim_owner("UNEW") is True
-        assert ct.is_allowed_sender("slack", "UNEW")
 
     def test_track_linked_channel_tracks_groups_not_dms(self):
         import personalclaw.channel_trust as ct

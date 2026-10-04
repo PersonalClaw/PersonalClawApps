@@ -29,7 +29,6 @@ def owner_and_an_allowed_user(monkeypatch):
     """OWNER owns this channel, and ALLOWED may talk to the bot, but is not the owner."""
     import slack_runtime.handler as h
 
-    monkeypatch.setattr(h, "_owner_id", OWNER)
     monkeypatch.setattr(h, "_allowed_users", {OWNER, ALLOWED})
     monkeypatch.setenv(owner_id_credential("slack"), OWNER)
 
@@ -114,9 +113,6 @@ async def test_the_owners_enterprise_id_is_the_owner_too():
 
 @pytest.mark.asyncio
 async def test_with_no_owner_nobody_is_sent_one(monkeypatch):
-    import slack_runtime.handler as h
-
-    monkeypatch.setattr(h, "_owner_id", "")
     monkeypatch.delenv(owner_id_credential("slack"), raising=False)
     slack = await _bang_dashboard(OWNER)
     slack.open_dm.assert_not_called()

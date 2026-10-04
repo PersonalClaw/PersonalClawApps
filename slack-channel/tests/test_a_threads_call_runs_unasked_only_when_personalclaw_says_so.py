@@ -24,7 +24,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from slack_helpers import MockSlackClient
+from slack_helpers import MockSlackClient, set_owner
 from test_slack_handler import FakeSessionManager
 
 import slack_runtime.handler as H
@@ -41,7 +41,7 @@ THREAD = "1700000300.000100"
 
 @pytest.fixture(autouse=True)
 def _the_owners_dm(monkeypatch):
-    H.set_owner_id(OWNER)
+    set_owner(OWNER)
     H.set_allowed_users({OWNER})
     for kept in (H._pending_approvals, H._ended_prompts, H._thread_agents):
         kept.clear()
@@ -51,7 +51,7 @@ def _the_owners_dm(monkeypatch):
     C.reset_ceiling()
     for kept in (H._pending_approvals, H._ended_prompts, H._thread_agents):
         kept.clear()
-    H.set_owner_id("")
+    set_owner("")
     H.set_allowed_users(set())
 
 

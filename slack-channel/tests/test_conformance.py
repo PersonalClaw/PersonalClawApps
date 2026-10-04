@@ -30,7 +30,7 @@ actual behaviour.
 from __future__ import annotations
 
 import pytest
-from slack_helpers import MockSlackClient
+from slack_helpers import MockSlackClient, set_owner
 
 import slack_runtime.handler as H
 from personalclaw.sdk.channel import ChannelContractError, assert_channel_contract
@@ -49,13 +49,13 @@ OWNER = "U_OWNER"
 @pytest.fixture
 def owner():
     """The owner the approval prompts ask, and whose press answers them."""
-    H.set_owner_id(OWNER)
+    set_owner(OWNER)
     for state in (H._pending_approvals, H._ended_prompts):
         state.clear()
     yield OWNER
     for state in (H._pending_approvals, H._ended_prompts):
         state.clear()
-    H.set_owner_id("")
+    set_owner("")
 
 
 def _press(slack: MockSlackClient):

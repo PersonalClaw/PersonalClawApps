@@ -9,14 +9,14 @@ from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from slack_helpers import MockSlackClient
+from slack_helpers import MockSlackClient, set_owner
 
 from personalclaw.context import ContextBuilder
 from personalclaw.memory import MemoryStore
 from personalclaw.llm.base import LLMEvent
 from personalclaw.skills import SkillsLoader
 from slack_runtime.client import RealSlackClient
-from slack_runtime.handler import handle_message, set_allowed_users, set_owner_id
+from slack_runtime.handler import handle_message, set_allowed_users
 
 if TYPE_CHECKING:
     from personalclaw.session import SessionManager
@@ -319,7 +319,7 @@ class TestThreadParentTextInjection:
 class TestHandlerFetchesThreadParent:
     @pytest.mark.asyncio
     async def test_fetches_parent_on_new_session(self, tmp_path):
-        set_owner_id("U001")
+        set_owner("U001")
         set_allowed_users([{"slack_id": "U001"}])
         slack = MockSlackClient()
         slack._fetch_message_result = "cron output here"
@@ -342,7 +342,7 @@ class TestHandlerFetchesThreadParent:
     async def test_skips_fetch_when_parent_in_compressed_history(self, tmp_path):
         """When compressed history exists, fetch_message is skipped —
         the parent is already in context."""
-        set_owner_id("U001")
+        set_owner("U001")
         set_allowed_users([{"slack_id": "U001"}])
         slack = MockSlackClient()
         slack._fetch_message_result = "cron output here"
@@ -378,7 +378,7 @@ class TestHandlerFetchesThreadParent:
     async def test_truncates_long_parent_text(self, tmp_path):
         """Parent messages over 3000 chars are truncated to prevent
         consuming too much of the LLM context window."""
-        set_owner_id("U001")
+        set_owner("U001")
         set_allowed_users([{"slack_id": "U001"}])
         slack = MockSlackClient()
         slack._fetch_message_result = "x" * 5000

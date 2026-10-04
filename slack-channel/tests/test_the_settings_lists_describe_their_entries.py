@@ -35,7 +35,7 @@ def test_a_list_of_records_declares_its_fields_and_requires_the_id(key, id_field
     assert items["required"] == [id_field], "an entry without its id is dropped when loaded"
 
 
-@pytest.mark.parametrize("key", ["open_channels", "trusted_bot_ids", "allowed_enterprise_ids"])
+@pytest.mark.parametrize("key", ["trusted_bot_ids"])
 def test_a_list_of_ids_declares_its_entries_as_text(key):
     items = _properties()[key].get("items")
     assert items is not None, f"{key} declares no items, so the form can only offer JSON"

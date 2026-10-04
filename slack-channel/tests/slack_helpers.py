@@ -1,7 +1,22 @@
 """Shared Slack test helpers (extracted from conftest so slack tests can import it
 without colliding with the app bundle's own conftest during combined test runs)."""
 
+import os
+
+from personalclaw.sdk.channel import owner_id_credential
+
 from slack_runtime.client import SlackClientOps
+
+
+def set_owner(owner_id: str) -> None:
+    """Name Slack's owner as core keeps it: Slack's own owner key, in the process environment,
+    which ``owner_id_for("slack")`` reads first. ``""`` leaves Slack with none. The suite's
+    conftest puts the environment back after every test."""
+    key = owner_id_credential("slack")
+    if owner_id:
+        os.environ[key] = owner_id
+    else:
+        os.environ.pop(key, None)
 
 
 class MockSlackClient(SlackClientOps):

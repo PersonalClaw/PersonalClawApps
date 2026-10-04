@@ -1,7 +1,7 @@
 """SlackSettings — the slack-channel app's OWN config (moved out of core AppConfig).
 
-Slack behavioral config (allowed users, tracking/open channels, slash command, trusted
-bot ids, enterprise allowlist, phase reactions, per-channel activation) is Slack-specific,
+Slack behavioral config (allowed users, tracking channels, slash command, trusted bot ids,
+phase reactions, per-channel activation) is Slack-specific,
 so it lives HERE in the app bundle, persisted in the app's own store
 (``~/.personalclaw/apps/slack-channel/data/config.json`` via ``ProviderSettings``), NOT in
 core ``config.json``. Core defines no ``SlackConfig``.
@@ -24,13 +24,9 @@ from dataclasses import dataclass, field
 from personalclaw.sdk.channel import (
     CRED_SLACK_APP_TOKEN,
     CRED_SLACK_BOT_TOKEN,
-    AppConfig,
     ProviderSettings,
     atomic_write,
     config_path,
-    owner_id_credential,
-    owner_id_for,
-    save_credential,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,6 +41,16 @@ _APP = "slack-channel"
 #: dashboard control with nothing behind it.
 CREDENTIAL_SETTING_KEYS = ("bot_token", "app_token")
 
+#: Where Slack's owner pairs it, in the words the other channels' doctors use: the dashboard's
+#: Configure page for this app, whose code the owner sends the bot in a direct message.
+PAIR_AS_OWNER = "Settings → Providers → Slack Channel → Configure → Pair as owner"
+
+#: What a direct message or a mention is told while Slack has no owner: how its owner pairs it.
+NO_OWNER_YET = (
+    f"I don't have an owner yet. Pair one in the PersonalClaw dashboard ({PAIR_AS_OWNER}), "
+    "then send me the code it shows in a direct message."
+)
+
 # Channel activation modes (moved from core config.loader).
 ACTIVATION_ALWAYS = "always"
 ACTIVATION_MENTION = "mention"
@@ -58,9 +64,8 @@ _VALID_CHANNEL_PREFIXES = ("C", "D", "G")
 
 # The behavioral keys this app owns (migrate_from_core lifts these out of a legacy core block).
 _OWNED_KEYS = (
-    "allowed_users", "tracking_channels", "open_channels", "command",
-    "trusted_bot_ids", "allowed_enterprise_ids", "reactions", "reactions_enabled",
-    "channels", "dm_activation",
+    "allowed_users", "tracking_channels", "command", "trusted_bot_ids", "reactions",
+    "reactions_enabled", "channels", "dm_activation",
 )
 
 
@@ -132,32 +137,6 @@ def load_tokens(
     return bot, app
 
 
-def adopt_owner_id() -> None:
-    """Store the owner under Slack's own key, once, when only the shared key holds it.
-
-    An earlier release's setup and first-contact claim wrote the owner to the one shared
-    ``PERSONALCLAW_OWNER_ID``, and core's ``owner_id_for`` still falls back to it for a channel
-    with no key of its own. Saving that owner under ``owner_id_credential("slack")`` keeps it
-    when the fallback goes. That matters more here than on any other channel: a Slack runtime
-    with no owner starts in first-contact claim mode, so without its own key the install would
-    become the first sender's. The owner in effect is the same before and after, so a failed
-    save changes nothing, and nothing here clears or blanks an owner. An install with its own
-    key already, or with no owner at all, is left as it is. Logs the key name, never the id.
-    """
-    key = owner_id_credential("slack")
-    if AppConfig.load().load_credentials().get(key):
-        return
-    owner = owner_id_for("slack")
-    if not owner:
-        return
-    try:
-        save_credential(key, owner)
-    except Exception as exc:  # noqa: BLE001 — the fallback still supplies the same owner
-        logger.warning("slack: could not store the owner under %s (%s)", key, type(exc).__name__)
-        return
-    logger.info("slack: stored the owner under its own key %s, from the shared key", key)
-
-
 @dataclass
 class ChannelConfig:
     """Per-channel Slack configuration."""
@@ -205,10 +184,8 @@ class SlackSettings:
 
     allowed_users: list[dict] = field(default_factory=list)
     tracking_channels: list[dict] = field(default_factory=list)
-    open_channels: list[str] = field(default_factory=list)
     command: str = "personalclaw"
     trusted_bot_ids: set[str] = field(default_factory=set)
-    allowed_enterprise_ids: list[str] = field(default_factory=list)
     reactions: dict[str, str | None] = field(default_factory=dict)
     reactions_enabled: bool = True
     channels: dict[str, ChannelConfig] = field(default_factory=dict)
@@ -222,12 +199,8 @@ class SlackSettings:
         return cls(
             allowed_users=[u for u in d.get("allowed_users", []) if isinstance(u, dict) and u.get("slack_id")],
             tracking_channels=_validate_tracking_channels(d.get("tracking_channels", [])),
-            open_channels=[c for c in d.get("open_channels", []) if isinstance(c, str)],
             command=d.get("command", "personalclaw") or "personalclaw",
             trusted_bot_ids=set(d.get("trusted_bot_ids", [])),
-            allowed_enterprise_ids=[
-                e for e in d.get("allowed_enterprise_ids", []) if isinstance(e, str) and e.startswith("E")
-            ],
             reactions={
                 k: v for k, v in d.get("reactions", {}).items()
                 if isinstance(k, str) and (v is None or (isinstance(v, str) and v))
@@ -248,9 +221,6 @@ class SlackSettings:
         if channel_id.startswith("D"):
             return ChannelConfig(activation=self.dm_activation)
         return ChannelConfig(activation=ACTIVATION_MENTION)
-
-    def enterprise_ids(self) -> set[str]:
-        return set(self.allowed_enterprise_ids)
 
 
 # ── Writers (read-modify-write the app store) ──

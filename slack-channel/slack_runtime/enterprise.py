@@ -33,7 +33,6 @@ logger = logging.getLogger(__name__)
 # check_message_origin().  Module-level — safe because the gateway runs
 # in a single asyncio event loop.
 _validated_team_id: str = ""
-_validated_enterprise_id: str = ""
 
 #: What a workspace check can conclude.
 VALIDATED = "validated"
@@ -123,27 +122,21 @@ def _failed(check: WorkspaceCheck) -> WorkspaceCheck:
     return check
 
 
-def validate_enterprise(
-    bot_token: str,
-    *,
-    extra_ids: set[str] | None = None,
-) -> WorkspaceCheck:
+def validate_enterprise(bot_token: str) -> WorkspaceCheck:
     """Call ``auth.test`` and bind the gateway to the token's workspace.
 
-    Caches the workspace ``team_id`` (and ``enterprise_id`` when present) so
-    ``check_message_origin()`` can verify each incoming message without an API
-    call. Succeeds for any workspace whose token authenticates. A failure says
-    which kind it was (:class:`WorkspaceCheck`): ``REJECTED`` when Slack answered
-    and said no, ``UNREACHABLE`` when it could not be asked or could not answer
-    now. ``extra_ids`` is accepted for call-site compatibility but
-    no longer gates acceptance.
+    Caches the workspace ``team_id`` so ``check_message_origin()`` can verify each incoming
+    message without an API call. Succeeds for any workspace whose token authenticates: the
+    boundary is the one workspace the bot token belongs to, checked on every message, and no
+    list of organisations narrows it. A failure says which kind it was
+    (:class:`WorkspaceCheck`): ``REJECTED`` when Slack answered and said no, ``UNREACHABLE``
+    when it could not be asked or could not answer now.
     """
-    global _validated_team_id, _validated_enterprise_id
+    global _validated_team_id
     from slack_sdk.web import WebClient
 
     # Clear stale state so a failed re-validation is fail-closed.
     _validated_team_id = ""
-    _validated_enterprise_id = ""
 
     try:
         client = WebClient(token=bot_token)
@@ -182,7 +175,6 @@ def validate_enterprise(
 
     # Bind to this workspace for per-message origin checks.
     _validated_team_id = team_id_str
-    _validated_enterprise_id = enterprise_id
 
     logger.info(
         "Slack workspace validated: team=%s team_id=%s%s",

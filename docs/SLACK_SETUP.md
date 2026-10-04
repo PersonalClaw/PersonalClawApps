@@ -39,9 +39,9 @@ uninstalling the app removes both tokens.
 personalclaw setup --app slack-channel
 ```
 
-The "Slack Channel App Credentials" step prompts for the App Token, Bot Token, and
-(optionally) your Slack Member ID. (A plain `personalclaw setup` runs the same step
-after core's own.)
+The "Slack Channel App Credentials" step prompts for the App Token and the Bot Token, and
+says how to pair yourself as the owner (step 3). (A plain `personalclaw setup` runs the same
+step after core's own.)
 
 **The Configure form:** Apps → Slack Channel → Configure has the same `bot_token` /
 `app_token` fields.
@@ -73,33 +73,37 @@ Verify:
   yet, or Slack is busy), the channel's card says so and when it tries again;
   inbound starts on its own once Slack answers. Only Slack refusing a token
   turns inbound off, and the card then names the token to re-check.
-- `personalclaw doctor` checks the credential pair.
-- DM your bot in Slack. **The first person to DM the bot is auto-claimed as the
-  owner** — do this from your own account.
+- `personalclaw doctor` checks the credential pair, and says whether Slack has a paired owner.
+- **Pair yourself as the owner.** In Settings → Providers → Slack Channel → Configure, press
+  **Pair as owner** and send the bot the code it shows, in a direct message, from your own
+  account. The bot answers *Paired — you're my owner here now.* Until an owner is paired the bot
+  does nothing anyone asks, and a direct message or a mention gets a note saying how to pair. Nothing else
+  names the owner: not the first message the bot gets, and not an id set in the environment. An
+  install from an earlier release, whose owner was the first person to message the bot or an id
+  typed into setup, forgets that owner when the channel next starts and pairs once more.
 
 ## 4. Configure channels and users
 
 Slack behavioral config (allowlist, tracked channels, activation modes) lives
 in the app's own store (`~/.personalclaw/apps/slack-channel/data/config.json`),
-editable from the app's Configure form or from Slack itself:
+editable from the app's Configure form, and in part from Slack itself:
 
-- `/personalclaw @user` — allowlist another user.
-- `/personalclaw #channel` — track a channel.
-- `/personalclaw dashboard [duration]` — get a tokenized dashboard link.
+- `/personalclaw #channel` — asks you whether to track a channel.
+- `/personalclaw dashboard [duration]` — DMs you, the owner, a tokenized dashboard link.
+
+People who may talk to the bot besides you are added under Allowed Users in the Configure form.
 
 Key settings (Configure form):
 
 | Setting | Meaning |
 |---|---|
 | `tracking_channels` | Channels the bot monitors: a row per channel, its channel ID with a name to know it by. |
-| `open_channels` | Channel IDs where ALL users may interact without the allowlist. |
 | `allowed_users` | Users allowed to interact: a row per person, their Slack member ID with a name to know them by. |
 | `dm_activation` | DM response mode: `always` (default) / `mention` / `observe` / `review` / `off`. |
 | `channels` | Per-channel overrides: a row per channel, its channel ID with the activation mode and the agent that answers there. |
 | `command` | The slash-command trigger word (default `personalclaw`). |
 | `reactions`, `reactions_enabled` | Phase-aware emoji reactions during processing: a field per phase (queued, thinking, coding, …) for its emoji's Slack name, blank for the default, or switched off for no reaction in that phase. |
 | `trusted_bot_ids` | Bot IDs allowed past the bot filter (multi-node mesh). |
-| `allowed_enterprise_ids` | Slack Enterprise Grid org IDs allowed for workspace validation. |
 
 Slack sessions appear in the chat UI alongside dashboard sessions
 (origin = slack), and the dashboard can hand a conversation off to Slack and
@@ -109,16 +113,17 @@ back.
 
 - **Bot doesn't respond**: check both tokens are present (`personalclaw
   doctor`), the Channels page shows Slack connected (tokens added outside the
-  Configure form while the gateway ran need a gateway restart), and you're either
-  the owner, allowlisted, or in an open channel.
+  Configure form while the gateway ran need a gateway restart), that an owner is paired
+  (until one is, the bot's only reply is how to pair), and that you're the owner or allowlisted.
 - **Socket Mode errors**: the `xapp-…` token must have the
   `connections:write` scope — regenerate it via the Socket Mode toggle dance in
   step 1.3. The Slack row on Settings → Providers says when Socket Mode is not
   connected, and what Slack answered the last reconnect: `invalid_auth` or
   `token_revoked` means the App Token was revoked or regenerated — save the new one
   on the Configure form.
-- **Wrong workspace / Enterprise Grid**: if you set `allowed_enterprise_ids`,
-  the connection refuses workspaces outside that list.
+- **Wrong workspace**: the bot answers only the workspace its Bot Token belongs to, and a
+  message from any other is refused. To move it, install the Slack app in the other workspace
+  and save that workspace's tokens.
 - **Token rotation**: save the new token on the Configure form, and the receiver
   reconnects on it at once. A token rotated in `.env` or the environment needs a
   gateway restart.

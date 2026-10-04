@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from slack_helpers import MockSlackClient
+from slack_helpers import MockSlackClient, set_owner
 
 from personalclaw.context import ContextBuilder
 from personalclaw.history import ConversationLog, summary_record
@@ -27,7 +27,7 @@ from personalclaw.llm.base import LLMEvent
 from personalclaw.memory import MemoryStore
 from personalclaw.sdk.channel import chore_usage
 from personalclaw.skills import SkillsLoader
-from slack_runtime.handler import handle_message, set_allowed_users, set_owner_id
+from slack_runtime.handler import handle_message, set_allowed_users
 
 if TYPE_CHECKING:
     from personalclaw.session import SessionManager
@@ -134,7 +134,7 @@ def _thread(tmp_path, turns: list[tuple[str, str]]) -> ConversationLog:
 
 
 async def _send(tmp_path, log: ConversationLog, text: str = "follow up") -> tuple[_Sessions, MockSlackClient]:
-    set_owner_id("U001")
+    set_owner("U001")
     set_allowed_users([{"slack_id": "U001"}])
     slack = MockSlackClient()
     sessions = _Sessions()

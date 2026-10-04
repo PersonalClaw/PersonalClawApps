@@ -32,11 +32,14 @@ from slack_sdk.socket_mode.websockets import SocketModeClient as WSSocketModeCli
 from slack_sdk.web.async_client import AsyncWebClient
 
 from personalclaw.sdk.channel import AppConfig
+from personalclaw.sdk.channel import CANNED_OWNER_PAIRED_REPLY, redeem_owner_pairing_code
 from slack_runtime.settings import (
     ACTIVATION_MENTION,
     ACTIVATION_OBSERVE,
     ACTIVATION_OFF,
     ACTIVATION_REVIEW,
+    NO_OWNER_YET,
+    PAIR_AS_OWNER,
 )
 from personalclaw.sdk.channel import TriggerStore, config_dir, describe_cadence
 from personalclaw.sdk.channel import parse_duration
@@ -59,20 +62,15 @@ from slack_runtime.enterprise import (
 from slack_runtime.files import process_slack_files
 from slack_runtime.format import slack_text
 from slack_runtime.handler import (
-    claim_owner,
     get_owner_id,
     handle_message,
     is_allowed_user,
-    is_open_channel,
     is_owner,
-    is_tracked_channel,
     is_yolo_mode,
     set_allowed_users,
     set_dashboard_state,
     set_gateway_services,
-    set_open_channels,
     set_orch_cfg,
-    set_owner_id,
     set_tracking_channels,
     set_yolo_mode,
 )
@@ -678,35 +676,29 @@ register_slash_command("status", _handle_status, "show runtime stats")
 def init_socket_mode(orch: "GatewayServices") -> WorkspaceCheck | None:
     """Wire up the Socket Mode client and attach the event listener, once the workspace checks.
 
-    Does nothing when Slack is disabled (either token missing), and returns None. An EMPTY
-    allowlist does not stop the socket — it starts so a first DM can arrive and claim
-    ownership, and every message is then refused by ``is_allowed_user`` until someone is
-    authorized. Returns the workspace check, which :func:`bind_workspace` has acted on: the
-    caller tries an ``UNREACHABLE`` one again. Mutates ``orch._socket_client`` in place.
+    Does nothing when Slack is disabled (either token missing), and returns None. A Slack with
+    no owner starts the socket too: the owner pairs it by sending the bot, in a direct message,
+    the code its Configure page shows, and until then every other message is refused. Returns
+    the workspace check, which :func:`bind_workspace` has acted on: the caller tries an
+    ``UNREACHABLE`` one again. Mutates ``orch._socket_client`` in place.
     """
     if not orch._slack_enabled:
         return None
 
-    # No preset owner → run in trust-on-first-use bootstrap: the socket still
-    # starts (so an inbound DM can arrive), and the first human to DM the bot is
-    # auto-claimed as owner (see _route_message → claim_owner). Multi-user is still
-    # disabled — exactly one owner ever exists; this only bootstraps who it is.
-    if not orch._owner_id:
+    if not get_owner_id():
         logger.warning(
-            "No Slack owner set — starting in owner-claim mode: the first user to "
-            "DM the bot becomes its owner."
+            "Slack has no owner yet, so it does nothing anyone asks until its owner pairs it: %s, then "
+            "send the bot the code in a direct message.",
+            PAIR_AS_OWNER,
         )
 
-    # Share owner-only allowlist and tracking channels with handler modules
+    # Share the allowlist and tracking channels with handler modules
     set_allowed_users(orch._allowed_users)
     set_tracking_channels(orch._tracking_channels)
-    set_open_channels(orch._open_channels)
-    set_owner_id(orch._owner_id)
     set_gateway_services(orch._services)
-    # Mirror the owner-only posture into core's channel_trust store — the
-    # guarded inbound door the linked-thread intercept routes through consults
-    # core, not SlackSettings. Idempotent: writes only what is missing.
-    sync_channel_trust(orch._owner_id, orch.settings)
+    # Mirror the tracked channels into core's channel_trust store — the guarded inbound door
+    # the linked-thread intercept routes through consults core, not SlackSettings.
+    sync_channel_trust(orch.settings)
     if orch._cfg.agent.yolo:
         set_yolo_mode(True)
     set_orch_cfg(orch._cfg)
@@ -721,7 +713,7 @@ def check_workspace(orch: "GatewayServices") -> WorkspaceCheck:
     transport runs its retries in a thread."""
     # Binds the gateway to the token's workspace, so a hot-swapped token cannot point the bot
     # at another workspace; until a check succeeds, no message is accepted.
-    return validate_enterprise(orch._bot_token, extra_ids=orch.settings.enterprise_ids())
+    return validate_enterprise(orch._bot_token)
 
 
 def bind_workspace(orch: "GatewayServices", check: WorkspaceCheck) -> WorkspaceCheck:
@@ -1178,6 +1170,19 @@ async def _handle_slash(orch: "GatewayServices", payload: dict) -> None:
     if cmd != slash_command:
         return
 
+    # No owner yet: nobody may use it, and the caller is told how the owner pairs.
+    if not get_owner_id():
+        sel().log_api_access(
+            caller=caller_id,
+            operation="slack.slash_command",
+            outcome="denied",
+            source="slack",
+            resources=cmd_text,
+            error="no owner paired",
+        )
+        asyncio.create_task(_respond(NO_OWNER_YET))
+        return
+
     # Deny-by-default — only allowed users can invoke slash commands
     if not is_allowed_user(caller_id):
         sel().log_api_access(
@@ -1198,12 +1203,6 @@ async def _handle_slash(orch: "GatewayServices", payload: dict) -> None:
         source="slack",
         resources=cmd_text,
     )
-
-    # The owner as it is now: a fresh install's owner is claimed by the first person to message
-    # the bot, after this runtime read it at its start.
-    if not (orch.slack and get_owner_id()):
-        asyncio.create_task(_respond("⚠️ Owner not configured."))
-        return
 
     # Parse sub-command and args
     parts = cmd_text.split(maxsplit=1)
@@ -1393,6 +1392,101 @@ async def _dispatch_queued(
     )
 
 
+def _claim(channel: str, text: str, sender_id: str, thread_ts: str | None, msg_ts: str) -> bool:
+    """Claim this message with PersonalClaw (``claim_message``): ``True`` the first time Slack
+    delivers it, ``False`` for a delivery made again, before or after a restart. Slack's timestamp
+    names a message within its channel, so the two together are the claim."""
+    from personalclaw.sdk.channel import ChannelMessage, claim_message
+
+    return claim_message(
+        "slack",
+        ChannelMessage(
+            channel_id=channel,
+            text=text,
+            sender=sender_id,
+            thread_id=thread_ts or msg_ts,
+            message_id=msg_ts,
+        ),
+    )
+
+
+async def _pair_the_owner(
+    orch: "GatewayServices",
+    sender_id: str,
+    channel: str,
+    text: str,
+    thread_ts: str | None,
+) -> bool:
+    """Whether this direct message was the owner's pairing code, which core redeemed: its sender
+    is Slack's owner from now on, and is told so in the DM, in core's words.
+
+    The code goes to core (``redeem_owner_pairing_code``) as every channel's does, so it is held
+    to the same rules: it works once, within the time the Configure page gives it, and a
+    code-shaped message that is not the code counts against the wrong guesses it allows. The
+    message is spent on pairing and is never a turn. The caller claimed it first, so a delivery
+    Slack makes again pairs nobody and counts no wrong guess twice."""
+    known = getattr(orch.channel_history, "_user_names", None) if orch.channel_history else None
+    if not redeem_owner_pairing_code(
+        "slack", sender_id, text, member_name(sender_id, orch.settings, known)
+    ):
+        return False
+    logger.info("Slack paired its owner from a direct message")
+    if orch.slack:
+        try:
+            await orch.slack.post_message(channel, CANNED_OWNER_PAIRED_REPLY, thread_ts)
+        except Exception:
+            logger.warning("Slack paired its owner but could not say so in the DM", exc_info=True)
+    return True
+
+
+async def _no_owner_yet(
+    orch: "GatewayServices",
+    sender_id: str,
+    channel: str,
+    text: str,
+    thread_ts: str | None,
+    msg_ts: str,
+    *,
+    tell: bool,
+    is_dm: bool,
+    claimed: bool,
+) -> None:
+    """Refuse a message while Slack has no owner, and tell a person who wrote to the bot how its
+    owner pairs it.
+
+    Nobody is let in until then, whoever Allowed Users names: with no owner, nobody's message can
+    answer for her. *tell* is whether this is a person's direct message or mention: a direct
+    message gets the note in the DM, a mention gets it where only its sender sees it, and a plain
+    message in a channel the bot sits in, or a bot's, gets none. Each message is told once: one
+    that is told is claimed first (*claimed* when the caller already did), so the ``message`` and
+    ``app_mention`` Slack announces for one mention, or a delivery made again, are told once."""
+    sel().log_api_access(
+        caller=sender_id,
+        operation="slack.message",
+        outcome="denied",
+        source="slack",
+        resources=channel,
+        error="no owner paired",
+    )
+    if not tell or not orch.slack:
+        return
+    if not claimed and not _claim(channel, text, sender_id, thread_ts, msg_ts):
+        return
+    try:
+        if is_dm:
+            await orch.slack.post_message(channel, NO_OWNER_YET, thread_ts)
+        else:
+            await orch.slack.post_ephemeral(channel, sender_id, NO_OWNER_YET, thread_ts=thread_ts)
+    except Exception:
+        logger.warning(
+            "Refused %s in %s while Slack has no owner, but the note saying how to pair failed "
+            "to send — the sender sees silence",
+            sender_id,
+            channel,
+            exc_info=True,
+        )
+
+
 async def _route_message(
     orch: "GatewayServices",
     event: dict,
@@ -1426,42 +1520,50 @@ async def _route_message(
         )
         return
 
-    # ── Owner auto-claim (trust-on-first-use bootstrap) ──
-    # On a fresh install with no preset owner, the FIRST human to reach the bot
-    # becomes its sole owner (persisted for restart). Accepted from a direct
-    # message OR an @mention in a tracked channel (both are deliberate first
-    # contact); a plain untracked-channel post can't claim. Never from a bot, and
-    # a no-op once an owner exists — ownership never transfers.
-    if (
-        not from_trusted_bot
-        and not get_owner_id()
-        and sender_id
-        and not event.get("bot_id")
-        and (event.get("channel_type") == "im" or is_mention or is_tracked_channel(channel))
-    ):
-        known = getattr(orch.channel_history, "_user_names", None) if orch.channel_history else None
-        if claim_owner(sender_id, member_name(sender_id, orch.settings, known)):
-            set_allowed_users({sender_id})
+    # ── The owner's pairing code, in a direct message ──
+    # Before anything asks who the sender is: whoever sends the code Configure → Pair as owner
+    # shows becomes Slack's owner, in place of any before them, so it has to reach core from
+    # someone nobody has let in yet. Core redeems it by the rules every channel's pairing follows:
+    # a code-shaped message that is not the code counts against it, and any other text is no code.
+    # A person's direct message is claimed here, before the code is looked for and before the
+    # activation checks, which a pairing code is not held to. Slack announces a direct message
+    # once (an ``app_mention`` is a channel's), so no second event of it waits on this claim.
+    person = sender_id and not from_trusted_bot and not event.get("bot_id")
+    is_dm = channel.startswith("D")  # Slack's own DM signal; a mention event carries no type
+    claimed = False
+    if person and is_dm:
+        if not _claim(channel, text, sender_id, thread_ts, msg_ts):
+            return
+        claimed = True
+        if await _pair_the_owner(orch, sender_id, channel, text, thread_ts):
+            return
+
+    # ── No owner yet: nobody is let in ──
+    if not get_owner_id():
+        await _no_owner_yet(
+            orch,
+            sender_id,
+            channel,
+            text,
+            thread_ts,
+            msg_ts,
+            tell=bool(person and (is_dm or is_mention)),
+            is_dm=is_dm,
+            claimed=claimed,
+        )
+        return
 
     # ── Access control: record authorization decision early for SEL audit ──
     # The ephemeral rejection is deferred until after activation checks so
     # users in observe/mention channels aren't spammed, but the SEL event
     # is always emitted to preserve the audit trail.
-    _user_authorized = from_trusted_bot or is_allowed_user(sender_id) or is_open_channel(channel)
+    _user_authorized = from_trusted_bot or is_allowed_user(sender_id)
     if from_trusted_bot:
         sel().log_api_access(
             caller=sender_id,
             operation="slack.message",
             outcome="allowed",
             source="slack",
-        )
-    elif is_open_channel(channel) and not is_allowed_user(sender_id):
-        sel().log_api_access(
-            caller=sender_id,
-            operation="slack.message",
-            outcome="allowed",
-            source="slack",
-            resources=f"open_channel={channel}",
         )
     if not _user_authorized:
         logger.warning("Ignoring message from unauthorized user %s", sender_id)
@@ -1587,19 +1689,9 @@ async def _route_message(
     # is still taken. Claimed before anything below acts on the message (the not-authorized
     # notice, a transcription, a turn), so a delivery Slack makes again, of an event whose
     # acknowledgement it did not see, before or after a restart, changes nothing. A linked
-    # thread's message is then taken by the guarded door from this claim, once.
-    from personalclaw.sdk.channel import ChannelMessage, claim_message
-
-    if not claim_message(
-        "slack",
-        ChannelMessage(
-            channel_id=channel,
-            text=text,
-            sender=sender_id,
-            thread_id=thread_ts or msg_ts,
-            message_id=msg_ts,
-        ),
-    ):
+    # thread's message is then taken by the guarded door from this claim, once. A person's
+    # direct message was claimed above, before the pairing code was looked for.
+    if not claimed and not _claim(channel, text, sender_id, thread_ts, msg_ts):
         return
 
     # ── Access control: send ephemeral rejection ──
@@ -1795,9 +1887,9 @@ async def _route_message(
     )
 
     # Hand the message to this bundle's own trigger source, if one is attached.
-    # HERE and not earlier: everything above this line is the gate — the allowlist /
-    # open-channel / tracked-channel decision, the channel activation mode, and the dedup
-    # cache. A message that reaches this point is one this app has admitted and is about to
+    # HERE and not earlier: everything above this line is the gate — the owner and allowlist
+    # decision, the channel activation mode, and the dedup cache. A message that reaches this
+    # point is one this app has admitted and is about to
     # answer, so it is exactly the traffic a user's automation should see; anything refused
     # above arms nothing. Published BEFORE the busy-session queue check on purpose: a queued
     # message is still an admitted message, and whether a session happened to be busy is not

@@ -26,7 +26,7 @@ from personalclaw.sdk.channel import (
     resolve_bind_host,
     resolve_dashboard_host,
 )
-from personalclaw.sdk.channel import owner_sign_in_token
+from personalclaw.sdk.channel import forget_owner, owner_id_for, owner_sign_in_token, paired_owner
 from personalclaw.sdk.channel import sel
 from slack_runtime.handler import get_owner_id, is_owner, is_tracked_channel
 
@@ -276,25 +276,48 @@ def member_name(
     return shown if shown and shown != user_id else ""
 
 
-def sync_channel_trust(owner_id: str, settings: "SlackSettings") -> None:
-    """Mirror the app store's trust data into core's channel_trust store (EA-7).
+def sync_channel_trust(settings: "SlackSettings") -> None:
+    """Mirror the app store's tracked channels into core's channel_trust store (EA-7).
 
     The guarded inbound door consults core's per-provider trust store, not this
-    app's SlackSettings, and the Sender trust page lists it. Slack's posture is
-    owner-only, so the mirror is small: the owner is the ONE allowed sender, and
-    each tracked channel is tracked, each under the name the owner gave it. Run
-    on every start: core writes and audits only what changed, so a name given
-    since the last start reaches the page, and nothing already there is let in
-    again.
+    app's SlackSettings, and the Sender trust page lists it. Each tracked channel
+    is tracked, under the name the owner gave it. The owner is not written here:
+    core's owner pairing trusted her when it named her. Run on every start: core
+    writes and audits only what changed, so a name given since the last start
+    reaches the page.
     """
-    from personalclaw.sdk.channel import allow_sender, track
+    from personalclaw.sdk.channel import track
 
     try:
-        if owner_id:
-            allow_sender("slack", owner_id, member_name(owner_id, settings), via="owner")
         for channel in settings.tracking_channels:
             cid = str(channel.get("channel_id", "") or "")
             if cid:
                 track("slack", cid, str(channel.get("name", "") or ""))
     except Exception:
         logger.warning("channel_trust mirror failed", exc_info=True)
+
+
+def forget_unpaired_owner() -> None:
+    """Have core forget an owner it holds for Slack that core's owner pairing did not name.
+
+    Slack keeps no owner but the one its pairing named. An earlier release made the first person
+    to message the bot its owner, and stored them where setup stored a member id typed at its
+    prompt and where a container can set one in the environment; nothing tells those apart, and
+    none was confirmed from the account. So when the channel starts, any owner core holds for
+    Slack other than the paired one is forgotten (``forget_owner``): no longer read, no longer
+    trusted, and the shared key every channel wrote before each had its own no longer answers
+    for Slack. The owner pairs once more from the Configure page. Fails loudly: a forget that
+    cannot be written raises, and the channel does not start on an owner nobody paired. Logs
+    that it forgot one, never the id.
+    """
+    owner = owner_id_for(_PROVIDER)
+    if not owner or owner == paired_owner(_PROVIDER):
+        return
+    if forget_owner(_PROVIDER, owner):
+        from slack_runtime.settings import PAIR_AS_OWNER
+
+        logger.warning(
+            "Slack forgot the owner it held, which was never paired here. Pair one in the "
+            "dashboard: %s, then send the bot the code in a direct message.",
+            PAIR_AS_OWNER,
+        )

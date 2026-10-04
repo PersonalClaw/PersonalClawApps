@@ -26,13 +26,12 @@ import pytest
 import pytest_asyncio
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
-from slack_helpers import MockSlackClient
+from slack_helpers import MockSlackClient, set_owner
 from test_slack_handler import FakeSessionManager
 
 import slack_runtime.handler as H
 import slack_runtime.interactions as interactions
 from personalclaw.llm.base import LLMEvent
-from personalclaw.sdk.channel import owner_id_credential
 
 OWNER = "U0OWNER"
 DM = "D0OWNER"
@@ -47,8 +46,7 @@ def _the_owners_dm(monkeypatch):
     # The owner this app pairs is the one PersonalClaw keeps for the channel, as on a gateway
     # (``owner_id_for``): PersonalClaw reads a thread's turn as hers by it, and her Trust answers
     # only her own turns.
-    monkeypatch.setenv(owner_id_credential("slack"), OWNER)
-    H.set_owner_id(OWNER)
+    set_owner(OWNER)
     H.set_allowed_users({OWNER})
     for state in (H._pending_approvals, H._ended_prompts, H._thread_agents):
         state.clear()
@@ -56,7 +54,7 @@ def _the_owners_dm(monkeypatch):
     yield
     for state in (H._pending_approvals, H._ended_prompts, H._thread_agents):
         state.clear()
-    H.set_owner_id("")
+    set_owner("")
     H.set_allowed_users(set())
 
 

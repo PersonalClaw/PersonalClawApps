@@ -36,11 +36,11 @@ origin** by core; `meta` carries identifiers only (`channel_id`, `sender`, `thre
 Three things this deliberately does *not* do:
 
 - **It observes nothing your trust gate refused.** The publish happens at the one point
-  where a message has cleared this app's allowlist / open-channel / tracked-channel gate,
-  its channel activation mode and its claim with PersonalClaw (`claim_message`), which a
-  message Slack delivers again does not pass. (This app predates core's guarded door —
-  see `tests/test_conformance.py`'s strict xfail — so the gate here is its own.)
-  A denied sender gets no session and arms no automation.
+  where a message has cleared this app's owner and allowlist gate, its channel activation
+  mode and its claim with PersonalClaw (`claim_message`), which a message Slack delivers
+  again does not pass. (This app runs its own turns, so the gate here is its own rather
+  than core's guarded door.) A denied sender gets no session and arms no automation, and
+  while Slack has no owner nothing is admitted.
 - **The event name never comes from the message.** It is chosen in code from the frozen
   list above by a structural fact, so a sender cannot pick which of your automations runs.
 - **Prose never lands in `meta`.** `meta` is matched, not narrated, and core does not fence
@@ -222,7 +222,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 |---|---|---|
 | `bot_token` | Bot Token | Slack Bot User OAuth Token (xoxb-...). Outbound only needs this one. |
 | `app_token` | App Token | Slack App-Level Token for Socket Mode (xapp-...). **Inbound needs both.** |
-| `allowed_users` | Allowed Users | Who may talk to the bot, besides the owner: one row per person, with their Slack member ID and a name to know them by. Empty means owner-only; with no owner set either, nobody is authorized. |
+| `allowed_users` | Allowed Users | Who may talk to the bot, besides the owner: one row per person, with their Slack member ID and a name to know them by. Empty means owner-only. Until an owner is paired, nobody is authorized, whoever is listed. |
 
 Both tokens are **write-only**: once saved, the form shows `••••••••` and the value never
 leaves the gateway. Saving other fields keeps the stored tokens; typing a new value
@@ -262,18 +262,11 @@ approvals sent to), and only what she allows is kept, as her own. The agent is t
 the agent's own file or shell tools would make to one of her memory documents in such a turn is
 refused before it runs, whatever pattern or Trust would have approved it.
 
-### Settings that currently do nothing
-
-Two keys are visible in the Configure form and have no effect. They are listed here rather
-than quietly left in place:
-
-- `open_channels` — "all users authorized in this channel" is not enforced; the predicate
-  behind it is a hardcoded `false`.
-- `allowed_enterprise_ids` — workspace validation accepts any workspace whose bot token
-  authenticates; the list does not restrict it.
-
-Making either live changes *who can reach the agent*, so it is a deliberate decision rather
-than a bugfix. Until then, `allowed_users` (above) is the allowlist that is enforced.
+The form offers no other access rule. Who may talk to the bot is its owner and Allowed Users,
+and the workspace it answers is the one its bot token belongs to: a message from any other
+workspace is refused. An earlier release's form also offered **Open Channels** and **Allowed
+Enterprise IDs**, which never let anyone in or kept anyone out; they are gone, and a value an
+earlier release saved for either is ignored.
 
 ## The live-writes kill switch
 
@@ -302,14 +295,34 @@ and **any other present value — including a typo — turns it on**.
 3. **Install to Workspace** and copy the Bot User OAuth Token (`xoxb-...`).
 4. Enter both tokens in the app's Configure form (Settings above), or run
    `personalclaw setup` and paste them when prompted.
+5. Pair yourself as the owner: in **Settings → Providers → Slack Channel → Configure**, press
+   **Pair as owner** and send the bot the code it shows, in a direct message. The bot answers
+   *Paired — you're my owner here now. I'll reach you in this chat.*
 
-The first person to DM the bot is auto-claimed as the owner, and approvals go to them from that
-message on, with no restart. Or `personalclaw setup` asks for your Slack member id. Either way it is stored as Slack's own owner, `PERSONALCLAW_OWNER_ID_SLACK`,
-so setting up another channel leaves it alone. An install set up by an earlier release kept the
-owner under the shared `PERSONALCLAW_OWNER_ID`; the first time Slack starts, it copies that owner
-to its own key, so the bot keeps its owner rather than waiting for a first sender to claim it. Use
-`/personalclaw @user` to allowlist more users and `/personalclaw #channel` to
-track a channel.
+People who may talk to the bot besides you are listed under Allowed Users in Configure, and
+`/personalclaw #channel` asks you whether to track a channel.
+
+## The owner
+
+Slack's owner is the one account its owner pairing named, the way Telegram, Discord and email pair
+theirs, and nothing else names it: not the first message the bot gets, not `personalclaw setup`, not
+an id set in the environment. Until the owner pairs, the bot does nothing anyone asks. A direct
+message or a mention gets a note saying how to pair, nobody's press answers an approval, and nobody
+can be sent a dashboard link. The code works once, for ten minutes, and five wrong codes sent to the
+bot cancel it. Pairing again from the same page (**Pair a new owner**) moves the owner to the
+account that sends the new code. Pairing works whatever DM Activation says, and only in a direct
+message: a code posted in a channel pairs nobody. Keep the code to yourself, though: whoever sends
+it to the bot first becomes the owner, so if it was posted where others could read it, cancel it on
+the same page, or pair again, which replaces it.
+
+**An install from an earlier release pairs once more.** An earlier release made the first person to
+message the bot its owner, and kept that owner, or a member id typed into setup, under
+`PERSONALCLAW_OWNER_ID_SLACK` or the shared `PERSONALCLAW_OWNER_ID`. Nobody confirmed that owner
+from the account, and nothing tells a first sender from an id you typed. So when the channel next
+starts, it forgets any owner its pairing did not name: the id is no longer read or trusted, and the
+shared key no longer answers for Slack (a channel that still reads it keeps it). Pair from
+Configure, as above. An earlier owner may have allowed people or tracked channels; check Allowed
+Users and Tracking Channels on the same page.
 
 ## Network
 

@@ -20,7 +20,7 @@ import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from slack_helpers import MockSlackClient
+from slack_helpers import MockSlackClient, set_owner
 from test_a_thread_prompt_waits_as_personalclaw_does import _AsksOnce, _thread_text, _turn
 
 import slack_runtime.delivery as D
@@ -46,7 +46,7 @@ _NO_ANSWERS_BRIEF = {
 
 @pytest.fixture(autouse=True)
 def _an_owner(monkeypatch):
-    H.set_owner_id(OWNER)
+    set_owner(OWNER)
     H.set_allowed_users({OWNER})
     monkeypatch.setattr(H, "_said_no_answers", False)
     for state in (H._pending_approvals, H._ended_prompts, H._thread_agents):
@@ -54,7 +54,7 @@ def _an_owner(monkeypatch):
     yield
     for state in (H._pending_approvals, H._ended_prompts, H._thread_agents):
         state.clear()
-    H.set_owner_id("")
+    set_owner("")
     H.set_allowed_users(set())
 
 

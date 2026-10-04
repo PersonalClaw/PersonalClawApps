@@ -53,9 +53,9 @@ class SlackDelivery:
 
     def __init__(self, client: RealSlackClient, owner: Callable[[], str]) -> None:
         self._client = client
-        #: Who the owner is NOW, read each time it is needed. A fresh install claims its owner
-        #: when the first person messages the bot; a value kept from the start left that owner
-        #: unknown here until a restart, and every approval core asked skipped Slack.
+        #: Who the owner is NOW, read each time it is needed. The owner pairs from the Configure
+        #: page while the receiver runs; a value kept from the start left that owner unknown here
+        #: until a restart, and every approval core asked skipped Slack.
         self._owner = owner
 
     # ── raw client passthrough (used by the approval flow + session routing) ──

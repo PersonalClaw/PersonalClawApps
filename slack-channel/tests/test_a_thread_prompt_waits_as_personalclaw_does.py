@@ -17,7 +17,7 @@ import asyncio
 from unittest.mock import patch
 
 import pytest
-from slack_helpers import MockSlackClient
+from slack_helpers import MockSlackClient, set_owner
 from test_slack_handler import FakeSessionManager
 
 import slack_runtime.handler as H
@@ -30,14 +30,14 @@ EXPIRED_LINE = "Nobody answered in time, so it did not run"
 
 @pytest.fixture(autouse=True)
 def _an_owner():
-    H.set_owner_id(OWNER)
+    set_owner(OWNER)
     H.set_allowed_users({OWNER})
     for state in (H._pending_approvals, H._ended_prompts, H._thread_agents):
         state.clear()
     yield
     for state in (H._pending_approvals, H._ended_prompts, H._thread_agents):
         state.clear()
-    H.set_owner_id("")
+    set_owner("")
     H.set_allowed_users(set())
 
 

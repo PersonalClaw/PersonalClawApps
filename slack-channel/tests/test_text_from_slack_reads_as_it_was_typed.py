@@ -13,6 +13,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from slack_helpers import set_owner
 
 from slack_runtime.client import RealSlackClient
 from slack_runtime.format import slack_text
@@ -21,6 +22,13 @@ from slack_runtime.inbox_source import SlackInboxSource
 #: What a sender typed, and how Slack sends it.
 TYPED = "Is 3 < 5 && 5 > 2? Ask R&D"
 SENT = "Is 3 &lt; 5 &amp;&amp; 5 &gt; 2? Ask R&amp;D"
+
+
+@pytest.fixture(autouse=True)
+def _slack_has_an_owner():
+    """Slack has a paired owner here: with none, the route admits nobody before it asks who the
+    sender is, and these tests are about what happens to a message it admits."""
+    set_owner("U0OWNER")
 
 
 class TestSlackText:

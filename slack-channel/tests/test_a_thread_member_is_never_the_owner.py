@@ -43,10 +43,8 @@ def _a_shared_channel(monkeypatch):
     """Slack knows its owner, and the owner allowed a colleague to talk to the agent."""
     monkeypatch.delenv(CRED_OWNER_ID, raising=False)
     monkeypatch.setenv(owner_id_credential("slack"), OWNER)
-    H.set_owner_id(OWNER)
     H.set_allowed_users({OWNER, COLLEAGUE})
     yield
-    H.set_owner_id("")
     H.set_allowed_users(set())
 
 

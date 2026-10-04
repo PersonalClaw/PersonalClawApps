@@ -16,8 +16,8 @@ on ``sys.path`` (see the header of ``transport.py``), and after that
 ``slack_runtime.inbound_tap`` is one object in ``sys.modules`` for the life of the process.
 
 **What may be published here, and what may not.** Only a message this app has already
-admitted: past the allowlist / open-channel / tracked-channel gate, past the channel
-activation mode, and past the dedup cache. Publishing earlier would let anyone in a shared
+admitted: past the owner and allowlist gate, past the channel activation mode, and past the
+dedup cache. Publishing earlier would let anyone in a shared
 workspace arm the owner's automations by posting, which is strictly worse than the session
 the gate already refuses them.
 

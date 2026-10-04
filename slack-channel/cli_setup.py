@@ -12,24 +12,19 @@ is the slack-specific setup that used to live hardcoded in core's ``cli_setup.py
   settings file, so uninstalling the app removes them. They used to go to the shared store
   under the plain names ``SLACK_BOT_TOKEN`` / ``SLACK_APP_TOKEN``, which no uninstall can
   attribute to an app, so both tokens outlived the app;
-- the owner's Slack member id → the credential store under Slack's OWN owner key,
-  ``owner_id_credential("slack")`` (``PERSONALCLAW_OWNER_ID_SLACK``), which core reads to reach the
-  owner on Slack. Every channel used to write the one shared ``PERSONALCLAW_OWNER_ID``, so setting
-  up a second channel replaced Slack's owner with an id from another platform;
 - the slash-command name → this app's ``ProviderSettings``.
+
+It asks for no owner. Slack's owner is the account that sends the bot the code its Configure page
+shows (Pair as owner), which proves the account is the owner's; a member id typed here proved
+nothing, and Slack keeps no owner its pairing did not name. Setup says how to pair instead.
 
 Core config.json holds no Slack config.
 """
 
-from personalclaw.sdk.channel import (
-    CRED_SLACK_APP_TOKEN,
-    CRED_SLACK_BOT_TOKEN,
-    owner_id_credential,
-    owner_id_for,
-)
+from personalclaw.sdk.channel import CRED_SLACK_APP_TOKEN, CRED_SLACK_BOT_TOKEN
 from personalclaw.sdk.cli import SetupContext
 
-from slack_runtime.settings import load_tokens
+from slack_runtime.settings import PAIR_AS_OWNER, load_tokens
 
 _APP = "slack-channel"
 
@@ -40,9 +35,8 @@ def _mask(val: str) -> str:
 
 def run(ctx: SetupContext) -> None:
     """Prompt for the Slack tokens and the slash command name (→ this app's
-    ProviderSettings) and the owner ID (→ Slack's own owner key in the credential store).
-    Empty input keeps the current value; declining skips the whole step (the channel stays
-    disabled)."""
+    ProviderSettings), and say how the owner pairs once the gateway runs. Empty input keeps
+    the current value; declining skips the whole step (the channel stays disabled)."""
     _setup_tokens(ctx)
     _setup_slash_command(ctx)
 
@@ -64,26 +58,25 @@ def _setup_tokens(ctx: SetupContext) -> None:
     # then the plain-named keys an earlier release's setup wrote. Enter keeps that value.
     legacy = {k: ctx.get_credential(k) for k in (CRED_SLACK_BOT_TOKEN, CRED_SLACK_APP_TOKEN)}
     cur_bot, cur_app = load_tokens(ctx.settings.load(_APP), legacy)
-    # Slack's own owner, or the shared one an earlier release wrote (core falls back to it).
-    # Enter keeps it, which stores it under Slack's own key from here on.
-    cur_owner = owner_id_for("slack")
 
     hint_app = f" [{_mask(cur_app)}]" if cur_app else ""
     hint_bot = f" [{_mask(cur_bot)}]" if cur_bot else ""
-    hint_owner = f" [{cur_owner}]" if cur_owner else ""
 
     app_token = ctx.input(f"  App Token (xapp-...){hint_app}: ").strip() or cur_app
     bot_token = ctx.input(f"  Bot Token (xoxb-...){hint_bot}: ").strip() or cur_bot
-    owner_id = ctx.input(f"  Your Slack Member ID{hint_owner}: ").strip() or cur_owner
 
     if not app_token or not bot_token:
         ctx.print("  ⚠️  Missing tokens — the Slack channel will be disabled.\n")
         return
 
     ctx.settings.update(_APP, {"app_token": app_token, "bot_token": bot_token})
-    if owner_id:
-        ctx.save_credential(owner_id_credential("slack"), owner_id)
     ctx.print("  ✅ Credentials saved.\n")
+    ctx.print(
+        "  The bot's owner is the Slack account that sends it the code shown at\n"
+        f"  {PAIR_AS_OWNER}\n"
+        "  in the dashboard, in a direct message, once the gateway is running.\n"
+        "  Until an owner is paired, the bot's only reply is how to pair.\n"
+    )
 
 
 def _setup_slash_command(ctx: SetupContext) -> None:

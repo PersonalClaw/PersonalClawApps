@@ -25,10 +25,11 @@ list to forget to update.
   ``getattr(orch.settings, "allowed_users", [])`` — a string, not an attribute read — so the
   field had no reader at all. It is still only a FLOOR: it proves a consumer exists, not
   that the consumer's answer changes anything. It does not see #953's second half (the gate
-  ignoring the set it was handed) and it passes ``allowed_enterprise_ids`` today, whose
-  consumer discards it.
+  ignoring the set it was handed), nor a consumer that discards what it reads: two fields
+  once passed it while gating nothing, and were removed
+  (``test_no_slack_setting_promises_a_rule_it_does_not_keep.py``).
 * So the gates themselves are pinned BEHAVIOURALLY below the floor, one test per claim,
-  including the fail-closed direction and the two settings that remain deliberately inert.
+  including the fail-closed direction.
 
 A new field inherits the floor for free, and needs its own behavioural test if it gates
 anything.
@@ -122,15 +123,14 @@ def test_every_settings_field_is_read_outside_settings_py(field_name):
 
     Counted two ways, both derived: a direct ``.<field>`` read in a runtime module, or a
     ``SlackSettings`` accessor that reads ``self.<field>`` and is itself called from a
-    runtime module (``allowed_enterprise_ids`` → ``enterprise_ids()``, ``dm_activation`` →
-    ``channel_config()`` — legitimate derived reads, not dead settings).
+    runtime module (``dm_activation`` → ``channel_config()`` — a legitimate derived read,
+    not a dead setting).
 
     This is the FLOOR, not the ceiling — see the module docstring. It proves a consumer
-    exists, not that the consumer's answer changes anything: ``allowed_enterprise_ids``
-    passes it today while ``validate_enterprise`` documents the argument as ignored. It DID
-    have the reach to flag ``allowed_users`` before #953 (measured on the pre-fix tree: the
-    field had no attribute read outside ``settings.py`` at all), but not the reach to see
-    the gate ignoring the set. Both are pinned behaviourally further down.
+    exists, not that the consumer's answer changes anything. It DID have the reach to flag
+    ``allowed_users`` before #953 (measured on the pre-fix tree: the field had no attribute
+    read outside ``settings.py`` at all), but not the reach to see the gate ignoring the set,
+    which is pinned behaviourally further down.
     """
     sources = _runtime_sources()
     direct = sorted(p for p, src in sources.items() if f".{field_name}" in src)
@@ -326,9 +326,9 @@ def test_allowed_users_from_the_store_are_authorized(store_only_home, monkeypatc
     )
     _own_owner(monkeypatch, "U_OWNER")
     runtime = SlackRuntime(_Services(), config={})
-    assert runtime._allowed_users == {"U_ALICE", "U_BOB", "U_CAROL", "U_OWNER"}
+    # The owner is not copied in: she is the owner core keeps, read each time.
+    assert runtime._allowed_users == {"U_ALICE", "U_BOB", "U_CAROL"}
 
-    H.set_owner_id("U_OWNER")
     H.set_allowed_users(runtime._allowed_users)
     for uid in ("U_ALICE", "U_BOB", "U_CAROL", "U_OWNER"):
         assert H.is_allowed_user(uid), f"{uid} is on the operator's allowlist and was refused"
@@ -339,7 +339,6 @@ def test_an_id_absent_from_the_store_is_refused(store_only_home, monkeypatch):
     _write_store(store_only_home, allowed_users=[{"slack_id": "U_ALICE"}])
     _own_owner(monkeypatch, "U_OWNER")
     runtime = SlackRuntime(_Services(), config={})
-    H.set_owner_id("U_OWNER")
     H.set_allowed_users(runtime._allowed_users)
     assert H.is_allowed_user("U_STRANGER") is False
     assert H.is_allowed_user("") is False
@@ -356,57 +355,6 @@ def test_an_empty_allowlist_and_no_owner_authorizes_nobody(store_only_home):
     runtime = SlackRuntime(_Services(), config={})
     assert runtime._allowed_users == set()
 
-    H.set_owner_id("")
     H.set_allowed_users(runtime._allowed_users)
     for uid in ("U_ALICE", "U_STRANGER", "U_OWNER", ""):
         assert H.is_allowed_user(uid) is False, f"empty allowlist authorized {uid!r}"
-
-
-def test_open_channels_still_authorizes_nobody(store_only_home):
-    """``open_channels`` is INERT and stays inert in this change — asserted, not assumed.
-
-    ``is_open_channel`` has been a hardcoded ``False`` since this bundle's first public
-    commit, so the ``or is_open_channel(channel)`` term in the inbound authorization
-    expression can never widen anything. That is the second dashboard control this class
-    of defect left dead (see the PR's census), and unlike a per-user allowlist, honouring
-    it would authorize *unknown* users by channel membership — a posture change neither
-    #952 nor #953 asks for. Pinned here so nobody flips it as "the obvious sibling fix"
-    without a deliberate decision, and so the census claim stays true.
-    """
-    _write_store(store_only_home, open_channels=["C_OPEN"])
-    runtime = SlackRuntime(_Services(), config={})
-    assert runtime._open_channels == {"C_OPEN"}, "the field is read; only the gate is inert"
-
-    H.set_open_channels(runtime._open_channels)
-    assert H.is_open_channel("C_OPEN") is False
-    assert H.is_open_channel("C_OTHER") is False
-
-
-def test_allowed_enterprise_ids_still_does_not_gate_validation():
-    """``allowed_enterprise_ids`` is INERT too, and in the fail-OPEN direction — pinned.
-
-    The third dashboard control this defect class left dead, and the only one whose
-    inertness is *permissive*: the field is read (``events.py`` →
-    ``settings.enterprise_ids()`` → ``validate_enterprise(extra_ids=…)``) and then ignored,
-    which ``validate_enterprise``'s own docstring states outright — "accepted for call-site
-    compatibility but no longer gates acceptance". So an operator who lists their Grid org
-    id to stop the bot being pointed at a personal workspace (the stated purpose of the
-    check) gets no such restriction: any workspace whose bot token authenticates is
-    accepted and bound.
-
-    Deliberately NOT changed here. Restoring the gate refuses every install whose workspace
-    is not on the list — including every personal/non-Grid workspace, i.e. most of them —
-    which is a posture decision, not a bugfix. Asserted so the census claim stays true and
-    so the inertness cannot quietly become intentional-looking.
-    """
-    doc = inspect.getdoc(enterprise.validate_enterprise) or ""
-    assert "no longer gates acceptance" in doc, (
-        "validate_enterprise's contract changed. If extra_ids gates acceptance again, "
-        "allowed_enterprise_ids is live: delete this test and the census entry for it."
-    )
-    src = inspect.getsource(enterprise.validate_enterprise)
-    body = src.split('"""', 2)[-1]
-    assert "extra_ids" not in body, (
-        "extra_ids is referenced in validate_enterprise's body — it may gate acceptance "
-        "again; re-check the census entry for allowed_enterprise_ids."
-    )

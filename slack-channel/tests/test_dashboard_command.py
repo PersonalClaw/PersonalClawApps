@@ -11,10 +11,8 @@ import pytest
 
 def _owner_is(monkeypatch, user_id: str) -> None:
     """*user_id* is this channel's owner: the only person a dashboard link is sent to."""
-    import slack_runtime.handler as h
     from personalclaw.sdk.channel import owner_id_credential
 
-    monkeypatch.setattr(h, "_owner_id", user_id)
     monkeypatch.setenv(owner_id_credential("slack"), user_id)
 
 

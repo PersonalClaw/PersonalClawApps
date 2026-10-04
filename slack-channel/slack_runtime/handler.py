@@ -62,6 +62,7 @@ from personalclaw.sdk.channel import parse_title, session_restrictions, trust_mo
 from personalclaw.sdk.channel import answer_in_chat, approval_brief_for, approval_window_secs
 from personalclaw.sdk.channel import chat_grant, screen_tool_call
 from personalclaw.sdk.channel import is_sensitive_path, redact_credentials, redact_exfiltration_urls
+from personalclaw.sdk.channel import owner_id_for
 from personalclaw.sdk.channel import sel
 from personalclaw.sdk.channel import SessionManager
 from personalclaw.sdk.model import closing_stream
@@ -492,12 +493,8 @@ class _VoiceConfig:
 
 _vc = _VoiceConfig()
 
-# Primary owner ID — for owner-only commands like !agent.
-_owner_id: str = ""
-
 # Tracked channel IDs for member_joined_channel monitoring.
 _tracking_channels: set[str] = set()
-_open_channels: set[str] = set()
 
 # Live reference to the orchestrator's config — set by events.py, reloaded
 # after !channel writes so activation changes take effect immediately.
@@ -882,47 +879,15 @@ def set_allowed_users(user_ids: set[str]) -> None:
     _allowed_users = user_ids
 
 
-def set_owner_id(owner_id: str) -> None:
-    """Set the primary owner ID for owner-only commands (called by gateway)."""
-    global _owner_id
-    _owner_id = owner_id
-
-
 def get_owner_id() -> str:
-    """Current owner id ('' when unclaimed)."""
-    return _owner_id
+    """Slack's owner as core keeps it now (``owner_id_for("slack")``), or ``""``.
 
-
-def claim_owner(user_id: str, name: str = "") -> bool:
-    """First-contact owner claim: when no owner is set yet, adopt *user_id* as the
-    owner and persist it (process env + ~/.personalclaw/.env) so it survives restart.
-
-    Trust-on-first-use bootstrap for a fresh Slack install with no preset owner —
-    the FIRST human to message the bot becomes its sole authorized owner. A no-op
-    once an owner exists (returns False), so it can never transfer ownership.
-    *name* is what the Sender trust page calls them (``allowlist.member_name``).
-    Returns True iff the claim happened.
-    """
-    global _owner_id, _allowed_users
-    if _owner_id or not user_id:
-        return False
-    _owner_id = user_id
-    _allowed_users = {user_id}
-    try:
-        from personalclaw.sdk.channel import owner_id_credential, save_credential
-        save_credential(owner_id_credential("slack"), user_id)
-    except Exception:
-        logger.warning("Failed to persist auto-claimed Slack owner", exc_info=True)
-    logger.info("Slack owner auto-claimed on first contact: %s", user_id)
-    # The claimed owner is slack's ONE allowed sender — seed core's
-    # channel_trust store so the guarded inbound door admits them.
-    try:
-        from personalclaw.sdk.channel import allow_sender
-
-        allow_sender("slack", user_id, name, via="owner")
-    except Exception:
-        logger.warning("Failed to seed channel_trust with claimed Slack owner", exc_info=True)
-    return True
+    Read each time it is needed, so an owner paired from the Configure page while the receiver
+    runs is the owner from her next message on. Core's owner pairing is the one way it is set:
+    the code the page shows, sent to the bot in a direct message (``events._route_message``). An
+    owner core holds for Slack that its pairing did not name is forgotten when the channel starts
+    (``allowlist.forget_unpaired_owner``)."""
+    return owner_id_for("slack")
 
 
 def set_yolo_mode(enabled: bool) -> None:
@@ -999,12 +964,14 @@ def _reload_orch_cfg() -> None:
 
 
 def is_owner(user_id: str) -> bool:
-    """Check if *user_id* is the primary owner (with W/U prefix cross-match)."""
-    if not _owner_id or not user_id:
+    """Whether *user_id* is Slack's owner (:func:`get_owner_id`). Slack spells one member with a
+    ``U`` or a ``W`` in front, so either matches the other. Nobody is, while Slack has no owner."""
+    owner = get_owner_id()
+    if not owner or not user_id:
         return False
-    if user_id == _owner_id:
+    if user_id == owner:
         return True
-    return user_id.replace("W", "U", 1) == _owner_id or user_id.replace("U", "W", 1) == _owner_id
+    return user_id.replace("W", "U", 1) == owner or user_id.replace("U", "W", 1) == owner
 
 
 def disable_yolo() -> None:
@@ -1028,9 +995,10 @@ def is_yolo_mode() -> bool:
 def is_allowed_user(user_id: str) -> bool:
     """Is *user_id* the owner, or on the operator's allowlist?
 
-    **Fail-CLOSED, and deny-by-default.** An empty ``user_id`` is refused; with no owner
-    and an empty allowlist the set is empty and NOBODY is authorized. The only way this
-    returns True for a non-owner is an id an operator explicitly wrote down — in the
+    **Fail-CLOSED, and deny-by-default.** An empty ``user_id`` is refused, and while Slack has
+    no owner NOBODY is authorized, whoever the allowlist names: the list is the owner's, and
+    with no owner nobody can answer for what the people on it ask the agent to do. The only
+    way this returns True for a non-owner is an id an operator explicitly wrote down — in the
     dashboard's "Allowed Users", or by clicking Approve on an in-Slack request. Both
     persist to the same ``allowed_users`` list; :class:`~slack_runtime.runtime.SlackRuntime`
     seeds this set from it at boot and the interaction handlers keep it in step.
@@ -1048,7 +1016,7 @@ def is_allowed_user(user_id: str) -> bool:
     not something restored here — but it is what "add this person to the allowlist" now
     means again, so it belongs in the docstring rather than in a surprise.
     """
-    if not user_id:
+    if not user_id or not get_owner_id():
         return False
     if is_owner(user_id):
         return True
@@ -1059,17 +1027,6 @@ def set_tracking_channels(channel_ids: set[str]) -> None:
     """Set the tracked channel IDs (called by gateway/interactions)."""
     global _tracking_channels
     _tracking_channels = channel_ids
-
-
-def set_open_channels(channel_ids: set[str]) -> None:
-    """Set channel IDs where all users are authorized (no allowlist needed)."""
-    global _open_channels
-    _open_channels = channel_ids
-
-
-def is_open_channel(channel_id: str) -> bool:
-    """Open channels are disabled — multi-user access is blocked for security."""
-    return False
 
 
 def is_tracked_channel(channel_id: str) -> bool:

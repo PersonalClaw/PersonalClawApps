@@ -5,6 +5,14 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from slack_helpers import set_owner
+
+
+@pytest.fixture(autouse=True)
+def _slack_has_an_owner():
+    """Slack has a paired owner here: with none, the route admits nobody before it asks who the
+    sender is, and these tests are about what happens to a message it admits."""
+    set_owner("U0OWNER")
 
 
 class TestHandleMessageDeleted:

@@ -3,7 +3,7 @@
 import asyncio
 
 import pytest
-from slack_helpers import MockSlackClient
+from slack_helpers import MockSlackClient, set_owner
 
 from personalclaw.context import ContextBuilder
 from personalclaw.hooks import AutoReplyHook, HookManager, HooksConfig
@@ -21,7 +21,6 @@ from slack_runtime.handler import (
     handle_interaction,
     handle_message,
     set_allowed_users,
-    set_owner_id,
 )
 
 
@@ -373,14 +372,14 @@ class TestToolApproval:
     def _reset_globals(self):
         import slack_runtime.handler as _h
         _h._yolo_mode = False
-        set_owner_id("U1")
+        set_owner("U1")
         yield
         _h._yolo_mode = False
 
     @pytest.mark.asyncio
     async def test_approval_posts_blocks_and_approves(self):
         """Permission request → buttons posted → approve click → tool approved."""
-        set_owner_id("U1")
+        set_owner("U1")
         set_allowed_users({"U1"})
         slack = MockSlackClient()
         gate = asyncio.Event()
@@ -436,7 +435,7 @@ class TestToolApproval:
     @pytest.mark.asyncio
     async def test_rejection_stops_streaming(self):
         """Permission request → reject click → streaming stops."""
-        set_owner_id("U1")
+        set_owner("U1")
         set_allowed_users({"U1"})
         slack = MockSlackClient()
         gate = asyncio.Event()
@@ -486,7 +485,7 @@ class TestToolApproval:
     @pytest.mark.asyncio
     async def test_approval_preserves_integer_request_id(self):
         """Integer request_id must be passed through without str conversion."""
-        set_owner_id("U1")
+        set_owner("U1")
         set_allowed_users({"U1"})
         slack = MockSlackClient()
         provider = FakeProvider(
@@ -525,7 +524,7 @@ class TestToolApproval:
     @pytest.mark.asyncio
     async def test_approval_blocks_include_tool_input(self):
         """When tool_input is set, approval blocks include a code-block section."""
-        set_owner_id("U1")
+        set_owner("U1")
         set_allowed_users({"U1"})
         slack = MockSlackClient()
         gate = asyncio.Event()
@@ -827,7 +826,7 @@ class TestAllowedUsers:
     @pytest.mark.asyncio
     async def test_allowed_user_can_approve(self):
         """Allowed user's approve action is accepted."""
-        set_owner_id("U1")
+        set_owner("U1")
         set_allowed_users({"U1"})
         slack = MockSlackClient()
         provider = FakeProvider(
@@ -862,7 +861,7 @@ class TestAllowedUsers:
     @pytest.mark.asyncio
     async def test_unauthorized_user_rejected(self, monkeypatch):
         """Non-allowed user's approve action is silently rejected."""
-        set_owner_id("U1")
+        set_owner("U1")
         set_allowed_users({"U1"})
         import slack_runtime.handler as _h
         monkeypatch.setattr(_h, "_yolo_mode", False)
@@ -921,7 +920,7 @@ class TestAllowedUsers:
     @pytest.mark.asyncio
     async def test_w_u_prefix_cross_match(self):
         """User with W-prefix matches U-prefix owner via is_owner cross-match."""
-        set_owner_id("U1234")
+        set_owner("U1234")
         set_allowed_users({"U1234"})
         slack = MockSlackClient()
         provider = FakeProvider(
@@ -1146,10 +1145,10 @@ class TestAgentCommand:
         (agents_dir / "fyi-blog-writer.json").write_text('{"name": "fyi-blog-writer"}')
         # Stub out _set_default_agent to avoid real config writes
         monkeypatch.setattr("slack_runtime.handler._set_default_agent", lambda name: None)
-        set_owner_id("U_OWNER")
+        set_owner("U_OWNER")
         set_allowed_users({"U_OWNER"})
         yield
-        set_owner_id("")
+        set_owner("")
         set_allowed_users(set())
 
     @pytest.mark.asyncio
@@ -1353,12 +1352,12 @@ class TestPerThreadAgent:
         (agents_dir / "acme-agents-acme-dev.json").write_text('{"name": "acme-dev"}')
         (agents_dir / "sisyphus.json").write_text('{"name": "sisyphus"}')
         monkeypatch.setattr("slack_runtime.handler._set_default_agent", lambda name: None)
-        set_owner_id("U_OWNER")
+        set_owner("U_OWNER")
         set_allowed_users({"U_OWNER"})
         _thread_agents.clear()
         yield
         _thread_agents.clear()
-        set_owner_id("")
+        set_owner("")
         set_allowed_users(set())
 
     @pytest.mark.asyncio
@@ -1445,7 +1444,7 @@ class TestStopCommand:
     @pytest.mark.asyncio
     async def test_stop_kills_active_session(self):
         """!stop calls stop_turn and posts confirmation."""
-        set_owner_id("U_OWNER")
+        set_owner("U_OWNER")
         set_allowed_users({"U_OWNER"})
         slack = MockSlackClient()
         sessions = FakeSessionManager()
@@ -1459,7 +1458,7 @@ class TestStopCommand:
     @pytest.mark.asyncio
     async def test_stop_no_session_running(self):
         """!stop with no active session replies 'Nothing running.'."""
-        set_owner_id("U_OWNER")
+        set_owner("U_OWNER")
         set_allowed_users({"U_OWNER"})
         slack = MockSlackClient()
         sessions = FakeSessionManager()
@@ -1479,7 +1478,7 @@ class TestStopCommand:
         ``!stop`` and ``!title`` are available to any allowed user; now they are.
         ``test_stop_denied_for_unauthorized`` below is the fail-closed half.
         """
-        set_owner_id("U_OWNER")
+        set_owner("U_OWNER")
         set_allowed_users({"U_OWNER", "U_ALLOWED"})
         slack = MockSlackClient()
         sessions = FakeSessionManager()
@@ -1491,7 +1490,7 @@ class TestStopCommand:
     @pytest.mark.asyncio
     async def test_stop_denied_for_unauthorized(self):
         """!stop is denied for users not on the allowlist."""
-        set_owner_id("U_OWNER")
+        set_owner("U_OWNER")
         set_allowed_users({"U_OWNER"})
         slack = MockSlackClient()
         sessions = FakeSessionManager()
@@ -1505,7 +1504,7 @@ class TestStopCommand:
     @pytest.mark.asyncio
     async def test_stop_session_hard_outcome(self):
         """!stop posts hard-kill message when stop_turn returns 'hard'."""
-        set_owner_id("U_OWNER")
+        set_owner("U_OWNER")
         set_allowed_users({"U_OWNER"})
         slack = MockSlackClient()
         sessions = FakeSessionManager()
@@ -1518,7 +1517,7 @@ class TestStopCommand:
     @pytest.mark.asyncio
     async def test_slack_stop_posts_ephemeral_stopping_blocks(self):
         """!stop posts an ephemeral message with stopping blocks and Kill Now button."""
-        set_owner_id("U_OWNER")
+        set_owner("U_OWNER")
         set_allowed_users({"U_OWNER"})
         slack = MockSlackClient()
         sessions = FakeSessionManager()
@@ -1541,7 +1540,7 @@ class TestStopCommand:
     @pytest.mark.asyncio
     async def test_slack_stop_updates_ephemeral_on_soft_ack(self):
         """On soft ack, on_soft callback posts thread summary."""
-        set_owner_id("U_OWNER")
+        set_owner("U_OWNER")
         set_allowed_users({"U_OWNER"})
         slack = MockSlackClient()
         sessions = FakeSessionManager()
@@ -1554,7 +1553,7 @@ class TestStopCommand:
     @pytest.mark.asyncio
     async def test_slack_stop_updates_ephemeral_on_hard(self):
         """On hard kill, on_hard callback posts thread summary with reset note."""
-        set_owner_id("U_OWNER")
+        set_owner("U_OWNER")
         set_allowed_users({"U_OWNER"})
         slack = MockSlackClient()
         sessions = FakeSessionManager()
@@ -1567,7 +1566,7 @@ class TestStopCommand:
     @pytest.mark.asyncio
     async def test_slack_stop_posts_thread_summary(self):
         """After resolution, a non-ephemeral thread reply is posted."""
-        set_owner_id("U_OWNER")
+        set_owner("U_OWNER")
         set_allowed_users({"U_OWNER"})
         slack = MockSlackClient()
         sessions = FakeSessionManager()
@@ -1580,7 +1579,7 @@ class TestStopCommand:
     @pytest.mark.asyncio
     async def test_slack_stop_first_press_clears_queue(self):
         """!stop via stop_turn clears the queue (stop_turn side effect)."""
-        set_owner_id("U_OWNER")
+        set_owner("U_OWNER")
         set_allowed_users({"U_OWNER"})
         slack = MockSlackClient()
         sessions = FakeSessionManager()
@@ -1609,7 +1608,7 @@ class TestThreadTitle:
         """!title <text> calls set_thread_title and reacts."""
         from slack_runtime.handler import _titled_threads
 
-        set_owner_id("U_OWNER")
+        set_owner("U_OWNER")
         set_allowed_users({"U_OWNER"})
         slack = MockSlackClient()
         sessions = FakeSessionManager()
@@ -1625,7 +1624,7 @@ class TestThreadTitle:
     @pytest.mark.asyncio
     async def test_title_no_args_shows_usage(self):
         """!title with no text shows usage message."""
-        set_owner_id("U_OWNER")
+        set_owner("U_OWNER")
         set_allowed_users({"U_OWNER"})
         slack = MockSlackClient()
         sessions = FakeSessionManager()
@@ -1641,7 +1640,7 @@ class TestThreadTitle:
         ``is_allowed_user`` ignored the allowlist. ``test_title_denied_for_unauthorized``
         below is the fail-closed half.
         """
-        set_owner_id("U_OWNER")
+        set_owner("U_OWNER")
         set_allowed_users({"U_OWNER", "U_ALLOWED"})
         slack = MockSlackClient()
         sessions = FakeSessionManager()
@@ -1654,7 +1653,7 @@ class TestThreadTitle:
     @pytest.mark.asyncio
     async def test_title_denied_for_unauthorized(self):
         """!title is denied for users not on the allowlist."""
-        set_owner_id("U_OWNER")
+        set_owner("U_OWNER")
         set_allowed_users({"U_OWNER"})
         slack = MockSlackClient()
         sessions = FakeSessionManager()
@@ -1669,7 +1668,7 @@ class TestThreadTitle:
     @pytest.mark.asyncio
     async def test_title_truncated_to_80_chars(self):
         """!title truncates to 80 characters."""
-        set_owner_id("U_OWNER")
+        set_owner("U_OWNER")
         set_allowed_users({"U_OWNER"})
         slack = MockSlackClient()
         sessions = FakeSessionManager()
@@ -2125,7 +2124,7 @@ class TestCompactCommand:
 
     @pytest.fixture(autouse=True)
     def _setup_owner(self):
-        set_owner_id("U_OWNER")
+        set_owner("U_OWNER")
         set_allowed_users({"U_OWNER"})
 
     def _make_provider_with_compact(self, events=None):
@@ -2370,7 +2369,7 @@ class TestTheAgentsOwnCompactionIsSaid:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("streamed", [False, True], ids=["updated", "streamed"])
     async def test_the_thread_says_it_after_the_reply_in_compacts_words(self, streamed):
-        set_owner_id("U_OWNER")
+        set_owner("U_OWNER")
         set_allowed_users({"U_OWNER"})
         slack = MockSlackClient()
         slack._stream_enabled = streamed
