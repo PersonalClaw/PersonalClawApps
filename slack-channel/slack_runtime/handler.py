@@ -59,7 +59,7 @@ from personalclaw.sdk.channel import (
 )
 from personalclaw.sdk.channel import parse_title, session_restrictions, trust_mode
 from personalclaw.sdk.channel import answer_in_chat, approval_brief_for, approval_window_secs
-from personalclaw.sdk.channel import chat_grant
+from personalclaw.sdk.channel import chat_grant, screen_tool_call
 from personalclaw.sdk.channel import is_sensitive_path, redact_credentials, redact_exfiltration_urls
 from personalclaw.sdk.channel import sel
 from personalclaw.sdk.channel import SessionManager
@@ -2504,21 +2504,32 @@ async def handle_message(
                     accumulated = ""
 
             elif event.kind == EVENT_PERMISSION_REQUEST:
-                if context_builder:
-                    tool_result = context_builder.hooks.on_tool_call(event.title)
-                    if tool_result.action == TOOL_DENY:
-                        await client.reject_tool(event.request_id)
-                        accumulated += f"\n🚫 _Tool `{event.title}` blocked by hooks._"
-                        sel().log_tool_invocation(
-                            session_key=session_key,
-                            source="slack",
-                            tool_name=event.title,
-                            tool_kind=event.tool_kind,
-                            outcome="denied",
-                            request_id=event.request_id,
-                            error="hook_deny",
-                        )
-                        continue
+                # PersonalClaw's deny-list first, read on the command the call would run as well
+                # as on its title, which need not carry it: the screen PersonalClaw's own chat
+                # asks. A call it refuses is refused, never approved and never asked about.
+                tool_result = screen_tool_call(
+                    context_builder.hooks if context_builder else None,
+                    event.title,
+                    event.tool_input,
+                )
+                if tool_result.action == TOOL_DENY:
+                    await client.reject_tool(event.request_id)
+                    accumulated += f"\n🚫 _Tool `{event.title}` blocked by hooks._"
+                    # One of the shell's own controls (its denylist, a credential path) is a
+                    # `refused` row naming the control and its rule.
+                    control = tool_result.audit()
+                    sel().log_tool_invocation(
+                        session_key=session_key,
+                        source="slack",
+                        tool_name=event.title,
+                        tool_kind=event.tool_kind,
+                        outcome="refused" if control else "denied",
+                        request_id=event.request_id,
+                        tool_input=event.tool_input,
+                        error="hook_deny",
+                        metadata={"decided_by": control.get("control", "hook_deny"), **control},
+                    )
+                    continue
 
                 # PersonalClaw says who approves this call without asking, and this app approves
                 # no call on an answer of its own: an operator's pattern in the hook settings, what

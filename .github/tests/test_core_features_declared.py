@@ -29,7 +29,10 @@ The rails over every bundle, against the installed core:
    PersonalClaw without the feature the save is refused.
 7. every app whose shipped code offers a message to core's answer to the Morning triage digest
    (``services.answer_channel_reply``) declares ``digest-replies``: on a PersonalClaw without it the
-   services handle has no such method, so every direct message the app offers would fail.
+   services handle has no such method, so every direct message the app offers would fail;
+8. every app whose shipped code asks PersonalClaw's deny-list about a call before it approves or
+   asks about it (``screen_tool_call`` from ``personalclaw.sdk.channel``) declares
+   ``tool-call-screen``: on a PersonalClaw without it the app would not load at all.
 """
 
 from __future__ import annotations
@@ -74,6 +77,9 @@ _TURN_SOURCE_NAMES = frozenset({"save_conversation_turn", "arrived_on"})
 #: The apps that offer their direct messages to core's answer to the Morning triage digest, for
 #: rail 7.
 KNOWN_DIGEST_ANSWERERS = {"slack-channel"}
+
+#: The apps that ask PersonalClaw's deny-list about a call before they approve or ask, for rail 8.
+KNOWN_SCREENERS = {"slack-channel"}
 
 
 @pytest.fixture(autouse=True)
@@ -429,3 +435,47 @@ def test_the_scan_tells_an_app_that_offers_the_digests_answer_from_one_that_does
     )
     assert _offers_digest_replies(answerer) is True
     assert _offers_digest_replies(other) is False
+
+
+def _screens_each_call(bundle: Path) -> bool:
+    """Whether the bundle's shipped code takes ``screen_tool_call`` from the SDK."""
+    for path in sdk_contract.shipped_sources(bundle):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "personalclaw.sdk.channel":
+                if any(alias.name == "screen_tool_call" for alias in node.names):
+                    return True
+    return False
+
+
+def test_every_app_that_screens_a_call_with_the_deny_list_declares_it():
+    from personalclaw.sdk.features import TOOL_CALL_SCREEN
+
+    screeners = {bundle.name for bundle in BUNDLES if _screens_each_call(bundle)}
+    assert KNOWN_SCREENERS <= screeners, (
+        f"the scan no longer sees these apps screen a call with the deny-list: "
+        f"{sorted(KNOWN_SCREENERS - screeners)}"
+    )
+    undeclared = sorted(
+        name for name in screeners if TOOL_CALL_SCREEN not in _declared(ROOT / name)
+    )
+    assert undeclared == [], (
+        f"these apps screen a call with personalclaw.sdk.channel.screen_tool_call without "
+        f"declaring 'requiresCoreFeatures': ['{TOOL_CALL_SCREEN}'] in app.json: {undeclared}"
+    )
+
+
+def test_the_scan_tells_an_app_that_screens_a_call_from_one_that_does_not(tmp_path):
+    """Positive and negative control for rail 8."""
+    screener = tmp_path / "screener-app"
+    screener.mkdir()
+    (screener / "app.json").write_text('{"name": "screener-app", "version": "0.1.0"}')
+    (screener / "handler.py").write_text(
+        "from personalclaw.sdk.channel import chat_grant, screen_tool_call\n", encoding="utf-8"
+    )
+    other = tmp_path / "other-app"
+    other.mkdir()
+    (other / "app.json").write_text('{"name": "other-app", "version": "0.1.0"}')
+    (other / "handler.py").write_text("from personalclaw.sdk.channel import chat_grant\n")
+    assert _screens_each_call(screener) is True
+    assert _screens_each_call(other) is False

@@ -112,13 +112,20 @@ chat: under a ceiling saying every call asks, none of them runs a call here, and
 reaches a host off your allowed hosts is asked about whatever would have approved it. Any other call
 is asked on the thread's prompt.
 
-The answers come from PersonalClaw, so the app declares the core features that hand them over
-and hold the chat's Trust (`requiresCoreFeatures`: `approval-answers`, `chat-trust`), and a
-PersonalClaw without them will not install or update the app. A PersonalClaw from before that
-check sends no answers. A prompt it asks for then has no buttons and says so, telling you to
-answer it in PersonalClaw and to update PersonalClaw; a call in a thread this app runs itself,
-which nothing else can ask you about, does not run, and the thread says why. The gateway log says
-it once.
+**A call PersonalClaw's deny-list refuses is refused, never asked about.** Before anything approves
+or asks about a call, the app asks the deny-list PersonalClaw's own chat asks (Settings → Security
+→ Shell denylist and the hook chain's other refusals), read on the command the call would run as
+well as on its title, which need not carry it. A call it refuses does not run, whatever would have
+approved it, the thread says *🚫 Tool `…` blocked by hooks.*, and the security log records the
+refusal with the rule that made it.
+
+The answers come from PersonalClaw, so the app declares the core features that hand them over, hold
+the chat's Trust and screen each call (`requiresCoreFeatures`: `approval-answers`, `chat-trust`,
+`tool-call-screen`), and a PersonalClaw without them will not install or update the app. A
+PersonalClaw from before that check sends no answers. A prompt it asks for then has no buttons and
+says so, telling you to answer it in PersonalClaw and to update PersonalClaw; a call in a thread
+this app runs itself, which nothing else can ask you about, does not run, and the thread says why.
+The gateway log says it once.
 
 ## Compaction
 
