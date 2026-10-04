@@ -20,7 +20,13 @@ Four rails over every bundle, against the installed core:
 5. every app whose shipped code links a chat on its channel or asks which channel a chat is on
    (``link_channel(…, provider=…)``, ``set_channel_link(…, channel_provider=…)``,
    ``get_channel_provider``) declares ``links-name-their-channel``: on a PersonalClaw without it
-   the link is refused, and a chat resumed or imported there is linked nowhere.
+   the link is refused, and a chat resumed or imported there is linked nowhere;
+6. every app whose shipped code saves a conversation's turns or takes lines into a chat with where
+   they came from (``save_conversation_turn``, ``arrived_on`` from ``personalclaw.sdk.channel``)
+   declares ``turns-name-their-channel``, and every turn it saves names its sender and its channel
+   (``source_user=``, ``source_channel=``): memory takes a line as the owner's own words only when
+   its sender is the owner its channel keeps, so a turn saved without them is nobody's, and on a
+   PersonalClaw without the feature the save is refused.
 """
 
 from __future__ import annotations
@@ -55,6 +61,12 @@ _CHAT_TRUST_NAMES = frozenset({"answer_in_chat", "chat_grant"})
 
 #: The apps that link a chat on their own channel, for rail 5.
 KNOWN_CHANNEL_LINKERS = {"slack-channel"}
+
+#: The apps that save a conversation's turns or take lines into a chat themselves, for rail 6.
+KNOWN_TURN_WRITERS = {"slack-channel"}
+
+#: What a channel calls to save its turns or record where a line came from (rail 6).
+_TURN_SOURCE_NAMES = frozenset({"save_conversation_turn", "arrived_on"})
 
 
 @pytest.fixture(autouse=True)
@@ -283,3 +295,86 @@ def test_the_scan_tells_an_app_that_links_on_its_channel_from_one_that_does_not(
     )
     assert _links_on_its_channel(linker) is True
     assert _links_on_its_channel(other) is False
+
+
+def _calls(bundle: Path, name: str) -> list[tuple[str, ast.Call]]:
+    """Every call of *name* in the bundle's shipped code, by the file it is in."""
+    found = []
+    for path in sdk_contract.shipped_sources(bundle):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                func = node.func
+                called = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+                if called == name:
+                    found.append((f"{path.relative_to(bundle)}:{node.lineno}", node))
+    return found
+
+
+def _writes_turns(bundle: Path) -> bool:
+    """Whether the bundle's shipped code takes ``save_conversation_turn`` or ``arrived_on`` from
+    the SDK."""
+    for path in sdk_contract.shipped_sources(bundle):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "personalclaw.sdk.channel":
+                if any(alias.name in _TURN_SOURCE_NAMES for alias in node.names):
+                    return True
+    return False
+
+
+def test_every_app_that_saves_its_turns_declares_that_they_name_their_channel():
+    from personalclaw.sdk.features import TURNS_NAME_THEIR_CHANNEL
+
+    writers = {bundle.name for bundle in BUNDLES if _writes_turns(bundle)}
+    assert KNOWN_TURN_WRITERS <= writers, (
+        f"the scan no longer sees these apps save their turns: "
+        f"{sorted(KNOWN_TURN_WRITERS - writers)}"
+    )
+    undeclared = sorted(
+        name for name in writers if TURNS_NAME_THEIR_CHANNEL not in _declared(ROOT / name)
+    )
+    assert undeclared == [], (
+        f"these apps save a conversation's turns without declaring "
+        f"'requiresCoreFeatures': ['{TURNS_NAME_THEIR_CHANNEL}'] in app.json: {undeclared}"
+    )
+
+
+def test_every_turn_an_app_saves_names_its_sender_and_its_channel():
+    nameless = [
+        f"{bundle.name}/{where}"
+        for bundle in BUNDLES
+        for where, call in _calls(bundle, "save_conversation_turn")
+        if not {"source_user", "source_channel"} <= {kw.arg for kw in call.keywords}
+    ]
+    assert nameless == [], (
+        f"these turns are saved without their sender and channel, so memory reads them as "
+        f"nobody's: {nameless}"
+    )
+    assert _calls(ROOT / "slack-channel", "save_conversation_turn"), "the scan sees no turn saved"
+
+
+def test_the_scan_tells_a_turn_that_names_its_channel_from_one_that_does_not(tmp_path):
+    """Positive and negative control for rail 6."""
+    writer = tmp_path / "writer-app"
+    writer.mkdir()
+    (writer / "app.json").write_text('{"name": "writer-app", "version": "0.1.0"}')
+    (writer / "handler.py").write_text(
+        "from personalclaw.sdk.channel import save_conversation_turn\n\n\n"
+        "def keep(log, key, text, reply, user):\n"
+        "    save_conversation_turn(log, key, text, reply, source_thread=key, source_user=user,\n"
+        "                           source_channel='writer')\n"
+        "    save_conversation_turn(log, key, text, reply, source_thread=key)\n",
+        encoding="utf-8",
+    )
+    other = tmp_path / "other-app"
+    other.mkdir()
+    (other / "app.json").write_text('{"name": "other-app", "version": "0.1.0"}')
+    (other / "handler.py").write_text("from personalclaw.sdk.channel import redact\n")
+    assert _writes_turns(writer) is True
+    assert _writes_turns(other) is False
+    named = [
+        {"source_user", "source_channel"} <= {kw.arg for kw in call.keywords}
+        for _where, call in _calls(writer, "save_conversation_turn")
+    ]
+    assert named == [True, False]

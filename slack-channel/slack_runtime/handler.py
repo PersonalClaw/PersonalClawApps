@@ -1937,6 +1937,7 @@ async def handle_message(
                     hook_result.text,
                     source_thread=session_key,
                     source_user=user_id,
+                    source_channel="slack",
                 )
             return
 
@@ -2086,6 +2087,7 @@ async def handle_message(
                     spawn_reply,
                     source_thread=session_key,
                     source_user=user_id,
+                    source_channel="slack",
                 )
             return
 
@@ -2104,6 +2106,7 @@ async def handle_message(
                 cron_reply,
                 source_thread=session_key,
                 source_user=user_id,
+                source_channel="slack",
             )
         return
 
@@ -2639,6 +2642,7 @@ async def handle_message(
                 "[suppressed: trusted bot error]",
                 source_thread=session_key,
                 source_user=user_id,
+                source_channel="slack",
             )
         return
 
@@ -2697,6 +2701,8 @@ async def handle_message(
                 text,
                 accumulated,
                 source_thread=session_key,
+                source_user=user_id,
+                source_channel="slack",
             )
         return
 
@@ -2800,6 +2806,7 @@ async def handle_message(
             accumulated,
             source_thread=session_key,
             source_user=user_id,
+            source_channel="slack",
         )
         if consolidator and _stop_reason != STOP_REASON_CANCELLED:
             consolidator.maybe_consolidate(session_key)

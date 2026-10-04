@@ -1,6 +1,6 @@
 {
   "name": "slack-channel",
-  "version": "0.1.35",
+  "version": "0.1.36",
   "displayName": "Slack Channel",
   "description": "Slack workspace integration. Monitor channels, respond to mentions, and interact via Slack.",
   "icon": "Slack",
@@ -9,7 +9,8 @@
   "requiresCoreFeatures": [
     "approval-answers",
     "chat-trust",
-    "links-name-their-channel"
+    "links-name-their-channel",
+    "turns-name-their-channel"
   ],
   "tags": [
     "channel",

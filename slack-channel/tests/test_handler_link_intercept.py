@@ -265,7 +265,7 @@ class TestLinkedThreadIntercept:
                 "user",
                 "[REDACTED]",
                 "msg msg-u",
-                source={"source_thread": "t1", "source_user": "U1"},
+                source={"source_thread": "t1", "source_user": "U1", "source_channel": "slack"},
             )
             # LLM gets original text
             assert [t[1] for t in services.turns] == ["hello http://evil.com"]

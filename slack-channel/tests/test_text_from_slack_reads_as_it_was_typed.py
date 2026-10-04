@@ -159,6 +159,8 @@ def test_a_section_is_read_as_typed_and_rich_text_is_kept_as_slack_sends_it():
 def test_a_thread_linked_to_the_dashboard_is_imported_as_typed(monkeypatch):
     from slack_runtime import interactions
 
+    # A member this app lets in: a message from anyone else is imported fenced, as data.
+    monkeypatch.setattr(interactions, "is_allowed_user", lambda uid: uid == "U1")
     session = MagicMock()
     ds = MagicMock()
     ds.get_linked_session = MagicMock(return_value=None)

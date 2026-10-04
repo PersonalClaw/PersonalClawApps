@@ -862,8 +862,14 @@ async def _route_action_to_session(
 
 
 async def _import_thread_to_session(slack: Any, ds: Any, channel: str, thread_ts: str) -> Any:
-    """Fetch a Slack thread, redact messages, and import into a new dashboard session."""
-    from personalclaw.sdk.channel import save_session_to_history
+    """Fetch a Slack thread, redact messages, and import into a new dashboard session.
+
+    Each message is taken in as the door takes in one it hands a chat: recorded with the thread,
+    the member who wrote it and this channel (``arrived_on``), so memory takes only the owner's as
+    her own words, and fenced as data when this app does not let its writer in
+    (``fence_untrusted_inbound``), so the agent never reads a stranger's text as a request."""
+    from personalclaw.sdk.channel import arrived_on, save_session_to_history
+    from slack_runtime.transport import fence_untrusted_inbound
 
     # Idempotency: return existing session if already linked
     existing = ds.get_linked_session(thread_ts)
@@ -890,10 +896,20 @@ async def _import_thread_to_session(slack: Any, ds: Any, channel: str, thread_ts
     for m in msgs:
         is_bot = bool(m.get("bot_id")) or m.get("user") == bot_id
         role = "assistant" if is_bot else "user"
+        sender = str(m.get("user") or m.get("bot_id") or "")
         text_content = slack_text(m.get("text", ""))
         text_content, _ = redact_exfiltration_urls(text_content)
         text_content, _ = redact_credentials(text_content)
-        session.append(role, text_content, f"msg msg-{'a' if is_bot else 'u'}")
+        if not is_bot:
+            text_content = fence_untrusted_inbound(
+                text_content, sender, trusted=is_allowed_user(sender)
+            )
+        session.append(
+            role,
+            text_content,
+            f"msg msg-{'a' if is_bot else 'u'}",
+            source=arrived_on(thread_ts, sender, _PROVIDER),
+        )
     ds.link_channel(session.key, thread_ts, channel, provider=_PROVIDER)
     save_session_to_history(ds, session)
     ds.push_sessions_update()

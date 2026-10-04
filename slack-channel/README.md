@@ -218,6 +218,13 @@ where everyone in the channel sees the buttons. Anyone else's press, an allowlis
 included, answers nothing. They are told "Only the owner can answer this", and the press is
 logged to the security event log.
 
+Memory is the owner's alone too. Each turn this app saves names who wrote it and Slack, and
+PersonalClaw's memory takes a turn as the owner's own words only when its writer is the owner:
+what an allowlisted user writes in a thread, about the owner or anything else, is never learned
+as the owner's, and consolidation shows it as their words. A thread you link to the dashboard is
+imported the same way, and a message in it from someone this app does not let in reaches the
+agent fenced as data, as the inbound door hands such a message to a chat.
+
 ### Settings that currently do nothing
 
 Two keys are visible in the Configure form and have no effect. They are listed here rather
