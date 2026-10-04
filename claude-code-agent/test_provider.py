@@ -184,6 +184,25 @@ def test_the_session_claude_is_asked_for_carries_the_isolation(operator, monkeyp
     assert modes == ["default"] * len(sessions)
 
 
+def test_a_chat_keeps_claude_code_s_session_when_its_context_fills(operator, monkeypatch):
+    """🔴 Red before: the entry said nothing about compaction, so core restarted every Claude Code
+    session at the Auto-compact threshold, and the results of its earlier tool calls went with it,
+    though Claude Code compacts its own conversation. The runtime core builds from the entry says
+    it compacts itself, which keeps the session going, and the README says so."""
+    from personalclaw.llm.registry import get_default_registry
+
+    monkeypatch.setattr(provider, "resolve_command", lambda provision=False: ["/opt/bin/claude-agent-acp"])
+    monkeypatch.setattr(provider, "_resolve_claude_exec", lambda: "/opt/bin/claude")
+    for config in ({}, {"isolated_config": False}):
+        provider.create_provider(config)
+        registry = get_default_registry()
+        assert registry.get_entry("acp:claude-code").options["compacts_itself"] is True
+        runtime = registry.build("acp:claude-code", session_key="dashboard:chat-1")
+        assert runtime.compacts_automatically is True
+    readme = (Path(provider.__file__).parent / "README.md").read_text()
+    assert "compacts its own conversation when its context fills" in readme
+
+
 def test_the_app_text_says_what_the_code_does():
     manifest = json.loads((Path(provider.__file__).parent / "app.json").read_text())
     setting = manifest["provider"]["settingsSchema"]["properties"]["isolated_config"]

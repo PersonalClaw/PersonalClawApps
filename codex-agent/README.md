@@ -59,6 +59,15 @@ Install consent names each of these before anything installs (the manifest's `la
 - Switching it on installs the npm package `@agentclientprotocol/codex-acp` into your
   PersonalClaw folder (`acp-adapters`) when no copy is on this machine.
 
+## When its context fills
+
+Codex compacts its own conversation when its context reaches its compaction limit, 90% of the
+model's context window, or lower where your Codex config sets `model_auto_compact_token_limit`:
+a summary takes the place of its older turns, and the thread goes on. This app tells
+PersonalClaw so (`compacts_itself`), and PersonalClaw leaves the session to it at **Settings →
+Chat → Auto-compact threshold**: the chat keeps Codex's session, with the results of its
+earlier tool calls, instead of restarting it.
+
 ## Capability boundary
 
 ACP providers are not at native parity, and the differences are documented rather than implied.

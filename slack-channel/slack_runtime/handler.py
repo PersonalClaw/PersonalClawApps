@@ -2633,7 +2633,8 @@ async def handle_message(
             task.complete()
             sessions.record_success(session_key)
 
-        # Check context usage — fires background compaction at configured threshold, never blocks
+        # Context usage: at the Auto-compact threshold core restarts a session whose agent does
+        # not compact itself, in the background, and tells the thread why. Never blocks.
         sessions.check_context_usage(session_key, client)
 
     except AcpTimeoutError as e:

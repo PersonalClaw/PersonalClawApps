@@ -1,6 +1,6 @@
 {
   "name": "claude-code-agent",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "displayName": "Claude Code",
   "description": "Run Anthropic's Claude Code as an agent (acp:claude-code) via the Zed ACP adapter. It runs with a Claude config of its own that starts empty, and loads nothing from the folder it works in (no .claude settings, .mcp.json servers, CLAUDE.md or skills), so no auto-approve rule of yours or of a repository's comes along: apart from the file reads and read-only commands Claude Code allows itself, every tool asks through PersonalClaw's approval gate. Sign in to Claude once for it (Settings \u2192 Providers \u2192 Claude Code \u2192 Sign in); PersonalClaw stores no key. Turn off Isolated Claude settings to use your own ~/.claude, rules included, and the Claude settings of the folder it works in. Enabling it installs its ACP adapter (@agentclientprotocol/claude-agent-acp) from npm into your PersonalClaw home when no copy is installed; a failed install says why on its card, with Retry.",
   "icon": "SquareTerminal",

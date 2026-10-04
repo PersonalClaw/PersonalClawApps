@@ -64,6 +64,24 @@ def test_the_cli_is_handed_the_folder_that_picks_its_provider(monkeypatch, tmp_p
     assert handed["CODEX_PATH"] == "/opt/host/codex", "what the app computed still is"
 
 
+def test_a_chat_keeps_codex_s_session_when_its_context_fills(monkeypatch):
+    """🔴 Red before: the entry said nothing about compaction, so core restarted every Codex
+    session at the Auto-compact threshold, and the results of its earlier tool calls went with it,
+    though Codex compacts its own conversation at its own limit. The runtime core builds from the
+    entry says it compacts itself, which keeps the session going, and the README says so."""
+    from personalclaw.llm.registry import get_default_registry
+
+    monkeypatch.setattr(provider, "resolve_command", lambda provision=False: ["/opt/bin/codex-acp"])
+    monkeypatch.setattr(provider, "_resolve_codex_exec", lambda: "/opt/host/codex")
+    provider.create_provider({})
+    registry = get_default_registry()
+    assert registry.get_entry("acp:codex").options["compacts_itself"] is True
+    runtime = registry.build("acp:codex", session_key="dashboard:chat-1")
+    assert runtime.compacts_automatically is True
+    readme = (Path(provider.__file__).parent / "README.md").read_text()
+    assert "compacts its own conversation when its context reaches its compaction limit" in readme
+
+
 def test_the_readme_names_every_variable_the_app_passes():
     readme = (Path(provider.__file__).parent / "README.md").read_text()
     assert [name for name in provider.PROVIDER_ENV if f"`{name}`" not in readme] == []

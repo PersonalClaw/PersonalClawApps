@@ -621,6 +621,15 @@ the `_meta` of every `session/new` and `session/load` it sends from the app's en
 `claude-code-agent` asks for Claude Code's `user` setting source alone while Isolated Claude
 settings is on, so a session loads nothing from the folder it works in.
 
+An agent app whose CLI compacts its own conversation when its context fills says so with
+`register_acp_cli_entry(compacts_itself=True)`. Core then leaves the CLI's sessions alone at
+the Auto-compact threshold (Settings → Chat), so a chat keeps the CLI's session, with the results
+of its earlier tool calls. An app that does not say it gets the safe default: a session that
+crosses the threshold is restarted from the chat's own history, since core cannot compact a
+conversation the CLI holds, and the chat says it was restarted and why. Declare it only for a CLI
+you have read compacting itself under ACP: `claude-code-agent` and `codex-agent` do, and their
+`COMPACTS_ITSELF` comments say what they read.
+
 Core holds what it does for your app to this list. `provision_acp_adapter` installs no package
 the manifest does not list, and `register_acp_cli_entry` refuses a CLI from an app that lists no
 program, whose adapter's engine (`requires_executable`) it does not list, or whose adapter runs

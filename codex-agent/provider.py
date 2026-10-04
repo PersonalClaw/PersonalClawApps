@@ -62,6 +62,15 @@ _CODEX_BIN_NAMES = ["codex"]
 #: credential-shaped name anyway.
 PROVIDER_ENV: tuple[str, ...] = ("CODEX_HOME",)
 
+#: Codex compacts its own conversation once its context reaches its compaction limit, mid-turn
+#: and before a turn, replacing the older turns with a summary and going on in the same thread.
+#: The limit is 90% of the model's context window, or lower where its config sets
+#: ``model_auto_compact_token_limit``. Its turn loop does that under every front end, the app
+#: server this adapter drives included. Said to core so the session is left to it at the
+#: Auto-compact threshold, instead of being restarted and losing the results of its earlier tool
+#: calls.
+COMPACTS_ITSELF = True
+
 
 # ── model selection ─────────────────────────────────────────────────────────
 # No hardcoded model list or default id (de-hardcode directive). The codex-acp
@@ -174,6 +183,7 @@ def create_provider(config: dict | None = None):
         model=model,
         env=env,
         env_passthrough=list(PROVIDER_ENV),
+        compacts_itself=COMPACTS_ITSELF,
         extension=EXTENSION,
         login_command=login_command(),
         # codex-acp is a thin protocol shim — the actual model turn is delegated

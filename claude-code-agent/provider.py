@@ -104,6 +104,14 @@ PROVIDER_ENV: tuple[str, ...] = (
 # ``permissions.allow`` rule the operator had, while the app said it was isolated. And a
 # ``CLAUDE_CONFIG_DIR`` the operator had set became the "isolated" root and was rewritten.
 
+#: Claude Code compacts its own conversation when its context fills, in a chat here as in a
+#: terminal: the Agent SDK the adapter runs it through compacts automatically (its
+#: ``autoCompactEnabled`` setting, on unless turned off in Claude Code's own settings, and the
+#: adapter leaves it on), replacing the older turns with a summary and going on in the same
+#: session. Said to core so the session is left to it at the Auto-compact threshold, instead of
+#: being restarted and losing the results of its earlier tool calls.
+COMPACTS_ITSELF = True
+
 #: The setting that turns isolation off (``settingsSchema.isolated_config``).
 _ISOLATED_SETTING = "isolated_config"
 
@@ -276,6 +284,7 @@ def create_provider(config: dict | None = None):
         env=env,
         env_passthrough=list(PROVIDER_ENV),
         session_meta=session_meta,
+        compacts_itself=COMPACTS_ITSELF,
         extension=EXTENSION,
         login_command=login_command(isolated=isolated),
         # claude-agent-acp delegates the model turn to the separate Claude Code

@@ -90,6 +90,15 @@ Install consent names each of these before anything installs (the manifest's `la
 - Switching it on installs the npm package `@agentclientprotocol/claude-agent-acp` into your
   PersonalClaw folder (`acp-adapters`) when no copy is on this machine.
 
+## When its context fills
+
+Claude Code compacts its own conversation when its context fills: a summary takes the place of
+its older turns, and the session goes on, as it does in a terminal. Its automatic compaction is
+on unless you turned it off in Claude Code's own settings. This app tells PersonalClaw so
+(`compacts_itself`), and PersonalClaw leaves the session to it at **Settings → Chat →
+Auto-compact threshold**: the chat keeps Claude Code's session, with the results of its earlier
+tool calls, instead of restarting it.
+
 ## Capability boundary
 
 Running an agent over ACP is **not** the same as PersonalClaw's native runtime: some host
