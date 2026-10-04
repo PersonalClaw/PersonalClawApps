@@ -43,6 +43,8 @@ def _make_mocks():
     sessions.get_or_create = AsyncMock(return_value=(mock_client, True, False))
     sessions.set_channel = AsyncMock()
     sessions.set_channel_link = MagicMock()
+    # A thread linked to no dashboard chat, as the session manager answers it: synchronously.
+    sessions.get_session_for_thread = MagicMock(return_value=None)
     sessions.get_pid = MagicMock(return_value=None)
     sessions.release = AsyncMock()
 

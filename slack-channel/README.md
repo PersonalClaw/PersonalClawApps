@@ -250,6 +250,13 @@ as the owner's, and consolidation shows it as their words. A thread you link to 
 imported the same way, and a message in it from someone this app does not let in reaches the
 agent fenced as data, as the inbound door hands such a message to a chat.
 
+Nor does anyone else change it. Each turn this app runs names whose message it answers, so when an
+allowlisted user asks the agent to remember or forget something, nothing is written on their
+say-so: the owner is asked where every approval reaches her (PersonalClaw, and the channel she has
+approvals sent to), and only what she allows is kept, as her own. The agent is told so. A change
+the agent's own file or shell tools would make to one of her memory documents in such a turn is
+refused before it runs, whatever pattern or Trust would have approved it.
+
 ### Settings that currently do nothing
 
 Two keys are visible in the Configure form and have no effect. They are listed here rather

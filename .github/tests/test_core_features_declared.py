@@ -35,7 +35,12 @@ The rails over every bundle, against the installed core:
    ``tool-call-screen``: on a PersonalClaw without it the app would not load at all;
 9. every app whose shipped code reads a model's stream inside ``closing_stream`` (imported from
    ``personalclaw.sdk.model``) declares ``closing-streams``: on a PersonalClaw without it the app
-   would not load at all.
+   would not load at all;
+10. every app whose shipped code saves a conversation's turns runs them itself, so it names whose
+    message each turn answers (``turn_asked_by`` from ``personalclaw.sdk.channel``) and declares
+    ``turns-name-who-asked``: what the turn's tools would change of the owner's memory waits for
+    her own word unless she sent it, and on a PersonalClaw without the feature the app does not
+    load.
 """
 
 from __future__ import annotations
@@ -531,3 +536,51 @@ def test_the_scan_tells_an_app_that_closes_its_streams_from_one_that_does_not(tm
     (other / "provider.py").write_text("from personalclaw.sdk.model import EVENT_TEXT_CHUNK\n")
     assert _closes_its_streams(closer) is True
     assert _closes_its_streams(other) is False
+
+
+def _names_who_asked(bundle: Path) -> bool:
+    """Whether the bundle's shipped code takes ``turn_asked_by`` from the SDK."""
+    for path in sdk_contract.shipped_sources(bundle):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "personalclaw.sdk.channel":
+                if any(alias.name == "turn_asked_by" for alias in node.names):
+                    return True
+    return False
+
+
+def test_every_app_that_runs_its_turns_names_who_asked_for_each_and_declares_it():
+    from personalclaw.sdk.features import TURNS_NAME_WHO_ASKED
+
+    runners = {b.name for b in BUNDLES if _calls(b, "save_conversation_turn")}
+    assert KNOWN_TURN_WRITERS <= runners, (
+        f"the scan no longer sees these apps run their turns: {sorted(KNOWN_TURN_WRITERS - runners)}"
+    )
+    unnamed = sorted(name for name in runners if not _names_who_asked(ROOT / name))
+    assert unnamed == [], (
+        f"these apps run a conversation's turns without saying whose message each answers "
+        f"(turn_asked_by), so the owner's memory takes what a colleague's turn asks for: {unnamed}"
+    )
+    undeclared = sorted(
+        name for name in runners if TURNS_NAME_WHO_ASKED not in _declared(ROOT / name)
+    )
+    assert undeclared == [], (
+        f"these apps name who asked for their turns without declaring "
+        f"'requiresCoreFeatures': ['{TURNS_NAME_WHO_ASKED}'] in app.json: {undeclared}"
+    )
+
+
+def test_the_scan_tells_an_app_that_names_who_asked_from_one_that_does_not(tmp_path):
+    """Positive and negative control for rail 10."""
+    runner = tmp_path / "runner-app"
+    runner.mkdir()
+    (runner / "app.json").write_text('{"name": "runner-app", "version": "0.1.0"}')
+    (runner / "handler.py").write_text(
+        "from personalclaw.sdk.channel import arrived_on, turn_asked_by\n", encoding="utf-8"
+    )
+    other = tmp_path / "other-app"
+    other.mkdir()
+    (other / "app.json").write_text('{"name": "other-app", "version": "0.1.0"}')
+    (other / "handler.py").write_text("from personalclaw.sdk.channel import arrived_on\n")
+    assert _names_who_asked(runner) is True
+    assert _names_who_asked(other) is False

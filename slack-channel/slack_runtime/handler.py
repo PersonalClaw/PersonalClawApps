@@ -18,6 +18,7 @@ writes.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -45,7 +46,7 @@ from personalclaw.sdk.channel import (
 from personalclaw.sdk.channel import ConversationLog, HistoryConsolidator
 from personalclaw.sdk.channel import chore_usage, run_chore
 from personalclaw.sdk.channel import HOOK_REPLY, TOOL_DENY, validate_file_path
-from personalclaw.sdk.channel import save_conversation_turn
+from personalclaw.sdk.channel import arrived_on, save_conversation_turn, turn_asked_by
 from personalclaw.sdk.channel import (
     COMPACTION_AUTOMATIC,
     EVENT_COMPACTION_STATUS,
@@ -2239,6 +2240,10 @@ async def handle_message(
         )
         session_key = linked_session_key
 
+    # Whose message this turn answers, as its line is saved: while the turn runs, what its tools
+    # would change of the owner's memory waits for her own word unless she sent it.
+    _turn = contextlib.ExitStack()
+    _turn.enter_context(turn_asked_by(session_key, arrived_on(session_key, user_id, "slack")))
     try:
         task.start()
         _agent = _thread_agents.get(session_key) or channel_agent or _get_default_agent() or None
@@ -2653,6 +2658,7 @@ async def handle_message(
         task.fail("unexpected")
         await sessions.record_failure(session_key)
     finally:
+        _turn.close()
         if _acquired:
             sessions.release(session_key)
         status_ctrl.finalize(error=_had_error)
