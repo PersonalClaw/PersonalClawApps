@@ -2,9 +2,11 @@
 // two declare the SAME closed vocabulary, so this file and the Python module cannot drift.
 //
 // The gateway drives the operator's own browser through exactly these five verbs, carried over
-// a CDP page-target endpoint the browser exposes on loopback. The vocabulary is CLOSED: a verb
+// the page-target endpoint of a tab the run opened for itself. The vocabulary is CLOSED: a verb
 // outside it is refused, never guessed, because a wider surface is a wider blast radius on a
-// session the operator is already logged into.
+// session the operator is already logged into. Every verb is ADDRESSED to one run, by the id core
+// gave that run's tab, and acts on that run's own tab and nothing else: never on whichever tab
+// happens to have focus.
 
 export const CONTRACT_METHODS = ["navigate", "read-outline", "click", "type", "close"];
 
@@ -16,7 +18,25 @@ export const REQUIRED_PARAMS = {
   "close": [],
 };
 
-export function buildRequest(method, params = {}) {
+// What the browser may report about a run's tab once core has asked for one: it could not open a
+// tab of the run's own, the person closed it (the tab, its group or its window), or the person
+// brought it to the front to take over.
+export const RUN_TAB_REPORTS = ["unavailable", "closed", "taken_over"];
+
+// A run's id is core's, and it rides in a route path, so it is held to a closed alphabet.
+export function isRunId(value) {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value);
+}
+
+// Validate one addressed request: the run it is for, a verb from the closed vocabulary, and that
+// verb's required params. Returns `{ run, method, params }`.
+export function buildRequest(message) {
+  const run = message && message.run;
+  const method = message && message.method;
+  const params = (message && message.params) || {};
+  if (!isRunId(run)) {
+    throw new Error("a contract request must name the run whose tab it acts on");
+  }
   if (!CONTRACT_METHODS.includes(method)) {
     throw new Error(`unknown contract method ${method}; the vocabulary is ${CONTRACT_METHODS}`);
   }
@@ -26,7 +46,7 @@ export function buildRequest(method, params = {}) {
       throw new Error(`${method} is missing required param ${key}`);
     }
   }
-  return { method, params };
+  return { run, method, params };
 }
 
 // ── the loopback rail (mirrors connector.py) ────────────────────────────────────────────────
@@ -58,8 +78,8 @@ export function isLoopbackHttpUrl(url) {
   }
 }
 
-// The write body sent to /api/browse/connector — refuses a non-loopback endpoint so a public
-// cdp_url can never leave the bundle.
+// The body that announces a run's own tab — refuses a non-loopback endpoint so a public cdp_url
+// can never leave the bundle.
 export function announcePayload(cdpUrl) {
   const value = (cdpUrl || "").trim();
   if (!isLoopbackWsUrl(value)) {
@@ -68,11 +88,26 @@ export function announcePayload(cdpUrl) {
   return { cdp_url: value };
 }
 
-// The gateway route to announce to — refuses a non-loopback gateway (loopback rail only).
-export function announceUrl(gatewayBaseUrl) {
+function gatewayBase(gatewayBaseUrl) {
   const base = (gatewayBaseUrl || "").replace(/\/+$/, "");
   if (!isLoopbackHttpUrl(base)) {
     throw new Error("the connector announces to a loopback gateway only");
   }
-  return `${base}/api/browse/connector`;
+  return base;
+}
+
+// The route that attaches this browser as the connector — refuses a non-loopback gateway.
+export function announceUrl(gatewayBaseUrl) {
+  return `${gatewayBase(gatewayBaseUrl)}/api/browse/connector`;
+}
+
+// The route that lists the runs which asked this browser for a tab of their own.
+export function runTabsUrl(gatewayBaseUrl) {
+  return `${announceUrl(gatewayBaseUrl)}/tabs`;
+}
+
+// The route one run's tab is announced and reported on.
+export function runTabUrl(gatewayBaseUrl, runId) {
+  if (!isRunId(runId)) throw new Error("not a run id");
+  return `${runTabsUrl(gatewayBaseUrl)}/${runId}`;
 }

@@ -91,6 +91,10 @@ jobs:
       PERSONALCLAW_SKIP_APP_BACKENDS: "1"
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        # browser-connector's tests drive its extension worker with Node's own test runner.
+        with:
+          node-version: "24"
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
@@ -207,6 +211,10 @@ jobs:
       PERSONALCLAW_SKIP_APP_BACKENDS: "1"
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        # The verifier runs each bundle's pytest, browser-connector's Node-driven worker tests included.
+        with:
+          node-version: "24"
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
@@ -552,7 +560,7 @@ jobs:
     # build` left a user without Node a page that could not load). The bundle is what users
     # run and the sources are what reviewers read, so this job rebuilds every UI from its
     # lockfile and fails when a committed bundle differs, stale or edited by hand. Rides here
-    # with the other cross-app sweeps: the `tests` job runs pytest per bundle and has no Node.
+    # with the other cross-app sweeps: the `tests` job runs pytest per bundle, never npm.
     # The script's vacuity floor fails a scan that found nothing to compare.
     runs-on: ubuntu-latest
     steps:

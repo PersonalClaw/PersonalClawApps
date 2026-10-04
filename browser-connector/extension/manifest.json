@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "PersonalClaw Browser Connector",
-  "version": "0.1.0",
-  "description": "Attach this browser to your PersonalClaw gateway as the user_browser target. Talks to the gateway over loopback only; opens no listening surface of its own.",
+  "version": "0.1.1",
+  "description": "Lets your PersonalClaw gateway run browse tasks in tabs they open for themselves. Loopback only; no listening socket.",
   "background": {
     "service_worker": "background.js",
     "type": "module"
@@ -16,8 +16,7 @@
   ],
   "permissions": [
     "tabs",
-    "activeTab",
-    "scripting",
+    "tabGroups",
     "storage"
   ],
   "host_permissions": [
