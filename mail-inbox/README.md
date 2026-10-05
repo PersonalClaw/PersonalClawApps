@@ -45,10 +45,11 @@ mail is irreversible and leaves your machine, so it is off by default. See
   told of it and given its text (a PDF's, a Word or PowerPoint document's) inside a fence.
   Its bytes are never part of the message body.
 - **Prompt-bound addresses.** A purpose-specific receiving address can carry a stored
-  prompt ("build my itinerary and add calendar entries"). Mail to it becomes that prompt
-  followed by the mail wrapped in an `<untrusted_content source="mail:<address>">` fence,
-  so the instruction is yours and the mail stays data. Each bound address has its own
-  sender allowlist that **narrows** the app-wide one.
+  prompt ("build my itinerary and add calendar entries"). Mail to it carries that prompt
+  as your instruction, beside the mail: an automation on the address runs your prompt,
+  outside any fence, with the mail after it in an `<untrusted_content>` fence PersonalClaw
+  puts around it, so the instruction is yours and the mail stays data. Each bound address
+  has its own sender allowlist that **narrows** the app-wide one.
 - **Replies, drafted by default.** A reply is composed as a properly threaded message
   (`In-Reply-To` + `References`) and written to disk as a real `.eml`. Nothing is sent
   until you turn sending on — see [Replies](#replies-draft-by-default).
@@ -114,28 +115,33 @@ JSON object per address:
 - `address` — matched **exactly** (case-insensitively) against the mail's `Delivered-To`,
   `X-Original-To`, `To` and `Cc` headers. So a Gmail `+suffix`, a catch-all domain, and a
   per-purpose mailbox all work; `nottravel@…` never binds to `travel@…`.
-- `default_prompt` — **your** instruction. It is the only trusted text in the composed
-  prompt. A row with no prompt (or `enabled: false`) does not bind at all: the mail is
+- `default_prompt` — **your** instruction, and the only text a run takes as one. The
+  manifest declares it an instruction (`x-meta.instruction`), so PersonalClaw takes the
+  prompt this app hands over with a mail as yours only when your settings hold it word for
+  word. A row with no prompt (or `enabled: false`) does not bind at all: the mail is
   surfaced as ordinary mail rather than half-firing.
 - `allow_senders` — a per-address allowlist that **narrows** the app-wide one. It is
   checked after it, so it can only ever remove senders. An **empty list fires nothing**,
   and an unlisted sender records a `mail_address_sender_rejected` security event and is
   dropped entirely (no inbox item, no event, nothing fired).
 
-Mail that binds becomes:
+Mail that binds reaches the Inbox as the mail alone, and carries your prompt beside it
+(`IncomingMessage.instruction`). An automation the mail starts is handed:
 
 ```
 <your default_prompt>
 
-<untrusted_content source="mail:you+travel@gmail.com">
+<untrusted_content source=trigger:… source_type=event:inbox:message_received source_id=…>
 Subject: Your flight is confirmed
 …the mail body…
 </untrusted_content>
 ```
 
-The subject is inside the fence too — it is as sender-controlled as the body. Mail that
-tries to *close* the fence and append instructions has its markers escaped, so the
-injected text stays inside the fence as data.
+Your prompt is outside the fence; the mail is inside one, fenced once, by PersonalClaw,
+naming where it came from. This app fences nothing itself. The subject is inside the fence
+too — it is as sender-controlled as the body. Mail that tries to *close* the fence and
+append instructions has its markers escaped, so the injected text stays inside the fence
+as data, and mail the injection screen refuses starts nothing, prompt or no prompt.
 
 ### Worked example: Gmail filter → bound address → agent run
 
@@ -147,10 +153,8 @@ injected text stays inside the fence as data.
    whose mail should be able to start a run).
 3. **Triggers page** → *New trigger* → kind **Data event** → pattern **InboxAddress** →
    address glob `you+travel@gmail.com` → action **invoke-agent** with the task template
-   `$value`. `$value` is the composed prompt-plus-fenced-mail above, so the run executes
-   your stored prompt grounded in the mail. (The platform fences an event payload only
-   when it is not already fenced, so this app's `mail:<address>` attribution reaches the
-   action unchanged rather than being re-wrapped.)
+   `$value`. `$value` is your prompt followed by the fenced mail above, so the run executes
+   your stored prompt grounded in the mail.
 4. Send yourself a booking confirmation from an allowlisted sender. The agent runs the
    stored prompt against the fenced mail; a mail to the same address from any other
    sender does nothing at all.
@@ -211,10 +215,10 @@ error text is scrubbed of the password before it reaches a log.
 
 A mail-triggered turn is attacker-reachable by anyone who can get mail to an allowlisted
 address, so mail bodies are treated as **untrusted data**: extracted text is carried raw
-into the inbox and fenced at prompt-composition time — once, in one place
-(`addresses.compose_prompt`), never in the MIME extractor, so text is never double-fenced.
-The fail-closed allowlist bounds *who* can reach the agent (twice over for a bound
-address); fencing bounds *what their content can do*. A compromised
+into the inbox, and PersonalClaw fences it wherever a model reads it, once; this app fences
+nothing, and a bound address's prompt rides beside the mail, never in it. The fail-closed
+allowlist bounds *who* can reach the agent (twice over for a bound address); fencing bounds
+*what their content can do*. A compromised
 allowlisted sender bypasses the allowlist by definition — the allowlist is not
 sufficient on its own; fencing, budgets, and the storm cap are what bound the damage.
 

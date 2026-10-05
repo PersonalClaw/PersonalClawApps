@@ -190,7 +190,8 @@ engine packages go in `dependencies.sidecarDependencies` (see
 
 `settingsSchema` properties support `x-meta` per field:
 `label`, `help`, `placeholder`, `sensitive: true` (secret handling), `tags: ["advanced"]`
-(collapsed by default), and `enum` for dropdowns. Describe a structured field and
+(collapsed by default), `instruction: true` (words the owner writes for the agent to follow,
+see below), and `enum` for dropdowns. Describe a structured field and
 the form edits it with controls instead of a JSON box: an `array` whose `items`
 are strings is chips, and one whose `items` are an `object` with `properties` is
 a row per entry. An `object` with `properties` is a control per field (a field
@@ -199,6 +200,18 @@ entries are keyed is a row per entry, its `additionalProperties` saying what eac
 value is and its `propertyNames` `x-meta` naming the key. Values the user saves land in
 `<home>/apps/<name>/data/config.json` and are read back via
 `personalclaw.sdk.settings.ProviderSettings`.
+
+A string setting declared `instruction: true` (a column of a table of rows included) holds the
+owner's instruction for the agent, such as the prompt `mail-inbox` runs for mail to one of its
+addresses. An inbox source hands such an instruction over beside a message's words, never in
+them: `IncomingMessage(text=<the message as it arrived>, instruction=<her setting's value>)`,
+from `personalclaw.sdk.inbox`. PersonalClaw takes it as hers only when your app's settings hold
+it word for word in a setting declared an instruction, or your manifest gives that setting it as
+its `default`; anything else handed over is dropped and recorded in the Security log. A run on
+the message is handed her instruction first, outside any fence, then the message fenced once by
+PersonalClaw. So never fence a message's text yourself, and never put an instruction in it: a
+fence of yours, and the prompt beside it, would be wrapped again as data. Declare the
+`message-instructions` core feature.
 
 #### A folder in PersonalClaw's home is asked for, never spelled
 
@@ -542,6 +555,7 @@ do without, ask `core_has` and say so when it is missing.
 | `chat-trust` | a channel that runs a conversation itself keeps no trust of its own: its prompt offers the chat's answers (`approval_brief_for(event, chat=...)`), Allow for this chat becomes the Trust of PersonalClaw's chat for the conversation (`answer_in_chat`), and each call asks which of that chat's grants answers it (`chat_grant`) | a channel app that runs its own turns: `slack-channel` |
 | `links-name-their-channel` | a chat's link to a channel thread names the channel it is on, where the chat answers: `link_channel(chat, thread, channel_id, provider=...)` links a chat on your channel (moving it off any thread it was on; the owner's own DM it left is told where it went), and `SessionManager.get_channel_provider(key)` says which channel a chat is on | a channel app that links a chat to one of its threads itself: `slack-channel` |
 | `tool-call-screen` | a channel that runs a conversation itself asks PersonalClaw's deny-list about each call before it approves or asks about it (`screen_tool_call(hooks, event.title, event.tool_input)`, the hook chain's verdict read on the command the call would run as well as on its title) and refuses a call it refuses, never putting it on its prompt | a channel app that runs its own turns: `slack-channel` |
+| `message-instructions` | an inbox source hands PersonalClaw the owner's instruction beside a message's words (`IncomingMessage.instruction`), held by a setting declared `x-meta.instruction`, and a run on the message is handed it outside any fence, then the message fenced once | an inbox app whose source hands one over: `mail-inbox` |
 | `closing-streams` | a model's stream your app reads is closed the moment it stops reading: read inside `personalclaw.sdk.model.closing_stream`, it is closed by any way out of the block, and an agent CLI's turn left part way is told to stop and its session takes the next prompt at once | an app that reads a model's stream (`stream`, `stream_command`, `complete`): `slack-channel`, `code-review`, `issue-radar` |
 
 A PersonalClaw from before core features cannot read the field, so an app also checks what it
@@ -551,8 +565,9 @@ every bundle's names to the ones the installed PersonalClaw offers, every app wh
 offers the brief's answers to declaring `approval-answers`, every app that gives or reads a
 chat's Trust to declaring `chat-trust`, every app that links a chat on its own channel to
 declaring `links-name-their-channel`, every app that screens a call with the deny-list to
-declaring `tool-call-screen`, and every app that reads a model's stream inside `closing_stream`
-to declaring `closing-streams`.
+declaring `tool-call-screen`, every app that reads a model's stream inside `closing_stream`
+to declaring `closing-streams`, and every app whose source hands over a message's instruction to
+declaring `message-instructions`.
 `.github/tests/test_model_streams_are_read_inside_closing_stream.py` holds every app to reading a
 model's stream that way: an `async for` over a provider's stream, or an `anext` of one, anywhere
 else fails it.

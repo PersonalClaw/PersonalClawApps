@@ -52,6 +52,10 @@ The rails over every bundle, against the installed core:
     ``pre-tool-hooks``: on a PersonalClaw without it the app would not load at all. And every app
     that screens a call its own turn asks about (rail 8) runs that turn's approvals itself, so it
     asks the hooks too, at the step every path in PersonalClaw asks them.
+14. every app whose shipped code hands PersonalClaw the owner's instruction beside a message's
+    words (``IncomingMessage(…, instruction=…)`` from ``personalclaw.sdk.inbox``) declares
+    ``message-instructions``: on a PersonalClaw without it the message has no such field, so
+    every poll that carries one fails.
 """
 
 from __future__ import annotations
@@ -112,6 +116,9 @@ KNOWN_TERMINAL_READERS = {"bedrock-models"}
 #: The apps that ask PersonalClaw's blocking hooks about a call before they approve or ask, for
 #: rail 13.
 KNOWN_HOOK_ASKERS = {"slack-channel"}
+
+#: The apps that hand over the owner's instruction beside a message's words, for rail 14.
+KNOWN_INSTRUCTION_CARRIERS = {"mail-inbox"}
 
 
 @pytest.fixture(autouse=True)
@@ -746,3 +753,59 @@ def test_the_scan_tells_an_app_that_asks_the_hooks_from_one_that_does_not(tmp_pa
     (other / "handler.py").write_text("from personalclaw.sdk.channel import screen_tool_call\n")
     assert _asks_the_hooks(asker) is True
     assert _asks_the_hooks(other) is False
+
+
+def _hands_over_an_instruction(bundle: Path) -> bool:
+    """Whether the bundle's shipped code builds an ``IncomingMessage`` with an ``instruction``."""
+    for path in sdk_contract.shipped_sources(bundle):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            callee = node.func
+            name = callee.id if isinstance(callee, ast.Name) else getattr(callee, "attr", "")
+            if name == "IncomingMessage" and any(kw.arg == "instruction" for kw in node.keywords):
+                return True
+    return False
+
+
+def test_every_app_that_hands_over_a_message_s_instruction_declares_it():
+    from personalclaw.sdk.features import MESSAGE_INSTRUCTIONS
+
+    carriers = {bundle.name for bundle in BUNDLES if _hands_over_an_instruction(bundle)}
+    assert KNOWN_INSTRUCTION_CARRIERS <= carriers, (
+        f"the scan no longer sees these apps hand over a message's instruction: "
+        f"{sorted(KNOWN_INSTRUCTION_CARRIERS - carriers)}"
+    )
+    undeclared = sorted(
+        name for name in carriers if MESSAGE_INSTRUCTIONS not in _declared(ROOT / name)
+    )
+    assert undeclared == [], (
+        f"these apps hand PersonalClaw an IncomingMessage instruction without declaring "
+        f"'requiresCoreFeatures': ['{MESSAGE_INSTRUCTIONS}'] in app.json: {undeclared}"
+    )
+
+
+def test_the_scan_tells_an_app_that_hands_over_an_instruction_from_one_that_does_not(tmp_path):
+    """Positive and negative control for rail 14."""
+    carrier = tmp_path / "carrier-app"
+    carrier.mkdir()
+    (carrier / "app.json").write_text('{"name": "carrier-app", "version": "0.1.0"}')
+    (carrier / "provider.py").write_text(
+        "from personalclaw.sdk.inbox import IncomingMessage\n"
+        "def row(text, prompt):\n"
+        "    return IncomingMessage(id='1', channel_id='c', channel_name='c', text=text,\n"
+        "                           instruction=prompt)\n",
+        encoding="utf-8",
+    )
+    other = tmp_path / "other-app"
+    other.mkdir()
+    (other / "app.json").write_text('{"name": "other-app", "version": "0.1.0"}')
+    (other / "provider.py").write_text(
+        "from personalclaw.sdk.inbox import IncomingMessage\n"
+        "def row(text):\n"
+        "    return IncomingMessage(id='1', channel_id='c', channel_name='c', text=text)\n",
+        encoding="utf-8",
+    )
+    assert _hands_over_an_instruction(carrier) is True
+    assert _hands_over_an_instruction(other) is False

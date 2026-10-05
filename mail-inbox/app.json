@@ -1,11 +1,14 @@
 {
   "name": "mail-inbox",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "displayName": "Mail Inbox",
   "description": "IMAP mail as an inbox source. Polls a mailbox, surfaces messages from a fail-closed sender allowlist as inbox items, reads multipart and HTML mail, and hands each attachment to the Inbox as a file to list and download. Purpose-specific addresses can each carry a stored prompt, so mail to them runs it against the fenced mail body. Replies are composed as threaded drafts and are NOT sent until you turn sending on. Passwords are kept in the credential store, never in the settings file.",
   "icon": "Mail",
   "author": "PersonalClaw",
   "license": "MIT",
+  "requiresCoreFeatures": [
+    "message-instructions"
+  ],
   "tags": [
     "inbox",
     "email"
@@ -170,7 +173,10 @@
                 "type": "string"
               },
               "default_prompt": {
-                "type": "string"
+                "type": "string",
+                "x-meta": {
+                  "instruction": true
+                }
               },
               "enabled": {
                 "type": "boolean",

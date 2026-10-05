@@ -23,17 +23,17 @@ On each ``poll`` the provider:
    ``IncomingMessage``, its attachments as the message's files (``files``): core keeps them
    with the Inbox row, which lists each one with a download;
 6. **binds a prompt-bound address**: when the mail was delivered to one of
-   the configured ``bound_addresses``, the item text becomes that row's stored,
-   user-authored ``default_prompt`` followed by the mail FENCED with
-   ``source="mail:<address>"`` (``addresses.compose_prompt`` — the one composition point),
-   and ``channel_id`` becomes the BOUND address so core's inbox→event bridge reports it as
-   the event's ``meta.address``. That is what lets the mail fire an inbox
-   ``run-prompt``/``invoke-agent`` action running exactly the stored prompt: core's fire
-   path re-fences only text that is not already fenced, so the app's attribution survives
-   to the action provider. Mail to an UNbound address is carried RAW exactly as before.
+   the configured ``bound_addresses``, the message carries that row's stored,
+   user-authored ``default_prompt`` as its ``instruction``, beside the mail's words (its
+   ``text``, raw like any mail's), and ``channel_id`` becomes the BOUND address so core's
+   inbox→event bridge reports it as the event's ``meta.address``. That is what lets the mail
+   fire an inbox ``run-prompt``/``invoke-agent`` action running exactly the stored prompt:
+   PersonalClaw takes the instruction as the owner's because ``app.json`` declares
+   ``default_prompt`` an instruction (``x-meta.instruction``) and her settings hold it, and
+   the fire hands the action her prompt first, outside any fence, then the mail fenced once.
 
-Fencing therefore happens exactly ONCE and only at prompt-composition time — never in
-``mime.py``, never for unbound mail.
+This app fences nothing: PersonalClaw fences the mail wherever a model reads it, with where it
+came from. A fence of the app's own would be wrapped again, and the prompt beside it with it.
 
 **A poll that cannot read the mailbox RAISES**, with the sentence core's inbox shows as this
 source's health (Inbox → the banner, ``GET /api/inbox/status``): the server unreachable, its
@@ -81,7 +81,6 @@ from personalclaw.sdk.util import app_data_dir
 
 from mail_inbox_runtime.addresses import (
     BoundAddress,
-    compose_prompt,
     match_bound_address,
     sender_matches,
 )
@@ -514,14 +513,10 @@ class MailInboxProvider(MessageSourceProvider):
     ) -> IncomingMessage:
         subject = str(msg.get("Subject", "")).strip()
         body = extract_body(msg)
-        if bound is not None:
-            # The ONE prompt-composition point: the user's stored instruction, then the mail
-            # fenced as `mail:<address>` (subject inside the fence — it is wire data too).
-            text = compose_prompt(bound, subject=subject, body=body)
-        else:
-            # Unbound mail is carried RAW into the item text (and thus the event value);
-            # fencing is a prompt-time concern, and there is no prompt here.
-            text = f"Subject: {subject}\n\n{body}".strip() if subject else body
+        # The mail's words, RAW, bound or not (the subject is wire data too): PersonalClaw
+        # fences them wherever a model reads them. A bound address's stored prompt rides beside
+        # them as the message's instruction, never in them.
+        text = f"Subject: {subject}\n\n{body}".strip() if subject else body
 
         display, _ = email.utils.parseaddr(str(msg.get("From", "")))
         # thread_id from the reply chain (In-Reply-To wins; else the first References id).
@@ -555,6 +550,9 @@ class MailInboxProvider(MessageSourceProvider):
             is_dm=False,
             kind="email",
             files=attachments(msg),
+            # The owner's instruction for mail to this address: her stored prompt, word for word
+            # as her settings hold it, which PersonalClaw checks before it takes it as hers.
+            instruction=bound.default_prompt if bound is not None else "",
         )
 
     @staticmethod

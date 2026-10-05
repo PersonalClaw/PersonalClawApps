@@ -12,8 +12,8 @@
   was once appended to the body, so a PDF quote read as the message and no attachment was
   listed anywhere.
 
-Everything extracted is RAW: fencing happens downstream at prompt time
-(``fence_untrusted``), never here — so text is never double-fenced.
+Everything extracted is RAW: PersonalClaw fences it wherever a model reads it, and this app
+fences nothing, so the mail is fenced once.
 """
 
 from __future__ import annotations

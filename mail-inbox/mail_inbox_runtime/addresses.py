@@ -8,13 +8,15 @@ ordinary Gmail/Outlook filters (see the app README's worked example).
 
 Two rules this module exists to keep, and never blur:
 
-1. **The stored prompt is TRUSTED, the mail is NOT.** ``compose_prompt`` is the ONE place
-   the two meet: the user's instruction stays outside the fence, and every byte that came
-   from the wire (subject, body, attachment-derived text) goes inside
-   ``fence_untrusted(..., source="mail:<address>")``. Fenced exactly ONCE, here, at prompt
-   time — ``mime.py`` deliberately extracts RAW so nothing is ever double-fenced, and
-   core's own fire path is idempotent (it re-fences only text that is not already fenced),
-   so this attribution survives all the way to the action provider.
+1. **The stored prompt is the owner's instruction, the mail is NOT.** They never meet in one
+   text here: the provider hands PersonalClaw the mail's words, raw, as the message's ``text``
+   and the bound row's ``default_prompt`` as its ``instruction``
+   (``personalclaw.sdk.inbox.IncomingMessage``). PersonalClaw takes the instruction as hers
+   because this app's manifest declares ``default_prompt`` an instruction
+   (``x-meta.instruction``) and her settings hold it word for word, and a fire on the mail
+   hands its action her prompt first, outside any fence, then every byte from the wire
+   (subject, body) fenced once, by PersonalClaw, with where it came from. This app fences
+   nothing: a fence of its own would be wrapped again, and its prompt with it.
 2. **Per-address senders FAIL CLOSED, and only NARROW.** A bound row's ``allow_senders``
    is checked *after* the app-wide allowlist (``settings.allow_senders``) has already
    passed, so it can only ever remove senders, never add them. An EMPTY per-address list
@@ -33,8 +35,6 @@ from __future__ import annotations
 import fnmatch
 import logging
 from dataclasses import dataclass, field
-
-from personalclaw.sdk.security import fence_untrusted
 
 logger = logging.getLogger(__name__)
 
@@ -163,24 +163,3 @@ def match_bound_address(
             return row
     return None
 
-
-def compose_prompt(bound: BoundAddress, *, subject: str = "", body: str = "") -> str:
-    """The stored prompt + the FENCED mail, in that order. The one composition point.
-
-    Everything from the wire goes inside a single
-    ``fence_untrusted(..., source="mail:<address>")`` span — subject included, because a
-    subject line is as attacker-controlled as a body. One fence, not two: nesting spans
-    would make the outer wrap escape the inner markers and destroy the attribution.
-
-    ``fence_untrusted`` neutralises an in-body fence-break attempt (a mail carrying a
-    literal ``</untrusted_content>`` plus trailing instructions) by escaping the markers,
-    so the injected text stays *inside* the fence as data.
-    """
-    prompt = (bound.default_prompt or "").strip()
-    untrusted = f"Subject: {subject}\n\n{body}".strip() if subject else (body or "").strip()
-    if not untrusted:
-        # Nothing untrusted arrived (empty mail): the stored prompt runs alone. Fencing an
-        # empty string would emit bare markers around nothing, which reads as data loss.
-        return prompt
-    fenced = fence_untrusted(untrusted, source=f"mail:{bound.address}")
-    return f"{prompt}\n\n{fenced}" if prompt else fenced
