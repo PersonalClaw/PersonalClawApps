@@ -651,7 +651,7 @@ def test_a_url_s_credentials_never_reach_the_sentence(monkeypatch):
     assert info.detail.startswith(f"Nothing is accepting connections at {URL}."), info.detail
 
 
-# ── clause 3: config round-trip ──────────────────────────────────────────────────────
+# ── config round-trip ────────────────────────────────────────────────────────────────
 # Where the api key is kept (the credential store, never the settings file) is proven end to end
 # in test_api_key.py, through core's own Configure handler.
 

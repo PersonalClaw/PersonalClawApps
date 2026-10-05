@@ -349,7 +349,7 @@ class TestDoctor:
         assert by_label["mailbox"].detail == "bot@test"
 
     def test_the_probe_is_login_plus_select_on_the_configured_folder(self):
-        """The plan's ``probe = login+select``: a login alone doesn't prove the folder we
+        """The Test action's ``probe = login+select``: a login alone doesn't prove the folder we
         poll exists, and a wrong folder name is the second most common misconfiguration."""
         ProviderSettings.update(_APP, {"folder": "Agent"})
         self._configured()

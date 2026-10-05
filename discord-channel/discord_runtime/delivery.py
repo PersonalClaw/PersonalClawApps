@@ -439,7 +439,7 @@ class DiscordDelivery:
     def list_reply_channels(self) -> list[dict]:
         """The channels this delivery can post into for the dashboard picker.
 
-        The tracked-channel allowlist lives in the core trust seam (CE-1 owns it),
+        The tracked-channel allowlist lives in the core trust seam,
         and the SDK exposes only a membership check (:func:`is_tracked_channel`) —
         no enumeration — so the picker offers the DM entry, and a guild reply targets
         a specific tracked channel id core already holds. Deliberately minimal, per

@@ -26,7 +26,7 @@ SPEC = BrandedProviderSpec(
     api_key_env="DEEPSEEK_API_KEY",
     default_model="",  # no curated pick: a call names its binding or the instance's Default Model
     capabilities=frozenset({Capability.CHAT, Capability.CODE_TOOLS, Capability.STREAMING}),
-        # No hardcoded fallback (de-hardcode directive 2026-07-06): this is an
+        # No hardcoded fallback: this is an
         # OpenAI-compatible provider — models come from live /v1/models discovery.
         fallback_models=(),
     # AUTOMATIC - DeepSeek's disk context caching is "enabled by default for all users,

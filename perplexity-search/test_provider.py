@@ -1,4 +1,4 @@
-"""WS7 — the Perplexity Sonar adapter: answer-first shape, depth→model mapping,
+"""The Perplexity Sonar adapter: answer-first shape, depth→model mapping,
 recency/domain filters, and the search_results→citations fallback.
 
 Mocks the net.fetch egress chokepoint (the adapter routes outbound HTTP through it

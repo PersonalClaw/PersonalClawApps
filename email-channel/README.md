@@ -261,8 +261,8 @@ than 100,000 characters.
 | `speaks_as_owner` | ✅ | a mail goes out from your own mailbox, so a stranger is sent nothing and their mail waits in your Inbox |
 | `groups` | ❌ | a mail to the mailbox is one person writing to you, so Sender trust shows no group rule |
 
-**Streaming is deliberately absent** (the plan's C3 table marks the streaming trio
-MUST-NOT for email: a "live-updating message" would mean one mail per token).
+**Streaming is deliberately absent** (the streaming trio is MUST-NOT for email: a
+"live-updating message" would mean one mail per token).
 `ChannelCapabilities` has no `streaming` field, and in every other channel a stream *is* a
 repeatedly-edited message — so `edits=False` carries that meaning, and `start_stream()`
 returns `""` with no-op append/stop. Core's mirror path already treats `""` as "this
@@ -319,9 +319,9 @@ the owner is sent the same way, through `deliver_notification`.
 ## Deferred, on purpose
 
 - **IMAP IDLE.** `imaplib` has no IDLE support, so it would mean hand-rolling the command
-  plus its 29-minute re-issue cycle and dead-connection detection. The plan calls IDLE
-  "optional later"; the 60s poll cadence is configurable in the meantime.
-- **OAuth2 / XOAUTH2** (DISCOVERY). Every provider documented above issues per-application
+  plus its 29-minute re-issue cycle and dead-connection detection. IDLE can come
+  later; the 60s poll cadence is configurable in the meantime.
+- **OAuth2 / XOAUTH2.** Every provider documented above issues per-application
   passwords precisely for clients like this, and they need no token refresh, no client
   registration, and no browser round-trip in a headless gateway. OAuth2 would add a
   per-provider registration story and a refresh-token lifecycle before it improved

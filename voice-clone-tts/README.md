@@ -16,7 +16,7 @@ A standalone PersonalClaw app bundle. It ships as a self-contained directory:
 
 - `app.json` — the manifest. `provider.execution: "sidecar"` runs the torch-heavy engine
   in a child process, so a mid-synthesis crash leaves the gateway up with a typed reason
-  (LOCAL-MODEL-MANAGER-V2 §3 machinery).
+  (the SDK's sidecar machinery).
 - `catalog.json` — the declarative model cards (`runtime: "torch"`, `matrix.supports_cloning`).
   Adding or pruning an engine model is a file drop, not a code change.
 - `provider.py` — the implementation, exposed via `create_provider`.

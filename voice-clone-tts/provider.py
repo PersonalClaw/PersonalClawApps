@@ -5,7 +5,7 @@ condition synthesis on a short reference clip (the ``ref_audio``/``ref_text`` a
 clone-kind voice profile resolves to) instead of a fixed voice bank. It runs as a
 **sidecar** (``provider.execution: "sidecar"`` in ``app.json``) because the engine is
 torch-heavy diffusion — exactly the crash class sidecars isolate, so a mid-synthesis
-crash leaves the gateway up with a typed reason (LOCAL-MODEL-MANAGER-V2 §3 machinery,
+crash leaves the gateway up with a typed reason (the SDK's sidecar machinery,
 consumed as-is).
 
 Implements the ``LocalTtsProvider`` ABC from ``personalclaw.sdk.tts`` (never core
@@ -17,14 +17,14 @@ cloning_unsupported:<provider>``. The engine's model cards (``runtime: torch``,
 ``matrix.supports_cloning``) are declared in the bundled ``catalog.json``, the single
 source of truth for what this app offers.
 
-SCOPE (MI-6 remainder, formerly "MI-2c"): the heavy ML engine is declared in ``app.json``
+SCOPE: the heavy ML engine is declared in ``app.json``
 ``sidecarDependencies``, which Install engine puts in this app's own Python environment where
 the sidecar runs, never in ``pythonDependencies`` (those go into the gateway's own packages).
 Nothing installs it before the owner asks, and no model weights are vendored, so the
 manifest/contract tests run everywhere. When no engine is installed the provider degrades
 gracefully (``is_available`` → False, ``synthesize`` → None) rather than raising, and
 ``availability()`` sends the owner to Install engine. The spike CHOSE OmniVoice (bake-off
-0.906 vs 0.658 — see the core plan doc); real zero-shot inference runs in the app's
+0.906 vs 0.658); real zero-shot inference runs in the app's
 ``worker.py`` through the SDK sidecar runner, weights download resumably with a
 completion receipt, and a sidecar killed mid-synthesis surfaces its typed crash
 reason here while the gateway stays up.
@@ -48,9 +48,9 @@ from personalclaw.sdk.util import config_dir
 
 logger = logging.getLogger(__name__)
 
-#: The engine the spike selected (OmniVoice 0.906 vs CosyVoice 0.658 — the loser's
-#: rejection notes live in the core plan dir). Kept as a tuple so detection stays a
-#: data-driven probe, but it is deliberately length-one now: the bake-off is decided.
+#: The engine the spike selected (OmniVoice 0.906 vs CosyVoice 0.658). Kept as a tuple so
+#: detection stays a data-driven probe, but it is deliberately length-one now: the bake-off
+#: is decided.
 _CANDIDATE_ENGINE_MODULES: tuple[str, ...] = ("omnivoice",)
 
 
@@ -179,7 +179,7 @@ class VoiceCloneTtsProvider(LocalTtsProvider):
     """Cloning-capable local TTS provider. Declares ``supports_cloning`` so a clone-kind
     profile (one carrying a reference clip) resolves here instead of a 409 refusal."""
 
-    #: MI-2a capability surface: this backend opts into voice CLONING. ``supports_voice_design``
+    #: Capability surface: this backend opts into voice CLONING. ``supports_voice_design``
     #: stays False until the spike validates the engine's instruct/design mode — the
     #: catalog cards mirror that (cloning true, design false) so nothing over-claims.
     supports_cloning = True
@@ -216,7 +216,7 @@ class VoiceCloneTtsProvider(LocalTtsProvider):
     #
     # Override list_models (rather than let LocalTtsProvider bridge it from list_voices)
     # so the per-model CapabilityMatrix + runtime survive into the cards — that carriage
-    # is exactly what the change's "catalog.json cards (runtime torch, matrix flags)" names,
+    # is exactly what the catalog.json cards (runtime torch, matrix flags) need,
     # and TtsVoice has no place to hold a matrix.
 
     async def list_models(self) -> list[Any]:
@@ -243,7 +243,7 @@ class VoiceCloneTtsProvider(LocalTtsProvider):
 
     async def download_voice(self, voice_name: str) -> bool:
         """Fetch an engine's weights from its declared HuggingFace ``source`` repo,
-        RESUMABLY (MI-6): an interrupted fetch leaves its partial files in place and the
+        RESUMABLY: an interrupted fetch leaves its partial files in place and the
         next call continues from them.
 
         Two mechanisms compose: ``huggingface_hub.snapshot_download`` already resumes
@@ -313,13 +313,13 @@ class VoiceCloneTtsProvider(LocalTtsProvider):
     ) -> str | None:
         """Synthesize *text* → audio, conditioned on a reference clip for cloning.
 
-        Accepts the full MI-2a conditioning surface (``ref_audio``/``ref_text``/``seed``/
+        Accepts the full conditioning surface (``ref_audio``/``ref_text``/``seed``/
         ``instruct``/``design_params``) that ``tts.registry.route_synthesis`` threads in.
         Degrades gracefully to ``None`` (never raises) when the optional engine or its
         weights are absent, and validates the reference clip up front so a clone request
         with a missing clip fails fast instead of mis-synthesizing.
 
-        Engine-backed zero-shot inference (MI-6): the bundled ``worker.py`` runs the
+        Engine-backed zero-shot inference: the bundled ``worker.py`` runs the
         real OmniVoice pipeline inside this app's sidecar child. A child killed
         mid-synthesis raises core's typed ``SidecarCrashed``; it is caught HERE — the
         gateway stays up, the typed reason (``sidecar_crashed:signal_9``) is recorded on

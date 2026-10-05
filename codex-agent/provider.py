@@ -73,7 +73,7 @@ COMPACTS_ITSELF = True
 
 
 # ── model selection ─────────────────────────────────────────────────────────
-# No hardcoded model list or default id (de-hardcode directive). The codex-acp
+# No hardcoded model list or default id. The codex-acp
 # adapter advertises the LIVE model set via the ``session/new`` handshake, so the
 # picker is populated by real discovery — a static curated list here would only go
 # stale. When the user pins no model, the empty pin flows to core's
@@ -166,7 +166,7 @@ def create_provider(config: dict | None = None):
     if bin_override:
         os.environ[_ACP_BIN_ENV] = bin_override
     # No hardcoded default — an unset pin flows through to core's "auto" sentinel
-    # (dialect skips set_model → CLI uses its own current default). De-hardcode.
+    # (dialect skips set_model → CLI uses its own current default).
     model = str(config.get("model", "") or "").strip()
 
     # Provision the codex-acp adapter as the app is installed or enabled when it isn't

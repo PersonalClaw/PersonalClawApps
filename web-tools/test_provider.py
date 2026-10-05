@@ -1,4 +1,4 @@
-"""WS4 — the `web` tool provider's web_search: resolves the use-case → bound search
+"""The `web` tool provider's web_search: resolves the use-case → bound search
 provider and returns the normalized shape; graceful recovery when none is bound.
 
 Uses a fake SearchProvider registered in the search registry (no network).

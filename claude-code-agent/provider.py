@@ -63,7 +63,7 @@ _CLAUDE_EXEC_ENV = "CLAUDE_CODE_EXECUTABLE"
 _CLAUDE_BIN_NAMES = ["claude"]
 
 # ── model selection ─────────────────────────────────────────────────────────
-# No hardcoded model list or default id (de-hardcode directive). The ACP adapter
+# No hardcoded model list or default id. The ACP adapter
 # advertises the LIVE model set via the ``session/new`` handshake (see
 # ``AcpAgentProvider.discover`` → ``result.models``), so the picker is populated
 # by real discovery — a static curated list here would only go stale (the class
@@ -263,7 +263,7 @@ def create_provider(config: dict | None = None):
     if bin_override:
         os.environ[_ACP_BIN_ENV] = bin_override
     # No hardcoded default — an unset pin flows through to core's "auto" sentinel
-    # (dialect skips set_model → CLI uses its own current default). De-hardcode.
+    # (dialect skips set_model → CLI uses its own current default).
     model = str(config.get("model", "") or "").strip()
 
     # Provision the adapter under a Node >= 20 when it would otherwise only run via the fragile

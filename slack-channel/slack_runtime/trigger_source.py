@@ -1,8 +1,8 @@
 """Slack's ``trigger_source`` provider — real inbound traffic as automation events.
 
-CHANNEL-EXPANSION CE-10, closing the vendor-completeness checklist's third row for this
-bundle. ``CE-8`` brought this app to ``channel`` + ``inbox``, which was the whole bar
-available at the time; ``WF2AUT-8`` then shipped the app-registered trigger-source seam, and
+This closes the vendor-completeness checklist's third row for this
+bundle. The app first reached ``channel`` + ``inbox``, which was the whole bar
+available at the time; core then shipped the app-registered trigger-source seam, and
 this is the app half of it. The app observes something core knows nothing about (a Slack
 workspace) and hands core typed
 :class:`~personalclaw.sdk.trigger_source.SourceEvent`\\ s. Core does everything else: it

@@ -30,7 +30,7 @@ class _FakeFetchResponse:
 
 def _stub_models(monkeypatch, payload, status=200):
     # Discovery (openai_compatible_list_models) now routes through the net.fetch
-    # egress chokepoint (#41) — stub fetch, not aiohttp.
+    # egress chokepoint — stub fetch, not aiohttp.
     async def _fake_fetch(url, *, policy=None, method="GET", headers=None, data=None):
         return _FakeFetchResponse(status, payload)
     monkeypatch.setattr("personalclaw.net.client.fetch", _fake_fetch, raising=False)

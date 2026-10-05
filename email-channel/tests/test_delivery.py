@@ -242,7 +242,7 @@ class TestThreadStorePersistence:
 
 
 class TestStreamingIsAbsent:
-    """C3: the streaming trio is MUST-NOT for email. These are explicit no-ops."""
+    """The streaming trio is MUST-NOT for email. These are explicit no-ops."""
 
     @pytest.mark.asyncio
     async def test_start_stream_returns_empty_and_sends_nothing(self, wired):

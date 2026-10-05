@@ -1,7 +1,7 @@
 """RapidOCR — a deterministic, fully offline OCR engine as a removable provider app.
 
 The engine is RapidOCR's ONNXRuntime build. Three properties decided it over the other
-candidates, and each is the reason a clause of KOCR-2 is satisfiable rather than argued:
+candidates, and each is the reason a requirement is satisfiable rather than argued:
 
 * **No model binding, and no download.** The PP-OCRv3 detection/recognition/classification
   weights ship INSIDE the wheel (13.8 MB of ``.onnx``), so the first OCR on a fresh install

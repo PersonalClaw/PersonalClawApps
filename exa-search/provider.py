@@ -185,7 +185,7 @@ class ExaProvider(SearchProvider):
         results = data.get("results") or []
         first = results[0] if results and isinstance(results[0], dict) else {}
         content = str(first.get("text") or "")
-        # Coarse char-window pagination (the native §4 pipeline owns token budgeting).
+        # Coarse char-window pagination (the native web_fetch pipeline owns token budgeting).
         window = content[start_index:]
         truncated = False
         next_index: int | None = None

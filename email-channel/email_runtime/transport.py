@@ -14,18 +14,18 @@ poll loop started by :meth:`start_inbound`, which the gateway calls once at boot
    provider ``"email"``) — the address allowlist, the pairing flow, fencing, redaction,
    session linking and the turn itself all live in core, so this transport can't forget
    any of them. A reply containing an active pairing code redeems it BEFORE the door
-   (the plan's "pairing code = a reply containing the code" — an in-body search core's
+   (pairing code = a reply containing the code — an in-body search core's
    whole-message check cannot do). A stranger is sent nothing: this mailbox is the
    owner's, so the channel declares ``speaks_as_owner`` and core holds the stranger's
    mail in the Inbox for the owner to answer. Core mirrors agent replies back out
    through the
    :class:`~email_runtime.delivery.EmailDelivery` this transport registers at boot.
 
-**Why not IMAP IDLE.** IDLE would give push-latency instead of the plan's 60s poll, but
+**Why not IMAP IDLE.** IDLE would give push-latency instead of the 60s poll, but
 ``imaplib`` has no IDLE support at all (it would mean hand-rolling the command plus its
 29-minute re-issue cycle and the dead-connection detection that comes with it), and a
-held-open connection is a second failure mode to supervise. DEFERRED per the plan
-("IDLE optional later"); the poll cadence is user-configurable.
+held-open connection is a second failure mode to supervise. DEFERRED (IDLE is an
+optional later addition); the poll cadence is user-configurable.
 
 Four inbound facts shape this file:
 
@@ -170,7 +170,7 @@ class EmailTransport(ChannelTransportProvider):
         * ``edits`` → **False, and this is how "streaming=false" is declared.** The
           shipped ``ChannelCapabilities`` dataclass has no ``streaming`` field; in every
           other channel a stream IS a repeatedly-edited message, so no-edits means
-          no-streaming. The plan's C3 row (streaming trio MUST-NOT for email) is
+          no-streaming. Email's MUST-NOT on the streaming trio is
           implemented as ``start_stream`` returning ``""`` with no-op append/stop, and a
           test pins both halves of that mapping together.
         * ``max_text_len`` → 0 (unbounded): SMTP imposes no practical body limit that a
@@ -603,7 +603,7 @@ class EmailTransport(ChannelTransportProvider):
             return
 
         # A reply from a not-yet-allowed sender that CONTAINS an active pairing code
-        # redeems it (the plan's "pairing code = a reply containing the code"). Checked
+        # redeems it (pairing code = a reply containing the code). Checked
         # before the door so the pairing reply doesn't get the canned nudge again —
         # the code is searched INSIDE the body, which core's whole-message digit
         # check cannot do through a mail client's quoting and signature.
@@ -658,7 +658,7 @@ class EmailTransport(ChannelTransportProvider):
     async def _try_pairing(self, cm: ChannelMessage, text: str, settings: EmailSettings) -> bool:
         """Redeem a pairing code found in *text*. Returns whether pairing happened.
 
-        The plan's pairing UX for email is "a reply containing the code", so the code is
+        The pairing UX for email is "a reply containing the code", so the code is
         searched for inside the body rather than required to be the whole message — a
         mail client's quoting and signature make an exact-match rule unusable.
 
@@ -736,7 +736,7 @@ class EmailTransport(ChannelTransportProvider):
         return bool(sent)
 
     async def health(self) -> dict[str, Any]:
-        """What the channel is doing, from what its connections last did (the F-24 contract).
+        """What the channel is doing, from what its connections last did.
 
         It read "ready" whenever the settings and passwords were there — so it said ready
         while every IMAP login was refused. Now it is ready only while the poll loop runs
@@ -786,7 +786,7 @@ class EmailTransport(ChannelTransportProvider):
         return {"state": "ready", "detail": " · ".join(halves)}
 
     async def test(self) -> dict[str, Any]:
-        """The Channels-page Test action: the plan's ``probe = login+select``.
+        """The Channels-page Test action: ``probe = login+select``.
 
         Both halves are probed — IMAP login plus a SELECT of the polled folder, and an
         SMTP login — because a channel with one working half is still broken, and the

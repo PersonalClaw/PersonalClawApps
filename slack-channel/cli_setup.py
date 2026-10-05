@@ -3,8 +3,8 @@
 Registered via ``app.json`` → ``cli.setup: "cli_setup:run"``. The core setup
 runner (``personalclaw.app_cli.run_app_setup_steps``) imports ``run`` and calls
 it with a :class:`personalclaw.sdk.cli.SetupContext` after the core steps. This
-is the slack-specific setup that used to live hardcoded in core's ``cli_setup.py``
-(plan 32 PROVIDER-BOUNDARY-COMPLETION moved it here). Where each answer goes:
+is the slack-specific setup that used to live hardcoded in core's ``cli_setup.py``.
+Where each answer goes:
 
 - the Bot and App tokens → this app's ``ProviderSettings`` (``bot_token`` / ``app_token``,
   the fields the Apps page's Configure form writes too). Saving them there keeps each value

@@ -73,13 +73,13 @@ class TestAgentPassthrough:
                 msg_ts="ts1",
                 user_id="U1",
                 context_builder=ctx,
-                channel_agent="siads-etl-test",
+                channel_agent="nightly-etl-test",
             )
 
         ctx.build_message.assert_called_once()
         call_kwargs = ctx.build_message.call_args
-        assert call_kwargs.kwargs.get("agent") == "siads-etl-test", (
-            f"Expected agent='siads-etl-test', got call: {call_kwargs}"
+        assert call_kwargs.kwargs.get("agent") == "nightly-etl-test", (
+            f"Expected agent='nightly-etl-test', got call: {call_kwargs}"
         )
 
     @pytest.mark.asyncio

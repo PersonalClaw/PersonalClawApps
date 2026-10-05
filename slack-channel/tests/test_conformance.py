@@ -122,7 +122,7 @@ def _isolate_home(tmp_path_factory, monkeypatch):
 def test_slack_transport_meets_the_channel_contract():
     """SlackTransport passes the full channel conformance kit, run exactly as core ships it.
 
-    CHANNEL-EXPANSION T1.4 landed: the Slack inbound path now fences untrusted non-owner
+    The Slack inbound path now fences untrusted non-owner
     content before it becomes the agent's prompt, so the kit's ``[fencing]`` clause — the
     last one Slack failed — holds alongside every other. Nothing here weakens the kit; a
     regression in ANY clause turns this red.
@@ -134,7 +134,7 @@ def test_the_fencing_clause_is_no_longer_outstanding():
     """The trust-seam fencing clause — the last one Slack failed — now holds.
 
     This used to pin that the kit RAISED at ``[fencing]`` and that fencing was the ONLY
-    outstanding clause. T1.4 landed, so that premise is false. It is re-expressed to pin
+    outstanding clause. Slack now fences, so that premise is false. It is re-expressed to pin
     the clause as SATISFIED rather than deleted, and it stays a TARGETED guard: a refactor
     that reverted Slack to feeding raw non-owner text to the model would fail HERE with a
     fencing-named message, not vanish into a generic red.
@@ -147,7 +147,7 @@ def test_the_fencing_clause_is_no_longer_outstanding():
     except ChannelContractError as exc:  # pragma: no cover - regression signal
         pytest.fail(
             "SlackTransport no longer passes the conformance kit; the trust-seam fencing "
-            f"clause (T1.4) or another clause regressed: {exc}"
+            f"clause or another clause regressed: {exc}"
         )
 
     # 2. And, specifically, the transport module still CONSUMES the fence — the exact
@@ -163,7 +163,7 @@ def test_the_fencing_clause_is_no_longer_outstanding():
     assert "fenced_text" in source or "deliver_channel_inbound" in source, (
         "slack_runtime.transport no longer consumes the untrusted-content fence: non-owner "
         "content would reach the agent as raw instructions. Restore the verdict.fenced_text "
-        "/ fence_channel_content consumption (CE-6 / T1.4)."
+        "/ fence_channel_content consumption."
     )
 
 

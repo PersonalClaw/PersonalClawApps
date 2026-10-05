@@ -2439,7 +2439,7 @@ class TestBuildTimingFooter:
 
 
 class TestStopReasonCancelled:
-    """Phase 4: handler response to stopReason='cancelled'."""
+    """Handler response to stopReason='cancelled'."""
 
     @pytest.fixture(autouse=True)
     def _ensure_reactions_enabled(self, monkeypatch):

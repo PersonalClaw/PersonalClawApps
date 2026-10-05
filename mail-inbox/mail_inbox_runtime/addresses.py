@@ -1,4 +1,4 @@
-"""Prompt-bound receiving addresses — the mail-inbox app's C4 table.
+"""Prompt-bound receiving addresses — the mail-inbox app's address table.
 
 A **bound address** is a purpose-specific receiving address (``travel@<your-domain>``,
 ``you+travel@gmail.com``) carrying a **stored, user-authored prompt**. Mail that arrives
@@ -64,7 +64,7 @@ def normalize_senders(value: object) -> list[str]:
 def sender_matches(from_addr: str, allow_senders: list[str]) -> bool:
     """Fail-closed glob match of a From address against an allowlist.
 
-    An EMPTY allowlist matches NOTHING. That is the whole posture (guardrail 1): an
+    An EMPTY allowlist matches NOTHING. That is the whole posture: an
     unknown sender can never trigger anything, so a missing/emptied list disables
     triggering rather than permitting everything.
     """
@@ -78,7 +78,7 @@ def sender_matches(from_addr: str, allow_senders: list[str]) -> bool:
 
 @dataclass
 class BoundAddress:
-    """One prompt-bound receiving address (plan contract C4)."""
+    """One prompt-bound receiving address."""
 
     address: str
     name: str = ""
@@ -149,7 +149,7 @@ def match_bound_address(
     """The first bindable row whose address is one of ``recipients``, else ``None``.
 
     Exact (case-insensitive) match on the full address, deliberately — not a suffix or
-    domain rule. All three receiving-address strategies the plan supports resolve to a
+    domain rule. All three receiving-address strategies this app supports resolve to a
     literal address in a recipient header (``travel@your-domain``, ``you+travel@gmail.com``,
     a per-purpose mailbox), and a looser rule would let ``nottravel@…`` bind to
     ``travel@…``. A row that is disabled or promptless is skipped here, so an unfinished

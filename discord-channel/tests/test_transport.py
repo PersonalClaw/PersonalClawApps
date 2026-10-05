@@ -464,7 +464,7 @@ class TestOutbound:
 
 
 class TestGatewayHelloProbe:
-    """test() is the 'gateway hello' probe T4.4 names."""
+    """test() is the 'gateway hello' probe the Channels-page Test action runs."""
 
     @pytest.mark.asyncio
     async def test_without_token_reports_not_configured(self):

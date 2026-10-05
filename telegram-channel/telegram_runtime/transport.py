@@ -18,8 +18,8 @@ saved (it stops the previous instance's receiver first). The loop:
    outbound half of the seam). ``callback_query`` updates (inline-keyboard button
    presses) resolve a pending approval in the delivery.
 
-Webhook mode is deferred to EXTERNAL-ACCESS by the plan; long-poll is the whole
-inbound story here.
+Webhook mode is deferred: it needs the gateway reachable from the internet. Long-poll is
+the whole inbound story here.
 """
 
 from __future__ import annotations

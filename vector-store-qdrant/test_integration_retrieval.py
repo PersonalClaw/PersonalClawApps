@@ -2,11 +2,11 @@
 
 `test_provider.py` proves this bundle against Qdrant's real engine, and core's
 `tests/test_knowledge_external_vector_store.py` proves the seam with an in-repo test double.
-Neither composes the two, and the change's clause is about the composition: *"after binding it,
+Neither composes the two, and the composition is the claim: after binding it,
 ingesting a doc indexes its chunk vectors into that external store and HybridRetriever fuses the
 external store's hits via RRF alongside FTS5 + graph — proven by a fixture that ingests a doc,
 runs a query, and asserts a vector-arm hit came from the EXTERNAL backend, not the
-sqlite-vec/vec0 path."* So that fixture lives here, where both halves are importable.
+sqlite-vec/vec0 path. So that fixture lives here, where both halves are importable.
 
 This file reaches past `personalclaw.sdk.*` into `personalclaw.knowledge.*` deliberately, and
 only because it is a TEST: `tests/test_apps_import_boundary.py` exempts `test_*.py` explicitly
@@ -130,7 +130,7 @@ def test_ingesting_a_doc_indexes_its_chunk_vectors_into_qdrant(wired):
 
 
 def test_a_vector_arm_hit_comes_from_qdrant_and_not_from_vec0(wired):
-    """The change's clause, as one executable claim.
+    """The composition, as one executable claim.
 
     Two documents are ingested, so both are in the LOCAL chunk table and both are an exact
     match for the query. Then document A's vectors are deleted **from Qdrant only** — the local
@@ -211,7 +211,7 @@ def test_deleting_a_document_removes_it_from_qdrant_too(wired):
 
 
 def test_a_re_poll_that_adds_one_doc_indexes_only_that_doc(wired):
-    """Clause 3's incremental half, end to end against the real store: the first document's
+    """Incremental indexing, end to end against the real store: the first document's
     points are still the same points afterwards — not deleted and rewritten."""
     store, qdrant = wired
     first = _ingest(store, "First", "one", [_vec(1.0)])

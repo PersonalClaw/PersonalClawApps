@@ -156,7 +156,7 @@ def main() -> int:
             )
 
     if failures:
-        print("Prompt-cache posture rail FAILED (PCS-8):\n")
+        print("Prompt-cache posture rail FAILED:\n")
         for f in failures:
             print(f"  - {f}\n")
         return 1

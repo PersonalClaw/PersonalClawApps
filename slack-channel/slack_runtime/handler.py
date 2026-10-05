@@ -927,7 +927,7 @@ def set_dashboard_state(state: object) -> None:
 
 
 def _track_linked_channel(channel_id: str) -> None:
-    """Record a just-linked channel in core's channel_trust store (EA-7).
+    """Record a just-linked channel in core's channel_trust store.
 
     Linking a thread is the owner's explicit invitation for the agent to converse
     there, so the guarded door must admit the thread's messages — for a group
@@ -949,7 +949,7 @@ def set_gateway_services(services: object) -> None:
     """Store the GatewayServices handle (called by events.py at socket init).
 
     The linked-thread intercept routes through the platform's guarded inbound
-    door (``services.deliver_channel_inbound``, EA-7) instead of hand-rolling
+    door (``services.deliver_channel_inbound``) instead of hand-rolling
     the session routing — this is how the handler reaches that door."""
     global _gateway_services
     _gateway_services = services
@@ -3379,8 +3379,8 @@ def _handle_cron_command(
 ) -> str | None:
     """Handle cron keyword commands against the unified trigger store. Returns reply or None.
 
-    🔴 Re-pointed off `ScheduleService`, which core deleted (S112). That service read
-    `crons.json` — a file nothing has written since core's S108 — so **every one of these commands
+    🔴 Re-pointed off `ScheduleService`, which core deleted. That service read
+    `crons.json` — a file nothing writes any more — so **every one of these commands
     was already broken**: `cron list` showed an empty list to a user with live automations, and
     remove/pause/resume answered "not found" for every real id. Measured against a store-only home
     before re-pointing.

@@ -8,7 +8,7 @@ ABC and the registry and nothing that implements them.
 **What the contract is for.** ``DashboardState.notify`` is the single choke point for every
 notification, and every destination behind it is local: a toast on this dashboard, a row in
 this digest, a push to this owner's phone. Once a shared store contributes rows somebody else
-owns (`TSE2-1`..`TSE2-3`), a note can be *about* a teammate, and firing it here spends the
+owns, a note can be *about* a teammate, and firing it here spends the
 wrong person's attention. So a foreign-addressed note is recorded locally, fired nowhere
 locally, and offered to whichever registered backend says it can reach the addressee. This
 is that backend.

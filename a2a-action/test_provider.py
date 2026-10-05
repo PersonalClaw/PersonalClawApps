@@ -127,7 +127,7 @@ def _fake_agent(monkeypatch, *, status=200, payload=None, capture=None):
 def test_a_non_allowlisted_public_host_is_refused(monkeypatch):
     """The host is PUBLIC and resolves fine. Only the empty allow-list can refuse it.
 
-    This is the change's egress clause end to end: the guard runs inside the real `fetch`, so
+    This is deny-by-default egress end to end: the guard runs inside the real `fetch`, so
     a provider that reached the network outside that seam would deliver instead of failing.
     """
     monkeypatch.setattr(socket, "getaddrinfo", _fake_dns({_HOST: [_PUBLIC_IP]}))
@@ -421,7 +421,7 @@ def test_the_provider_name_is_the_name_core_allowlists():
     """`ALLOWED_HOOK_PROVIDERS` matches on this exact string.
 
     A rename here without the matching core change is a hook that validates and then finds
-    no provider at fire time — which is the whole reason EA-8 is a two-repo change.
+    no provider at fire time — which is the whole reason this is a two-repo change.
     """
     assert A2AActionProvider().name == "a2a-call"
     assert create_provider().name == "a2a-call"

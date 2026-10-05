@@ -47,7 +47,7 @@ SPEC = BrandedProviderSpec(
     capabilities=frozenset(
         {Capability.CHAT, Capability.CODE_TOOLS, Capability.STREAMING, Capability.VISION}
     ),
-        # No hardcoded fallback (de-hardcode directive 2026-07-06): this is an
+        # No hardcoded fallback: this is an
         # OpenAI-compatible provider — models come from live /v1/models discovery.
         fallback_models=(),
     # NONE - Groq's caching IS automatic and cannot be disabled, but Groq's own docs scope

@@ -1,7 +1,7 @@
-"""The outbound half of mail-inbox (contract C3): compose a threaded reply, and
+"""The outbound half of mail-inbox: compose a threaded reply, and
 **draft it by default**.
 
-Guardrail 4 — draft-by-default — is the shape of this module, not a flag inside it. Every
+Draft-by-default is the shape of this module, not a flag inside it. Every
 reply is COMPOSED first and only then asked whether it may leave the machine, so
 "composed but not sent" is the normal path and a real send is the exception a user opted
 into. Three independent conditions each force a draft, and they are checked in this order
@@ -10,7 +10,7 @@ so the reason a user is shown is the most specific true one:
 1. an explicit ``dry_run=True`` from the caller (the observe-mode request the provider's
    ``supports_dry_run`` advertises);
 2. the PLATFORM's live-writes posture — ``PERSONALCLAW_DISABLE_LIVE_WRITES`` (core's
-   AUTONOMY-GUARDRAILS §1.4 process-wide destructive-write kill);
+   process-wide destructive-write kill);
 3. the app's own ``send_enabled`` setting, which **defaults to False** — so a freshly
    installed, fully configured mailbox with a valid SMTP password still sends nothing;
 4. an incomplete SMTP config or a missing SMTP credential — fail closed, and say which.
@@ -107,7 +107,7 @@ def draft_reason(
 ) -> str:
     """The reason this reply must be DRAFTED, or ``""`` when it may be sent.
 
-    The single decision point for guardrail 4. Every unknown or incomplete state resolves
+    The single decision point for draft-by-default. Every unknown or incomplete state resolves
     to a draft — there is no input combination that sends by accident, and the default
     (``send_enabled=False``) sends nothing."""
     if dry_run:

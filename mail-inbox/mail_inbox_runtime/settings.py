@@ -1,6 +1,6 @@
 """MailInboxSettings — the mail-inbox app's OWN non-secret config + credential keys.
 
-Where each value lives, and why (the app/core boundary, provider-boundary.md §2.5/§2.6):
+Where each value lives, and why (the app/core boundary, provider-boundary.md):
 
 - IMAP host/port/ssl/username/address/folder and the sender **allowlist** are
   NON-secret behavioral config, so they live in this app's own ``ProviderSettings``
@@ -9,7 +9,7 @@ Where each value lives, and why (the app/core boundary, provider-boundary.md §2
 - The IMAP and SMTP **passwords** are SECRETS. They are the settings ``password`` /
   ``smtp_password``, declared ``x-meta.sensitive``, so the settings FILE never holds one:
   :class:`ProviderSettings` keeps each value in the credential store under a key this app
-  owns and writes a reference in its place, and uninstalling the app removes them (the EIAT
+  owns and writes a reference in its place, and uninstalling the app removes them (the
   guardrail, "credentials come only from the credential store", holds for the value). Setup
   and the Configure form both write them there; :func:`load_passwords` is the one place they
   are read. Never echoed into a log. (Setup used to save them to the shared store under the
@@ -19,20 +19,20 @@ Where each value lives, and why (the app/core boundary, provider-boundary.md §2
 The allowlist is the inbound security surface: it is stored here but ENFORCED in the
 provider, fail-closed — an empty/absent allowlist surfaces ZERO messages.
 
-The **prompt-bound address table** (contract C4) is non-secret behavioral config
+The **prompt-bound address table** is non-secret behavioral config
 too, so it lives in the same store under ``bound_addresses`` — see ``addresses.py`` for
 the row shape and the fail-closed per-address rule. It is declared in ``app.json``'s
 schema, which is what makes it editable from the platform's generated app-settings page
 (core's config PUT rejects any key the schema does not declare) and what puts the write
 path and this read path on the SAME file (``data/config.json``).
 
-**Outbound (contract C3)** follows the same split: SMTP host/port/TLS-mode/login
+**Outbound** follows the same split: SMTP host/port/TLS-mode/login
 are non-secret and live here; the SMTP **password** is a second secret, its own setting. It
 is deliberately NOT the IMAP one — the runtime never silently reuses one credential for the
 other transport. (The setup step may COPY the IMAP password into it when the user says so;
 that is an explicit, visible choice rather than a hidden fallback.) ``send_enabled`` defaults
-to **False**: guardrail 4 means a fully configured mailbox with a working SMTP password still
-only ever composes drafts until the user turns sending on.
+to **False**: draft-by-default means a fully configured mailbox with a working SMTP password
+still only ever composes drafts until the user turns sending on.
 """
 
 from __future__ import annotations
@@ -103,10 +103,10 @@ class MailInboxSettings:
     address: str = ""
     folder: str = _DEFAULT_FOLDER
     allow_senders: list[str] = field(default_factory=list)
-    #: Prompt-bound receiving addresses (C4). Coerced at load; see ``addresses.py``.
+    #: Prompt-bound receiving addresses. Coerced at load; see ``addresses.py``.
     bound_addresses: list[BoundAddress] = field(default_factory=list)
-    # ── outbound (C3) ──
-    #: Guardrail 4: **draft-by-default**. False means a reply is composed and written to
+    # ── outbound ──
+    #: **Draft-by-default**. False means a reply is composed and written to
     #: the drafts dir and nothing is sent. Turning this on is the user's explicit opt-in to
     #: an irreversible, outward-facing action.
     send_enabled: bool = False
@@ -156,7 +156,7 @@ class MailInboxSettings:
             folder=str(d.get("folder", _DEFAULT_FOLDER)).strip() or _DEFAULT_FOLDER,
             allow_senders=_coerce_senders(d.get("allow_senders", [])),
             bound_addresses=load_bound_addresses(d.get(_ADDRESSES_KEY, [])),
-            # Guardrail 4: the DEFAULT is False, and an absent/unparseable value keeps it
+            # Draft-by-default: the DEFAULT is False, and an absent/unparseable value keeps it
             # False — the safe side for an irreversible outbound action.
             send_enabled=d.get("send_enabled", False) is True,
             smtp_host=str(d.get("smtp_host", "")).strip(),

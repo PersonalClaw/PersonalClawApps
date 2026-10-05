@@ -101,7 +101,7 @@ def _task_request(
     ONE spelling, the spec-canonical one: the skill travels in `metadata.skillId` and the
     text in `message.parts[].text`. Core's own inbound `_skill_id_of` reads that metadata
     key, so a PersonalClaw instance is reachable by this provider without either side
-    special-casing the other — which is the interop claim §5 actually makes.
+    special-casing the other — which is the interop claim this app actually makes.
 
     `messageId` is the caller's retry key. Core's inbound turns it into an idempotency key
     (`a2a:<id>`), so a retried delivery adopts the existing run instead of starting a

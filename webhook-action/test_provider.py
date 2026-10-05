@@ -1,4 +1,4 @@
-"""Webhook action provider routes through the net.fetch egress chokepoint (N1).
+"""Webhook action provider routes through the net.fetch egress chokepoint.
 
 The provider-local `_check_ssrf` was deleted; SSRF protection + delivery now come from
 `net.fetch(policy=WEBHOOK)`, which also closes the DNS-rebind TOCTOU the old guard had.

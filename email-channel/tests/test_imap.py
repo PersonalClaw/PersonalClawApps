@@ -321,7 +321,7 @@ class TestConnectUsesTlsAndTimeout:
 
 
 class TestProbeLogin:
-    """The plan's ``probe = login+select``: a login alone doesn't prove the folder."""
+    """The Test action's ``probe = login+select``: a login alone doesn't prove the folder."""
 
     def test_ok_when_login_and_select_both_succeed(self, monkeypatch):
         monkeypatch.setattr(

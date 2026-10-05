@@ -246,7 +246,7 @@ class TestSigV4:
 
 class TestGuardedEgress:
     def test_module_imports_no_http_client_of_its_own(self):
-        """§4.3: "never hand-rolled aiohttp". Asserted on the SOURCE, because a test that
+        """Never hand-rolled aiohttp. Asserted on the SOURCE, because a test that
         only checks behaviour would still pass if someone added a second, unguarded code
         path for one method."""
         src = pathlib.Path(provider_mod.__file__).read_text(encoding="utf-8")
@@ -1839,14 +1839,14 @@ class TestAsyncBridge:
             asyncio.run(drive())
 
 
-# ── 5. the plan's success criteria 7 and 8, driven through THIS transport ─────────────
+# ── 5. secret-free shards and the encrypted store, driven through THIS transport ──────
 #
-# Criterion 7 is "no shard, sync object, or export zip ever contains .env, .local_secret,
+# The first is "no shard, sync object, or export zip ever contains .env, .local_secret,
 # sel_hmac.key, or telemetry_salt — adversarially verified against EVERY transport". Core
 # proves it against a test-local folder transport; these two apps are new transports, so the
 # proof has to be re-run here, on the bytes that actually crossed the wire.
 #
-# Criterion 8 is "an encrypted S3 sync store is useless without the passphrase, yet
+# The second is "an encrypted S3 sync store is useless without the passphrase, yet
 # list_remote / registry operations work without the key; a plaintext object appearing in an
 # encrypted store is skipped permanently and logged, never looped on." Its literal wording
 # names S3, so this file is the first place it can be proved as written.
@@ -1888,7 +1888,7 @@ def _run_cycle(transport, home: pathlib.Path, monkeypatch, *, encrypt: str, self
     return run_sync_cycle(transport, home, self_id=self_id, now="t1", encrypt=encrypt)
 
 
-class TestCriterion7SecretsNeverLeave:
+class TestSecretsNeverLeave:
     @pytest.mark.parametrize("encrypt", ["on", "off"])
     def test_no_secret_content_ever_crosses_the_wire(
         self, isolated_home, stub, live, monkeypatch, encrypt
@@ -1937,7 +1937,7 @@ class TestCriterion7SecretsNeverLeave:
         )
 
 
-class TestCriterion8EncryptedStore:
+class TestEncryptedStore:
     def test_an_encrypted_store_is_useless_without_the_passphrase(
         self, isolated_home, stub, live, monkeypatch
     ):
@@ -1976,7 +1976,7 @@ class TestCriterion8EncryptedStore:
     def test_routing_and_registry_operations_work_with_no_key_at_all(
         self, isolated_home, stub, live, monkeypatch
     ):
-        """The other half of criterion 8: the store must stay OPERABLE without the key, or
+        """The other half: the store must stay OPERABLE without the key, or
         a machine that has not been given the passphrase could not even list the remote."""
         home = isolated_home
         _seed_task(home, "task-a", "a row")
@@ -1988,7 +1988,7 @@ class TestCriterion8EncryptedStore:
             access_key_id=AK, secret_access_key=SK,
         )
         refs = blind.list_remote()
-        assert refs, "list_remote needed the key — criterion 8 requires it not to"
+        assert refs, "list_remote needed the key — an encrypted store must list without it"
         assert blind.test().ok
 
         from personalclaw.sdk.sync import SALT_KEY, is_routing_key

@@ -9,8 +9,8 @@ drop idle SMTP sessions aggressively (Gmail at ~a minute), so a cached connectio
 usually dead by the time the next result needs delivering, and the failure surfaces as a
 lost message instead of a retry. Sends here are occasional, not a stream.
 
-**Authentication is an app password.** OAuth2 (XOAUTH2) is DEFERRED — see the DISCOVERY
-note in the app README. Every provider whose flow the setup step documents
+**Authentication is an app password.** OAuth2 (XOAUTH2) is DEFERRED — see the
+"Deferred, on purpose" note in the app README. Every provider whose flow the setup step documents
 (Gmail/Fastmail/iCloud) issues a per-application password precisely for clients like
 this, and it needs no token-refresh machinery, no client registration, and no browser
 round-trip in a headless gateway.

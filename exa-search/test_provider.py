@@ -1,4 +1,4 @@
-"""WS7 — the Exa Search adapter: capability disclosure (neural + highlights + fetch),
+"""The Exa Search adapter: capability disclosure (neural + highlights + fetch),
 depth→type mapping, recency→startPublishedDate, highlight folding, and /contents fetch.
 
 Mocks the net.fetch egress chokepoint (the adapter routes outbound HTTP through it

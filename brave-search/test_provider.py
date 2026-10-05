@@ -1,4 +1,4 @@
-"""WS7 — the Brave Search adapter: capability disclosure, recency→freshness mapping,
+"""The Brave Search adapter: capability disclosure, recency→freshness mapping,
 extra_snippets folding, and response normalization.
 
 Mocks the net.fetch egress chokepoint (the adapter routes outbound HTTP through it

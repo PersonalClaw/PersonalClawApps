@@ -163,8 +163,8 @@ _MODELS_PATH = "/v1/models"
 _API_VERSION = "2023-06-01"
 
 # Curated Claude catalog. The list is CURATED rather than discovered because the
-# exclusion below is a product decision an endpoint cannot make for us — so per the
-# de-hardcode directive this is the one place a model list is allowed to be hardcoded,
+# exclusion below is a product decision an endpoint cannot make for us — so this is the
+# one place a model list is allowed to be hardcoded,
 # and it is sourced by INTERNET SEARCH of the current Anthropic model docs
 # (platform.claude.com/docs/en/docs/about-claude/models/overview), not from memory.
 #

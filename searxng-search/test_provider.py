@@ -1,4 +1,4 @@
-"""WS2 — SearXNG search adapter (a standalone app): capability disclosure,
+"""SearXNG search adapter (a standalone app): capability disclosure,
 request shaping, and response normalization.
 
 Mocks the net.fetch egress chokepoint (the adapter routes outbound HTTP through it

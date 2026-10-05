@@ -1197,10 +1197,10 @@ async def _handle_options(payload: dict, action: dict, channel: str, msg_ts: str
 async def _handle_cron_ack(payload: dict, action: dict, channel: str, msg_ts: str) -> None:
     """Acknowledge a cron notification from its Slack button.
 
-    🔴 The `cron_svc.ack_job(...)` call is GONE (S112). Core deleted `ScheduleService`, and that write
-    was already dead weight: its `acked_items` field maps to `None` in `LEGACY_FIELD_MAP` (core S98
+    🔴 The `cron_svc.ack_job(...)` call is GONE. Core deleted `ScheduleService`, and that write
+    was already dead weight: its `acked_items` field maps to `None` in `LEGACY_FIELD_MAP` (core
     verified the whole ack surface had zero consumers — no frontend client method, no MCP tool, and an
-    empty field on the owner's real store) and the route was removed in S110.
+    empty field on the owner's real store) and the route was removed.
 
     The load-bearing half stays, and always was: acknowledging the DASHBOARD notification, exactly as
     the sibling `_handle_subagent_ack` does. The gate now needs no scheduler either.
@@ -2001,7 +2001,7 @@ async def _handle_session_end(
 
     key_to_remove = _orch.sessions.find_key_by_sid(session_id)
     if key_to_remove:
-        # E11: ending a session is an explicit close — extract skills from the
+        # Ending a session is an explicit close — extract skills from the
         # full transcript one last time before the process goes away.
         if _orch.consolidator is not None:
             try:

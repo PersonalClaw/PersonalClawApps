@@ -39,7 +39,7 @@ def test_catalog_is_plain_catalog():
 
 def test_discovery_failure_is_raised_not_swallowed(monkeypatch):
     # Endpoint 500 -> the failure is RAISED. No hardcoded curated fallback
-    # (de-hardcode directive 2026-07-06), and with nothing to fall back on a
+    # exists, and with nothing to fall back on a
     # discovery failure is not the same event as "this endpoint serves no
     # models" (core #955): every caller relays a raised failure onto the
     # provider row, while a silent [] is the one answer a user cannot act on.

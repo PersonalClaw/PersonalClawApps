@@ -1,6 +1,6 @@
 """Rails for the fully-local image backend.
 
-Organised by the five clauses IG-1 has to satisfy, because a rail whose subject is
+Organised by the five clauses it has to satisfy, because a rail whose subject is
 unclear is the kind that quietly goes vacuous:
 
 * **Clause 1** — generation runs through core's existing SEL-audited
@@ -179,10 +179,10 @@ def _no_saved_settings(monkeypatch):
 
 # ══ Clause 3 — licence discipline ════════════════════════════════════════════
 
-#: Every trap IG-1 names, with the reason each must be refused. Held here as a
-#: literal so the rail is asserted against the change's own list, not against
+#: Every trap the licence rule disqualifies, with the reason each must be refused. Held
+#: here as a literal so the rail is asserted against its own list, not against
 #: whatever the catalog happens to contain.
-_C9_TRAPS = {
+_LICENCE_TRAPS = {
     "flux.1-dev": "non-commercial",
     "sdxl-base-1.0": "OpenRAIL",
     "sd-1.5": "OpenRAIL",
@@ -204,7 +204,7 @@ class TestClause3LicenceAllowlist:
         assert not rec.disqualified
         assert is_permissive(rec)
 
-    @pytest.mark.parametrize("name", sorted(_C9_TRAPS))
+    @pytest.mark.parametrize("name", sorted(_LICENCE_TRAPS))
     def test_every_c9_trap_is_in_the_catalog_and_refused(self, name):
         """Each trap is present AND rejected.
 
@@ -237,7 +237,7 @@ class TestClause3LicenceAllowlist:
     def test_setup_copy_recommends_the_permissive_default_and_names_no_trap(self):
         text = setup_help()
         assert RECOMMENDED_MODEL in text
-        for trap in _C9_TRAPS:
+        for trap in _LICENCE_TRAPS:
             assert trap not in text, f"setup copy names the disqualified {trap}"
         # and it tells the user the weights are theirs to fetch
         assert "does not ship or fetch model weights" in text
@@ -245,13 +245,13 @@ class TestClause3LicenceAllowlist:
     def test_manifest_description_recommends_only_a_permissive_model(self):
         """The manifest is setup copy too — it is what the Store renders."""
         blob = json.dumps(_MANIFEST).lower()
-        for trap in _C9_TRAPS:
+        for trap in _LICENCE_TRAPS:
             assert trap not in blob, f"the manifest names the disqualified {trap}"
         assert RECOMMENDED_MODEL in blob
 
     # ── the rail's own negative case ──────────────────────────────────────────
 
-    @pytest.mark.parametrize("trap", sorted(_C9_TRAPS))
+    @pytest.mark.parametrize("trap", sorted(_LICENCE_TRAPS))
     def test_the_rail_goes_red_if_a_trap_is_made_the_default(self, monkeypatch, trap):
         """Exercise the failure the clause-3 rail exists to catch.
 

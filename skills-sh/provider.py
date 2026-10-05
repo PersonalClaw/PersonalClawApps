@@ -94,8 +94,8 @@ class SkillsShMarketplace(SkillsMarketplace):
     def _get(self, path: str) -> dict:
         url = f"{_API_BASE}{path}"
         endpoint = url.split("?", 1)[0]
-        # Classify the target host through the egress guard BEFORE the raw request
-        # (#41). The SkillsMarketplace ABC is SYNCHRONOUS, so the async net.fetch
+        # Classify the target host through the egress guard BEFORE the raw request.
+        # The SkillsMarketplace ABC is SYNCHRONOUS, so the async net.fetch
         # can't be used here — ``evaluate`` is the sync egress decision (resolve +
         # host-classify + scheme check) that net.fetch runs internally. This gives
         # skills.sh the same SSRF/private-IP + scheme guard the async callers get, under the

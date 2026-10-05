@@ -63,7 +63,7 @@ class OpenAIToolProvider(ToolProvider):
             return False
         # Guard the operator endpoint through the same egress evaluator the data
         # paths use BEFORE any raw request — a private/blocked host reports "not
-        # connected" rather than being probed (#41). ``evaluate`` is the SYNC guard
+        # connected" rather than being probed. ``evaluate`` is the SYNC guard
         # (resolves + classifies the host); the async net.fetch can't be used from
         # this sync property, but evaluate() gives the identical decision.
         try:
@@ -107,7 +107,7 @@ class OpenAIToolProvider(ToolProvider):
         # Route discovery through the net.fetch egress chokepoint (host
         # classification, redirect-hop re-check, byte cap, timeout, SEL audit)
         # instead of raw aiohttp — the endpoint is operator-configured, so this
-        # closes the SSRF/private-IP surface. #41.
+        # closes the SSRF/private-IP surface.
         import json
 
         from personalclaw.sdk.net import CONNECTOR, EgressBlocked, egress_policy_for, fetch
@@ -183,7 +183,7 @@ class OpenAIToolProvider(ToolProvider):
         invoke_url = f"{self._endpoint}/tools/{tool_name}"
         try:
             # Route through the net.fetch egress chokepoint (operator endpoint →
-            # SSRF-relevant; guard classifies the host + re-checks redirect hops). #41.
+            # SSRF-relevant; guard classifies the host + re-checks redirect hops).
             # egress_policy_for layers the operator's security.egress allow-list so a
             # self-hosted LAN tool server is reachable when opted in.
             resp = await fetch(

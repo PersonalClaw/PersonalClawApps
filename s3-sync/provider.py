@@ -845,7 +845,7 @@ def _outcome_for_status(status: int, code: str = "") -> str:
     temporary redirect (307), or failing (5xx). Everything else — an auth or permission
     refusal, a bucket that isn't there, a malformed request, a missing feature (501: no
     conditional writes), a permanent redirect — is a setup the next try would meet unchanged,
-    so ``permanent``: retrying an unauthorized PUT forever is the error loop §4.4 bans.
+    so ``permanent``: retrying an unauthorized PUT forever would be an error loop.
     """
     if code == "RequestTimeout" or status in (307, 408, 429):
         return "transient"

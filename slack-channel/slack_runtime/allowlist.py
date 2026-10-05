@@ -232,7 +232,7 @@ def persist_allowed_user(user_id: str, name: str = "", *, remove: bool = False) 
 
     persist_list_entry("allowed_users", "slack_id", user_id, remove=remove, name=name)
     reload_settings()
-    # EA-7 write-through: the guarded inbound door consults core's channel_trust
+    # Write-through: the guarded inbound door consults core's channel_trust
     # store, so the owner's Allow/Deny ruling must land there too, not only in
     # SlackSettings — otherwise the two stores drift and the door rules on stale data.
     try:
@@ -249,7 +249,7 @@ def persist_tracking_channel(channel_id: str, name: str = "", *, remove: bool = 
 
     persist_list_entry("tracking_channels", "channel_id", channel_id, remove=remove, name=name)
     reload_settings()
-    # EA-7 write-through — same reason as persist_allowed_user above.
+    # Write-through — same reason as persist_allowed_user above.
     try:
         from personalclaw.sdk.channel import track, untrack
 
@@ -277,7 +277,7 @@ def member_name(
 
 
 def sync_channel_trust(settings: "SlackSettings") -> None:
-    """Mirror the app store's tracked channels into core's channel_trust store (EA-7).
+    """Mirror the app store's tracked channels into core's channel_trust store.
 
     The guarded inbound door consults core's per-provider trust store, not this
     app's SlackSettings, and the Sender trust page lists it. Each tracked channel

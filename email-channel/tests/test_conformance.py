@@ -2,7 +2,7 @@
 
 The kit is the ONE executable statement of the channel contract, shipped by core and
 imported through ``personalclaw.sdk.channel``. Email is the channel that exercises the
-kit's *negative* streaming clause: it declares ``edits=False`` (§C3 "streaming MUST-NOT"),
+kit's *negative* streaming clause: it declares ``edits=False`` (email: streaming MUST-NOT),
 so instead of a throttle the kit asserts that ``start_stream`` returns ``""`` — core reads
 ``await start_stream(...) or ""`` and would otherwise begin an animation this channel can
 never update.

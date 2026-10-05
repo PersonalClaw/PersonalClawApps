@@ -132,7 +132,7 @@ MAX_FILE_BYTES = 1024 * 1024
 GIT_TIMEOUT_SECS = 60
 
 #: Local paths the connector must never index, even if explicitly configured — the
-#: bypass-immune class (decision 7). The primary guard is "must be a git work tree", which a
+#: bypass-immune class. The primary guard is "must be a git work tree", which a
 #: credential directory is not; this is defense in depth for the case where one happens to be.
 _SENSITIVE_BASENAMES = frozenset({".ssh", ".aws", ".gnupg", ".gpg", ".personalclaw", ".config"})
 
@@ -239,7 +239,7 @@ class _RepoConfig:
     Frozen, and passed down every poll path as an argument rather than read off ``self``:
     one provider instance now serves every source of this app, so a value on the instance is
     a value that belongs to whichever source polled last. That is precisely the ceiling
-    AECO-2 lifts, and the type system is the cheapest place to keep it lifted.
+    per-source specs lift, and the type system is the cheapest place to keep it lifted.
     """
 
     repo: str
@@ -251,7 +251,7 @@ class _RepoConfig:
 
 
 class GitRepoSourceProvider(KnowledgeSourceProvider):
-    """Poll-capable knowledge source over a git repository's file CONTENT (AECO-1/AECO-2).
+    """Poll-capable knowledge source over a git repository's file CONTENT.
 
     One instance serves EVERY source of this app. The constructor takes the app settings,
     which are the per-install DEFAULTS; each source's own spec (:data:`SPEC_KEYS`, delivered
@@ -383,11 +383,11 @@ class GitRepoSourceProvider(KnowledgeSourceProvider):
     async def poll(
         self, source_id: str, cursor: str = "", *, spec: dict | None = None, policy: Any = None
     ) -> SourcePollResult:
-        """One incremental pass over THIS source's repo. Never raises to the engine (§1.1) —
+        """One incremental pass over THIS source's repo. Never raises to the engine —
         a bad config, an unreadable repo, or an egress denial is a soft error so the source
         degrades rather than killing the loop. ``cursor`` is the last-ingested commit SHA
         (opaque to the engine); ``spec`` is this source's own row, delivered by the engine
-        because an app holds no store handle to read it with (AECO-2)."""
+        because an app holds no store handle to read it with."""
         cfg, err = self._resolve(spec)
         if cfg is None:
             # Cursor untouched: a transient misconfiguration (an unmounted clone) must not wipe

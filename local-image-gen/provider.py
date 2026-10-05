@@ -448,7 +448,7 @@ class LocalComfyImageProvider(ImageGenProvider):
         """Checkpoint filenames ComfyUI can actually load right now.
 
         Empty when the runtime is up but the user has pulled no weights yet —
-        which is the state clause 5 of IG-1 cares about, and is a calm empty list
+        which is the declared-but-not-pulled state, and is a calm empty list
         rather than an error.
         """
         data = await self._get("/object_info/CheckpointLoaderSimple")

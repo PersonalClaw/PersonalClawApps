@@ -97,7 +97,7 @@ class VLLMProvider(OpenAIProvider):
 # ── Capability descriptor ────────────────────────────────────────────────
 #
 # Mirrors :data:`personalclaw.providers.openai.OPENAI_CAPABILITY` because vLLM
-# speaks the same wire protocol. Per design § A.5 individual capabilities
+# speaks the same wire protocol. Individual capabilities
 # (tools, embeddings, vision) are model-dependent on a vLLM server, so
 # concrete Provider_Entry rows should declare only the subset their
 # deployment actually supports — the descriptor here is the maximum

@@ -2051,7 +2051,7 @@ class TestConfiguration:
         assert isinstance(create_provider({}), SyncTransportProvider)
 
 
-# ── 5. success criterion 7, driven through THIS transport ─────────────────────────────
+# ── 5. no secret ever leaves, driven through THIS transport ───────────────────────────
 #
 # "No shard, sync object, or export zip ever contains .env, .local_secret, sel_hmac.key, or
 # telemetry_salt — adversarially verified against EVERY transport." Core proves it against a
@@ -2095,7 +2095,7 @@ def _run_cycle(transport, home: pathlib.Path, monkeypatch, *, encrypt: str, self
 
 
 @needs_rsync
-class TestCriterion7SecretsNeverLeave:
+class TestSecretsNeverLeave:
     @pytest.mark.parametrize("encrypt", ["on", "off"])
     def test_no_secret_content_ever_reaches_the_target(
         self, isolated_home, local, target, monkeypatch, encrypt
@@ -2141,8 +2141,8 @@ class TestCriterion7SecretsNeverLeave:
     def test_encryption_is_on_by_default_for_this_transport(
         self, isolated_home, local, target, monkeypatch
     ):
-        """§4.4 leaves rsync-sync unnamed; core resolved the tie to ON. Pin the resolution
-        here so the app and core cannot drift apart silently."""
+        """rsync-sync's encryption default could go either way; core resolved the tie to ON.
+        Pin the resolution here so the app and core cannot drift apart silently."""
         from personalclaw.durability.crypto import (
             DEFAULT_ENCRYPT_BY_TRANSPORT,
             encryption_enabled_for,

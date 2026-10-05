@@ -352,7 +352,7 @@ class TestLinkedThreadIntercept:
             slash.assert_called_once()
 
 
-# ── EA-7 trust write-through tests ──
+# ── Trust write-through tests ──
 
 
 class TestChannelTrustWriteThrough:

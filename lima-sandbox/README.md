@@ -67,7 +67,7 @@ degradation*) rather than failing a launch.
 ## Relationship to `backend.sandbox`
 
 This app supplies the **provider** — the isolated tier itself. It is the counterpart to the
-core-side launcher work in EI-4 §1.3(4), which lets a *consumer* app run its own backend in a
+core-side launcher work, which lets a *consumer* app run its own backend in a
 sandbox tier: that app declares `backend.sandbox` to name the tier, and the core launcher maps
 its `permissions.network` → the sandbox `egress_tier` and `permissions.storage` → the sandbox
 `allowed_write_paths` when it builds the launch policy. Those consumer-side manifest mappings

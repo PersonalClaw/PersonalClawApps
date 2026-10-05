@@ -153,8 +153,8 @@ async def test_default_chain_when_no_profile(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_no_hardcoded_default_model_constant() -> None:
-    """De-hardcode directive: there is NO hardcoded default model id.
-    The old ``DEFAULT_BEDROCK_MODEL`` constant (and the #32 fix's hardcoded value) are
+    """There is NO hardcoded default model id.
+    The old ``DEFAULT_BEDROCK_MODEL`` constant (and the hardcoded value a later fix put in its place) are
     gone, and nothing picks a model in their place: a call names its binding or the
     instance's Default Model, or it is refused."""
     import provider as prov
@@ -550,7 +550,7 @@ def test_bare_model_id_empty_uses_fallback():
     assert _bare_model_id(None, "the-fallback") == "the-fallback"
 
 
-# ── MCP tool-name sanitization for Converse (#69) ──
+# ── MCP tool-name sanitization for Converse ──
 
 def test_tool_names_sanitized_for_converse_and_reverse_mapped():
     """Bedrock's toolSpec.name must match [a-zA-Z0-9_-]+; MCP tools are
@@ -722,9 +722,8 @@ def test_translate_messages_never_emits_empty_text_blocks() -> None:
 #
 # Core places a NEUTRAL `_cache_hint` marker on exactly one message and never learns
 # Converse's syntax; this app turns that marker into a `cachePoint` content block. These
-# tests pin the translation at the payload level, which is the substitute for the live
-# multi-turn Bedrock drive the change's validation clause asks for (see the plan's
-# execution log: no usable Bedrock credentials in this environment).
+# tests pin the translation at the payload level, which is the substitute for a live
+# multi-turn Bedrock drive (no usable Bedrock credentials in this environment).
 
 _CACHE_POINT = {"cachePoint": {"type": "default"}}
 

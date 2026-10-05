@@ -533,7 +533,7 @@ async def test_one_install_watches_two_repositories_each_from_its_own_spec(store
     """The headline, end to end through the real engine.
 
     ONE ``create_provider`` call — one install, one set of settings, one provider instance —
-    serves TWO sources whose specs name different repositories. The pre-AECO-2 shape (repo
+    serves TWO sources whose specs name different repositories. The pre-spec shape (repo
     from a per-install setting) cannot pass this: both sources would index the same tree.
     """
     provider = create_provider({"repo": str(repo)})  # the install default
@@ -618,7 +618,7 @@ async def test_an_empty_spec_install_is_unchanged_by_the_new_contract(store, rep
     """Clause 4's round-trip: a single-source install with an empty spec behaves EXACTLY as
     it did before the spec could be delivered. Driven twice over the same fixture — once
     through the engine (which now passes ``spec={}``) and once by calling ``poll`` with no
-    spec at all, as the pre-AECO-2 engine did — and the two must agree item for item."""
+    spec at all, as the pre-spec engine did — and the two must agree item for item."""
     provider = create_provider({"repo": str(repo)})
     engine = _engine(store, provider)
     sid = store.create_source(name="r", provider="git-repo", kind="external", spec={})

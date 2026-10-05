@@ -4,9 +4,9 @@ over SMTP, **drafting by default**.
 On each ``poll`` the provider:
 
 1. reads the latest app settings + the IMAP password, whose value ``ProviderSettings`` keeps
-   in the credential store (the settings file holds only a reference — EIAT guardrail);
+   in the credential store (the settings file holds only a reference);
 2. **fails closed on the allowlist** — an empty/absent ``allow_senders`` surfaces ZERO
-   messages and never even connects (guardrail 1);
+   messages and never even connects;
 3. UID-SEARCHes the folder for messages newer than the checkpoint cursor (the dict
    ``poll`` returns is the resume mechanism — the highest processed UID per folder), so a
    restart neither reprocesses nor skips. A mailbox with no checkpoint yet — the first poll
@@ -22,7 +22,7 @@ On each ``poll`` the provider:
 5. extracts the body (prefer text/plain, sanitize HTML) and maps the mail onto
    ``IncomingMessage``, its attachments as the message's files (``files``): core keeps them
    with the Inbox row, which lists each one with a download;
-6. **binds a prompt-bound address** (C4): when the mail was delivered to one of
+6. **binds a prompt-bound address**: when the mail was delivered to one of
    the configured ``bound_addresses``, the item text becomes that row's stored,
    user-authored ``default_prompt`` followed by the mail FENCED with
    ``source="mail:<address>"`` (``addresses.compose_prompt`` — the one composition point),
@@ -41,7 +41,7 @@ certificate refused, the login refused, or a setting it needs missing. It used t
 warning and return nothing, so a wrong password read exactly like a quiet mailbox. Core keeps
 the checkpoints it had, so the next poll starts where this one would have.
 
-**Outbound (C3, guardrail 4).** Polling also REMEMBERS how to answer each
+**Outbound (draft-by-default).** Polling also REMEMBERS how to answer each
 surfaced message (``outbound.remember_target``), because ``send_reply``'s signature —
 ``(channel_id, text, thread_ts)`` — carries no recipient and one can never be inferred
 from a channel id. ``thread_ts`` is the mail's ``Message-ID`` (its ``IncomingMessage.id``,
@@ -339,7 +339,7 @@ class MailInboxProvider(MessageSourceProvider):
                 "Configure form"
             )
         # Fail closed: an empty allowlist surfaces NOTHING and never connects. This is the
-        # structural guarantee (guardrail 1) — not a per-message filter, an upstream refusal.
+        # structural guarantee — not a per-message filter, an upstream refusal.
         if not settings.allow_senders:
             raise NotSetUp(
                 "Allowed Senders is empty, so it reads no mail: it surfaces only mail from the "
@@ -448,7 +448,7 @@ class MailInboxProvider(MessageSourceProvider):
             self._log_rejection(from_addr, uid)
             return None
 
-        # Prompt-bound address (C4). Matched AFTER the app-wide allowlist, so a bound row's
+        # Prompt-bound address. Matched AFTER the app-wide allowlist, so a bound row's
         # own list can only NARROW: a sender the global list rejects never reaches here.
         bound = match_bound_address(settings.bound_addresses, _recipients(msg))
         if bound is not None and not bound.sender_allowed(from_addr):
@@ -567,7 +567,7 @@ class MailInboxProvider(MessageSourceProvider):
                 pass
         return time.time()
 
-    # ── outbound (C3, guardrail 4) ──
+    # ── outbound (draft-by-default) ──
     async def send_reply(
         self, channel_id: str, text: str, thread_ts: str | None = None
     ) -> "bool | ReplyNotSent":

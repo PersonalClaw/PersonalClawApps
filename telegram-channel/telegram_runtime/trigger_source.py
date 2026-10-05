@@ -1,7 +1,7 @@
 """Telegram's ``trigger_source`` provider — real inbound traffic as automation events.
 
-CHANNEL-EXPANSION CE-10, closing the vendor-completeness checklist's third row for this
-bundle. ``WF2AUT-8`` shipped the app-registered trigger-source seam; this is the app half.
+This closes the vendor-completeness checklist's third row for this
+bundle. Core ships the app-registered trigger-source seam; this is the app half.
 The app observes something core knows nothing about (a Telegram chat) and hands core typed
 :class:`~personalclaw.sdk.trigger_source.SourceEvent`\\ s. Core does everything else: it
 namespaces them ``app:telegram-channel:<event>``, fences the text at origin with full

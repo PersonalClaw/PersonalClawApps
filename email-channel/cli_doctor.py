@@ -5,7 +5,7 @@ Registered via ``app.json`` → ``cli.doctor: "cli_doctor:probe"``. The core doc
 by a timeout + exception guard), rendering the returned ``list[DoctorLine]`` as this
 app's doctor section.
 
-The probe here is the plan's ``probe = login+select``, and it runs it **live** for both
+The probe here is login + SELECT, and it runs it **live** for both
 protocols: IMAP login plus a SELECT of the polled folder, and an SMTP login. That is
 more than the Telegram/Discord doctors do (they only check that a token is present and
 point at the Channels-page Test), and deliberately so — an email channel has *two*

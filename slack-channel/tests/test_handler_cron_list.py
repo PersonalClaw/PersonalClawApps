@@ -1,9 +1,9 @@
 """`cron list` renders automations from the unified TRIGGER STORE.
 
-🔴 REWRITTEN for core's S112, which deleted `ScheduleService`. These tests drove that service by
+🔴 REWRITTEN when core deleted `ScheduleService`. These tests drove that service by
 assigning `cron_service._jobs = [...]` — poking a private list on a class whose file the store
 replaced. Worse, they passed the whole time the command was BROKEN: the service read `crons.json`,
-which nothing has written since core's S108, so a real user's `cron list` showed an empty list and
+which nothing writes any more, so a real user's `cron list` showed an empty list and
 remove/pause/resume answered "not found" for every live id.
 
 The contract under test is unchanged — the relative next-run rendering, and that a job's message is

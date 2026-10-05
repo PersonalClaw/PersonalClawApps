@@ -321,7 +321,7 @@ async def test_sel_audit_logged_for_action(orch_fixture: MagicMock) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Phase 6 — stop_kill_now action and _handle_stop_confirm via stop_turn
+# stop_kill_now action and _handle_stop_confirm via stop_turn
 # ---------------------------------------------------------------------------
 
 

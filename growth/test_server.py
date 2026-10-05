@@ -285,7 +285,7 @@ def test_ui_declares_the_capability_its_import_depends_on():
     assert "from '@personalclaw/app-sdk/ui'" in src, "the UI no longer imports the host primitives"
     caps = _json.loads((_APP_DIR / "app.json").read_text(encoding="utf-8")).get("uiCapabilities")
     assert caps == ["shell-primitives"], f"manifest declares {caps!r}"
-    # The subpath is a DIFFERENT module from the base SDK (APE-11 removed the alias), so
+    # The subpath is a DIFFERENT module from the base SDK (the alias was removed), so
     # importing the base module is not evidence that the primitives resolved.
     assert "from '@personalclaw/app-sdk'" in src
 
@@ -304,7 +304,7 @@ def test_frontend_is_token_clean_under_the_shared_lint():
 
 
 def test_no_local_re_declaration_of_a_host_primitive():
-    """APE-6 deleted this bundle's copies of the host component spec. A new one would fork
+    """This bundle's copies of the host component spec were deleted. A new one would fork
     the design system again silently — the whole failure mode the migration removed."""
     src = _ui_code_lines()
     for name in ("primaryBtn", "smallBtn", "linkBtn", "tabStyle", "tabActive", "cardStyle"):

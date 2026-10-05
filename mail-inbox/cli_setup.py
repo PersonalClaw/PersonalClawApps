@@ -15,7 +15,7 @@ Core config.json holds no mail config. Declining the token step leaves the sourc
 disabled (no password ⇒ the provider never polls).
 
 The outbound step never turns sending ON: it configures the transport and stores the
-password, and ``send_enabled`` stays False (guardrail 4 — draft-by-default). Enabling a
+password, and ``send_enabled`` stays False (draft-by-default). Enabling a
 send is a separate, deliberate act in the app's settings page, because a sent email cannot
 be taken back.
 """

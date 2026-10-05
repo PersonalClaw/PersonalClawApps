@@ -15,7 +15,7 @@ import { defineConfig } from 'vite'
 //   · `react/jsx-runtime` — emitted by the AUTOMATIC JSX runtime, which is vite 8's default
 //     for TSX. `growth` hit it first: its page stopped rendering entirely ("Failed to resolve
 //     module specifier react/jsx-runtime", measured in a browser on unmodified sources; fixed
-//     in APE-6). This bundle is on vite 8 too, so the CLASSIC transform PINNED below is what
+//     since). This bundle is on vite 8 too, so the CLASSIC transform PINNED below is what
 //     keeps that import out of it.
 //   · `lucide-react` — the host comment claims it is provided; it appears in
 //     `resolvableAppSpecs` but has NO entry in the module map, so `appModuleShimUrl`

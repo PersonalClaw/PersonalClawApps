@@ -131,7 +131,7 @@ class TestCapabilities:
         assert caps.speaks_as_owner is True  # a mail goes out from the owner's own mailbox
 
     def test_streaming_falsity_is_declared_as_no_edits(self):
-        """The plan says "capabilities declare streaming=false", but the shipped
+        """The capabilities must declare "streaming=false", but the shipped
         ``ChannelCapabilities`` dataclass has NO ``streaming`` field. In every other
         channel a stream IS a repeatedly-edited message, so no-edits IS no-streaming.
         This test pins both halves of that mapping TOGETHER so they can't drift apart."""
@@ -259,7 +259,7 @@ class TestNewMailDetection:
 
 
 class TestUidPersistence:
-    """A restart neither reprocesses nor skips — the change's explicit requirement."""
+    """A restart neither reprocesses nor skips."""
 
     @pytest.mark.asyncio
     async def test_cursor_is_written_to_the_apps_data_dir(self, wired):
@@ -592,7 +592,7 @@ class TestTrustSeamIntegration:
 
 
 class TestPairingByReply:
-    """The plan's email pairing UX: a REPLY CONTAINING the code redeems it."""
+    """Email's pairing UX: a REPLY CONTAINING the code redeems it."""
 
     @pytest.mark.asyncio
     async def test_a_reply_containing_the_code_pairs_the_sender(self, wired):

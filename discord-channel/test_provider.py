@@ -40,7 +40,7 @@ def test_discord_capabilities():
     c = DiscordTransport().capabilities()
     assert c.inbound and c.threads and c.attachments and c.edits and c.rich_text
     # Both declared True because both are implemented (add_reaction / show_typing) —
-    # the change's "honest capabilities" bar.
+    # the channel contract's "honest capabilities" bar.
     assert c.reactions is True
     assert c.typing_indicator is True
     assert c.max_text_len == 2000

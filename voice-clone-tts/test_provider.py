@@ -1,8 +1,8 @@
 """Unit tests for the voice-clone-tts app: the manifest + catalog contract, the
-cloning-capability declaration MI-2a routes on, catalog-driven model/voice listing,
+cloning-capability declaration core routes on, catalog-driven model/voice listing,
 engine detection, and graceful degradation when the optional engine is absent.
 
-All tests run WITHOUT the heavy engine installed (the contract phase); the one path
+All tests run WITHOUT the heavy engine installed; the one path
 that needs a real engine is guarded with ``skipif``. Patches are app-local (provider.*)."""
 
 from __future__ import annotations
@@ -126,7 +126,7 @@ class TestDegradation:
 class TestEnginePath:
     @pytest.mark.skipif(
         _detect_engine() == "",
-        reason="no cloning engine installed (OmniVoice/CosyVoice) — MI-2c wires real inference",
+        reason="no cloning engine installed (OmniVoice/CosyVoice)",
     )
     @pytest.mark.asyncio
     async def test_engine_detected_reports_available(self):

@@ -10,7 +10,7 @@ message to :func:`asyncio.to_thread`; nothing in this module touches a socket on
 event loop. That is not a nicety — one blocking ``sendmail`` against a slow relay would
 freeze every session and WebSocket in the gateway for the duration.
 
-**There is no streaming.** The plan's C3 table marks the streaming trio MUST-NOT for
+**There is no streaming.** The streaming trio is MUST-NOT for
 email, and rightly: a "live-updating message" would mean re-sending a mail per token.
 :meth:`start_stream` returns ``""`` and the append/stop calls are no-ops, which is
 exactly what core's mirror path checks before animating (``_mirror_stream_ts = await
@@ -484,7 +484,7 @@ class EmailDelivery:
     async def deliver_notification(
         self, channel: str, title: str, text: str, thread_ts: str = ""
     ) -> str:
-        """Deliver a titled notification. This is also plan 42's ``channel_dm`` /
+        """Deliver a titled notification. This is also the ``channel_dm`` /
         digest delivery target for email — see the README's deferral note."""
         return await self._deliver(channel, thread_ts, f"[PersonalClaw] {title}", text)
 
@@ -532,7 +532,7 @@ class EmailDelivery:
     def list_reply_channels(self) -> list[dict]:
         """The addresses this delivery can post into for the dashboard picker.
 
-        The allowed-sender list lives in the core trust seam (CE-1 owns it) and the SDK
+        The allowed-sender list lives in the core trust seam and the SDK
         exposes only a membership check — no enumeration — so the picker offers the
         owner's own address when one is configured. Deliberately minimal, per the
         ChannelDelivery contract ("may be empty")."""
@@ -544,7 +544,7 @@ class EmailDelivery:
         return is_tracked_channel("email", channel_id)
 
     def build_thread_link(self, channel: str, ts: str) -> str:
-        """An RFC 2392 ``mid:`` anchor for a message id (C3: MAY, message-id anchor).
+        """An RFC 2392 ``mid:`` anchor for a message id (MAY, message-id anchor).
 
         ``mid:`` is the standard URL form for "this message", and mail clients that
         register the scheme jump straight to it. The angle brackets are stripped (they
@@ -555,7 +555,7 @@ class EmailDelivery:
             return ""
         return f"mid:{quote(mid, safe='@.')}"
 
-    # ── attachments (C3: SHOULD — MIME parts) ──
+    # ── attachments (SHOULD — MIME parts) ──
 
     async def upload_attachment(
         self, channel: str, file_path: str, *, filename: str = "", thread_ts: str = "",
@@ -580,7 +580,7 @@ class EmailDelivery:
             channel, thread_ts, title or "", body, attachments=[(name, mimetype, payload)]
         )
 
-    # ── streaming: MUST-NOT for email (C3). Explicit no-ops, not accidents. ──
+    # ── streaming: MUST-NOT for email. Explicit no-ops, not accidents. ──
 
     async def start_stream(self, channel: str, thread_ts: str = "", initial_text: str = "") -> str:
         """No streaming affordance: returns "" so core skips live animation entirely.
@@ -599,7 +599,7 @@ class EmailDelivery:
         """No-op: nothing was started (see :meth:`start_stream`)."""
         return None
 
-    # ── approval via reply token (C3: SHOULD) ──
+    # ── approval via reply token (SHOULD) ──
 
     def _owner_address(self) -> str:
         """The owner's own address, or ``""`` when this channel knows none.

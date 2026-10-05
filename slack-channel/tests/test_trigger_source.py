@@ -1,6 +1,6 @@
 """SlackTriggerSource — the bundle's third provider.
 
-``CE-8`` brought this bundle to ``channel`` + ``inbox``; this closes the vendor-completeness
+The bundle already had ``channel`` + ``inbox``; this closes the vendor-completeness
 checklist's third row.
 
 Every clause here is DRIVEN. The end-to-end test starts from a raw Slack ``message`` event and
@@ -16,8 +16,8 @@ running it would drag ACP in.
 Slack's own: ``slack_runtime/allowlist.py`` owns this app's allow/deny UX and
 ``grep -rn guard_inbound slack-channel/`` is empty. So the denied-sender clause below drives
 the allowlist that actually governs this app today. The three sibling bundles drive
-``verdict.allowed`` instead, because they route admission through the door. (The CE-6
-``[fencing]`` clause of T1.4 DID land — ``handle_message`` now fences non-owner content
+``verdict.allowed`` instead, because they route admission through the door. (The kit's
+``[fencing]`` clause DOES hold — ``handle_message`` now fences non-owner content
 before the agent — so ``tests/test_conformance.py`` passes the kit; it is no longer an xfail.)
 
 **Process-global state.** ``trigger_sources``' registry, the bus's router, and ``handler``'s
@@ -241,10 +241,10 @@ def test_the_manifest_DECLARES_a_trigger_source_over_this_bundle_s_own_factory()
     manifest = AppManifest.from_dict(json.loads(_MANIFEST.read_text(encoding="utf-8")))
     declared = {p.type: p for p in manifest.all_providers()}
     assert "channel" in declared, "this test is about a CHANNEL app's completeness"
-    assert "inbox" in declared, "CE-8's inbox source must survive this change"
+    assert "inbox" in declared, "the inbox source must survive this change"
     assert "trigger_source" in declared, (
         "slack-channel declares no trigger_source provider — the vendor-completeness "
-        "checklist's third row (CHANNEL-EXPANSION CE-10)"
+        "checklist's third row"
     )
     assert (
         declared["trigger_source"].implementation == "slack_runtime.trigger_source:create_provider"

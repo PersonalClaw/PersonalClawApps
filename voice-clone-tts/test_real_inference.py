@@ -1,6 +1,6 @@
-"""MI-6 remainder: real zero-shot inference, resumable weights, typed crash reason.
+"""Real zero-shot inference, resumable weights, typed crash reason.
 
-What the change pins, test by test:
+What this file pins, test by test:
 
 - the sidecar **worker** drives the REAL engine API (constructor + synthesis method
   probed in documented order, kwargs filtered to the callee's true signature) and an

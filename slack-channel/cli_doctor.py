@@ -4,7 +4,7 @@ Registered via ``app.json`` → ``cli.doctor: "cli_doctor:probe"``. The core doc
 runner (``personalclaw.app_cli.run_app_doctor_probes``) imports ``probe`` and calls
 it (bounded by a timeout + exception guard), rendering the returned
 ``list[DoctorLine]`` as this app's doctor section. Reproduces the presence check
-core's doctor used to hardcode (plan 32 moved it here): token presence + owner id,
+core's doctor used to hardcode: token presence + owner id,
 with a hint to the Channels-page Test action for live workspace validation (which
 the app owns, not core's doctor).
 

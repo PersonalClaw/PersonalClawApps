@@ -67,7 +67,7 @@ def test_the_store_installs_it_without_a_scanner_warning(tmp_path):
 
 
 def test_no_local_re_declaration_of_a_host_primitive():
-    """APE-6 deleted this bundle's copies of the host component spec — a `cardStyle` that
+    """This bundle's copies of the host component spec were deleted — a `cardStyle` that
     re-declared `Surface`'s tone+radius plus a border the neumorphic ground does not have, and
     four button constants re-declaring `Button`'s variant token values. A new one would fork
     the design system again silently, which is the failure mode the migration removed."""

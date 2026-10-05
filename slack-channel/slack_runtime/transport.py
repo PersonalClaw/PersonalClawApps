@@ -79,7 +79,7 @@ logger = logging.getLogger("slack_runtime.transport")
 def fence_untrusted_inbound(text: str, sender_id: str, *, trusted: bool) -> str:
     """Fence untrusted NON-OWNER inbound content as DATA before it reaches the agent.
 
-    CHANNEL-EXPANSION T1.4 / CE-6 — the channel conformance kit's ``[fencing]`` clause.
+    This is the channel conformance kit's ``[fencing]`` clause.
     A non-owner's chat text is untrusted input, never instructions: on Slack's direct
     inbound path (``handler.handle_message``) it MUST reach the model wrapped in the
     platform's untrusted-content fence — the SAME fence core's guarded door hands the

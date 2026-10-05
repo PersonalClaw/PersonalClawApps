@@ -74,7 +74,7 @@ SOURCE = SubscriptionSource(
 register_subscription_source(SOURCE)
 
 # The Anthropic Messages API exposes no models-list route, so the picker is fed from a
-# curated list. Per the de-hardcode directive this is NOT a second source of model truth:
+# curated list. It is NOT a second source of model truth:
 # it mirrors the CURRENT rows of the sibling ``anthropic-models`` app's curated catalog
 # (anthropic-models/provider.py, sourced from the Anthropic model docs, refreshed
 # 2026-07-06) — the same ids the same wire serves. Which of them a given subscription tier

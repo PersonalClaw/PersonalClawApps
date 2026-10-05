@@ -337,7 +337,7 @@ def probe_login(
 ) -> tuple[bool, str]:
     """The doctor/Test probe: connect + login + SELECT the folder. BLOCKING.
 
-    This is the plan's ``probe = login+select``: a login alone proves the credential but
+    It selects as well as logging in: a login alone proves the credential but
     not that the folder we poll exists, and a wrong folder name is the second most
     common misconfiguration after a wrong password."""
     client = Imap4Client(host, port, username, password, use_ssl=use_ssl, ca_file=ca_file)

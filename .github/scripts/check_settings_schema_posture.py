@@ -24,9 +24,8 @@ convention"):
    the same fact. The fallback is the documented convention, not an accident.
 4. **A credential-shaped field carries ``x-meta.sensitive``.** That flag is the SOLE
    input to every masker core has — verified by reading them, not from memory:
-   ``dashboard/handlers/apps.py::_sensitive_field_names`` (which feeds
-   ``_mask_secret_config``, whose own comment names the consequence: "leaving the
-   backend in cleartext on every config-panel open (#43)"),
+   ``apps/secret_fields.py::mask_secrets`` (without the flag, the backend serves the
+   value in cleartext on every config-panel open),
    ``config/validation.py::_is_sensitive_path``, and the frontend
    ``pages/apps/appConfigForm.tsx``, which decides ``type="password"`` and the
    write-only blank-input behaviour from the same flag. A manifest declaring an

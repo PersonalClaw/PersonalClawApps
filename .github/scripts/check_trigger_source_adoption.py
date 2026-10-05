@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Repo rail: every channel app adopts the ``trigger_source`` seam, and none hand-rolls glue.
 
-``WF2AUT-8`` shipped the app-registered trigger-source seam and
+Core shipped the app-registered trigger-source seam and
 nothing required anybody to use it, so adoption sat at 0/4 with a test fixture as the only
 implementer anywhere. This rail is what stops that recurring: it MEASURES adoption over the
 channel apps it DISCOVERS, rather than asserting a count somebody has to remember to bump.
@@ -172,14 +172,14 @@ def check_adoption() -> tuple[list[str], list[str]]:
                 failures.append(
                     f"{app}: declares a channel transport and an EMPTY providers[] array — "
                     f"an empty list is a declaration that registers nothing, not an absent "
-                    f"one. Add a {{'type': '{SOURCE_TYPE}'}} provider (CE-10)"
+                    f"one. Add a {{'type': '{SOURCE_TYPE}'}} provider"
                 )
             else:
                 missing.append(app)
                 failures.append(
                     f"{app}: declares a channel transport but NO {SOURCE_TYPE} provider — "
                     f"its manifest declares {sorted(declared)}. One vendor app owns every "
-                    f"seam that vendor touches; the seam is live (WF2AUT-8). See "
+                    f"seam that vendor touches; the seam is live. See "
                     f"docs/guides/build-a-channel-app.md, 'Vendor completeness'"
                 )
             continue
@@ -272,7 +272,7 @@ def check_no_bespoke_glue() -> tuple[list[str], list[str]]:
             if name in FORBIDDEN_NAMES and not is_test:
                 failures.append(
                     f"{rel}: references core-internal {name!r} — an app reaches the bus only "
-                    f"through the registered trigger_source handler (CE-10). Emit through the "
+                    f"through the registered trigger_source handler. Emit through the "
                     f"callable core hands your provider's start()"
                 )
 

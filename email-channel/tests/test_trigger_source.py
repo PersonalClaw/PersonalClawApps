@@ -254,7 +254,7 @@ def test_the_manifest_DECLARES_a_trigger_source_over_this_bundle_s_own_factory()
     assert "channel" in declared, "this test is about a CHANNEL app's completeness"
     assert "trigger_source" in declared, (
         "email-channel declares no trigger_source provider — the vendor-completeness "
-        "checklist's third row (CHANNEL-EXPANSION CE-10)"
+        "checklist's third row"
     )
     assert (
         declared["trigger_source"].implementation == "email_runtime.trigger_source:create_provider"

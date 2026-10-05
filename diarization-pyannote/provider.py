@@ -128,7 +128,7 @@ class PyannoteDiarizationProvider(DiarizationProvider, LocalModelProvider):
         return "Diarization (pyannote)"
 
     def _hf_token(self) -> str:
-        """This app's own setting, else the SHARED SDK cascade (LOCAL-MODEL-MANAGER-V2 §5).
+        """This app's own setting, else the SHARED SDK cascade.
 
         The second term used to be a private ``os.environ["HF_TOKEN"]`` read, which saw
         neither the managed credential store nor a ``huggingface-cli login``. It now

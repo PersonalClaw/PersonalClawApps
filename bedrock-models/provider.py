@@ -552,7 +552,7 @@ def _translate_messages(
     ``toolUse`` blocks so a replayed assistant turn names tools exactly as the
     toolConfig does (Bedrock rejects a toolUse whose name is not in the config).
 
-    Prompt caching (PCS-8) — this is where the neutral marker becomes Converse syntax:
+    Prompt caching — this is where the neutral marker becomes Converse syntax:
 
     * a message carrying :data:`CACHE_HINT_KEY` is the trailing boundary of the
       cacheable span, and Converse marks a boundary with a ``cachePoint`` CONTENT
@@ -1319,7 +1319,7 @@ BEDROCK_CAPABILITY = ProviderCapability(
 # hardcoded fallback catalog); it belongs with the provider. boto3 stays lazily
 # imported (Property 11) so importing this module is SDK-free.
 
-# NO hardcoded fallback catalog (user directive 2026-07-06): Bedrock is discovered
+# NO hardcoded fallback catalog: Bedrock is discovered
 # from the control plane, and discovery is authoritative. When it can't list anything
 # (no credentials, a failing credential command, a denied permission, no connection),
 # ``list_models`` RAISES ``ModelDiscoveryError`` naming why and what to do — the

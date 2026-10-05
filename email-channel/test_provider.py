@@ -104,7 +104,7 @@ def test_settings_defaults_and_validation():
 
 
 def test_credential_keys_are_app_owned():
-    """The plan's key vocabulary, verbatim — secrets live in the credential store under
+    """The key vocabulary, verbatim — secrets live in the credential store under
     these names, never in app config."""
     assert CRED_IMAP_PASS == "EMAIL_IMAP_PASS"
     assert CRED_SMTP_PASS == "EMAIL_SMTP_PASS"

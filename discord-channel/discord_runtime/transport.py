@@ -447,7 +447,7 @@ class DiscordTransport(ChannelTransportProvider):
         return {"state": "ready", "detail": "Bot token configured"}
 
     async def test(self) -> dict[str, Any]:
-        """The Channels-page Test action: the live "gateway hello" probe (T4.4).
+        """The Channels-page Test action: the live "gateway hello" probe.
 
         ``GET /gateway/bot`` is the cheapest call that proves BOTH halves at once —
         the token authenticates AND a gateway session is available (it returns the

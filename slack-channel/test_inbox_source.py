@@ -121,8 +121,8 @@ def test_manifest_declares_at_least_two_providers():
 
     Asserted as a SUBSET, not as set equality. The original spelling was
     ``types == {"channel", "inbox"}``, which froze the vendor-completeness checklist at the
-    bar available when CE-8 shipped — so the next seam this app adopted turned the own
-    test red for succeeding. It did, at CE-10 (``trigger_source``). What this test owns is
+    bar available when the inbox seam shipped — so the next seam this app adopted turned
+    the own test red for succeeding. It did, at ``trigger_source``. What this test owns is
     that the inbox seam is declared and points at THIS module; which other seams the bundle
     has grown is the completeness rail's business, not this file's.
     """
@@ -248,7 +248,7 @@ def test_poll_ignores_a_malformed_ts_for_the_cursor():
     assert cursors["C1"] == "1700000001.000100"
 
 
-# ── nothing is skipped, however much arrived (ledger: 50 per poll) ─────────────
+# ── nothing is skipped, however much arrived ───────────────────────────────────
 
 
 def _burst(n, start=1700001000):

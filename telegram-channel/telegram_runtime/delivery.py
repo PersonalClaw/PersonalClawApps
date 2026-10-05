@@ -117,7 +117,7 @@ async def send_parts(
     return last
 
 # Minimum wall-clock seconds between two edits of the same streamed message. The
-# plan sets the floor at 1.1s; Telegram tolerates roughly one edit/second.
+# floor is 1.1s; Telegram tolerates roughly one edit/second.
 _EDIT_MIN_INTERVAL = 1.1
 # How many ended approvals are remembered, so a press on one is answered with how it ended.
 _ENDED_KEPT = 256
@@ -325,7 +325,7 @@ class TelegramDelivery:
     def list_reply_channels(self) -> list[dict]:
         """The channels this delivery can post into for the dashboard picker.
 
-        The tracked-group allowlist lives in the core trust seam (CE-1 owns it; this
+        The tracked-group allowlist lives in the core trust seam (this
         app keeps none of its own), and the SDK exposes only a membership check
         (:func:`is_tracked_channel`) — no enumeration — so the picker offers the DM
         entry, and a group reply targets a specific tracked chat id core already

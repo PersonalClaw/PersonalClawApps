@@ -291,7 +291,7 @@ class WebToolProvider(ToolProvider):
                 "truncated": outcome.truncated,
                 "next_index": outcome.next_index,
                 "extractor": outcome.extractor,
-                # §5 fetch-derived citation: the source URL + the exact [start, end)
+                # Fetch-derived citation: the source URL + the exact [start, end)
                 # char span of this content within the full document, so a quote can
                 # be attributed to a precise offset (and survives pagination).
                 "citations": [{

@@ -145,7 +145,7 @@ def _get_skills_loader() -> SkillsLoader:
 def publish_inbound_for_trigger_source(
     *, channel: str, text: str, sender_id: str, thread_ts: str, msg_ts: str
 ) -> int:
-    """Normalize one ADMITTED message and hand it to this bundle's inbound tap (CE-10).
+    """Normalize one ADMITTED message and hand it to this bundle's inbound tap.
 
     Lives here rather than in ``inbound_tap`` so the tap stays vendor-neutral: it moves a
     :class:`~personalclaw.sdk.channel.ChannelMessage` and knows nothing about Slack's event
@@ -1000,7 +1000,7 @@ async def _publish_home_tab(orch: "GatewayServices", user_id: str) -> None:
         # ── Automations ──
         #
         # 🔴 Read the unified TRIGGER STORE. This asked `orch.cron_svc`, which core deleted —
-        # and that service described `crons.json`, a file nothing has written since core's S108. So
+        # and that service described `crons.json`, a file nothing writes any more. So
         # the status card showed "_No cron jobs._" to a user with live automations, and every
         # file-watch or event trigger was invisible here because the legacy scheduler only held
         # clocks. There is no "service unavailable" branch any more: a store is a file, so the honest

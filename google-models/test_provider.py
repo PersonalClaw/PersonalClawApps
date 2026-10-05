@@ -276,7 +276,7 @@ def no_waiting(monkeypatch, tmp_path):
 
 
 def test_every_native_call_sends_the_key_in_its_header_and_no_url_carries_it(no_waiting, monkeypatch):
-    """Discovery, an image, and a video's submit, poll and download: row 464. Each used to put
+    """Discovery, an image, and a video's submit, poll and download. Each used to put
     the key in its URL (``?key=…``), which an HTTP library's error, a traceback and a log line
     can each quote. None may follow a redirect with the key: that is the download's own call."""
     sent_for_image = _fake_gemini(monkeypatch, (200, {"models": [_IMAGE_MODEL]}), (200, _AN_IMAGE))
@@ -512,7 +512,7 @@ def test_a_job_that_never_finishes_says_so_with_the_last_polls_words(no_waiting,
     )
 
 
-# ── A 200 that is not the JSON object Gemini sends (row 468) ─────────────────
+# ── A 200 that is not the JSON object Gemini sends ───────────────────────────
 
 _NOT_OBJECTS = [([], "a list"), ("null", "null"), ('"ok"', "a string"), ("7", "a number")]
 

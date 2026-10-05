@@ -1,7 +1,6 @@
 """EmailSettings — the email-channel app's OWN non-secret config + credential keys.
 
-Where each value lives, and why (the app/core boundary, ``provider-boundary.md``
-§2.5/§2.6):
+Where each value lives, and why (the app/core boundary, ``provider-boundary.md``):
 
 - IMAP/SMTP **hosts, ports, TLS mode, logins, mailbox address, folder and poll
   cadence** are NON-secret behavioral config, so they live in this app's own
@@ -21,7 +20,7 @@ provider ``"email"``), so this app keeps NO allowlist of its own — that is the
 point. (The sibling ``mail-inbox`` app has an app-local allowlist because it is
 an *inbox source*, not a channel; a channel binds to the seam.)
 
-The plan's credential keys are ``EMAIL_IMAP_{HOST,USER,PASS,PORT}`` /
+The credential vocabulary is ``EMAIL_IMAP_{HOST,USER,PASS,PORT}`` /
 ``EMAIL_SMTP_{...}``. Only the two passwords are actually secret, so only those two live
 in the credential store; host/user/port live in the app store where the user can see and
 edit them in the Configure form. Putting a hostname in the credential store would claim a
@@ -48,7 +47,7 @@ KEY_SMTP_PASSWORD = "smtp_password"
 CRED_IMAP_PASS = "EMAIL_IMAP_PASS"
 CRED_SMTP_PASS = "EMAIL_SMTP_PASS"
 
-# Non-secret settings keys, named to match the plan's EMAIL_IMAP_*/EMAIL_SMTP_*
+# Non-secret settings keys, named to match the EMAIL_IMAP_*/EMAIL_SMTP_*
 # vocabulary. These are the app-store keys (settingsSchema properties).
 KEY_IMAP_HOST = "imap_host"
 KEY_IMAP_PORT = "imap_port"
@@ -64,7 +63,7 @@ KEY_TLS_CA_FILE = "tls_ca_file"
 DEFAULT_IMAP_PORT = 993
 DEFAULT_SMTP_PORT = 587
 DEFAULT_FOLDER = "INBOX"
-#: The plan's inbound cadence: poll IMAP every 60s. IDLE is deferred (see the
+#: The inbound cadence: poll IMAP every 60s. IDLE is deferred (see the
 #: transport's module docstring).
 DEFAULT_POLL_SECS = 60
 
@@ -128,7 +127,7 @@ def _coerce_poll_secs(value: object) -> int:
 
     Below 10s a poll loop hammers the provider (and many hosts throttle or ban for
     it); above an hour the channel stops feeling conversational. An unparseable value
-    falls back to the plan's 60s rather than disabling the loop."""
+    falls back to the default 60s rather than disabling the loop."""
     try:
         secs = int(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):

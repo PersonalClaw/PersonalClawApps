@@ -44,7 +44,7 @@ def test_app_manifest_is_valid():
 
 
 def test_cli_search_parse_takes_canonical_slug_from_url_line():
-    """C13 regression: the `npx skills find` display line truncates the id at
+    """Regression: the `npx skills find` display line truncates the id at
     the first space of the display name ('owner/repo@changelog generator' →
     parsed id 'owner/repo@changelog'), and installing that WRONG id fails with
     'No matching skills found'. The `└ https://skills.sh/owner/repo/slug` line

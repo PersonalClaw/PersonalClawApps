@@ -1,6 +1,6 @@
 """Standalone smoke test for the openai-tools app (OpenAI tool-schema adapter).
 
-Also covers the #41 migration: outbound HTTP (list_tools discovery + invoke) routes
+Also covers the move to the egress chokepoint: outbound HTTP (list_tools discovery + invoke) routes
 through the net.fetch egress chokepoint, and the sync connected() probe guards the
 operator endpoint through the egress evaluator before any raw request.
 """
@@ -101,7 +101,7 @@ async def test_invoke_routes_through_chokepoint(fake_fetch):
 
 def test_connected_blocks_private_endpoint():
     # The egress guard must classify a loopback/private endpoint as not-connected
-    # BEFORE any raw probe (#41 SSRF guard on the operator-configured endpoint).
+    # BEFORE any raw probe (the SSRF guard on the operator-configured endpoint).
     p = provider.create_openai_tool_provider({"endpoint": "http://127.0.0.1:9999"})
     assert p.connected is False
 

@@ -1,6 +1,6 @@
-"""Prompt-bound receiving addresses (EIAT-4 / contract C4).
+"""Prompt-bound receiving addresses.
 
-Covers the acceptance criteria: mail to a bound address carries the stored user-authored
+Covers each behaviour: mail to a bound address carries the stored user-authored
 ``default_prompt`` grounded in ``fence_untrusted(body, source="mail:<address>")``; the
 fence markers wrap the mail; an in-body fence-break attempt is neutralised; the
 per-address sender list is fail-closed and only NARROWS the app-wide one; the table
@@ -169,7 +169,7 @@ def test_delivered_to_header_binds_for_a_catch_all_domain():
 
 
 def test_unbound_address_is_carried_raw():
-    """EIAT-2 behaviour is unchanged for mail to an address with no binding: no prompt,
+    """Behaviour is unchanged for mail to an address with no binding: no prompt,
     no fence (there is no prompt to ground, so there is nothing to fence FOR)."""
     _configure(bound_addresses=[_travel_row()])
     raw = build_message(from_addr="colleague@example.com", to_addr="me@example.com", plain="hi")
@@ -299,7 +299,7 @@ def test_the_composed_prompt_reaches_the_action_provider_intact():
     assert "Depart 09:15 from SFO." in seen["task"]
 
 
-# ── fence-break neutralisation (the change names this explicitly) ──
+# ── fence-break neutralisation ──
 
 
 def test_in_body_fence_break_attempt_is_neutralised():

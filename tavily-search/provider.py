@@ -183,7 +183,7 @@ class TavilyProvider(SearchProvider):
         first = results[0] if results and isinstance(results[0], dict) else {}
         content = str(first.get("raw_content") or "")
         # Coarse char-window pagination so callers can page a long extract (the
-        # native §4 pipeline owns token-budgeted pagination; here char ranges).
+        # native web_fetch pipeline owns token-budgeted pagination; here char ranges).
         window = content[start_index:]
         truncated = False
         next_index: int | None = None

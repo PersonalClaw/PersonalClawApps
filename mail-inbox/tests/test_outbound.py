@@ -1,6 +1,6 @@
-"""Outbound replies (contract C3, guardrail 4).
+"""Outbound replies (draft-by-default).
 
-Covers the acceptance clause by clause:
+Covers each behaviour in turn:
 
 - a reply is COMPOSED but NOT sent while draft-mode is on — and the vacuity floor for that
   claim is asserted too: a real, parseable ``.eml`` with the reply body and the threading
@@ -139,7 +139,7 @@ def test_reply_is_composed_but_not_sent_while_draft_mode_is_on():
 
 
 def test_send_enabled_defaults_to_false_in_a_fully_configured_app():
-    """Guardrail 4 as a property of the settings, not only of the send path: a mailbox with
+    """Draft-by-default as a property of the settings, not only of the send path: a mailbox with
     a valid SMTP host and password but NO ``send_enabled`` key — a fresh install — still
     reads False, and a non-boolean value stays on the safe side."""
     from mail_inbox_runtime.settings import MailInboxSettings
