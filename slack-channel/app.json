@@ -1,6 +1,6 @@
 {
   "name": "slack-channel",
-  "version": "0.1.43",
+  "version": "0.1.44",
   "displayName": "Slack Channel",
   "description": "Slack workspace integration. Monitor channels, respond to mentions, and interact via Slack.",
   "icon": "Slack",
@@ -14,6 +14,7 @@
     "links-name-their-channel",
     "messages-run-once",
     "paired-owner",
+    "pre-tool-hooks",
     "tool-call-screen",
     "turns-name-their-channel",
     "turns-name-who-asked"

@@ -47,6 +47,11 @@ The rails over every bundle, against the installed core:
 12. every app whose shipped code reads its provider's own wire through ``until_terminal``
     (imported from ``personalclaw.sdk.model``) declares ``cut-off-answers``: on a PersonalClaw
     without it the app would not load at all.
+13. every app whose shipped code asks PersonalClaw's blocking hooks about a call before it
+    approves or asks about it (``ask_pre_tool_hooks`` from ``personalclaw.sdk.channel``) declares
+    ``pre-tool-hooks``: on a PersonalClaw without it the app would not load at all. And every app
+    that screens a call its own turn asks about (rail 8) runs that turn's approvals itself, so it
+    asks the hooks too, at the step every path in PersonalClaw asks them.
 """
 
 from __future__ import annotations
@@ -103,6 +108,10 @@ KNOWN_CLAIMERS = {"email-channel", "slack-channel"}
 
 #: The apps that read their provider's own wire through ``until_terminal``, for rail 12.
 KNOWN_TERMINAL_READERS = {"bedrock-models"}
+
+#: The apps that ask PersonalClaw's blocking hooks about a call before they approve or ask, for
+#: rail 13.
+KNOWN_HOOK_ASKERS = {"slack-channel"}
 
 
 @pytest.fixture(autouse=True)
@@ -682,3 +691,58 @@ def test_the_scan_tells_an_app_that_reads_to_the_answers_end_from_one_that_does_
     (other / "provider.py").write_text("from personalclaw.sdk.model import closing_stream\n")
     assert _reads_to_the_answers_end(reader) is True
     assert _reads_to_the_answers_end(other) is False
+
+
+def _asks_the_hooks(bundle: Path) -> bool:
+    """Whether the bundle's shipped code takes ``ask_pre_tool_hooks`` from the SDK."""
+    for path in sdk_contract.shipped_sources(bundle):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "personalclaw.sdk.channel":
+                if any(alias.name == "ask_pre_tool_hooks" for alias in node.names):
+                    return True
+    return False
+
+
+def test_every_app_that_asks_the_blocking_hooks_declares_it():
+    from personalclaw.sdk.features import PRE_TOOL_HOOKS
+
+    askers = {bundle.name for bundle in BUNDLES if _asks_the_hooks(bundle)}
+    assert KNOWN_HOOK_ASKERS <= askers, (
+        f"the scan no longer sees these apps ask the blocking hooks: "
+        f"{sorted(KNOWN_HOOK_ASKERS - askers)}"
+    )
+    undeclared = sorted(name for name in askers if PRE_TOOL_HOOKS not in _declared(ROOT / name))
+    assert undeclared == [], (
+        f"these apps ask personalclaw.sdk.channel.ask_pre_tool_hooks without declaring "
+        f"'requiresCoreFeatures': ['{PRE_TOOL_HOOKS}'] in app.json: {undeclared}"
+    )
+
+
+def test_every_app_that_answers_its_own_turns_calls_asks_the_blocking_hooks():
+    """An app that screens a call its own turn asks about decides that call itself, so the
+    operator's blocking hooks are its to ask too: one that skips them approves what they refuse."""
+    screeners = {bundle.name for bundle in BUNDLES if _screens_each_call(bundle)}
+    askers = {bundle.name for bundle in BUNDLES if _asks_the_hooks(bundle)}
+    assert screeners, "the scan sees no app that screens its own turn's calls: it reads nothing"
+    assert sorted(screeners - askers) == [], (
+        "these apps answer their own turns' calls without asking PersonalClaw's blocking hooks "
+        "(personalclaw.sdk.channel.ask_pre_tool_hooks)"
+    )
+
+
+def test_the_scan_tells_an_app_that_asks_the_hooks_from_one_that_does_not(tmp_path):
+    """Positive and negative control for rail 13."""
+    asker = tmp_path / "asker-app"
+    asker.mkdir()
+    (asker / "app.json").write_text('{"name": "asker-app", "version": "0.1.0"}')
+    (asker / "handler.py").write_text(
+        "from personalclaw.sdk.channel import ask_pre_tool_hooks, screen_tool_call\n",
+        encoding="utf-8",
+    )
+    other = tmp_path / "other-app"
+    other.mkdir()
+    (other / "app.json").write_text('{"name": "other-app", "version": "0.1.0"}')
+    (other / "handler.py").write_text("from personalclaw.sdk.channel import screen_tool_call\n")
+    assert _asks_the_hooks(asker) is True
+    assert _asks_the_hooks(other) is False

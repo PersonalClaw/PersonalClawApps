@@ -60,7 +60,7 @@ from personalclaw.sdk.channel import (
 )
 from personalclaw.sdk.channel import parse_title, session_restrictions, trust_mode
 from personalclaw.sdk.channel import answer_in_chat, approval_brief_for, approval_window_secs
-from personalclaw.sdk.channel import chat_grant, screen_tool_call
+from personalclaw.sdk.channel import ask_pre_tool_hooks, chat_grant, screen_tool_call
 from personalclaw.sdk.channel import is_sensitive_path, redact_credentials, redact_exfiltration_urls
 from personalclaw.sdk.channel import owner_id_for
 from personalclaw.sdk.channel import sel
@@ -2500,6 +2500,24 @@ async def handle_message(
                             tool_input=event.tool_input,
                             error="hook_deny",
                             metadata={"decided_by": control.get("control", "hook_deny"), **control},
+                        )
+                        continue
+
+                    # Then the operator's blocking hooks, bound to the agent this turn runs as, at
+                    # the step PersonalClaw asks them on every path: a hook that blocks the call or
+                    # fails to run refuses it, before anything approves it or anyone is asked.
+                    hooks_said = await ask_pre_tool_hooks(event, agent=_agent)
+                    if hooks_said.refused:
+                        await client.reject_tool(event.request_id)
+                        accumulated += f"\n🚫 _Tool `{event.title}` not run: {hooks_said.note}._"
+                        sel().log_tool_invocation(
+                            session_key=session_key,
+                            source="slack",
+                            tool_name=event.title,
+                            tool_kind=event.tool_kind,
+                            request_id=event.request_id,
+                            tool_input=event.tool_input,
+                            **hooks_said.audit_row(),
                         )
                         continue
 
