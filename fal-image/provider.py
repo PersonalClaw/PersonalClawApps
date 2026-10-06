@@ -35,6 +35,7 @@ from personalclaw.sdk.video import (
     VideoResult,
 )
 from personalclaw.sdk.model import ProviderResolutionError, require_model
+from personalclaw.sdk.net import EgressBlocked, http_session
 
 logger = logging.getLogger(__name__)
 
@@ -458,7 +459,9 @@ class FalVideoProvider(VideoGenProvider):
 
         timeout = aiohttp.ClientTimeout(total=_VIDEO_POLL_TIMEOUT_S)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            # Asked of the egress guard first, under the owner's Network egress settings, as the
+            # queue requests below are.
+            async with http_session(model_provider=True, timeout=timeout) as session:
                 async with session.post(
                     f"https://fal.run/{model_id}", headers=headers, data=body,
                 ) as resp:
@@ -476,6 +479,10 @@ class FalVideoProvider(VideoGenProvider):
             pass
         except VideoGenError:
             raise
+        except EgressBlocked as e:
+            # The owner's settings refused the host: the queue is on the same service, so the
+            # refusal is the answer, in the guard's sentence.
+            raise VideoGenError(str(e)) from e
         except Exception:
             pass
 

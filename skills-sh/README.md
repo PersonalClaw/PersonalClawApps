@@ -52,7 +52,7 @@ With an API key, search and fetch go to the skills.sh API from the app's own cod
 
 ## Network
 
-Reaches `skills.sh`, clones a skill's repository from `github.com`, and runs the `skills` CLI through `npx`, which fetches it from the npm registry. A request to the skills.sh API is checked first by PersonalClaw's egress guard under your **Settings → Security → Network egress** rules, so it is refused when you put `skills.sh` on Denied hosts, and when the check itself cannot run. A search refused there is not tried again through the `skills` CLI.
+Reaches `skills.sh`, clones a skill's repository from `github.com`, and runs the `skills` CLI through `npx`, which fetches it from the npm registry. A request to the skills.sh API is checked first by PersonalClaw's egress guard under your **Settings → Security → Network egress** rules, and sent through it, each redirect included, so it is refused when you put `skills.sh` (or a host it sends the request on to) on Denied hosts, and when the check itself cannot run. A search refused there is not tried again through the `skills` CLI.
 
 ## License
 

@@ -54,7 +54,12 @@ from personalclaw.sdk.model import (
     per_call_temperature,
     require_model,
 )
-from personalclaw.sdk.net import sentence_with_detail
+from personalclaw.sdk.net import (
+    EgressBlocked,
+    RequestGuard,
+    sentence_with_detail,
+    sync_http_client,
+)
 
 #: Named, not ``__name__``: core loads this module under a private name, and a line logged under
 #: it would carry that name. Which lines reach the gateway log does not depend on it: core
@@ -245,6 +250,36 @@ def _from_credential_command(error: BaseException) -> bool:
     return False
 
 
+def _aws_session(profile: str | None, *, agents_model: bool) -> Any:
+    """A boto3 session for *profile* (boto3's default credential chain when none) whose every
+    request asks the egress guard first: a host on the owner's Denied hosts is never contacted.
+
+    botocore takes no HTTP client, but it announces ``before-send`` before each request a client
+    sends, a retry and a redirect included, and a handler that raises there stops the request
+    before it is sent and is not retried. A client takes its session's handlers when it is made,
+    so the handler is registered here, before any client: the clients botocore makes from the
+    session to sign in (an IAM role's, a single sign-on's) ask too. What it cannot reach:
+    credentials botocore reads from a cloud instance's metadata service, which it fetches with an
+    HTTP client of its own.
+
+    *agents_model* is for the agent's own model, which every run shares (its chat, its embeddings,
+    its model list, and the credential check they stand on): its requests keep to the owner's
+    Network egress settings alone. An image, a video or a transcription is something a run asks
+    for, and keeps to that run's egress tier as well.
+
+    boto3 is imported here, so importing this module never imports it."""
+    import boto3  # noqa: PLC0415
+
+    session = boto3.Session(profile_name=profile or None)
+    guard = RequestGuard(model_provider=True, shared_by_every_run=agents_model)
+
+    def ask(request: Any, **_event: Any) -> None:
+        guard.ask(str(request.url))
+
+    session.events.register_first("before-send", ask)
+    return session
+
+
 def _profile_in_use(profile: str | None) -> str:
     """The AWS profile boto3 signs in with: the instance's AWS Profile, else the one the
     environment names (botocore reads ``AWS_DEFAULT_PROFILE``, then ``AWS_PROFILE``). ""
@@ -287,6 +322,10 @@ def _aws_setup_problem(error: BaseException, *, region: str, profile: str | None
     AWS tool, fix the profile or the region, or choose another profile. The same sentence serves
     the chat, the connection test and the Models page. ``None`` when ``error`` is not about the
     setup."""
+    if isinstance(error, EgressBlocked):
+        # The owner's Network egress settings refused AWS's host before anything was sent: the
+        # guard's sentence names the host and the setting that decided it.
+        return str(error)
     in_use = _profile_in_use(profile)
     whose = f"the AWS profile '{in_use}'" if in_use else "your default AWS profile"
     flag = f" --profile {in_use}" if in_use else ""
@@ -941,7 +980,6 @@ class BedrockProvider(ModelProvider):
 
         def _build_client() -> Any:
             # Lazy import per Property 11. Do NOT lift to module top.
-            import boto3  # noqa: PLC0415
             from botocore.config import Config  # noqa: PLC0415
 
             # Long read timeout so a healthy-but-quiet reasoning stream isn't killed
@@ -954,11 +992,7 @@ class BedrockProvider(ModelProvider):
                 retries={"max_attempts": 0, "mode": "standard"},
                 tcp_keepalive=True,
             )
-            session = (
-                boto3.Session(profile_name=self._profile)
-                if self._profile else boto3.Session()
-            )
-            return session.client(
+            return _aws_session(self._profile, agents_model=True).client(
                 "bedrock-runtime", region_name=self._region, config=boto_config
             )
 
@@ -1398,10 +1432,9 @@ def _list_bedrock_models_sync(region: str, profile: str) -> list[dict[str, Any]]
     A listing that fails leaves its models out of what the others found. When nothing was
     listed and a listing failed, that failure is raised: it is the answer, not ``[]``.
     """
-    import boto3  # noqa: PLC0415 — lazy per Property 11
-
-    session = boto3.Session(profile_name=profile) if profile else boto3.Session()
-    client = session.client("bedrock", region_name=region or DEFAULT_REGION)
+    client = _aws_session(profile, agents_model=True).client(
+        "bedrock", region_name=region or DEFAULT_REGION
+    )
 
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -1743,10 +1776,7 @@ async def _creds_problem(region: str, profile: str | None) -> str:
 
     def _probe() -> str:
         try:
-            import boto3  # noqa: PLC0415
-
-            session = boto3.Session(profile_name=profile) if profile else boto3.Session()
-            found = session.get_credentials()
+            found = _aws_session(profile, agents_model=True).get_credentials()
         except Exception as exc:  # noqa: BLE001 — every failure is said as its cause
             problem = _aws_setup_problem(exc, region=region, profile=profile)
             if problem is None:
@@ -2018,9 +2048,7 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
 
     def _get_client(self):
         """Build a fresh bedrock-runtime client (lazy boto3 import)."""
-        import boto3  # noqa: PLC0415
-
-        session = boto3.Session(profile_name=self._profile) if self._profile else boto3.Session()
+        session = _aws_session(self._profile, agents_model=True)
         return session.client("bedrock-runtime", region_name=self._region)
 
     async def is_available(self) -> bool:
@@ -2270,9 +2298,7 @@ class BedrockImageProvider(ImageGenProvider):
         return "Amazon Bedrock (image)"
 
     def _get_client(self):
-        import boto3  # noqa: PLC0415
-
-        session = boto3.Session(profile_name=self._profile) if self._profile else boto3.Session()
+        session = _aws_session(self._profile, agents_model=False)
         return session.client("bedrock-runtime", region_name=self._region)
 
     async def is_available(self) -> bool:
@@ -2544,15 +2570,11 @@ class BedrockVideoProvider(VideoGenProvider):
         return "Amazon Bedrock (video)"
 
     def _get_runtime_client(self):
-        import boto3  # noqa: PLC0415
-
-        session = boto3.Session(profile_name=self._profile) if self._profile else boto3.Session()
+        session = _aws_session(self._profile, agents_model=False)
         return session.client("bedrock-runtime", region_name=self._region)
 
     def _get_s3_client(self):
-        import boto3  # noqa: PLC0415
-
-        session = boto3.Session(profile_name=self._profile) if self._profile else boto3.Session()
+        session = _aws_session(self._profile, agents_model=False)
         return session.client("s3", region_name=self._region)
 
     async def is_available(self) -> bool:
@@ -2821,8 +2843,7 @@ class BedrockSTTProvider(SttProvider):
         return "Amazon Transcribe"
 
     def _get_session(self):
-        import boto3  # noqa: PLC0415
-        return boto3.Session(profile_name=self._profile) if self._profile else boto3.Session()
+        return _aws_session(self._profile, agents_model=False)
 
     async def is_available(self) -> bool:
         """True if the AWS credential chain resolves AND an S3 bucket is set."""
@@ -2839,7 +2860,6 @@ class BedrockSTTProvider(SttProvider):
         """Blocking: upload → start job → poll → fetch transcript. Via to_thread.
 
         A job Transcribe failed, or did not finish in time, raises ``SttError`` saying so."""
-        import urllib.request
         import uuid
 
         session = self._get_session()
@@ -2881,7 +2901,14 @@ class BedrockSTTProvider(SttProvider):
                 st = status["TranscriptionJob"]["TranscriptionJobStatus"]
                 if st == "COMPLETED":
                     uri = status["TranscriptionJob"]["Transcript"]["TranscriptFileUri"]
-                    result = json.loads(urllib.request.urlopen(uri, timeout=10).read())
+                    # The transcript's address is Amazon's answer: it is asked of the egress
+                    # guard as every request this provider sends is, each redirect hop included.
+                    with sync_http_client(
+                        model_provider=True, timeout=10, follow_redirects=True
+                    ) as http:
+                        answer = http.get(uri)
+                        answer.raise_for_status()
+                        result = answer.json()
                     return result["results"]["transcripts"][0]["transcript"]
                 elif st == "FAILED":
                     reason = str(status["TranscriptionJob"].get("FailureReason") or "")

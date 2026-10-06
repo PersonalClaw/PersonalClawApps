@@ -35,7 +35,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 ## Network
 
-Reaches only the tool server you set in **Endpoint URL**.
+Reaches only the tool server you set in **Endpoint URL**. Its requests, the connection check included, go through PersonalClaw's egress guard under your **Settings → Security → Network egress** rules, each redirect included, so a tool server you put on Denied hosts, or a host it sends a request on to, is never reached.
 
 ## License
 

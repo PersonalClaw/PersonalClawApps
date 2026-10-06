@@ -48,7 +48,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 ## Network
 
-Reaches `generativelanguage.googleapis.com`, or the endpoint you set in **Base URL**.
+Reaches `generativelanguage.googleapis.com`, or the endpoint you set in **Base URL**. Every request it sends (chat, the model list, images, video and speech) goes through PersonalClaw's egress guard under your **Settings → Security → Network egress** rules, each redirect included: a host you put on Denied hosts is never reached, and the call says so, naming the host and the setting.
 
 ## License
 

@@ -47,6 +47,8 @@ class _FakeBedrockClient:
 
 class _FakeSession:
     """Stand-in for ``boto3.Session`` — records region/profile."""
+    #: A boto3 session's events, where the app registers its egress guard's before-send hook.
+    events = types.SimpleNamespace(register_first=lambda *_a, **_k: None)
 
     last_profile: str | None = "UNSET"
 

@@ -45,4 +45,4 @@ For workspace-based access, enter your workspace URL manually:
 
 ## Network
 
-Reaches the Model Studio endpoint you set in **Endpoint** (by default `dashscope-intl.aliyuncs.com`).
+Reaches the Model Studio endpoint you set in **Endpoint** (by default `dashscope-intl.aliyuncs.com`). Every request it sends (chat and images) goes through PersonalClaw's egress guard under your **Settings → Security → Network egress** rules, each redirect included: a host you put on Denied hosts is never reached, and the call says so, naming the host and the setting.

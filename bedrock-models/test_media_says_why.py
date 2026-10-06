@@ -171,6 +171,8 @@ def test_speech_to_text_that_cannot_sign_in_says_why(monkeypatch):
     """🔴 Red before: False, and nothing else."""
 
     class _Session:
+        #: A boto3 session's events, where the app registers its egress guard's before-send hook.
+        events = types.SimpleNamespace(register_first=lambda *_a, **_k: None)
         def __init__(self, profile_name=None) -> None:
             pass
 
@@ -189,6 +191,8 @@ def test_speech_to_text_that_cannot_sign_in_says_why(monkeypatch):
 
 def test_speech_to_text_that_can_sign_in_has_nothing_to_say(monkeypatch):
     class _Session:
+        #: A boto3 session's events, where the app registers its egress guard's before-send hook.
+        events = types.SimpleNamespace(register_first=lambda *_a, **_k: None)
         def __init__(self, profile_name=None) -> None:
             pass
 
@@ -240,22 +244,47 @@ def test_a_job_that_does_not_finish_says_so(aws_stt):
     assert len(polls) == prov._STT_POLL_TRIES
 
 
-def test_audio_with_no_speech_is_an_empty_transcript_not_a_failure(aws_stt, monkeypatch):
-    """The one outcome that is "nothing": a job that finished and heard no speech."""
-    import urllib.request
-
+def _finished_at(aws_stt, uri: str) -> None:
+    """Transcribe's answer: the job finished, its transcript at *uri*."""
     aws_stt.world["statuses"] = [
-        {
-            "TranscriptionJobStatus": "COMPLETED",
-            "Transcript": {"TranscriptFileUri": "https://transcripts.example.com/job.json"},
-        }
+        {"TranscriptionJobStatus": "COMPLETED", "Transcript": {"TranscriptFileUri": uri}}
     ]
-    answer = {"results": {"transcripts": [{"transcript": ""}]}}
-    monkeypatch.setattr(
-        urllib.request, "urlopen", lambda uri, timeout=None: io.BytesIO(json.dumps(answer).encode())
-    )
 
-    assert _transcribed(aws_stt) == ""
+
+def test_audio_with_no_speech_is_an_empty_transcript_not_a_failure(aws_stt):
+    """The one outcome that is "nothing": a job that finished and heard no speech. The transcript
+    is served on this computer, whose host its owner allowed in Settings → Security → Network
+    egress."""
+    from apps_testkit.egress import HOST, ProviderHost, owner_egress
+
+    owner_egress(allow_hosts=[HOST])
+    answer = {"results": {"transcripts": [{"transcript": ""}]}}
+    with ProviderHost(json.dumps(answer)) as host:
+        _finished_at(aws_stt, f"{host.url}/job.json")
+
+        assert _transcribed(aws_stt) == ""
+
+    assert [(r["method"], r["path"]) for r in host.requests] == [("GET", "/job.json")]
+
+
+def test_a_transcript_on_a_host_the_owner_denied_is_never_fetched(aws_stt):
+    """🔴 Red before: the transcript's address is Amazon's answer, and it was fetched with an HTTP
+    client of the app's own that asked no guard, so a host on Denied hosts was reached all the
+    same. It is asked now, and the transcription fails in the words that name the setting."""
+    from apps_testkit.egress import HOST, ProviderHost, owner_egress
+
+    owner_egress(deny_hosts=[HOST])
+    with ProviderHost(json.dumps({"results": {"transcripts": [{"transcript": "hi"}]}})) as host:
+        uri = f"{host.url}/job.json"
+        _finished_at(aws_stt, uri)
+
+        with pytest.raises(SttError) as failed:
+            _transcribed(aws_stt)
+
+    assert str(failed.value) == (
+        f"{uri} was not reached: {HOST} is on Denied hosts in Settings → Security → Network egress."
+    )
+    assert host.requests == []
 
 
 @pytest.mark.parametrize(
@@ -390,6 +419,8 @@ def _embedding_boto3(monkeypatch, answers: list[Exception | list[float]]):
             return {"body": io.BytesIO(json.dumps({"embedding": answer}).encode())}
 
     class _Session:
+        #: A boto3 session's events, where the app registers its egress guard's before-send hook.
+        events = types.SimpleNamespace(register_first=lambda *_a, **_k: None)
         def __init__(self, profile_name=None) -> None:
             pass
 

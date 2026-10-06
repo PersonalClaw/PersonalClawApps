@@ -17,6 +17,8 @@ import pytest
 @pytest.fixture(autouse=True)
 def _stub_anthropic(monkeypatch):
     fake = types.ModuleType("anthropic")
+    # The error a refused request is raised as, so the SDK does not retry it.
+    fake.AnthropicError = type("AnthropicError", (Exception,), {})
 
     class _AsyncAnthropic:
         def __init__(self, **kw):

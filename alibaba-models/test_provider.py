@@ -54,7 +54,9 @@ def test_endpoint_falls_back_to_regional_default() -> None:
 class _FakeAsyncOpenAI:
     constructed: list[dict[str, Any]] = []
 
-    def __init__(self, *, api_key: str, base_url: str | None = None) -> None:
+    def __init__(
+        self, *, api_key: str, base_url: str | None = None, http_client: object = None
+    ) -> None:
         type(self).constructed.append({"api_key": api_key, "base_url": base_url})
 
     async def close(self) -> None:
@@ -64,6 +66,8 @@ class _FakeAsyncOpenAI:
 @pytest.fixture
 def fake_openai(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     fake = types.ModuleType("openai")
+    # The error a refused request is raised as, so the SDK does not retry it.
+    fake.OpenAIError = type("OpenAIError", (Exception,), {})
     fake.AsyncOpenAI = _FakeAsyncOpenAI  # type: ignore[attr-defined]
     _FakeAsyncOpenAI.constructed = []
     monkeypatch.setitem(sys.modules, "openai", fake)
@@ -213,7 +217,20 @@ def _fake_aiohttp(monkeypatch: pytest.MonkeyPatch, status: int, payload: Any) ->
     fake.ClientSession = _Session  # type: ignore[attr-defined]
     fake.ClientTimeout = lambda total=None: None  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "aiohttp", fake)
+    _sessions_are(monkeypatch, _Session)
     return calls
+
+
+def _sessions_are(monkeypatch: pytest.MonkeyPatch, session: type) -> None:
+    """The app's session is core's guarded one (``personalclaw.sdk.net.http_session``): here it is
+    the stand-in, made with the options the app passed. What the guard decides is shown with the
+    real one, below."""
+
+    def _made(*, endpoint: str = "", model_provider: bool = False, **options: Any) -> Any:
+        assert model_provider, "an image request is a model provider's"
+        return session(**options)
+
+    monkeypatch.setattr(prov, "http_session", _made)
 
 
 def test_generate_parses_url_and_b64_results(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -327,6 +344,7 @@ def _aiohttp_that_answers(monkeypatch: pytest.MonkeyPatch, answer: Any) -> None:
     fake.ClientSession = _Session  # type: ignore[attr-defined]
     fake.ClientTimeout = lambda total=None: None  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "aiohttp", fake)
+    _sessions_are(monkeypatch, _Session)
 
 
 @pytest.mark.parametrize(("answer", "sentence"), [
@@ -397,3 +415,43 @@ def test_a_media_call_that_names_no_model_is_refused_and_sends_nothing():
     )
     report = asyncio.run(media_refusal_report(adapters, edit=False))
     assert report == media_refusal_expected(adapters, edit=False)
+
+
+# ── The owner's Network egress settings ──────────────────────────────────────
+
+
+def test_an_image_request_to_a_host_the_owner_denied_is_never_sent() -> None:
+    """🔴 Red before: the image request went through an aiohttp session of the app's own, which
+    asked no guard, so with the endpoint's host on Denied hosts in Settings → Security → Network
+    egress the prompt was sent to it all the same. Now the request is refused before anything is
+    sent, in the words that name the setting and the host. The real session and guard, against a
+    stand-in on this computer."""
+    from apps_testkit.egress import HOST, ProviderHost, owner_egress
+    from personalclaw.sdk.image import ImageGenError
+
+    owner_egress(deny_hosts=[HOST])
+    with ProviderHost(json.dumps({"data": [{"b64_json": "aGk="}]})) as host:
+        provider = prov.AlibabaImageProvider(api_key="ak", endpoint=f"{host.url}/v1")
+        with pytest.raises(ImageGenError) as ei:
+            _run(provider.generate("a fox", model="qwen-image-2.0"))
+
+    assert str(ei.value) == (
+        f"{host.url}/v1/images/generations was not reached: {HOST} is on Denied hosts in "
+        "Settings → Security → Network egress."
+    )
+    assert host.requests == []
+
+
+def test_an_image_request_to_her_own_endpoint_is_sent() -> None:
+    """The endpoint she set on the instance is hers to point anywhere, her own computer included,
+    with nothing on Allowed hosts."""
+    from apps_testkit.egress import ProviderHost
+
+    with ProviderHost(json.dumps({"data": [{"b64_json": "aGk="}]})) as host:
+        provider = prov.AlibabaImageProvider(api_key="ak", endpoint=f"{host.url}/v1")
+        results = _run(provider.generate("a fox", model="qwen-image-2.0"))
+
+    assert [r.b64 for r in results] == ["aGk="]
+    assert [(r["method"], r["path"]) for r in host.requests] == [
+        ("POST", "/v1/images/generations")
+    ]

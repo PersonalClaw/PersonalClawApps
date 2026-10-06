@@ -24,6 +24,8 @@ import pytest
 @pytest.fixture(autouse=True)
 def _stub_openai(monkeypatch):
     fake = types.ModuleType("openai")
+    # The error a refused request is raised as, so the SDK does not retry it.
+    fake.OpenAIError = type("OpenAIError", (Exception,), {})
 
     class _AsyncOpenAI:
         def __init__(self, **kw):
@@ -704,3 +706,87 @@ def test_a_call_without_a_key_names_where_to_set_it(monkeypatch):
     with pytest.raises(VideoGenError) as ei:
         asyncio.run(prov.GeminiVideoProvider(api_key="").generate("a heron", model="veo-test"))
     assert str(ei.value) == _NO_KEY
+
+
+# ── The owner's Network egress settings ───────────────────────────────────────
+
+
+@pytest.fixture
+def connections(monkeypatch):
+    """Every connection aiohttp opens, recorded and stopped: a request the egress guard let
+    through shows up here instead of reaching Google."""
+    import aiohttp
+
+    opened: list[str] = []
+
+    async def _connect(self, req, traces, timeout):
+        opened.append(str(req.url))
+        raise AssertionError(f"a connection was opened for {req.url}")
+
+    monkeypatch.setattr(aiohttp.TCPConnector, "connect", _connect)
+    monkeypatch.setattr(prov, "_discovery_cache", {})
+    return opened
+
+
+def _denied(url: str) -> str:
+    return (
+        f"{url} was not reached: {prov._GEMINI_HOST} is on Denied hosts in Settings → Security → "
+        "Network egress."
+    )
+
+
+@pytest.mark.parametrize(
+    ("call", "url"),
+    [
+        (_image, f"{prov._NATIVE_BASE}models/gemini-image-test:generateContent"),
+        (_video, f"{prov._NATIVE_BASE}models/veo-test:predictLongRunning"),
+    ],
+    ids=["image", "video"],
+)
+def test_a_media_request_to_the_host_the_owner_denied_is_never_sent(connections, call, url):
+    """🔴 Red before: each request went through an aiohttp session of the app's own, which asked
+    no guard, so with Gemini's host on Denied hosts in Settings → Security → Network egress the
+    prompt was sent to it all the same. Now each is refused before a connection is opened, in the
+    words that name the setting and the host. The real session and guard."""
+    from apps_testkit.egress import owner_egress
+    from personalclaw.sdk.image import ImageGenError
+    from personalclaw.sdk.video import VideoGenError
+
+    owner_egress(deny_hosts=[prov._GEMINI_HOST])
+    with pytest.raises((ImageGenError, VideoGenError)) as refused:
+        call()
+
+    assert str(refused.value) == _denied(url)
+    assert connections == []
+
+
+def test_the_model_list_from_the_host_the_owner_denied_is_never_fetched(connections):
+    """The model list asks the guard too, and lists nothing it was refused."""
+    from apps_testkit.egress import owner_egress
+
+    owner_egress(deny_hosts=[prov._GEMINI_HOST])
+
+    assert asyncio.run(prov._discover_models(_KEY)) == []
+    assert connections == []
+
+
+def test_a_request_the_owner_allowed_is_sent(connections, monkeypatch):
+    """The control: the same request, with Gemini's host on Allowed hosts instead, asks the guard,
+    is let through, and opens a connection (stopped here, so nothing reaches Google). The host's
+    address is pinned to a documentation one, so the guard's lookup never leaves this machine."""
+    import socket
+
+    from apps_testkit.egress import owner_egress
+    from personalclaw.sdk.video import VideoGenError
+
+    def _pinned(host, *_args, **_kwargs):
+        if host != prov._GEMINI_HOST:
+            raise socket.gaierror(f"{host} is not pinned here")
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("203.0.113.7", 443))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", _pinned)
+    owner_egress(allow_hosts=[prov._GEMINI_HOST])
+    with pytest.raises(VideoGenError):
+        asyncio.run(prov.GeminiVideoProvider(api_key=_KEY).generate("a heron", model="veo-test"))
+
+    assert connections == [f"{prov._NATIVE_BASE}models/veo-test:predictLongRunning"]

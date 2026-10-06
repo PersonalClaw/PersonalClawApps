@@ -141,6 +141,8 @@ Speech-to-text, embeddings, images and video say the same, and name what else st
 
 Reaches AWS in the region you set in **AWS Region**: Amazon Bedrock, plus Amazon S3 and Amazon Transcribe for the features that use them.
 
+Every request it sends goes through PersonalClaw's egress guard under your **Settings → Security → Network egress** rules, each redirect and retry included: the chat, the model list, embeddings, images, video, speech-to-text and the transcript it fetches, and the sign-in requests your AWS profile makes (an IAM role's, a single sign-on's). A host you put on Denied hosts is never reached, and the chat or the call says so, naming the host and the setting. An AWS endpoint on your own machine or network (a VPC endpoint, or one set with `AWS_ENDPOINT_URL_*`) is reached once you add its host to Allowed hosts. Credentials the AWS SDK reads from a cloud instance's metadata service are fetched by the SDK itself, outside the guard.
+
 ## License
 
 MIT — see the apps repo [LICENSE](../LICENSE).

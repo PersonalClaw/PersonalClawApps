@@ -93,12 +93,17 @@ class ProviderHost:
     each request it was sent.
 
     ``with ProviderHost(body) as host:`` starts it; ``host.url`` is its base URL and
-    ``host.requests`` the ``{"method", "path", "body"}`` of each request, oldest first.
+    ``host.requests`` the ``{"method", "path", "body"}`` of each request, oldest first. With
+    *moved_to* it sends every request on there instead, as a host that redirects does: a 307 to
+    *moved_to* followed by the request's path.
     """
 
-    def __init__(self, body: str | bytes, *, content_type: str = "application/json") -> None:
+    def __init__(
+        self, body: str | bytes, *, content_type: str = "application/json", moved_to: str = ""
+    ) -> None:
         self.body = body.encode("utf-8") if isinstance(body, str) else body
         self.content_type = content_type
+        self.moved_to = moved_to
         self.requests: list[dict[str, Any]] = []
         self._lock = threading.Lock()
         self._httpd = ThreadingHTTPServer((HOST, 0), _handler_for(self))
@@ -132,6 +137,13 @@ def _handler_for(server: ProviderHost) -> type[BaseHTTPRequestHandler]:
         def _answer(self, method: str) -> None:
             raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
             server.record(method, self.path, raw)
+            if server.moved_to:
+                self.send_response(307)
+                self.send_header("Location", f"{server.moved_to}{self.path}")
+                self.send_header("Content-Length", "0")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                return
             self.send_response(200)
             self.send_header("Content-Type", server.content_type)
             self.send_header("Content-Length", str(len(server.body)))

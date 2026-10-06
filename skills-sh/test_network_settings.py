@@ -1,10 +1,12 @@
 """skills.sh: a request to its API honours the owner's Settings → Security → Network egress.
 
-The marketplace is synchronous, so it asks the SDK's guard (``evaluate``) before its request. The
-app's real request goes to a server on this machine standing in for the skills.sh API
-(``apps_testkit.egress``): reached when the owner allowed its host, and refused before anything
-is sent when they denied it, did not allow it, or when the check itself could not run. A refused
-search is not tried again through the ``skills`` CLI, which the guard never sees.
+The marketplace is synchronous, so it asks the SDK's guard (``evaluate``) before its request, and
+sends the request with the SDK's synchronous guarded client, which asks the guard again about
+every request it sends, each redirect hop included. The app's real request goes to a server on
+this machine standing in for the skills.sh API (``apps_testkit.egress``): reached when the owner
+allowed its host, and refused before anything is sent when they denied it, did not allow it, or
+when the check itself could not run, and a redirect to a host they denied is never followed. A
+refused search is not tried again through the ``skills`` CLI, which the guard never sees.
 """
 
 from __future__ import annotations
@@ -105,3 +107,24 @@ def test_a_refused_search_is_not_tried_again_through_the_cli(skills_api, cli):
     assert "is on Denied hosts in Settings → Security → Network egress" in str(refused.value)
     assert cli == []
     assert skills_api.requests == []
+
+
+def test_a_redirect_to_a_host_the_owner_denied_is_never_followed(monkeypatch):
+    """🔴 Red before: the request was sent with urllib, which follows a redirect by itself, and only
+    the API's own host was asked: the API the owner allowed could send it on to a host she denied.
+    Each hop is asked now, before it is sent, and the one to the denied host is refused in the
+    words that name it."""
+    with ProviderHost(json.dumps(_ANSWER)) as elsewhere:
+        port = elsewhere.url.rsplit(":", 1)[1]
+        with ProviderHost("{}", moved_to=f"http://localhost:{port}") as api:
+            monkeypatch.setattr(provider, "_API_BASE", f"{api.url}/api/v1")
+            owner_egress(allow_hosts=[HOST], deny_hosts=["localhost"])
+            with pytest.raises(RuntimeError) as refused:
+                provider.SkillsShMarketplace()._get(_PATH)
+
+    assert str(refused.value) == (
+        f"http://localhost:{port}/api/v1/skills/search was not reached: localhost is on Denied "
+        "hosts in Settings → Security → Network egress."
+    )
+    assert [r["path"] for r in api.requests] == [f"/api/v1{_PATH}"]
+    assert elsewhere.requests == [], "the redirect to a denied host was followed"

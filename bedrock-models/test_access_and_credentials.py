@@ -180,6 +180,8 @@ def _boto3(state: dict) -> types.ModuleType:
     mod = types.ModuleType("boto3")
 
     class Session:
+        #: A boto3 session's events, where the app registers its egress guard's before-send hook.
+        events = types.SimpleNamespace(register_first=lambda *_a, **_k: None)
         def __init__(self, profile_name=None):
             state["probes"] = state.get("probes", 0) + 1
 
@@ -593,7 +595,10 @@ def test_a_listing_the_policy_denies_names_the_action(aws, monkeypatch):
     stub = Stubber(client)
     for operation in ("list_foundation_models", "list_inference_profiles"):
         stub.add_client_error(operation, "AccessDeniedException", denied, http_status_code=403)
-    session = types.SimpleNamespace(client=lambda service, region_name=None: client)
+    session = types.SimpleNamespace(
+        client=lambda service, region_name=None: client,
+        events=types.SimpleNamespace(register_first=lambda *_a, **_k: None),
+    )
     monkeypatch.setitem(
         sys.modules, "boto3", types.SimpleNamespace(Session=lambda profile_name=None: session)
     )

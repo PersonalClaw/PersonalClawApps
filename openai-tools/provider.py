@@ -61,32 +61,19 @@ class OpenAIToolProvider(ToolProvider):
     def connected(self) -> bool:
         if not self._endpoint:
             return False
-        # Guard the operator endpoint through the same egress evaluator the data
-        # paths use BEFORE any raw request — a private/blocked host reports "not
-        # connected" rather than being probed. ``evaluate`` is the SYNC guard
-        # (resolves + classifies the host); the async net.fetch can't be used from
-        # this sync property, but evaluate() gives the identical decision.
-        try:
-            from personalclaw.sdk.net import CONNECTOR, egress_policy_for, evaluate
+        # The probe is synchronous, so it is sent with the SDK's synchronous guarded client,
+        # which asks the egress guard about it before it is sent, each redirect hop included,
+        # under the owner's Settings → Security → Network egress: a host they denied, or a
+        # private one they did not allow, reports "not connected" and is never probed. A guard
+        # that cannot judge the request raises too, so nothing goes out unjudged.
+        from personalclaw.sdk.net import sync_http_client
 
-            # Layer the operator's security.egress config onto CONNECTOR so a
-            # self-hoster who allow-lists their tool host (or sets allow_private)
-            # can reach a private/LAN tool server. Default stays public-only.
-            if not evaluate(self._endpoint, egress_policy_for(CONNECTOR)).allow:
-                return False
-        except Exception:  # noqa: BLE001 — a check that could not run judged nothing
-            # So the endpoint is reported not connected rather than probed unchecked.
-            logger.warning("egress check for %s could not run; not probing it", self._endpoint)
-            return False
+        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         try:
-            import urllib.request
-
-            req = urllib.request.Request(self._endpoint, method="HEAD")
-            if self._api_key:
-                req.add_header("Authorization", f"Bearer {self._api_key}")
-            urllib.request.urlopen(req, timeout=5)  # noqa: S310
+            with sync_http_client(timeout=5, follow_redirects=True) as http:
+                http.head(self._endpoint, headers=headers).raise_for_status()
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001 — refused, unreachable or answered with an error
             return False
 
     def _headers(self) -> dict[str, str]:

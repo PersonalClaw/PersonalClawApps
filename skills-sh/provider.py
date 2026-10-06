@@ -17,11 +17,10 @@ in Settings → Secrets under that name, or once with:
     personalclaw setup --credential skills_sh_api_key=sk_live_...
 """
 
-import json
 import logging
 import shutil
 import subprocess
-import urllib.request
+import urllib.parse
 from pathlib import Path
 
 from personalclaw.sdk.security import mask_child_output
@@ -116,10 +115,19 @@ class SkillsShMarketplace(SkillsMarketplace):
         api_key = self._api_key()
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        req = urllib.request.Request(url, headers=headers)
+        # The check above says a refusal of this URL in the app's words; the request itself is
+        # sent with the SDK's guarded client, which asks the guard about every request it sends,
+        # each redirect hop included, so a hop to a host the owner denied is refused too.
+        from personalclaw.sdk.net import EgressBlocked, sync_http_client
+
         try:
-            with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:  # noqa: S310
-                return json.loads(resp.read())
+            with sync_http_client(timeout=_TIMEOUT, follow_redirects=True) as http:
+                answer = http.get(url, headers=headers)
+                answer.raise_for_status()
+                return answer.json()
+        except EgressBlocked as exc:
+            hop = exc.decision.url.split("?", 1)[0]
+            raise _EgressRefused(egress_refusal(hop, exc.decision)) from exc
         except Exception as exc:
             raise RuntimeError(f"skills.sh API request failed for {path}: {exc}") from exc
 
@@ -128,7 +136,7 @@ class SkillsShMarketplace(SkillsMarketplace):
     def search(self, query: str, limit: int = 20) -> list[SkillEntry]:
         if self._api_key():
             try:
-                data = self._get(f"/skills/search?q={urllib.request.quote(query)}&limit={limit}")
+                data = self._get(f"/skills/search?q={urllib.parse.quote(query)}&limit={limit}")
             except _EgressRefused:
                 raise
             except Exception as exc:

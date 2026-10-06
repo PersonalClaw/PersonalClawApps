@@ -34,7 +34,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 ## Network
 
-Reaches `queue.fal.run`, and the file URLs fal returns for the finished images and videos. Its requests to the queue go through PersonalClaw's egress guard under your **Settings → Security → Network egress** rules, so a host you put on Denied hosts is never reached.
+Reaches `queue.fal.run` and `fal.run`, and the file URLs fal returns for the finished images and videos. Every request it sends to fal goes through PersonalClaw's egress guard under your **Settings → Security → Network egress** rules, so a host you put on Denied hosts is never reached, and the call says so, naming the host and the setting.
 
 ## License
 

@@ -27,7 +27,9 @@ from personalclaw.llm.registry import CredentialMissing
 class _FakeAsyncOpenAI:
     constructed: list[dict[str, Any]] = []
 
-    def __init__(self, *, api_key: str, base_url: str | None = None) -> None:
+    def __init__(
+        self, *, api_key: str, base_url: str | None = None, http_client: object = None
+    ) -> None:
         type(self).constructed.append({"api_key": api_key, "base_url": base_url})
         self.api_key = api_key
         self.base_url = base_url
@@ -39,6 +41,8 @@ class _FakeAsyncOpenAI:
 @pytest.fixture
 def fake_openai(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     fake = types.ModuleType("openai")
+    # The error a refused request is raised as, so the SDK does not retry it.
+    fake.OpenAIError = type("OpenAIError", (Exception,), {})
     fake.AsyncOpenAI = _FakeAsyncOpenAI  # type: ignore[attr-defined]
     _FakeAsyncOpenAI.constructed = []
     monkeypatch.setitem(sys.modules, "openai", fake)

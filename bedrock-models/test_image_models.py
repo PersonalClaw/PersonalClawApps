@@ -29,12 +29,16 @@ import re
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
 import pytest
 
-import provider as prov  # app-local (loaded from the app dir)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the repo root: apps_testkit
+
+import provider as prov  # app-local (loaded from the app dir)  # noqa: E402
+from apps_testkit.egress import HOST, owner_egress  # noqa: E402
 from personalclaw.sdk.image import ImageGenError
 
 PROMPT = "a heron at dawn on a misty lake"
@@ -374,6 +378,9 @@ def bedrock(monkeypatch):
         monkeypatch.setenv("AWS_ENDPOINT_URL_BEDROCK", endpoint.url)
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "image-test")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "image-test")
+        # The endpoint is on this computer, so its owner allows its host in Settings → Security →
+        # Network egress, as she would for her own; every request is asked of the guard.
+        owner_egress(allow_hosts=[HOST])
         for name in ("AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_DEFAULT_PROFILE"):
             monkeypatch.delenv(name, raising=False)
         monkeypatch.setenv("AWS_CONFIG_FILE", os.devnull)

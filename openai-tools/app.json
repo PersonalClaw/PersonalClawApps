@@ -1,11 +1,14 @@
 {
   "name": "openai-tools",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "OpenAI Tool Servers",
   "description": "Connect OpenAI-compatible tool servers that expose tools via REST API.",
   "icon": "Wrench",
   "author": "PersonalClaw",
   "license": "MIT",
+  "requiresCoreFeatures": [
+    "guarded-clients"
+  ],
   "tags": [
     "tool"
   ],

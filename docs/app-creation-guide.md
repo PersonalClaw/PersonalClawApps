@@ -343,10 +343,43 @@ address the owner configured. That layers the owner's **Settings â†’ Security â†
 onto the profile, so a host they put on Denied hosts is never reached, and one on Allowed hosts
 is reached even when it is on their own network. Say a refusal (`EgressBlocked`) with
 `egress_refusal(url, exc.decision)`: the sentence names the setting that lifts it. A synchronous
-surface asks `evaluate(url, egress_policy_for(CONNECTOR))` before its own request, and refuses
-when that check raises, since it judged nothing. The bare profile, or no policy at all, leaves
-the owner's settings out, and `.github/scripts/check_egress_policy.py` holds every request in
-this repository to the layered form, and every failed check to a refusal.
+surface that says a refusal in its own words asks `evaluate(url, egress_policy_for(CONNECTOR))`
+first, and refuses when that check raises, since it judged nothing; its request still goes
+through a guarded client (below). The bare profile, or no policy at all, leaves the owner's
+settings out, and `.github/scripts/check_egress_policy.py` holds every request in this repository
+to the layered form, and every failed check to a refusal.
+
+A provider that sends its requests with an HTTP client of its own, or through a vendor SDK, opens
+that client from `personalclaw.sdk.net` with the guard inside it: `http_client(...)` and
+`sync_http_client(...)` (an `httpx` client) or `http_session(...)` (an `aiohttp` session). Each
+asks the guard about every request it sends, each redirect hop included, under the owner's Network
+egress settings, and a refused request raises `EgressBlocked` before it is sent, its message the
+sentence to show. `model_provider=True` judges a model provider's requests, with the endpoint the
+owner set on the instance (`endpoint=...`) reachable on their own machine or network;
+`shared_by_every_run=True` is for the agent's own model (its chat, embeddings and model list),
+which a run whose network is off still thinks with. Hand an SDK that takes an `http_client`
+(`openai`, `anthropic`) one of these.
+
+A client library that takes no HTTP client asks the guard itself: build a
+`RequestGuard(model_provider=True, ...)` with the same keywords, and call its `ask(url)` from the
+hook the library runs before each request, letting the refusal propagate so the request is never
+sent. That glue is the library's, so it lives in your app. For boto3, register a `before-send`
+handler on the session as soon as it is made, before any client, as `bedrock-models` does:
+
+```python
+session = boto3.Session(profile_name=profile)
+guard = RequestGuard(model_provider=True)
+
+def ask(request, **_event):
+    guard.ask(str(request.url))
+
+session.events.register_first("before-send", ask)  # every client made from it asks, retries too
+```
+
+An app that uses any of these declares `"requiresCoreFeatures": ["guarded-clients"]`, and
+`.github/scripts/check_network_clients.py` fails app code that opens an HTTP client any other
+way, or an AWS session with no `before-send` hook that asks a guard registered on it before its
+first client (a chat channel's connection to its own service is not held to it yet).
 
 A download too large to hold in memory (a model's files) streams through
 `open_url(url, timeout_s=...)` instead: the standard library's opener with every request asked
@@ -557,6 +590,7 @@ do without, ask `core_has` and say so when it is missing.
 | `tool-call-screen` | a channel that runs a conversation itself asks PersonalClaw's deny-list about each call before it approves or asks about it (`screen_tool_call(hooks, event.title, event.tool_input)`, the hook chain's verdict read on the command the call would run as well as on its title) and refuses a call it refuses, never putting it on its prompt | a channel app that runs its own turns: `slack-channel` |
 | `message-instructions` | an inbox source hands PersonalClaw the owner's instruction beside a message's words (`IncomingMessage.instruction`), held by a setting declared `x-meta.instruction`, and a run on the message is handed it outside any fence, then the message fenced once | an inbox app whose source hands one over: `mail-inbox` |
 | `closing-streams` | a model's stream your app reads is closed the moment it stops reading: read inside `personalclaw.sdk.model.closing_stream`, it is closed by any way out of the block, and an agent CLI's turn left part way is told to stop and its session takes the next prompt at once | an app that reads a model's stream (`stream`, `stream_command`, `complete`): `slack-channel`, `code-review`, `issue-radar` |
+| `guarded-clients` | the HTTP clients `personalclaw.sdk.net` hands out with the egress guard inside them (`http_client`, `sync_http_client`, `http_session`), each asking the guard about every request it sends, each redirect hop included, under the owner's Network egress settings, and the guard itself (`RequestGuard`) for a client library's own hook; a refused request raises `EgressBlocked` before it is sent | an app that sends requests with a client of its own: `bedrock-models`, `google-models`, `alibaba-models`, `fal-image`, `openai-tools`, `skills-sh` |
 
 A PersonalClaw from before core features cannot read the field, so an app also checks what it
 relies on where it uses it: a channel app handed a brief with no answers says so on the prompt,
@@ -566,7 +600,8 @@ offers the brief's answers to declaring `approval-answers`, every app that gives
 chat's Trust to declaring `chat-trust`, every app that links a chat on its own channel to
 declaring `links-name-their-channel`, every app that screens a call with the deny-list to
 declaring `tool-call-screen`, every app that reads a model's stream inside `closing_stream`
-to declaring `closing-streams`, and every app whose source hands over a message's instruction to
+to declaring `closing-streams`, every app that opens a guarded HTTP client or asks the guard
+itself to declaring `guarded-clients`, and every app whose source hands over a message's instruction to
 declaring `message-instructions`.
 `.github/tests/test_model_streams_are_read_inside_closing_stream.py` holds every app to reading a
 model's stream that way: an `async for` over a provider's stream, or an `anext` of one, anywhere

@@ -177,6 +177,13 @@ jobs:
         # pass-through, a stale entry, an unreadable file and a lost floor app each red it; a clean
         # tree is green.
         run: python -m pytest .github/tests/test_egress_policy.py -q
+      - name: The network-clients rail reds on a planted defect
+        # Drives the rail's own script against seeded trees: an httpx, aiohttp or urllib client,
+        # an SDK client with no guarded http_client, an AWS session with no before-send hook that
+        # asks the guard (or one registered after a client is made) and a client of boto3's
+        # default session each red it, as does a lost floor app; a channel app is outside it, a
+        # hook written any way is recognised, and a clean tree is green.
+        run: python -m pytest .github/tests/test_network_clients.py -q
       - name: The active-home rail reds on a planted defect
         # Drives the rail's own script against seeded trees: a path in the default home spelled in
         # a default or a fallback, one built from the account's home, the variable read, a setting
@@ -418,6 +425,21 @@ jobs:
           python-version: "3.12"
       - name: Every request an app makes honours the owner's network settings
         run: python .github/scripts/check_egress_policy.py
+
+  network-clients:
+    # Every HTTP client an app opens has the egress guard inside it (the SDK's http_client,
+    # sync_http_client or http_session), and every AWS session asks the guard from a before-send
+    # hook registered before its first client, so a host on the owner's Denied hosts is never
+    # reached by a request the app's own client sends. Pure-stdlib AST rail, no core install,
+    # the same script run locally.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Every HTTP client an app opens asks the egress guard
+        run: python .github/scripts/check_network_clients.py
 
   prompt-cache-posture:
     # Cross-app rail: every model-provider app must declare a `prompt_cache`

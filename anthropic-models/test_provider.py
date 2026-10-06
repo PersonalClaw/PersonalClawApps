@@ -71,7 +71,9 @@ class _FakeMessages:
 class _FakeAsyncAnthropic:
     constructed: list[dict[str, Any]] = []
 
-    def __init__(self, *, api_key: str, base_url: str | None = None) -> None:
+    def __init__(
+        self, *, api_key: str, base_url: str | None = None, http_client: object = None
+    ) -> None:
         type(self).constructed.append({"api_key": api_key, "base_url": base_url})
         self.api_key = api_key
         self.base_url = base_url
@@ -87,6 +89,8 @@ class _FakeAsyncAnthropic:
 def fake_anthropic(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     """Install a fake ``anthropic`` module into ``sys.modules``."""
     fake = types.ModuleType("anthropic")
+    # The error a refused request is raised as, so the SDK does not retry it.
+    fake.AnthropicError = type("AnthropicError", (Exception,), {})
     fake.AsyncAnthropic = _FakeAsyncAnthropic  # type: ignore[attr-defined]
     _FakeAsyncAnthropic.constructed = []
     monkeypatch.setitem(sys.modules, "anthropic", fake)

@@ -1,12 +1,15 @@
 {
   "name": "skills-sh",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "displayName": "Skills.sh Marketplace",
   "description": "Browse and install community skills from skills.sh. Search, preview, and manage external skill packages.",
   "icon": "Store",
   "heroImage": "assets/hero.svg",
   "author": "PersonalClaw",
   "license": "MIT",
+  "requiresCoreFeatures": [
+    "guarded-clients"
+  ],
   "tags": [
     "skills",
     "bundled"

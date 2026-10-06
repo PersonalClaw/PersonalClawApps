@@ -20,6 +20,8 @@ import pytest
 @pytest.fixture(autouse=True)
 def _stub_openai(monkeypatch):
     fake = types.ModuleType("openai")
+    # The error a refused request is raised as, so the SDK does not retry it.
+    fake.OpenAIError = type("OpenAIError", (Exception,), {})
 
     class _AsyncOpenAI:
         def __init__(self, **kw):

@@ -42,7 +42,7 @@ from personalclaw.sdk.model import (
     register_branded_app,
     require_model,
 )
-from personalclaw.sdk.net import sentence_with_detail
+from personalclaw.sdk.net import EgressBlocked, http_session, sentence_with_detail
 
 logger = logging.getLogger(__name__)
 
@@ -277,7 +277,11 @@ class AlibabaImageProvider(ImageGenProvider):
 
         timeout = aiohttp.ClientTimeout(total=_IMAGE_TIMEOUT_S)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            # Asked of the egress guard first, under the owner's Network egress settings, with
+            # the instance's endpoint hers to point anywhere.
+            async with http_session(
+                endpoint=self._endpoint, model_provider=True, timeout=timeout
+            ) as session:
                 async with session.post(url, headers=headers, json=body) as resp:
                     text = await resp.text()
                     if resp.status != 200:
@@ -394,8 +398,11 @@ def _unanswered_message(error: Exception) -> str:
     with something that is not JSON, or failed some other way.
 
     Told apart by builtin types: the HTTP library raises an ``OSError`` for a connection it could
-    not make, and it is imported only where the request is made.
+    not make, and it is imported only where the request is made. A request the owner's network
+    settings refused is said in the guard's sentence, which names the host and the setting.
     """
+    if isinstance(error, EgressBlocked):
+        return str(error)
     if isinstance(error, (json.JSONDecodeError, UnicodeDecodeError)):
         sentence = (
             "Alibaba Model Studio's answer to the image request could not be read. Try again in "

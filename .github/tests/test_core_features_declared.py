@@ -56,6 +56,10 @@ The rails over every bundle, against the installed core:
     words (``IncomingMessage(…, instruction=…)`` from ``personalclaw.sdk.inbox``) declares
     ``message-instructions``: on a PersonalClaw without it the message has no such field, so
     every poll that carries one fails.
+15. every app whose shipped code opens an HTTP client the egress guard is inside, or asks the
+    guard itself (``http_client``, ``sync_http_client``, ``http_session`` or ``RequestGuard`` from
+    ``personalclaw.sdk.net``), declares ``guarded-clients``: on a PersonalClaw without it the app
+    would not load at all.
 """
 
 from __future__ import annotations
@@ -119,6 +123,13 @@ KNOWN_HOOK_ASKERS = {"slack-channel"}
 
 #: The apps that hand over the owner's instruction beside a message's words, for rail 14.
 KNOWN_INSTRUCTION_CARRIERS = {"mail-inbox"}
+
+#: The apps that open an HTTP client the egress guard is inside, for rail 15: one per kind.
+KNOWN_GUARDED_CLIENTS = {"bedrock-models", "google-models", "openai-tools"}
+
+#: What an app imports to open an HTTP client the egress guard is inside, or to ask the guard
+#: itself (rail 15).
+_GUARDED_CLIENT_NAMES = frozenset({"http_client", "sync_http_client", "http_session", "RequestGuard"})
 
 
 @pytest.fixture(autouse=True)
@@ -809,3 +820,51 @@ def test_the_scan_tells_an_app_that_hands_over_an_instruction_from_one_that_does
     )
     assert _hands_over_an_instruction(carrier) is True
     assert _hands_over_an_instruction(other) is False
+
+
+def _opens_a_guarded_client(bundle: Path) -> bool:
+    """Whether the bundle's shipped code takes a guarded HTTP client from the SDK."""
+    for path in sdk_contract.shipped_sources(bundle):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "personalclaw.sdk.net":
+                if any(alias.name in _GUARDED_CLIENT_NAMES for alias in node.names):
+                    return True
+    return False
+
+
+def test_every_app_that_opens_a_guarded_client_declares_it():
+    from personalclaw.sdk.features import GUARDED_CLIENTS
+
+    openers = {bundle.name for bundle in BUNDLES if _opens_a_guarded_client(bundle)}
+    assert KNOWN_GUARDED_CLIENTS <= openers, (
+        f"the scan no longer sees these apps open a guarded client: "
+        f"{sorted(KNOWN_GUARDED_CLIENTS - openers)}"
+    )
+    undeclared = sorted(
+        name for name in openers if GUARDED_CLIENTS not in _declared(ROOT / name)
+    )
+    assert undeclared == [], (
+        f"these apps open an HTTP client from personalclaw.sdk.net without declaring "
+        f"'requiresCoreFeatures': ['{GUARDED_CLIENTS}'] in app.json: {undeclared}"
+    )
+
+
+def test_the_scan_tells_an_app_that_opens_a_guarded_client_from_one_that_does_not(tmp_path):
+    """Positive and negative control for rail 15."""
+    opener = tmp_path / "opener-app"
+    opener.mkdir()
+    (opener / "app.json").write_text('{"name": "opener-app", "version": "0.1.0"}')
+    (opener / "provider.py").write_text(
+        "async def ask(url):\n"
+        "    from personalclaw.sdk.net import http_session\n"
+        "    async with http_session(model_provider=True) as session:\n"
+        "        return await session.get(url)\n",
+        encoding="utf-8",
+    )
+    other = tmp_path / "other-app"
+    other.mkdir()
+    (other / "app.json").write_text('{"name": "other-app", "version": "0.1.0"}')
+    (other / "provider.py").write_text("from personalclaw.sdk.net import fetch\n")
+    assert _opens_a_guarded_client(opener) is True
+    assert _opens_a_guarded_client(other) is False

@@ -66,6 +66,8 @@ def sent(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, dict[str, Any]
     calls: list[tuple[str, str, dict[str, Any]]] = []
 
     class _Session:
+        #: A boto3 session's events, where the app registers its egress guard's before-send hook.
+        events = types.SimpleNamespace(register_first=lambda *_a, **_k: None)
         def __init__(self, profile_name: str | None = None) -> None:
             self._profile = profile_name
 

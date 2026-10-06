@@ -54,3 +54,31 @@ async def test_a_host_the_owners_settings_refuse_is_never_asked(fal_queue, allow
                                         api_key="k")
     assert str(refused.value) == refusal.reason
     assert fal_queue.requests == []
+
+
+@pytest.mark.asyncio
+async def test_a_video_asked_of_a_host_the_owner_denied_is_never_sent(monkeypatch):
+    """🔴 Red before: a video is asked of fal.run first, through an aiohttp session of the app's
+    own, which asked no guard, so with fal.run on Denied hosts the prompt was sent to it all the
+    same. Now it is refused before a connection is opened, in the words that name the setting and
+    the host, and the queue is not tried in its place. The real session and guard."""
+    import aiohttp
+
+    from personalclaw.sdk.video import VideoGenError
+
+    opened: list[str] = []
+
+    async def _connect(self, req, traces, timeout):
+        opened.append(str(req.url))
+        raise AssertionError(f"a connection was opened for {req.url}")
+
+    monkeypatch.setattr(aiohttp.TCPConnector, "connect", _connect)
+    owner_egress(deny_hosts=["fal.run"])
+    with pytest.raises(VideoGenError) as refused:
+        await provider.FalVideoProvider(api_key="k").generate("a bicycle", model="fal-ai/clip")
+
+    assert str(refused.value) == (
+        "https://fal.run/fal-ai/clip was not reached: fal.run is on Denied hosts in Settings → "
+        "Security → Network egress."
+    )
+    assert opened == []

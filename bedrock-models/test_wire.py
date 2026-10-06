@@ -22,6 +22,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the repo root: apps_testkit
 
+from apps_testkit.egress import HOST, owner_egress  # noqa: E402
 from apps_testkit.model_wire import (  # noqa: E402
     LISTED,
     MODEL,
@@ -47,6 +48,9 @@ def _boto3_reaches_only(monkeypatch, recording: RecordingModelServer) -> None:
     monkeypatch.setenv("AWS_ENDPOINT_URL_BEDROCK", recording.url)
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "wire-test")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "wire-test")
+    # The endpoint is on this computer, so its owner allows its host in Settings → Security →
+    # Network egress, as she would for her own; every request is asked of the guard.
+    owner_egress(allow_hosts=[HOST])
     for name in ("AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_DEFAULT_PROFILE"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("AWS_CONFIG_FILE", os.devnull)
@@ -84,6 +88,36 @@ async def test_what_core_asks_of_a_call_is_what_the_request_carries(server, aske
     assert await one_call(built) == REPLY
     assert [sampling_sent(call) for call in server.calls()] == [sent]
     assert [model_sent(call) for call in server.calls()] == [MODEL]
+
+
+# ── The owner's Network egress settings ───────────────────────────────────────────────────
+
+
+@pytest.fixture
+def denied(monkeypatch):
+    """The same endpoint, with its host on Denied hosts in Settings → Security → Network egress."""
+    with RecordingModelServer() as recording:
+        _boto3_reaches_only(monkeypatch, recording)
+        owner_egress(allow_hosts=[HOST], deny_hosts=[HOST])
+        yield recording
+
+
+@pytest.mark.asyncio
+async def test_a_chat_to_a_host_the_owner_denied_is_never_sent(denied):
+    """🔴 Red before: boto3's client sent the chat itself and asked no guard, so with the
+    endpoint's host on Denied hosts the conversation was sent to it all the same. Every request a
+    client of the app's AWS session sends is asked now, before it is sent: the chat fails in the
+    words that name the setting and the host, and the endpoint receives nothing."""
+    built = provider._factory(entry=_entry(denied.url), model=MODEL)
+
+    with pytest.raises(Exception) as refused:
+        await one_call(built)
+
+    assert str(refused.value) == (
+        f"{denied.url}/model/{MODEL}/converse-stream was not reached: {HOST} is on Denied hosts "
+        "in Settings → Security → Network egress."
+    )
+    assert denied.requests == []
 
 
 # ── A call no model is chosen for ─────────────────────────────────────────────────────────

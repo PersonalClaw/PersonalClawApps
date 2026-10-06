@@ -65,7 +65,7 @@ from personalclaw.sdk.model import (
     register_branded_app,
     require_model,
 )
-from personalclaw.sdk.net import sentence_with_detail
+from personalclaw.sdk.net import EgressBlocked, http_session, sentence_with_detail
 from personalclaw.sdk.tts import TtsProvider
 from personalclaw.sdk.video import (
     VideoGenError,
@@ -208,7 +208,10 @@ async def _discover_models(api_key: str) -> list[dict[str, Any]]:
     url = f"{_NATIVE_BASE}models?pageSize=200"
     timeout = aiohttp.ClientTimeout(total=20)
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        # The model list is the agent's own model's, which every run shares.
+        async with http_session(
+            model_provider=True, shared_by_every_run=True, timeout=timeout
+        ) as session:
             async with session.get(
                 url, headers=_key_header(api_key), allow_redirects=False,
             ) as resp:
@@ -409,7 +412,7 @@ class GeminiImageProvider(ImageGenProvider):
 
         timeout = aiohttp.ClientTimeout(total=_IMAGE_TIMEOUT_S)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with http_session(model_provider=True, timeout=timeout) as session:
                 async with session.post(url, headers=headers, json=body) as resp:
                     text = await resp.text()
                     if resp.status != 200:
@@ -450,7 +453,7 @@ class GeminiImageProvider(ImageGenProvider):
         }
         timeout = aiohttp.ClientTimeout(total=_IMAGE_TIMEOUT_S)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with http_session(model_provider=True, timeout=timeout) as session:
                 async with session.post(
                     url, headers={**_key_header(key), "Content-Type": "application/json"},
                     json=body, allow_redirects=False,
@@ -581,7 +584,7 @@ class GeminiVideoProvider(VideoGenProvider):
 
         timeout = aiohttp.ClientTimeout(total=60)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with http_session(model_provider=True, timeout=timeout) as session:
                 async with session.post(
                     url, headers={**_key_header(key), "Content-Type": "application/json"},
                     json=body, allow_redirects=False,
@@ -622,7 +625,7 @@ class GeminiVideoProvider(VideoGenProvider):
         last_problem = ""
         while elapsed < _VIDEO_TIMEOUT_S:
             try:
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with http_session(model_provider=True, timeout=timeout) as session:
                     async with session.get(
                         url, headers=_key_header(key), allow_redirects=False,
                     ) as resp:
@@ -646,7 +649,8 @@ class GeminiVideoProvider(VideoGenProvider):
                             last_problem = f"HTTP {resp.status}: {_error_detail(text)}"
             except VideoGenError:
                 raise
-            except (_NotAnObject, json.JSONDecodeError, UnicodeDecodeError) as e:
+            except (EgressBlocked, _NotAnObject, json.JSONDecodeError, UnicodeDecodeError) as e:
+                # A refusal is the owner's setting answering, not a dropped poll: it is final.
                 raise VideoGenError(_unanswered_message(e, what="Veo video", key=key)) from e
             except Exception as e:  # noqa: BLE001 — a dropped poll is retried until the deadline
                 logger.debug("Veo poll error", exc_info=True)
@@ -736,7 +740,7 @@ async def _video_file(uri: str, *, key: str) -> VideoResult:
     url = uri
     timeout = aiohttp.ClientTimeout(total=_VIDEO_DOWNLOAD_TIMEOUT_S)
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with http_session(model_provider=True, timeout=timeout) as session:
             for _hop in range(_MAX_REDIRECTS + 1):
                 async with session.get(
                     url, headers=_key_header(key), allow_redirects=False,
@@ -892,7 +896,7 @@ class GeminiTTSProvider(TtsProvider):
 
         timeout = aiohttp.ClientTimeout(total=60)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with http_session(model_provider=True, timeout=timeout) as session:
                 async with session.post(
                     url,
                     headers={**_key_header(key), "Content-Type": "application/json"},
@@ -1027,8 +1031,12 @@ def _status_message(status: int, text: str, *, what: str, key: str) -> str:
 
 
 def _unanswered_message(error: Exception, *, what: str, key: str) -> str:
-    """The sentence for a Gemini media call that got no usable answer: timed out, unable to
-    connect, answered with something that is not JSON, or failed some other way."""
+    """The sentence for a Gemini media call that got no usable answer: refused by the owner's
+    network settings, timed out, unable to connect, answered with something that is not JSON, or
+    failed some other way."""
+    if isinstance(error, EgressBlocked):
+        # Refused before anything was sent: the guard's sentence names the host and the setting.
+        return _scrubbed(str(error), key)
     if isinstance(error, asyncio.TimeoutError):
         sentence = f"The {what} request to Gemini timed out. Try again in a moment."
     elif isinstance(error, (json.JSONDecodeError, UnicodeDecodeError, _NotAnObject)):

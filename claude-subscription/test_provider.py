@@ -84,6 +84,8 @@ def _isolated(monkeypatch, tmp_path):
 
     calls: list[dict] = []
     fake = types.ModuleType("anthropic")
+    # The error a refused request is raised as, so the SDK does not retry it.
+    fake.AnthropicError = type("AnthropicError", (Exception,), {})
 
     class _AsyncAnthropic:
         def __init__(self, **kw):
