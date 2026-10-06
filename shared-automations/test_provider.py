@@ -122,7 +122,7 @@ def test_list_triggers_filters_by_kind_and_can_exclude_broken(tmp_path):
         path,
         [
             _row("ok"),
-            _row("other", kind="file", spec={"path": str(tmp_path)}),
+            _row("other", kind="file", spec={"paths": [str(tmp_path)]}),
             _row("bad", spec={"kind": "cron", "cron": "nope"}),
         ],
     )

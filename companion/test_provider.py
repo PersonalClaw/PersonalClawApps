@@ -661,24 +661,44 @@ def test_dropped_ids_are_capped(store: CompanionTriggerStore) -> None:
     assert len(raw["dropped"]) == MAX_DROPPED
 
 
-def test_a_delivered_one_shot_stops_being_an_automation(store: CompanionTriggerStore) -> None:
-    item = store._book.add_reminder(title="Call the dentist", at=future())
-    row_id = f"companion:reminder:{item.id}"
+def _goes_off(store: CompanionTriggerStore, row_id: str) -> None:
+    """What core writes for a one-shot that goes off, in its order: the grant takes its slot and
+    counts the fire BEFORE the run, the run's record stamps its success, and the retire after a
+    run that did its work deletes it (``delete_after_run``)."""
     trigger = store.get(row_id).trigger  # type: ignore[union-attr]
-
-    # The pre-execution write: core persists the NEXT fire time BEFORE running. This must NOT
-    # retire the row, or the very fire about to happen would be cancelled.
     trigger.next_fire_at = ""
-    store.upsert(trigger)
-    assert store.get(row_id) is not None
-
-    # The post-execution write is what retires it.
+    trigger.enabled = False
     trigger.run_count = 1
     trigger.last_fired_at = "2026-09-07T09:00:00"
     store.upsert(trigger)
+    assert store.get(row_id) is not None, "still served, so core has a row to run"
+    trigger.last_success_at = "2026-09-07T09:00:01"
+    store.upsert(trigger)
+    assert store.get(row_id) is not None, "still served, so core can retire it"
+    assert store.delete(row_id) is True
+
+
+def test_a_one_shot_is_served_through_every_write_until_core_retires_it(
+    store: CompanionTriggerStore,
+) -> None:
+    """Core writes the grant (its slot taken, the fire counted) BEFORE it runs the row, and reads
+    the row again to run it. 🔴 The row vanished at that write, so nothing ran, and core
+    quarantined the store for a write it could not read back."""
+    item = store._book.add_reminder(title="Call the dentist", at=future())
+    row_id = f"companion:reminder:{item.id}"
+    _goes_off(store, row_id)
     assert store.get(row_id) is None
-    # The item itself is kept, so the day plan can honestly say "delivered".
-    assert len(store._book.reminders()) == 1
+    # The item itself is kept, marked delivered, so the list and the day plan can say so.
+    (kept,) = store._book.reminders()
+    assert kept.delivered_at > 0
+
+
+def test_a_one_shot_deleted_before_it_went_off_is_removed(store: CompanionTriggerStore) -> None:
+    """Control: deleted from the Automations page while still pending, it is gone, not
+    "delivered"."""
+    item = store._book.add_reminder(title="Call the dentist", at=future())
+    assert store.delete(f"companion:reminder:{item.id}") is True
+    assert store._book.reminders() == []
 
 
 def test_a_delivered_recurring_reminder_keeps_firing(store: CompanionTriggerStore) -> None:
@@ -876,16 +896,18 @@ def test_the_day_plan_buckets_by_when(book: Companion) -> None:
             {"id": "rtoday", "title": "today", "at": epoch(6, 18)},
             {"id": "rlater", "title": "later", "at": epoch(20, 9)},
             {"id": "rcron", "title": "recurring", "cron": "30 8 * * 1-5"},
-            {"id": "rdone", "title": "delivered", "at": epoch(6, 10)},
+            {"id": "rdone", "title": "delivered", "at": epoch(6, 10), "delivered_at": epoch(6, 10)},
+            # Its fire was counted and its run did not go off: it is overdue, not delivered.
+            {"id": "rfail", "title": "fired, not delivered", "at": epoch(6, 7)},
         ],
         watches=[{"id": "w1", "path": "/tmp", "label": "drafts"}],
-        runtime={"companion:reminder:rdone": {"run_count": 1}},
+        runtime={"companion:reminder:rfail": {"run_count": 1, "last_failure_at": "x"}},
     )
 
     plan = book.day_plan(now=now)
     assert plan["date"] == "2026-09-06"
     assert plan["timezone"] == "Europe/Berlin"
-    assert [e["id"] for e in plan["overdue"]] == ["rover"]
+    assert [e["id"] for e in plan["overdue"]] == ["rfail", "rover"]
     assert [e["id"] for e in plan["due_today"]] == ["rtoday"]
     assert [e["id"] for e in plan["later"]] == ["rlater"]
     assert [e["title"] for e in plan["recurring"]] == ["recurring"]
@@ -1053,10 +1075,7 @@ async def test_list_shows_each_items_state(provider: CompanionProvider) -> None:
 
     # Deliver the one-shot; the listing must say "delivered", not vanish.
     store = create_trigger_store(ALL_ON)
-    row_id = f"companion:reminder:{one_shot.metadata['id']}"
-    trigger = store.get(row_id).trigger  # type: ignore[union-attr]
-    trigger.run_count = 1
-    store.upsert(trigger)
+    _goes_off(store, f"companion:reminder:{one_shot.metadata['id']}")
     after = await provider.invoke("companion_list", {})
     assert "delivered" in after.output
     assert after.metadata["reminders"] == 2
@@ -1068,6 +1087,18 @@ async def test_list_says_surface_off_rather_than_lying(provider: CompanionProvid
     quiet = create_provider({})
     result = await quiet.invoke("companion_list", {})
     assert "surface off" in result.output
+
+
+@pytest.mark.asyncio
+async def test_a_one_shot_whose_surface_is_off_is_not_said_delivered(
+    provider: CompanionProvider,
+) -> None:
+    """🔴 With Reminders off, a reminder that never went off read "Delivered"."""
+    await provider.invoke("companion_remind", {"title": "Put the bins out", "at": future()})
+    quiet = create_provider({})
+    result = await quiet.invoke("companion_list", {})
+    assert "surface off" in result.output
+    assert "delivered" not in result.output
 
 
 @pytest.mark.asyncio

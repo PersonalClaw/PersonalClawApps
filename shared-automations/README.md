@@ -43,6 +43,11 @@ Core arms and fires only rows whose `author` matches the local owner's username
 - **structurally cannot arm** — core drops them before the arm path is handed a single row,
   so there is no code path on your machine that could decide to run a teammate's automation.
 
+Your own rows are run, switched on or off and deleted from the Automations page, and a row you
+add to the file is armed by core within a tick, with no restart. What a row *is* (its schedule,
+its action) is changed in the file itself, where every machine pointed at it reads it: the
+Automations page says so rather than offer an edit.
+
 An **unattributed** row (`"author": ""`) reads as the local owner's on *every* machine, so a
 multi-user file that omits the field will have everybody arming everything. Attribute your
 rows. The shipped example leaves the shared rows unattributed on purpose — so it runs for

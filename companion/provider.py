@@ -391,7 +391,7 @@ class CompanionProvider(ToolProvider):
                     when = datetime.fromtimestamp(item.at, tz=self._book.tzinfo()).strftime(
                         "%Y-%m-%d %H:%M"
                     )
-                state = self._row_state(row_id, rows, armed, one_shot=not item.recurring)
+                state = self._row_state(row_id, rows, armed, delivered=bool(item.delivered_at))
                 note = f" — {item.note.splitlines()[0]}" if item.note.strip() else ""
                 lines.append(f"| `{item.id}` | {when} | {state} | {item.title}{note} |")
             blocks.append(f"**{len(reminders)} reminder(s)**\n\n" + "\n".join(lines))
@@ -399,7 +399,7 @@ class CompanionProvider(ToolProvider):
             lines = ["| id | state | path | label |", "|---|---|---|---|"]
             for watch in watches:
                 row_id = f"companion:watch:{watch.id}"
-                state = self._row_state(row_id, rows, armed, one_shot=False)
+                state = self._row_state(row_id, rows, armed, delivered=False)
                 lines.append(f"| `{watch.id}` | {state} | `{watch.path}` | {watch.label or '—'} |")
             blocks.append(f"**{len(watches)} watch(es)**\n\n" + "\n".join(lines))
         # Titles, notes, labels and paths are all the user's own text, and a reminder is
@@ -498,13 +498,18 @@ class CompanionProvider(ToolProvider):
         rows: list[dict[str, Any]],
         armed: set[str],
         *,
-        one_shot: bool,
+        delivered: bool,
     ) -> str:
-        """How an item's automation stands, in one word a person can act on."""
+        """How an item's automation stands, in one word a person can act on.
+
+        "delivered" only for a one-shot core retired after it went off (``drop_row`` marks it):
+        an item with no row is otherwise one whose surface is off, and a one-shot is no
+        exception — it was said "delivered" while its surface was off and it had never gone off.
+        """
         present = any(row["id"] == row_id for row in rows)
         if present:
             return "armed" if row_id in armed else "paused"
-        if one_shot:
+        if delivered:
             return "delivered"
         return "surface off"
 
@@ -530,12 +535,11 @@ class CompanionTriggerStore(TriggerStoreProvider):
 
     @property
     def base_dir(self) -> Path:
-        """Root for this store's own sidecars — this app's data dir.
+        """Root for this store's own files — this app's data dir, where the items live.
 
-        The file-watch runtime keeps each `file` trigger's seen-state here, so it has to be a
-        real, writable, per-install directory. It is the same directory the items live in,
-        which is what makes "uninstall the app and its automations are gone" one fact rather
-        than two.
+        Core keeps none of its own state here: what a watch has seen and a fire's claim are
+        this machine's, kept in its home beside its own automations, so "uninstall the app and
+        its automations are gone" needs nothing of core's to be cleaned up here.
         """
         return self._book.root
 

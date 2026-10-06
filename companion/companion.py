@@ -36,7 +36,7 @@ import os
 import re
 import secrets
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -156,6 +156,9 @@ class Reminder:
     instead of one: the title is what a notification says, and the note is what only a human
     reading ``companion_list`` sees. The note NEVER enters a trigger row, so however long or
     however pasted-in it is, it cannot reach an automation payload.
+
+    ``delivered_at`` is when core retired a one-shot after a run of it went off (``drop_row``):
+    from then on it is no automation, and the list and the day plan say it was delivered.
     """
 
     id: str
@@ -164,6 +167,7 @@ class Reminder:
     at: float = 0.0
     cron: str = ""
     created_at: float = 0.0
+    delivered_at: float = 0.0
 
     @property
     def recurring(self) -> bool:
@@ -177,6 +181,7 @@ class Reminder:
             "at": self.at,
             "cron": self.cron,
             "created_at": self.created_at,
+            "delivered_at": self.delivered_at,
         }
 
 
@@ -706,8 +711,10 @@ class Companion:
         out: list[dict[str, Any]] = []
         if self._reminders_on:
             for item in state.reminders:
+                if item.delivered_at:
+                    continue
                 row = self._reminder_row(item, state)
-                if row is not None and row["id"] not in dropped:
+                if row["id"] not in dropped:
                     out.append(row)
         if self._watchlist_on:
             for watch in state.watches:
@@ -739,6 +746,11 @@ class Companion:
     def drop_row(self, trigger_id: str) -> bool:
         """Retire one row: remove the item behind it if there is one, and remember the id.
 
+        A one-shot reminder core retires after a run of it went off (its runtime records the
+        success: core stamps ``last_success_at`` and then deletes a ``delete_after_run`` row) is
+        kept, marked delivered, rather than removed: it is no longer served, and the list and the
+        day plan say it was delivered. Deleted any other way it goes, as everything else does.
+
         The ``dropped`` list exists for the ONE row that has no item — the day brief, which is
         driven by a setting this app cannot write. Without it, a brief the user retired from
         the Automations page would be served again on the next read, core's post-delete
@@ -748,10 +760,15 @@ class Companion:
         """
         served = self.row_for(trigger_id) is not None
         state = self._load()
-        for kind, items in (("reminder", state.reminders), ("watch", state.watches)):
-            for index, item in enumerate(list(items)):
-                if trigger_id == f"companion:{kind}:{item.id}":
-                    items.pop(index)
+        went_off = bool(str((state.runtime.get(trigger_id) or {}).get("last_success_at") or ""))
+        for index, item in enumerate(list(state.reminders)):
+            if trigger_id != f"companion:reminder:{item.id}":
+                continue
+            if went_off and not item.recurring:
+                state.reminders[index] = replace(item, delivered_at=time.time())
+            else:
+                state.reminders.pop(index)
+        state.watches = [w for w in state.watches if trigger_id != f"companion:watch:{w.id}"]
         state.runtime.pop(trigger_id, None)
         if trigger_id not in state.dropped:
             state.dropped.append(trigger_id)
@@ -760,14 +777,14 @@ class Companion:
 
     # ── row synthesis ──────────────────────────────────────────────────────────────────
 
-    def _reminder_row(self, item: Reminder, state: _State) -> dict[str, Any] | None:
+    def _reminder_row(self, item: Reminder, state: _State) -> dict[str, Any]:
+        """The row a reminder is. Served until core deletes it, whatever core writes back first:
+        core writes a fired row's next fire, ``run_count`` and ``last_fired_at`` BEFORE it runs
+        it, and reads it again to run it, so a row hidden in answer to that write would leave
+        nothing to run, and core quarantines a store whose write it cannot read back. A one-shot
+        stops being an automation when core retires it after its run (``drop_row``)."""
         row_id = f"companion:reminder:{item.id}"
         runtime = state.runtime.get(row_id) or {}
-        if not item.recurring and _has_fired(runtime):
-            # A delivered one-shot stops being an automation. Gated on run_count/last_fired_at
-            # rather than on next_fire_at: core persists the NEXT fire time BEFORE it executes,
-            # so gating on that would cancel the very fire that is about to happen.
-            return None
         if item.recurring:
             spec: dict[str, Any] = {"kind": "cron", "expr": item.cron}
         else:
@@ -870,7 +887,6 @@ class Companion:
         recurring: list[dict[str, Any]] = []
         delivered = 0
         for item in state.reminders:
-            runtime = state.runtime.get(f"companion:reminder:{item.id}") or {}
             entry = {
                 "id": item.id,
                 "title": item.title,
@@ -886,7 +902,7 @@ class Companion:
             }
             if item.recurring:
                 recurring.append(entry)
-            elif _has_fired(runtime):
+            elif item.delivered_at:
                 delivered += 1
             elif item.at < current:
                 overdue.append(entry)
@@ -907,9 +923,7 @@ class Companion:
             "later": [
                 r.to_dict()
                 for r in state.reminders
-                if not r.recurring
-                and r.at >= end_of_day
-                and not _has_fired(state.runtime.get(f"companion:reminder:{r.id}") or {})
+                if not r.recurring and r.at >= end_of_day and not r.delivered_at
             ],
         }
 
@@ -948,15 +962,6 @@ def _overlay(row: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _has_fired(runtime: dict[str, Any]) -> bool:
-    """Whether core has recorded a fire for this row."""
-    try:
-        count = int(runtime.get("run_count") or 0)
-    except (TypeError, ValueError):
-        count = 0
-    return count > 0 or bool(str(runtime.get("last_fired_at") or "").strip())
-
-
 def _reminder_from(row: Any) -> Reminder | None:
     if not isinstance(row, dict):
         return None
@@ -971,6 +976,7 @@ def _reminder_from(row: Any) -> Reminder | None:
         at=_float(row.get("at")),
         cron=one_line(str(row.get("cron") or ""), CRON_MAX),
         created_at=_float(row.get("created_at")),
+        delivered_at=_float(row.get("delivered_at")),
     )
 
 

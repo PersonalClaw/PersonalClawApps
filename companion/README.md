@@ -164,10 +164,14 @@ consequences this bundle implements and tests:
   (`companion:day-brief:0830`) so changing the time in Settings mints a fresh one rather than
   making the retirement permanent.
 
-A one-shot reminder carries `delete_after_run` and *also* stops being served once its runtime
-record shows a fire. The second guard is gated on `run_count`/`last_fired_at` rather than on
-`next_fire_at`, because core persists the next fire time **before** it executes — gating on that
-would cancel the very fire about to happen. Both directions are tested.
+A one-shot reminder carries `delete_after_run`, and that is the only thing that retires it: core
+deletes it after a run of it went off. Until then it is served whatever core writes back first,
+because core writes a fired row's next fire, `run_count` and `last_fired_at` **before** it runs
+it and reads the row again to run it; a row hidden at that write would leave nothing to run, and
+core would quarantine the store for a write it could not read back. The reminder is kept, marked
+delivered, so `companion_list` and the day plan can say so; one deleted before it went off is
+removed. Core arms these rows itself (they are minted with no next fire), on the tick after one
+is added.
 
 Rows are namespaced `companion:*`, because a row whose id also exists in the owner's local
 `triggers.json` is not armed (the local row wins). `author` is left empty, which core reads as
@@ -206,8 +210,8 @@ surface serving only its own rows, all-off keeping the items, a refused setting 
 of blocking the mount, every row parsed by **core's own `parse_trigger`** with zero error issues,
 the notify-only freeze, a hand-injected action in the store file being ignored, the write-back
 round trip and the exact read-back check core makes, a write-back that cannot edit the user's
-fields, a pause that survives, delete for a reminder, a watch and the brief, the pre- vs
-post-execution one-shot retirement, malformed-store robustness, `0600`, the no-mkdir-on-construct
+fields, a pause that survives, delete for a reminder, a watch and the brief, a one-shot served
+through every write until core retires it, malformed-store robustness, `0600`, the no-mkdir-on-construct
 rule, the caps, the day-plan buckets under a frozen clock, the zone deciding where today ends,
 the whole tool surface with its risk levels and approval flags, fencing and a fence-break, the
 manifest round-trip and both provider declarations, and the CLI seams.
@@ -280,12 +284,11 @@ Stated plainly, because the difference matters.
   installing it in a running gateway, and driving `companion_remind` from chat has *not* been
   done. The install/quarantine/scan path, the Store listing, and the Settings → Providers
   rendering of this manifest are unverified in the real UI.
-- **A real fire.** No reminder has actually gone off. The rows are proven to be *acceptable* to
-  core's parser and the write-back contract is exercised against the store, but no gateway tick
-  has armed one of these rows, dispatched `notify`, and raised a notification. The claim that a
-  reminder fires rests on core's own `arm`/`dispatch` behavior, not on an observed fire.
-- **A real `file` trigger poll.** Same shape: the row is a valid `file` trigger and `base_dir` is
-  a real writable directory, but core's `file_poll` has never walked one of these globs.
+- **A fire in a running gateway.** `test_reminders_go_off_while_it_runs.py` drives core's own
+  clock loop (its tick, dispatch, runner and recorder) and its file-watch pass over this store:
+  a reminder and the day brief added after the start are armed and ring core's notification at
+  their time, and a watched folder speaks up when a file in it changes. That is core's code on a
+  fixed clock, not a gateway left running with a real notification seen in the UI.
 - **A real disable/uninstall cycle.** The "disabling removes every trigger" claim is proven
   *structurally* (rows exist only in this store, surfaces gate what it serves, and the tests
   drive all-off → zero rows) and rests on core's documented "a provider that is not registered
