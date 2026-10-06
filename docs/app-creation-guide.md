@@ -188,6 +188,14 @@ you ship runs in a child process under the app's own Python environment,
 engine packages go in `dependencies.sidecarDependencies` (see
 [Dependencies](#dependencies)). `voice-clone-tts` is the worked example.
 
+An engine that stays in-process is called from several of the gateway's threads at once: a
+re-index, a recall in a chat and the check a re-index makes before it starts can each reach it
+first. Build its model once, behind a lock every call takes, and give the model one call at a time
+unless its library says it is safe from several threads. Choose its device yourself: left to choose
+on Apple silicon, torch takes the GPU (`mps`), whose compiled kernels sit in one cache for the
+whole process with no lock around it, so two threads on it at once crash the gateway. Run an
+in-process torch model on the CPU, as `sentence-transformers` does, or move it to a sidecar.
+
 `settingsSchema` properties support `x-meta` per field:
 `label`, `help`, `placeholder`, `sensitive: true` (secret handling), `tags: ["advanced"]`
 (collapsed by default), `instruction: true` (words the owner writes for the agent to follow,

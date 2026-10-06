@@ -1,6 +1,6 @@
 # Sentence Transformers (local embeddings)
 
-Local, in-process text embedding models via sentence-transformers (runs on your machine, no API key). Provides the embedding capability; bind a model in Settings → Models. Needs the sentence-transformers/torch package (server or container build).
+Local, in-process text embedding models via sentence-transformers (runs on your machine's CPU, no API key). Provides the embedding capability; bind a model in Settings → Models. Needs the sentence-transformers/torch package (server or container build).
 
 **Sentence Transformers (local embeddings)** is a **model provider (embeddings) + local-model manager** — it provides local, in-process embedding models for the embedding use-case and manages their download/delete; bind a model in Settings → Models.
 
@@ -28,6 +28,14 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 ## Setup notes
 
 Needs the `sentence-transformers` Python package (declared as an app dependency; the gateway installs it into `<home>/app-python` at install time, importable without a restart). Models run fully locally; no API key.
+
+Models run on the CPU, one call at a time. The gateway embeds from several places at once (a
+re-index, a recall in a chat, the check a re-index makes before it starts), so the app builds a
+model once for all of them and gives it one call at a time: building, saving, encoding and deleting
+all wait their turn. It never leaves the device to the library, which on Apple silicon picks the GPU
+(`mps`): torch keeps that GPU's compiled kernels in one cache for the whole process, without a lock,
+and two calls on it at once ended the gateway with a segmentation fault. On the CPU torch runs
+safely from several threads, and these models are small enough to embed well there.
 
 It declares `sentence-transformers>=5.6`, the oldest release this app was checked against for the
 one thing it relies on beyond the download: a model card told to stay local

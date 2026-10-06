@@ -1,8 +1,8 @@
 {
   "name": "sentence-transformers",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "displayName": "Sentence Transformers (local embeddings)",
-  "description": "Local, in-process text embedding models \u2014 runs on your machine, no API key. Built on sentence-transformers. Provides the embedding capability; bind a model in Settings \u2192 Models. Needs the sentence-transformers/torch package (server or container build).",
+  "description": "Local, in-process text embedding models that run on your machine's CPU, with no API key. Built on sentence-transformers. Provides the embedding capability; bind a model in Settings \u2192 Models. Needs the sentence-transformers/torch package (server or container build).",
   "icon": "Binary",
   "author": "PersonalClaw",
   "license": "MIT",

@@ -12,16 +12,22 @@ matched by the ``sentence-transformers``/``sentence_transformers`` aliases). Bec
 it also implements ``list_models``/``download_model``/``delete_model``, it is the
 catalog/management surface for local embedding models (the Settings download UI drives
 these through the provider, mirroring how ollama manages its models).
+
+The gateway embeds from several threads at once: a binding's re-index check, the Settings page's
+re-index start, a recall in a chat, a re-index batch. So everything this app does with a model
+(building it, saving it, encoding with it, dropping it) runs under one lock, one step at a time, and
+a model is built once however many callers want it first. And it runs on the CPU, never on the GPU
+the library picks by itself on Apple silicon (mps), where two calls at once crashed the gateway.
 """
 
 from __future__ import annotations
 
 import asyncio
-import functools
 import logging
 import os
+import threading
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from personalclaw.sdk.availability import missing_modules
 from personalclaw.sdk.credentials import resolve_token
@@ -50,16 +56,30 @@ def _pin_torch_single_thread() -> None:
     except Exception:  # noqa: BLE001 — torch may be absent / already configured
         pass
 
+
+#: Every step this app takes with a model runs under this lock: building one (loaded from disk,
+#: downloaded, or fetched on its first use), saving it, encoding with it, deleting it. The gateway
+#: asks from several threads at once, and each first caller used to build a copy of its own, side
+#: by side; a deletion took the files from under a call that was reading them.
+_lock = threading.RLock()
+
+#: The device every model runs on. Left to choose, sentence-transformers takes the GPU, mps on
+#: Apple silicon, and there torch keeps its compiled kernels in one cache for the whole process,
+#: unguarded: two threads encoding at once crashed the gateway (a segmentation fault in that cache,
+#: no traceback). The lock above cannot cover another app using torch in the same process. On the
+#: CPU torch runs safely from several threads, and these models are small enough to embed well there.
+_DEVICE = "cpu"
+
 # The local model catalog (dim + approx download size). This is the app's own
 # knowledge of the sentence-transformers models it can run — it moved out of core.
 # Each entry carries the true HuggingFace `repo` id. Most sentence-transformers models
 # live under the `sentence-transformers/` org, but some (e.g. BGE → `BAAI`) do NOT — so
 # the repo is explicit here rather than guessed by prepending an org (guessing 401'd bge).
 AVAILABLE_MODELS: dict[str, dict] = {
-    "all-MiniLM-L6-v2": {"repo": "sentence-transformers/all-MiniLM-L6-v2", "dim": 384, "size_mb": 80, "description": "Fast, general-purpose (384 dim, ~80 MB)"},
-    "all-MiniLM-L12-v2": {"repo": "sentence-transformers/all-MiniLM-L12-v2", "dim": 384, "size_mb": 120, "description": "Balanced quality/speed (384 dim, ~120 MB)"},
-    "bge-small-en-v1.5": {"repo": "BAAI/bge-small-en-v1.5", "dim": 384, "size_mb": 130, "description": "High quality for retrieval (384 dim, ~130 MB)"},
-    "all-mpnet-base-v2": {"repo": "sentence-transformers/all-mpnet-base-v2", "dim": 768, "size_mb": 420, "description": "Best quality, slower (768 dim, ~420 MB)"},
+    "all-MiniLM-L6-v2": {"repo": "sentence-transformers/all-MiniLM-L6-v2", "dim": 384, "size_mb": 80, "description": "Fast, general-purpose, runs on the CPU (384 dim, ~80 MB)"},
+    "all-MiniLM-L12-v2": {"repo": "sentence-transformers/all-MiniLM-L12-v2", "dim": 384, "size_mb": 120, "description": "Balanced quality/speed, runs on the CPU (384 dim, ~120 MB)"},
+    "bge-small-en-v1.5": {"repo": "BAAI/bge-small-en-v1.5", "dim": 384, "size_mb": 130, "description": "High quality for retrieval, runs on the CPU (384 dim, ~130 MB)"},
+    "all-mpnet-base-v2": {"repo": "sentence-transformers/all-mpnet-base-v2", "dim": 768, "size_mb": 420, "description": "Best quality, slower, runs on the CPU (768 dim, ~420 MB)"},
 }
 
 
@@ -96,7 +116,7 @@ def _hub_token() -> str | bool:
     return resolve_token() or False
 
 
-def _fetch(model_name: str, cache_dir: Path) -> object:
+def _fetch(model_name: str, cache_dir: Path) -> Any:
     """A ``SentenceTransformer`` for *model_name*, downloaded into *cache_dir* if it is not there.
 
     The token covers the download. The model card needs its own switch: left to itself it asks
@@ -108,6 +128,7 @@ def _fetch(model_name: str, cache_dir: Path) -> object:
 
     return SentenceTransformer(
         _repo_of(model_name),
+        device=_DEVICE,
         cache_folder=str(cache_dir),
         token=_hub_token(),
         model_card_data=SentenceTransformerModelCardData(local_files_only=True),
@@ -147,50 +168,68 @@ def download_model(model_name: str) -> Path:
     cache_dir.mkdir(parents=True, exist_ok=True)
     model_path = cache_dir / model_name.replace("/", "_")
     logger.info("Downloading embedding model '%s' (repo %s) to %s", model_name, _repo_of(model_name), model_path)
-    model = _fetch(model_name, cache_dir)
-    model.save(str(model_path))
+    with _lock:
+        _pin_torch_single_thread()
+        model = _fetch(model_name, cache_dir)
+        model.save(str(model_path))
     logger.info("Model '%s' downloaded successfully", model_name)
     return model_path
 
 
-def load_model(model_name: str) -> object:
-    """Load a sentence-transformers model (downloads if not cached), process-cached."""
+def load_model(model_name: str) -> Any:
+    """The model *model_name*, built once for every caller: loaded from disk, or fetched (and
+    saved) when it is not there yet. Kept for the next call until another model is asked for."""
     global _loaded_model, _loaded_model_name
-    if _loaded_model is not None and _loaded_model_name == model_name:
-        return _loaded_model
-    _pin_torch_single_thread()
-    from sentence_transformers import SentenceTransformer
+    with _lock:
+        if _loaded_model is not None and _loaded_model_name == model_name:
+            return _loaded_model
+        _pin_torch_single_thread()
+        from sentence_transformers import SentenceTransformer
 
-    model_path = _models_dir() / model_name.replace("/", "_")
-    if model_path.exists() and any(model_path.iterdir()):
-        # On disk already: load it from disk, and never ask the hub about it.
-        _loaded_model = SentenceTransformer(str(model_path), local_files_only=True)
-    else:
-        cache_dir = _models_dir()
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        _loaded_model = _fetch(model_name, cache_dir)
-        _loaded_model.save(str(model_path))
-    _loaded_model_name = model_name
-    return _loaded_model
+        model_path = _models_dir() / model_name.replace("/", "_")
+        if model_path.exists() and any(model_path.iterdir()):
+            # On disk already: load it from disk, and never ask the hub about it.
+            model = SentenceTransformer(str(model_path), device=_DEVICE, local_files_only=True)
+        else:
+            cache_dir = _models_dir()
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            model = _fetch(model_name, cache_dir)
+            model.save(str(model_path))
+        _loaded_model, _loaded_model_name = model, model_name
+        return model
 
 
-def make_native_embed_fn(model_name: str) -> Callable[[str], list[float] | None]:
-    """Return a sync ``(str) -> list[float] | None`` callable using a local model."""
+def _encode(model_name: str, texts: list[str]) -> list[Any]:
+    """The vectors of *texts* from *model_name* (one list of floats per text), normalized, one call
+    at a time.
 
-    @functools.lru_cache(maxsize=4096)
-    def _cached_embed(text: str) -> tuple[float, ...]:
-        model = load_model(model_name)
-        embedding = model.encode(text, normalize_embeddings=True)
-        return tuple(embedding.tolist())
+    In this process and on one thread, with no progress bar: a multi-worker encode spawns
+    ``loky`` subprocesses whose native teardown crashed the gateway (see the module's start)."""
+    with _lock:
+        return load_model(model_name).encode(
+            texts, batch_size=16, show_progress_bar=False,
+            normalize_embeddings=True, convert_to_numpy=True,
+        ).tolist()
 
-    def _embed(text: str) -> list[float] | None:
-        try:
-            return list(_cached_embed(text))
-        except Exception:
-            logger.debug("Native embed failed", exc_info=True)
-            return None
 
-    return _embed
+def _delete(model_name: str) -> bool:
+    """Remove BOTH on-disk layouts of *model_name* (the explicit ``model.save()`` copy AND
+    HuggingFace's own ``models--…`` cache), once no call is using the model, so a delete is honest:
+    leaving either behind would keep ``is_model_downloaded()`` True, and the model would reappear
+    as downloaded. The model is dropped from memory too when it is the one loaded."""
+    import shutil
+
+    global _loaded_model, _loaded_model_name
+    with _lock:
+        removed = False
+        for target in (_models_dir() / model_name.replace("/", "_"), _hf_cache_dir(model_name)):
+            if target.is_dir():
+                shutil.rmtree(target, ignore_errors=True)
+                removed = True
+        if removed and _loaded_model_name == model_name:
+            _loaded_model = None
+            _loaded_model_name = None
+        return removed
 
 
 #: What local embedding runs on: each module, by the package this app installs for it.
@@ -257,21 +296,8 @@ class NativeEmbeddingProvider(EmbeddingProvider, LocalModelProvider):
         return await asyncio.to_thread(_download)
 
     async def delete_model(self, model_name: str) -> bool:
-        import shutil
-        # Remove BOTH on-disk layouts (the explicit model.save() copy AND HuggingFace's
-        # own models--… cache) so a delete is honest — leaving either behind would keep
-        # is_model_downloaded() True and the model would re-appear as "downloaded".
-        removed = False
-        for target in (_models_dir() / model_name.replace("/", "_"), _hf_cache_dir(model_name)):
-            if target.is_dir():
-                shutil.rmtree(target, ignore_errors=True)
-                removed = True
-        if removed:
-            global _loaded_model, _loaded_model_name
-            if _loaded_model_name == model_name:
-                _loaded_model = None
-                _loaded_model_name = None
-        return removed
+        # Off the event loop: it waits for a call using the model to finish first.
+        return await asyncio.to_thread(_delete, model_name)
 
     # Like chat, an embedding call names its model (the Embedding binding in Settings → Models),
     # and one that names none is refused before anything is loaded: both used to load
@@ -283,10 +309,12 @@ class NativeEmbeddingProvider(EmbeddingProvider, LocalModelProvider):
         except ProviderResolutionError as exc:
             logger.warning("sentence-transformers refused: %s", exc)
             return None
-
-        def _run():
-            return make_native_embed_fn(named)(text)
-        return await asyncio.to_thread(_run)
+        try:
+            [vector] = await asyncio.to_thread(_encode, named, [text])
+        except Exception:
+            logger.debug("Native embed failed", exc_info=True)
+            return None
+        return vector
 
     async def embed_batch(self, texts: list[str], model: str = "") -> list[list[float] | None]:
         # A text that is not embedded is ``None``, as the SDK's contract asks: an empty vector is
@@ -296,17 +324,7 @@ class NativeEmbeddingProvider(EmbeddingProvider, LocalModelProvider):
         except ProviderResolutionError as exc:
             logger.warning("sentence-transformers refused: %s", exc)
             return [None for _ in texts]
-
-        def _run():
-            m = load_model(named)
-            # Explicit single-process encode: no progress bar, modest batch — never let
-            # sentence-transformers spawn loky workers (they segfault the gateway on
-            # teardown, see module header). normalize_embeddings matches embed().
-            return m.encode(
-                texts, batch_size=16, show_progress_bar=False,
-                normalize_embeddings=True, convert_to_numpy=True,
-            ).tolist()
-        return await asyncio.to_thread(_run)
+        return await asyncio.to_thread(_encode, named, list(texts))
 
 
 def create_provider(config: dict[str, Any] | None = None) -> NativeEmbeddingProvider:
