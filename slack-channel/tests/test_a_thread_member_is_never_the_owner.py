@@ -25,7 +25,7 @@ import slack_runtime.handler as H
 from personalclaw.config.credentials import owner_id_credential
 from personalclaw.config.loader import CRED_OWNER_ID
 from personalclaw.history import ConversationLog, consolidation_line
-from personalclaw.own_words import own_words
+from personalclaw.own_words import her_turns, own_words
 
 OWNER = "U0RINOWNER"
 COLLEAGUE = "U0OLACOLL"
@@ -70,7 +70,10 @@ async def test_a_thread_this_app_runs_records_who_wrote_each_turn_and_slack(tmp_
         (COLLEAGUE, "slack"),
     ]
     assert [own_words(m) for m in lines] == [HERS, ""]
-    assert "SENT BY SOMEONE OTHER THAN THE USER" in consolidation_line(lines[1])
+    # Consolidation is shown only the turns the owner asked for: the colleague's turn is not
+    # one of them, so their line never reaches it at all.
+    assert [m["source_user"] for m in her_turns(lines)] == [OWNER]
+    assert all(ABOUT_HER not in consolidation_line(m) for m in her_turns(lines))
 
 
 def _dashboard(tmp_path):
