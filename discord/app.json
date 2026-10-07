@@ -1,0 +1,70 @@
+{
+  "app": "discord",
+  "label": "Discord",
+  "version": "0.2.0",
+  "description": "Chat with your agent in Discord and run automations on Discord messages.",
+  "categories": ["messaging", "network"],
+  "requiresCoreFeatures": [
+    "approval-answers",
+    "dm-activation-gate",
+    "trigger-receiver",
+    "capability-harness",
+    "conformance-kit",
+    "account-settings-api"
+  ],
+  "replaces": {
+    "app": "discord-channel",
+    "capability": "channel",
+    "settings": {
+      "bot_token": "account.bot_token",
+      "application_id": "account.application_id",
+      "dm_activation": "channel.dm_activation"
+    },
+    "data": "channel"
+  },
+  "account": {
+    "settings": [
+      {
+        "id": "bot_token",
+        "type": "sensitive",
+        "label": "Bot Token",
+        "description": "Discord bot token for API access."
+      },
+      {
+        "id": "application_id",
+        "type": "string",
+        "label": "Application ID",
+        "description": "Discord application ID."
+      }
+    ]
+  },
+  "providers": {
+    "channel": {
+      "type": "transport",
+      "id": "discord.channel",
+      "label": "Chat with your agent in Discord",
+      "description": "Allows the agent to receive and send messages in Discord DMs and channels.",
+      "startsOn": true,
+      "capabilities": ["messaging", "reactions", "threads"],
+      "settings": [
+        {
+          "id": "dm_activation",
+          "type": "boolean",
+          "label": "DM Activation",
+          "description": "Require explicit user consent before the bot responds to direct messages."
+        }
+      ]
+    },
+    "triggers": {
+      "type": "trigger_source",
+      "id": "discord.triggers",
+      "label": "Run automations on Discord messages",
+      "description": "Fires automation events for incoming Discord DMs and guild messages.",
+      "startsOn": false,
+      "events": [
+        "app:discord:direct_message",
+        "app:discord:guild_message"
+      ]
+    }
+  }
+}
