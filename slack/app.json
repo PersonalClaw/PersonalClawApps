@@ -1,0 +1,126 @@
+{
+  "name": "slack",
+  "displayName": "Slack",
+  "version": "0.1.45",
+  "description": "Slack integration with chat, Inbox and automation capabilities",
+  "settings": {
+    "bot_token": {
+      "type": "string",
+      "sensitive": true,
+      "label": "Bot Token",
+      "description": "Slack bot token (xoxb-*)"
+    },
+    "app_token": {
+      "type": "string",
+      "sensitive": true,
+      "label": "App Token",
+      "description": "Slack app-level token (xapp-*)"
+    }
+  },
+  "providers": [
+    {
+      "id": "channel",
+      "type": "channel",
+      "label": "Chat with your agent in Slack",
+      "startsOn": true,
+      "capabilities": ["messaging", "reactions", "threads"],
+      "settingsSchema": {
+        "allowed_users": {
+          "type": "array",
+          "items": {"type": "string"},
+          "label": "Allowed Users",
+          "description": "User IDs allowed to interact with the bot"
+        },
+        "tracking_channels": {
+          "type": "array",
+          "items": {"type": "string"},
+          "label": "Tracking Channels",
+          "description": "Channels to track for messages"
+        },
+        "command": {
+          "type": "string",
+          "label": "Command",
+          "description": "Custom slash command"
+        },
+        "trusted_bot_ids": {
+          "type": "array",
+          "items": {"type": "string"},
+          "label": "Trusted Bot IDs",
+          "description": "Bot IDs trusted by the channel"
+        },
+        "reactions": {
+          "type": "array",
+          "items": {"type": "string"},
+          "label": "Reactions",
+          "description": "Emoji reactions to handle"
+        },
+        "reactions_enabled": {
+          "type": "boolean",
+          "label": "Enable Reactions",
+          "description": "Whether to process reactions"
+        },
+        "channels": {
+          "type": "object",
+          "label": "Channel Config",
+          "description": "Per-channel configuration"
+        },
+        "dm_activation": {
+          "type": "boolean",
+          "label": "DM Activation",
+          "description": "Enable direct message activation"
+        }
+      }
+    },
+    {
+      "id": "inbox",
+      "type": "inbox",
+      "label": "Slack messages in your Inbox",
+      "capabilities": ["poll", "reply", "reactions", "history"],
+      "startsOn": false
+    },
+    {
+      "id": "trigger_source",
+      "type": "trigger_source",
+      "label": "Run automations on Slack messages",
+      "capabilities": ["direct_message", "channel_message"],
+      "startsOn": false
+    }
+  ],
+  "replaces": [
+    {
+      "app": "slack-channel",
+      "capability": "channel",
+      "settings": {
+        "bot_token": "account.bot_token",
+        "app_token": "account.app_token",
+        "allowed_users": "channel.allowed_users",
+        "tracking_channels": "channel.tracking_channels",
+        "command": "channel.command",
+        "trusted_bot_ids": "channel.trusted_bot_ids",
+        "reactions": "channel.reactions",
+        "reactions_enabled": "channel.reactions_enabled",
+        "channels": "channel.channels",
+        "dm_activation": "channel.dm_activation"
+      },
+      "data": "channel"
+    }
+  ],
+  "permissions": {
+    "network": ["https://slack.com"]
+  },
+  "cli": {
+    "setup": "slack_runtime.cli_setup:main",
+    "doctor": "slack_runtime.cli_setup:doctor"
+  },
+  "requiresCoreFeatures": [
+    "channel.transport",
+    "inbox.source",
+    "trigger.source",
+    "provider.settings",
+    "account.credentials",
+    "capability.switching"
+  ],
+  "pre-tool-hooks": [
+    "slack_runtime.handler:pre_tool_hook"
+  ]
+}
