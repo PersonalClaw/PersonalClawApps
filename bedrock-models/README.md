@@ -75,7 +75,7 @@ read from Bedrock's cache instead of re-processed, which is both cheaper and fas
 reports it as `cacheReadInputTokens`, which this app surfaces as the turn's cache-read token
 count, so savings show up in the usual usage view rather than needing a Bedrock-specific one.
 
-Turn it off globally with **Settings → Agent → Prompt Caching**; there is nothing to
+Turn it off globally with **Settings → Models → Prompt caching**; there is nothing to
 configure per-model. Caching is best-effort on Bedrock's side and needs a prompt long enough
 to be worth caching, so short turns may report no reads at all — that is normal.
 
