@@ -76,7 +76,7 @@ user who does have a distribution policy can read it rather than discover it.
 
 Measured as the on-disk size, in a PersonalClaw dev install's `site-packages`, of exactly
 the distributions the engine adds. **The delta is platform-dependent, so it is recorded per
-platform** — the per-distribution table below is macOS arm64; the ubuntu-latest x86_64
+platform** — the per-distribution table below is macOS arm64; the ubuntu-24.04 x86_64
 number under it is what CI measures:
 
 | distribution | on-disk |
@@ -96,7 +96,7 @@ preprocessing, not something this bundle chose. It cannot be swapped for
 `opencv-python-headless`: the engine requires that exact distribution name, so declaring the
 headless build would install it *alongside*, not instead of, the one it asks for.
 
-On **ubuntu-latest x86_64** the same four distributions at the same pinned versions measure
+On **ubuntu-24.04 x86_64** the same four distributions at the same pinned versions measure
 **224.0 MB** — 77 MB more than the macOS figure above — because `opencv-python`'s manylinux
 wheel carries far more shared-object payload than the macOS one. Measured on the CI runner
 (PersonalClawApps run 35454957517, 2026-09-19), not inferred.
