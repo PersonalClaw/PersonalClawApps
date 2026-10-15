@@ -27,7 +27,7 @@ jobs:
   manifest-validate:
     # Every app.json parses against core's own manifest parser (the real contract),
     # not a hand-rolled schema — so a manifest that core would reject fails CI.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - name: Install uv
@@ -82,7 +82,7 @@ jobs:
     # Each bundle's test_*.py runs after its manifest-declared Python dependencies
     # are installed. Undeclared vendor SDKs remain absent, so model apps still stub
     # SDKs they deliberately do not declare.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # No job-level PERSONALCLAW_HOME: one home shared by every test defeats the
     # Path.home()/HOME patches some tests isolate themselves with, the same mismatch
     # documented in the core test job. The repository's conftest.py gives each test a
@@ -211,7 +211,7 @@ jobs:
     # layer down. `needs: [tests]` so a declaring app whose own suite is red can never
     # reach a green quality job.
     needs: [tests]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       # Same reason as the `tests` job: the verifier RUNS each declaring bundle's
       # pytest, so it needs the posture those tests are written against.
@@ -302,7 +302,7 @@ jobs:
     # SDK-only import lint from the apps side: an installed app may import core ONLY
     # via personalclaw.sdk.* — never deep internals. Mirrors core's
     # tests/test_apps_import_boundary.py, run against this checkout.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       # Pure-stdlib ast lint — no uv, no core install needed. (An earlier
@@ -348,7 +348,7 @@ jobs:
     # its own wire call — so it is enforced here. Pure-stdlib AST lint, no core install:
     # the script is a committed file (not an inline heredoc) so a contributor runs the
     # EXACT same check locally that CI runs.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -362,7 +362,7 @@ jobs:
     # provider runs inside the gateway, whose environment holds every secret saved in
     # PersonalClaw, so a child that runs someone else's program must get the SDK's child
     # allowlist. Pure-stdlib AST rail, no core install, the same script run locally.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -375,7 +375,7 @@ jobs:
     # Every program an app's code starts is declared under `launches`: install consent names each
     # one, what of the owner's it runs with, the package an npx entry downloads and runs, and the
     # hosts it reaches. Pure-stdlib AST rail, no core install, the same script run locally.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -388,7 +388,7 @@ jobs:
     # Every app whose code reaches the network declares `"network": true`: install consent
     # shows it, a backend's outbound tier follows it, and an action is judged by it to leave
     # the machine. Pure-stdlib AST rail, no core install, the same script run locally.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -403,7 +403,7 @@ jobs:
     # account's home, or spells a path under it in its code or a manifest default writes the
     # account's home whatever home PersonalClaw runs on. Pure-stdlib AST rail, no core install, the
     # same script run locally.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -417,7 +417,7 @@ jobs:
     # egress_policy_for, so the owner's Settings → Security → Network egress (Denied hosts,
     # Allowed hosts) applies to it, and a failed check refuses rather than letting the request go
     # ahead. Pure-stdlib AST rail, no core install, the same script run locally.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -432,7 +432,7 @@ jobs:
     # hook registered before its first client, so a host on the owner's Denied hosts is never
     # reached by a request the app's own client sends. Pure-stdlib AST rail, no core install,
     # the same script run locally.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -447,7 +447,7 @@ jobs:
     # actually translate the neutral marker. A cross-app sweep can't live in one app's
     # test_*.py (the tests job runs pytest PER bundle), so it rides here alongside the
     # other two cross-app sweeps. Pure stdlib — no core install needed.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -469,7 +469,7 @@ jobs:
     # zero credential-shaped fields — and so passes green while a real violation sits in
     # this repo. It surfaced `openai-tools.api_key` only when run by hand from a
     # workspace that happened to hold both clones.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -495,7 +495,7 @@ jobs:
     #
     # Pure stdlib — no core install. Cross-app by necessity: the tests job runs pytest
     # PER bundle, so no bundle can see the denominator.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -509,7 +509,7 @@ jobs:
     # route. Scan every tracked file because runtime refusals, CLI output, READMEs,
     # and inline docs can all drift independently, while pytest runs per bundle.
     # The committed script covers both arrow encodings and split-line forms.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -529,7 +529,7 @@ jobs:
     # denominator. Each app's own tests/test_trigger_source.py drives its source to a real
     # fire; this job measures the ratio. Committed script, not an inline heredoc, so a
     # contributor runs the EXACT same check locally. Pure stdlib — no core install.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -547,7 +547,7 @@ jobs:
     # neighbours: the tests job runs pytest PER bundle, and a README is no bundle's
     # test. Committed script, not an inline heredoc, so a contributor runs the EXACT
     # same check locally. Pure stdlib — no core install.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -567,7 +567,7 @@ jobs:
     # Rides here with the other cross-app sweeps for the same reason they do: the `tests`
     # job runs pytest per bundle, so a check over the whole catalogue has no other home.
     # Pure stdlib — no core install needed.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -584,7 +584,7 @@ jobs:
     # lockfile and fails when a committed bundle differs, stale or edited by hand. Rides here
     # with the other cross-app sweeps: the `tests` job runs pytest per bundle, never npm.
     # The script's vacuity floor fails a scan that found nothing to compare.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -607,7 +607,7 @@ jobs:
     # bundle and these defects belong to no bundle. The script proves every pattern against
     # a sample it must catch (and one it must spare) BEFORE trusting a clean scan.
     # Pure stdlib — no core install needed.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -620,7 +620,7 @@ jobs:
     # No test value has a real token's format or a provider's key prefix: the repository is
     # public and secret scanners read it. Pure-stdlib rail, no core install, the same script
     # run locally.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -639,7 +639,7 @@ jobs:
     # dependabot branch (rebase, lockfile regen), which changes github.actor to a
     # human and would otherwise re-fail on dependabot's own unsigned commit.
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
