@@ -332,24 +332,23 @@ function b({ api: e, agent: t, areas: r, onDone: a, onCancel: s, seed: c, editTa
 			}
 		}
 	}, I = async () => {
-		if (!u.trim() || D) {
-			N("Title is required.");
-			return;
-		}
-		O("Saving…");
-		try {
-			let t = {
-				title: u.trim(),
-				situation: p,
-				behavior: g,
-				impact: v,
-				evidence: b,
-				area_id: C,
-				source: b.length ? "sourced" : "manual"
-			};
-			l ? await e.patch(`${m}/artifacts/${l.id}`, t) : await e.post(`${m}/artifacts`, t), a();
-		} catch (e) {
-			N(String(e.message || e)), O("");
+		if (!u.trim() || D) N("Title is required.");
+		else {
+			O("Saving…");
+			try {
+				let t = {
+					title: u.trim(),
+					situation: p,
+					behavior: g,
+					impact: v,
+					evidence: b,
+					area_id: C,
+					source: b.length ? "sourced" : "manual"
+				};
+				l ? await e.patch(`${m}/artifacts/${l.id}`, t) : await e.post(`${m}/artifacts`, t), a();
+			} catch (e) {
+				N(String(e.message || e)), O("");
+			}
 		}
 	};
 	return /* @__PURE__ */ i.createElement(M, { style: {
@@ -463,11 +462,7 @@ function b({ api: e, agent: t, areas: r, onDone: a, onCancel: s, seed: c, editTa
 function x({ api: e, onPick: t, onClose: r }) {
 	let [a, c] = o("project"), [l, u] = o([]), [f, p] = o(!1), [m, h] = o("");
 	return s(() => {
-		if (a === "external") {
-			u([]);
-			return;
-		}
-		p(!0), (async () => a === "project" ? ((await e.get("/api/projects")).projects || []).map((e) => ({
+		a === "external" ? u([]) : (p(!0), (async () => a === "project" ? ((await e.get("/api/projects")).projects || []).map((e) => ({
 			kind: "project",
 			ref: e.id,
 			label: e.name
@@ -479,7 +474,7 @@ function x({ api: e, onPick: t, onClose: r }) {
 			kind: "knowledge",
 			ref: e.id,
 			label: e.title
-		})))().then(u).catch(() => u([])).finally(() => p(!1));
+		})))().then(u).catch(() => u([])).finally(() => p(!1)));
 	}, [a]), /* @__PURE__ */ i.createElement(M, { style: {
 		background: "var(--color-surface-high)",
 		display: "grid",
@@ -821,31 +816,30 @@ function E({ api: e, agent: t, digests: r, artifacts: a, areas: s, onChanged: c 
 	let [l, u] = o(w()), [d, f] = o(!1), [p, h] = o(""), g = async () => {
 		if (d) return;
 		let n = a.filter((e) => e.period === l), r = n.length ? n : a;
-		if (!r.length) {
-			h("No artifacts to summarize.");
-			return;
-		}
-		f(!0), h("Generating…");
-		try {
-			let n = Object.fromEntries(s.map((e) => [e.id, e.name])), i = r.map((e) => ({
-				title: e.title,
-				situation: e.situation,
-				behavior: e.behavior,
-				impact: e.impact,
-				dimensions: e.dimensions,
-				date: e.date,
-				area: n[e.area_id] || "",
-				evidence: e.evidence.map((e) => e.label || e.ref)
-			})), a = `Write a concise, professional growth digest ("brag doc") in Markdown for the period "${l}". Base it ONLY on these evidenced artifacts (JSON) — do NOT invent details or metrics. Group by growth area or dimension, lead each item with measurable impact, and cite the evidence in parentheses. Keep it tight + factual. Return ONLY the raw Markdown document — no code fences, no preamble or commentary. Artifacts: ${JSON.stringify(i)}`, o = T(((await t.run(a, { maxTurns: 3 })).result || "").trim());
-			if (!o) throw Error("empty digest");
-			await e.post(`${m}/digests`, {
-				period: l,
-				content_md: o
-			}), h(""), c();
-		} catch (e) {
-			h(String(e.message || e));
-		} finally {
-			f(!1);
+		if (!r.length) h("No artifacts to summarize.");
+		else {
+			f(!0), h("Generating…");
+			try {
+				let n = Object.fromEntries(s.map((e) => [e.id, e.name])), i = r.map((e) => ({
+					title: e.title,
+					situation: e.situation,
+					behavior: e.behavior,
+					impact: e.impact,
+					dimensions: e.dimensions,
+					date: e.date,
+					area: n[e.area_id] || "",
+					evidence: e.evidence.map((e) => e.label || e.ref)
+				})), a = `Write a concise, professional growth digest ("brag doc") in Markdown for the period "${l}". Base it ONLY on these evidenced artifacts (JSON) — do NOT invent details or metrics. Group by growth area or dimension, lead each item with measurable impact, and cite the evidence in parentheses. Keep it tight + factual. Return ONLY the raw Markdown document — no code fences, no preamble or commentary. Artifacts: ${JSON.stringify(i)}`, o = T(((await t.run(a, { maxTurns: 3 })).result || "").trim());
+				if (!o) throw Error("empty digest");
+				await e.post(`${m}/digests`, {
+					period: l,
+					content_md: o
+				}), h(""), c();
+			} catch (e) {
+				h(String(e.message || e));
+			} finally {
+				f(!1);
+			}
 		}
 	}, _ = (e) => {
 		try {
