@@ -900,20 +900,19 @@ function j({ api: e }) {
 }
 function M({ api: e, template: t, onDone: r, onCancel: a }) {
 	let [s, c] = o(t?.name || ""), [l, d] = o(t?.description || ""), [f, p] = o(t?.prompt || ""), [m, h] = o(!1), [g, _] = o(""), v = async () => {
-		if (!s.trim() || !f.trim() || m) {
-			_("Name and prompt are required.");
-			return;
-		}
-		h(!0), _("");
-		try {
-			let n = {
-				name: s.trim(),
-				description: l.trim(),
-				prompt: f.trim()
-			};
-			t ? await e.patch(`${u}/templates/${t.id}`, n) : await e.post(`${u}/templates`, n), r();
-		} catch (e) {
-			_(String(e.message || e)), h(!1);
+		if (!s.trim() || !f.trim() || m) _("Name and prompt are required.");
+		else {
+			h(!0), _("");
+			try {
+				let n = {
+					name: s.trim(),
+					description: l.trim(),
+					prompt: f.trim()
+				};
+				t ? await e.patch(`${u}/templates/${t.id}`, n) : await e.post(`${u}/templates`, n), r();
+			} catch (e) {
+				_(String(e.message || e)), h(!1);
+			}
 		}
 	};
 	return /* @__PURE__ */ i.createElement("div", null, /* @__PURE__ */ i.createElement("div", { style: { marginBottom: "var(--spacing-s)" } }, /* @__PURE__ */ i.createElement(n, {
