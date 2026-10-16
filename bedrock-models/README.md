@@ -43,7 +43,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | `profile` | AWS Profile | Optional named profile from ~/.aws. Empty uses the default credential chain (env / SSO / instance role). Add a second instance with a different profile to use another AWS account. |
 | `default_model` | Default Chat Model | A Bedrock chat model id (full versioned id). The model this instance answers with when nothing in Settings → Models names one. Leave it empty to choose its models in Settings → Models. |
 | `system_prompt` | System Prompt | Optional system prompt prepended to every chat turn. |
-| `max_tokens` | Max Output Tokens | The most tokens Bedrock may generate in one turn. 0 sends the budget PersonalClaw sets for that call, else 8192. A cap is always sent, because Bedrock's own default can be low enough to cut long answers and tool calls short. |
+| `max_tokens` | Max Output Tokens | The most tokens Bedrock may generate in one turn. 0 sends the budget PersonalClaw sets for that call, else 32000 to a Claude model that thinks (its thinking counts against the cap) and 8192 to any other. A cap is always sent, because Bedrock's own default can be low enough to cut long answers and tool calls short. |
 | `video_s3_bucket` | S3 Bucket | S3 bucket Bedrock's media features stage files in: Nova Reel writes each generated video there, and speech-to-text uploads each recording there for Amazon Transcribe, deleting it afterwards. Required for video generation and speech-to-text; nothing else uses it. Falls back to the BEDROCK_VIDEO_S3_BUCKET env var. |
 
 ## The model list

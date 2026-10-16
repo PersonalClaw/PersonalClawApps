@@ -95,6 +95,37 @@ _DEFAULT_CONTEXT_WINDOW = 200_000
 # mirror that here: a generous cap large enough for substantial file writes.
 _DEFAULT_MAX_TOKENS = 8192
 
+# The default output cap for a request to a Claude model that thinks, when the instance sets
+# none. Thinking counts against ``maxTokens``, so at 8,192 a model that reasons at length spends
+# the whole cap before it writes a word or makes a call, and the turn ends with no answer.
+# 32,000 leaves room to think and still answer, and stays within the output ceiling of every
+# Claude model that can think (the lowest of them allows 32,000).
+_THINKING_MAX_TOKENS = 32_000
+
+# The Claude models that think on every request even when no reasoning effort is sent: Opus 5.5
+# always thinks (its thinking cannot be turned off), and Sonnet 5.5, Haiku 5.5 and Fable 5.1
+# think by default. Matched anywhere in the id, so the ``global.``/``us.`` inference-profile
+# forms and a dated or ``-v1:0`` suffix all count. A later minor version is not matched
+# (``5-50`` is not ``5-5``): it is added here once its default is known.
+_THINKS_BY_DEFAULT_RE = re.compile(
+    r"anthropic\.claude-(?:(?:opus|sonnet|haiku)-5-5|fable-5-1)(?![0-9])"
+)
+
+
+def _is_claude(model_id: str) -> bool:
+    """Whether *model_id* names an Anthropic Claude model, in any Bedrock id form."""
+    return "anthropic.claude-" in model_id
+
+
+def _thinks(model_id: str, *, effort_sent: bool) -> bool:
+    """Whether a request to *model_id* carries extended thinking: a Claude model asked for a
+    reasoning effort (``complete`` sends adaptive thinking with it), or one that thinks on every
+    request whether or not an effort is sent."""
+    if not _is_claude(model_id):
+        return False
+    return effort_sent or bool(_THINKS_BY_DEFAULT_RE.search(model_id))
+
+
 # ── Prompt caching: Bedrock's OWN wire form ───────────────────────────────────
 #
 # THIS APP IS THE ONLY PLACE ``cachePoint`` MAY BE NAMED. Core emits the NEUTRAL
@@ -924,7 +955,10 @@ class BedrockProvider(ModelProvider):
         self._profile = profile_name or None
         self._system_prompt = (system_prompt or "").strip()
         # Always send an output cap (see _DEFAULT_MAX_TOKENS): omitting it lets
-        # Converse truncate large tool-call JSON mid-stream.
+        # Converse truncate large tool-call JSON mid-stream. A cap set here (the instance's Max
+        # Output Tokens, else the budget core asked for this call) is sent as it is; with none,
+        # a request that thinks gets _THINKING_MAX_TOKENS instead (``_inference_config``).
+        self._cap_set = max_tokens is not None
         self._max_tokens = max_tokens if max_tokens is not None else _DEFAULT_MAX_TOKENS
         #: The sampling temperature every request carries, or ``None`` for the model default.
         self._temperature = temperature
@@ -943,10 +977,18 @@ class BedrockProvider(ModelProvider):
         (the caller that reads this back) never takes."""
         return self._temperature
 
-    def _inference_config(self, *, thinking: bool = False) -> dict[str, Any]:
-        """Converse's ``inferenceConfig``: the output cap always, the sampling temperature when
-        one was asked for — except with extended thinking on, which rejects a custom one."""
-        config: dict[str, Any] = {"maxTokens": self._max_tokens}
+    def _inference_config(self, model_id: str, *, thinking: bool = False) -> dict[str, Any]:
+        """Converse's ``inferenceConfig`` for a request to *model_id*: the output cap always, the
+        sampling temperature when one was asked for — except with a reasoning effort sent
+        (*thinking*), which turns extended thinking on and rejects a custom one.
+
+        The cap is the one this provider was built with when one was set. Without one, a request
+        that thinks (``_thinks``) gets ``_THINKING_MAX_TOKENS``, since its thinking is spent out of
+        the same cap, and any other gets ``_DEFAULT_MAX_TOKENS``."""
+        cap = self._max_tokens
+        if not self._cap_set and _thinks(model_id, effort_sent=thinking):
+            cap = _THINKING_MAX_TOKENS
+        config: dict[str, Any] = {"maxTokens": cap}
         if self._temperature is not None and not thinking:
             config["temperature"] = self._temperature
         return config
@@ -1037,7 +1079,7 @@ class BedrockProvider(ModelProvider):
         request: dict[str, Any] = {
             "modelId": model_id,
             "messages": self._history,
-            "inferenceConfig": self._inference_config(),
+            "inferenceConfig": self._inference_config(model_id),
         }
         if self._system_prompt:
             request["system"] = [{"text": self._system_prompt}]
@@ -1176,7 +1218,7 @@ class BedrockProvider(ModelProvider):
         # and fall back on the ValidationException path is avoided by using the
         # documented adaptive form. "" = no thinking (model default).
         _eff = (reasoning_effort or "").strip()
-        request["inferenceConfig"] = self._inference_config(thinking=bool(_eff))
+        request["inferenceConfig"] = self._inference_config(model_id, thinking=bool(_eff))
         if _eff:
             request["additionalModelRequestFields"] = {
                 "thinking": {"type": "adaptive"},
