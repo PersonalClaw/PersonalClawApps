@@ -1,6 +1,6 @@
 {
   "name": "inbox-github-notifications",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "displayName": "GitHub Notifications Inbox",
   "description": "Your GitHub notifications, as inbox items you can triage here. Review requests, mentions, CI failures and issue activity arrive read-only, and GitHub filters by time, so history never floods in.",
   "icon": "BellDot",

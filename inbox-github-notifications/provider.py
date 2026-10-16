@@ -56,6 +56,9 @@ class InboxGithubNotificationsProvider(MessageSourceProvider):
         self._config = dict(config or {})
         self._timeout = int(self._config.get("timeout_secs", 20))
         self._token = str(self._config.get("token", "") or "").strip()
+        #: Whether the missing token has been said. The inbox polls every minute, and a token
+        #: not set yet is an ordinary state after install, so it is said once per settings.
+        self._said_no_token = False
         self._api_base = str(
             self._config.get("api_base", DEFAULT_API_BASE) or DEFAULT_API_BASE
         ).rstrip("/")
@@ -142,9 +145,12 @@ class InboxGithubNotificationsProvider(MessageSourceProvider):
         else is dropped client-side.
         """
         if not self._token:
-            logger.warning(
-                "github notifications: no token configured — returning empty"
-            )
+            if not self._said_no_token:
+                self._said_no_token = True
+                logger.warning(
+                    "github notifications: no token configured, so nothing is fetched; set one "
+                    "in the app's settings to see your notifications"
+                )
             return [], dict(checkpoints)
         since = str(checkpoints.get(_CHECKPOINT_KEY, "") or "")
         try:
