@@ -71,11 +71,11 @@ record the host key, then sync.
 ## Encryption
 
 Shard encryption is applied by PersonalClaw core **above** this transport, and it is **ON by
-default for `rsync-sync`**. Set the passphrase once per machine (all machines must share it):
-
-```
-personalclaw credentials set PERSONALCLAW_SYNC_PASSPHRASE
-```
+default for `rsync-sync`**. Set the passphrase once per machine (all machines must share it).
+Settings → Backups → Sync asks for it before the first sync and saves it in the credential
+store as `PERSONALCLAW_SYNC_PASSPHRASE`. From a shell,
+`personalclaw setup --credential PERSONALCLAW_SYNC_PASSPHRASE` saves the value of the
+environment variable of that name.
 
 Routing metadata — `registry.json`, the salt object, and the machine/seq key paths — stays
 plaintext so listings and the registry compare-and-swap work without the key. Shard
