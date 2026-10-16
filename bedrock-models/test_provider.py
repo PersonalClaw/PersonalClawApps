@@ -1110,6 +1110,108 @@ def test_a_configured_max_tokens_wins_and_the_declared_zero_is_not_a_cap() -> No
     assert _bedrock_built({"max_tokens": 0})._max_tokens == _DEFAULT_MAX_TOKENS
 
 
+# ── The output cap a model that thinks gets when the instance sets none ──
+#
+# Thinking counts against ``maxTokens``. At 8,192 a Claude model that reasons at length spent the
+# whole cap before it wrote a word, and the turn ended with "the model ran out of output room".
+
+#: The output ceiling every Claude model that can think allows at least.
+_LOWEST_THINKING_CEILING = 32_000
+
+#: Claude models that think on every request, with no reasoning effort sent, in the id forms a
+#: binding names them by: an inference profile, a bare foundation-model id, a versioned suffix.
+_THINKS_BY_DEFAULT = [
+    "global.anthropic.claude-opus-5-5",
+    "us.anthropic.claude-sonnet-5-5",
+    "anthropic.claude-haiku-5-5-v1:0",
+    "global.anthropic.claude-fable-5-1",
+]
+
+
+async def _cap_sent(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    *,
+    path: str = "complete",
+    options: dict | None = None,
+    effort: str = "",
+    **build_kwargs: Any,
+) -> int:
+    """The ``maxTokens`` one call to *model* carries, built the way core builds a bound model."""
+    from personalclaw.llm.registry import ProviderEntry
+    from provider import _factory
+
+    client = _install_fake_boto3(monkeypatch, [_text_event("ok"), _stop_event(), _usage_event(10, 2)])
+    entry = ProviderEntry(name="bedrock", type="bedrock", model="", options={"max_tokens": 0, **(options or {})})
+    built = _factory(entry=entry, model=model, **build_kwargs)
+    await built.start()
+    events = (
+        built.stream("hi")
+        if path == "stream"
+        else built.complete([{"role": "user", "content": "hi"}], reasoning_effort=effort)
+    )
+    _ = [ev async for ev in events]
+    return client.last_request["inferenceConfig"]["maxTokens"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["complete", "stream"])
+@pytest.mark.parametrize("model", _THINKS_BY_DEFAULT)
+async def test_a_claude_model_that_thinks_by_default_gets_room_to_think_and_answer(
+    monkeypatch: pytest.MonkeyPatch, model: str, path: str
+) -> None:
+    """🔴 Red before: with Max Output Tokens 0 these were sent 8,192, which their thinking alone
+    could spend. They get more, within the ceiling of every Claude model that thinks."""
+    cap = await _cap_sent(monkeypatch, model, path=path)
+    assert 8_192 < cap <= _LOWEST_THINKING_CEILING
+
+
+@pytest.mark.asyncio
+async def test_a_claude_model_asked_for_a_reasoning_effort_gets_room_to_think(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """🔴 Red before: an effort turns adaptive thinking on for any Claude model, and the request
+    still carried 8,192."""
+    cap = await _cap_sent(monkeypatch, "us.anthropic.claude-sonnet-4-20250514-v1:0", effort="high")
+    assert 8_192 < cap <= _LOWEST_THINKING_CEILING
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "effort"),
+    [
+        # An older Claude that thinks only when asked, asked for nothing.
+        ("us.anthropic.claude-sonnet-4-20250514-v1:0", ""),
+        # Not Claude: no thinking is sent to it, an effort or not.
+        ("amazon.nova-pro-v1:0", ""),
+        ("amazon.nova-pro-v1:0", "high"),
+        # A later minor version is not taken for a listed one.
+        ("global.anthropic.claude-opus-5-50", ""),
+    ],
+)
+async def test_a_request_that_does_not_think_keeps_8192(
+    monkeypatch: pytest.MonkeyPatch, model: str, effort: str
+) -> None:
+    assert await _cap_sent(monkeypatch, model, effort=effort) == 8_192
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("effort", ["", "high"])
+async def test_an_instances_max_output_tokens_wins_over_the_thinking_default(
+    monkeypatch: pytest.MonkeyPatch, effort: str
+) -> None:
+    """The setting is sent as it is, above or below 32,000, and also when core asks a budget of
+    its own for the call. This held before as well: it keeps the thinking default from ever
+    overriding what the owner set."""
+    model = "global.anthropic.claude-opus-5-5"
+    assert await _cap_sent(monkeypatch, model, options={"max_tokens": 4000}, effort=effort) == 4000
+    assert await _cap_sent(monkeypatch, model, options={"max_tokens": 64000}, effort=effort) == 64000
+    assert (
+        await _cap_sent(monkeypatch, model, options={"max_tokens": 4000}, effort=effort, max_tokens=2048)
+        == 4000
+    )
+
+
 @pytest.mark.asyncio
 async def test_extended_thinking_drops_the_custom_temperature(monkeypatch: pytest.MonkeyPatch) -> None:
     """Thinking on Anthropic-on-Bedrock rejects a custom temperature, so a reasoning turn sends
@@ -1163,10 +1265,13 @@ def test_the_max_tokens_help_names_the_cap_a_zero_sends() -> None:
     import json
     from pathlib import Path
 
-    from provider import _DEFAULT_MAX_TOKENS
+    from provider import _DEFAULT_MAX_TOKENS, _THINKING_MAX_TOKENS
 
     props = json.loads((Path(__file__).parent / "app.json").read_text())["provider"][
         "settingsSchema"]["properties"]
-    assert f"else {_DEFAULT_MAX_TOKENS}." in props["max_tokens"]["x-meta"]["help"]
+    assert (
+        f"else {_THINKING_MAX_TOKENS} to a Claude model that thinks (its thinking counts against "
+        f"the cap) and {_DEFAULT_MAX_TOKENS} to any other."
+    ) in props["max_tokens"]["x-meta"]["help"]
     assert _bedrock_built({"max_tokens": 0})._max_tokens == _DEFAULT_MAX_TOKENS
     assert _bedrock_built({"max_tokens": 0}, max_tokens=2048)._max_tokens == 2048
