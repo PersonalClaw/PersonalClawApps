@@ -19,7 +19,7 @@ issue itself.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `token` | *(unset)* | A GitHub personal access token that can read your notifications. **Required**: notifications belong to an account, so without a token nothing is read. Stored as a secret and never shown again. |
+| `token` | *(unset)* | A GitHub personal access token (classic) with the `notifications` scope. GitHub's notifications API takes only a classic token, so a fine-grained one reads nothing here. The `repo` scope works too, but grants far more than this app reads. **Required**: notifications belong to an account, so without a token nothing is read. Stored as a secret and never shown again. |
 | `api_base` | `https://api.github.com` | Override for GitHub Enterprise. |
 | `timeout_secs` | `20` | Seconds to wait for each GitHub response. |
 

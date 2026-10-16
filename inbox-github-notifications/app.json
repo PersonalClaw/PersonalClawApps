@@ -1,6 +1,6 @@
 {
   "name": "inbox-github-notifications",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "displayName": "GitHub Notifications Inbox",
   "description": "Your GitHub notifications, as inbox items you can triage here. Review requests, mentions, CI failures and issue activity arrive read-only, and GitHub filters by time, so history never floods in.",
   "icon": "BellDot",
@@ -28,7 +28,7 @@
           "default": "",
           "x-meta": {
             "label": "GitHub Token",
-            "help": "A GitHub personal access token that can read your notifications. Required: notifications belong to an account, so without a token there is nothing to read.",
+            "help": "A GitHub personal access token (classic) with the notifications scope. GitHub's notifications API takes only a classic token, so a fine-grained one reads nothing. Required: notifications belong to an account, so without a token there is nothing to read.",
             "sensitive": true
           }
         },
