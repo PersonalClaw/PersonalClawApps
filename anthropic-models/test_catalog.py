@@ -70,19 +70,34 @@ def test_catalog_registered():
 def test_lists_current_claude_models():
     cat = prov.create_catalog({"api_key": "fake-key-ant"})
     models = _run(cat.list_models())
-    ids = {m.id for m in models}
-    # Current family surfaces (the picker must offer today's models) — the list is
-    # sourced by internet search of the current Anthropic model docs. claude-sonnet-5
-    # is the current Sonnet (this replaced the stale claude-sonnet-4-6 "current" id).
-    assert "claude-opus-4-8" in ids
-    assert "claude-sonnet-5" in ids
-    assert "claude-haiku-4-5" in ids
-    assert "claude-fable-5" in ids
-    # Still-available legacy ids remain for back-compat with pinned accounts.
-    assert "claude-opus-4-7" in ids
-    assert "claude-sonnet-4-6" in ids
-    assert "claude-opus-4-1" in ids  # deprecated but callable until 2026-08-05
-    # Invitation-only Project Glasswing models must NOT surface in a self-serve picker.
+    ids = [m.id for m in models]
+    assert len(ids) == len(set(ids)), "an id is listed twice"
+    # The picker must offer today's models, current family first — the list is sourced by
+    # internet search of the vendor's models overview and model deprecations pages.
+    assert ids[:4] == ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5"]
+    # Still-available legacy ids remain for back-compat with pinned accounts, and a
+    # deprecated one stays until it retires (claude-sonnet-4-5, on 2026-11-30).
+    for legacy in (
+        "claude-fable-5",
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-opus-4-5",
+        "claude-sonnet-5",
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-5",
+    ):
+        assert legacy in ids
+    # A retired id is dropped: the API fails every call to it (claude-opus-4-1 retired
+    # on 2026-08-05).
+    assert "claude-opus-4-1" not in ids
+    # The current claude-haiku-5-5 waits until core prices it, knows its context window
+    # and knows it refuses a custom temperature; claude-haiku-4-5 is offered meanwhile.
+    assert "claude-haiku-5-5" not in ids
+    # Models served only to organizations the vendor has verified or invited must NOT
+    # surface in a self-serve picker.
+    assert "claude-mythos-5-1" not in ids
     assert "claude-mythos-5" not in ids
     assert "claude-mythos-preview" not in ids
     # every entry is at least chat-capable

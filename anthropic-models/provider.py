@@ -166,7 +166,7 @@ _API_VERSION = "2023-06-01"
 # exclusion below is a product decision an endpoint cannot make for us — so this is the
 # one place a model list is allowed to be hardcoded,
 # and it is sourced by INTERNET SEARCH of the current Anthropic model docs
-# (platform.claude.com/docs/en/docs/about-claude/models/overview), not from memory.
+# (platform.claude.com/docs/en/about-claude/models/overview), not from memory.
 #
 # 🪤 This comment used to justify the hardcoding with "the Messages API has no
 # models-list endpoint", and that premise was false — `GET /v1/models` exists (it is
@@ -174,26 +174,35 @@ _API_VERSION = "2023-06-01"
 # nothing to probe, so the false premise cost a real defect; the curation is the true
 # reason and is the one recorded here.
 #
-# Refreshed 2026-07-06. Current family first so the picker surfaces today's
-# models; still-available legacy ids follow for accounts pinned to them. All current
-# + Claude-4 models support text + image input (vision) per the docs' capability note.
+# Refreshed 2026-10-16, against the vendor's models overview and model deprecations pages.
+# Current family first so the picker surfaces today's models; still-available legacy ids
+# follow for accounts pinned to them. Every model listed takes text + image input
+# (vision), per the vendor's model pages.
 #
-# Excluded deliberately: claude-mythos-5 / claude-mythos-preview (invitation-only
-# Project Glasswing — no self-serve access, so it must not appear in a picker).
+# Excluded deliberately: claude-mythos-5-1, claude-mythos-5 and claude-mythos-preview
+# (served only to organizations the vendor has verified or invited — no self-serve
+# access, so none may appear in a picker).
 _ANTHROPIC_MODELS: list[dict[str, Any]] = [
     # Current models.
-    {"id": "claude-fable-5", "capabilities": ["chat", "image_modality"]},
-    {"id": "claude-opus-4-8", "capabilities": ["chat", "image_modality"]},
-    {"id": "claude-sonnet-5", "capabilities": ["chat", "image_modality"]},
+    {"id": "claude-fable-5-1", "capabilities": ["chat", "image_modality"]},
+    {"id": "claude-opus-5-5", "capabilities": ["chat", "image_modality"]},
+    {"id": "claude-sonnet-5-5", "capabilities": ["chat", "image_modality"]},
+    # The current Haiku is claude-haiku-5-5, held back until core prices it, knows its
+    # context window and knows it refuses a custom temperature: offered now, it would read
+    # as unpriced, its context gauge as unmeasured, and a best-of-N sweep would send it a
+    # temperature the API rejects. Until then the Haiku offered is claude-haiku-4-5.
     {"id": "claude-haiku-4-5", "capabilities": ["chat", "image_modality"]},
     # Legacy models — still available; kept for back-compat with pinned accounts.
+    {"id": "claude-fable-5", "capabilities": ["chat", "image_modality"]},
+    {"id": "claude-opus-5", "capabilities": ["chat", "image_modality"]},
+    {"id": "claude-opus-4-8", "capabilities": ["chat", "image_modality"]},
     {"id": "claude-opus-4-7", "capabilities": ["chat", "image_modality"]},
     {"id": "claude-opus-4-6", "capabilities": ["chat", "image_modality"]},
-    {"id": "claude-sonnet-4-6", "capabilities": ["chat", "image_modality"]},
-    {"id": "claude-sonnet-4-5", "capabilities": ["chat", "image_modality"]},
     {"id": "claude-opus-4-5", "capabilities": ["chat", "image_modality"]},
-    # Deprecated (retires 2026-08-05) but still callable until then.
-    {"id": "claude-opus-4-1", "capabilities": ["chat", "image_modality"]},
+    {"id": "claude-sonnet-5", "capabilities": ["chat", "image_modality"]},
+    {"id": "claude-sonnet-4-6", "capabilities": ["chat", "image_modality"]},
+    # Deprecated (retires 2026-11-30) but still callable until then.
+    {"id": "claude-sonnet-4-5", "capabilities": ["chat", "image_modality"]},
 ]
 
 def _probe_headers(key: str) -> dict[str, str]:

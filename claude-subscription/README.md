@@ -74,10 +74,10 @@ an expired sign-in.
 - **"Test connection" cannot see your sign-in.** The shared branded catalog probes with a
   configured API key, and this app has none, so connectivity reports "no API key
   configured". Sign-in state is shown by the extensions list instead (above).
-- **Model list.** The Messages API exposes no models-list route, so the picker is fed from
-  a curated list mirroring the sibling `anthropic-models` app. Which of those ids your plan
-  may call is the vendor's business — one it does not include fails at the wire with
-  Anthropic's own error, exactly as it would with an API key.
+- **Model list.** The picker is fed from a curated list mirroring the current models of the
+  sibling `anthropic-models` app. Which of those ids your plan may call is the vendor's
+  business — one it does not include fails at the wire with Anthropic's own error, exactly
+  as it would with an API key.
 
 ## Per-call sampling
 

@@ -73,25 +73,26 @@ SOURCE = SubscriptionSource(
 )
 register_subscription_source(SOURCE)
 
-# The Anthropic Messages API exposes no models-list route, so the picker is fed from a
-# curated list. It is NOT a second source of model truth:
+# The picker is fed from a curated list. It is NOT a second source of model truth:
 # it mirrors the CURRENT rows of the sibling ``anthropic-models`` app's curated catalog
 # (anthropic-models/provider.py, sourced from the Anthropic model docs, refreshed
-# 2026-07-06) — the same ids the same wire serves. Which of them a given subscription tier
-# may call is the vendor's business: an id your plan doesn't include fails at the wire with
-# Anthropic's own error, exactly as it would with an API key.
+# 2026-10-16) — the same ids the same wire serves, its Haiku included (claude-haiku-4-5
+# until core knows the current claude-haiku-5-5; the reason is recorded there). Which of
+# them a given subscription tier may call is the vendor's business: an id your plan doesn't
+# include fails at the wire with Anthropic's own error, exactly as it would with an API key.
 _CURATED_MODELS: tuple[dict[str, Any], ...] = (
-    {"id": "claude-fable-5", "capabilities": ["chat", "image_modality"]},
-    {"id": "claude-opus-4-8", "capabilities": ["chat", "image_modality"]},
-    {"id": "claude-sonnet-5", "capabilities": ["chat", "image_modality"]},
+    {"id": "claude-fable-5-1", "capabilities": ["chat", "image_modality"]},
+    {"id": "claude-opus-5-5", "capabilities": ["chat", "image_modality"]},
+    {"id": "claude-sonnet-5-5", "capabilities": ["chat", "image_modality"]},
     {"id": "claude-haiku-4-5", "capabilities": ["chat", "image_modality"]},
 )
 
 # Family preference for the spec's curated first choice (``SPEC.default_model``). The id is
 # DERIVED from the curated list, so refreshing the list moves it and no id is separately
-# hardcoded. It is what the spec offers core (Test connection on a wire with no models route,
-# and the family map); it is never the model a call is sent with when nobody chose one — an
-# instance with no Default Model refuses an unbound call (core's ``require_model``).
+# hardcoded. It is what the spec offers core (the model Test connection's one-token probe asks
+# for when the instance has no Default Model, and the family map); it is never the model a call
+# is sent with when nobody chose one — an instance with no Default Model refuses an unbound call
+# (core's ``require_model``).
 _DEFAULT_MODEL_PREFERENCE = ("opus", "sonnet", "haiku", "fable")
 
 
