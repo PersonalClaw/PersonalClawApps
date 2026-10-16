@@ -47,15 +47,22 @@ A PR that adds or changes an app must meet all of:
   never be complete, so none exists and none should be added. Re-read your diff
   for it before you commit.
 
-Run one bundle locally with the same dependency posture as CI:
+Run one bundle locally with the same dependency posture as CI, from a Python
+environment that holds core and pytest, as the CI `tests` job builds it (core
+from `CORE_SPEC` in `.github/workflows/ci.yml`):
 
 ```bash
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python "personalclaw @ git+https://github.com/PersonalClaw/PersonalClaw@main" pytest pytest-asyncio
+. .venv/bin/activate
 ./scripts/test-bundles <bundle>
 ```
 
-The runner installs that bundle's declared Python dependencies into the active
-Python environment with `uv`, then invokes pytest. With no bundle argument it
-runs every tested bundle, matching the CI job.
+The runner starts `python` from your `PATH`, or the interpreter `PYTHON` names
+(`PYTHON=.venv/bin/python ./scripts/test-bundles <bundle>` needs no activation).
+It installs that bundle's declared Python dependencies into that environment
+with `uv`, then invokes pytest. With no bundle argument it runs every tested
+bundle, matching the CI job.
 
 Full contract: [`docs/app-creation-guide.md`](docs/app-creation-guide.md) and
 [`docs/platform-architecture.md`](docs/platform-architecture.md).

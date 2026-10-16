@@ -1,3 +1,8 @@
 #!/bin/sh
 set -eu
-exec "${PYTHON:-python}" "$(dirname "$0")/test_bundles.py" "$@"
+python="${PYTHON:-python}"
+if ! command -v "$python" >/dev/null 2>&1; then
+  echo "test-bundles: no Python interpreter '$python'. Activate the environment that has PersonalClaw and pytest installed (CONTRIBUTING.md shows how), or set PYTHON to its interpreter." >&2
+  exit 127
+fi
+exec "$python" "$(dirname "$0")/test_bundles.py" "$@"
