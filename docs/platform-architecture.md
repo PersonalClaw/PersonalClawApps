@@ -15,7 +15,7 @@ Core source pointers (for the curious): `personalclaw/apps/` (`app_manager.py`,
 | Tier | Where it lives | Managed how |
 |---|---|---|
 | **Native** | inside the core package (`personalclaw/apps/native/`) | Seeded as installed on first boot, **locked on** — disable/uninstall/force-uninstall are refused; only settings are editable, and it is updated with PersonalClaw, never from a source. Native is where an app was installed from: one from any other source that declares `native` is refused at install. |
-| **First-party** | this repo's `apps/` directory | Surfaced in the Store via an always-present, read-only local source; user-managed like any other app. |
+| **First-party** | this repository | Listed in the Store from this repository's git URL, a default source (see [App sources](third-party-install.md#app-sources)); a development checkout also lists it as a read-only local source. User-managed like any other app. |
 | **Third-party** | user-added sources (local dirs or git URLs) | Fully user-managed; full scanner gate. |
 
 Installed apps live at `~/.personalclaw/apps/<name>/`. Each app's mutable state
