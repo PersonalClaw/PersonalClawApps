@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import re
+import threading
 from collections.abc import AsyncIterator, Callable
 from typing import Any, NamedTuple, NoReturn, TypeVar
 from urllib.parse import urlsplit
@@ -2020,6 +2021,9 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
         self._name = name
         #: The last embedding's failure — when, and the sentence saying why — until one succeeds.
         self._last_failure: tuple[float, str] | None = None
+        #: The bedrock-runtime client, made on the first embedding and kept (:meth:`_get_client`).
+        self._client: Any = None
+        self._client_lock = threading.Lock()
 
     @property
     def name(self) -> str:
@@ -2047,9 +2051,18 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
         return await _creds_problem(self._region, self._profile)
 
     def _get_client(self):
-        """Build a fresh bedrock-runtime client (lazy boto3 import)."""
-        session = _aws_session(self._profile, agents_model=True)
-        return session.client("bedrock-runtime", region_name=self._region)
+        """The bedrock-runtime client (lazy boto3 import), made once and kept.
+
+        A new session for every embedding resolved the AWS credentials again each time, and a
+        profile that signs in through a credential_process ran that program once per embedding.
+        One client serves every thread, and its credentials refresh themselves as they expire.
+        A call that fails on the AWS setup drops it (:meth:`_invoke_embed_sync`), so a fixed
+        setup is read on the next one."""
+        with self._client_lock:
+            if self._client is None:
+                session = _aws_session(self._profile, agents_model=True)
+                self._client = session.client("bedrock-runtime", region_name=self._region)
+            return self._client
 
     async def is_available(self) -> bool:
         """True if the AWS credential chain resolves (cached, off-loop)."""
@@ -2060,12 +2073,18 @@ class BedrockEmbeddingProvider(EmbeddingProvider):
         to_thread. Raises :class:`_NoEmbedding` for an answer that holds no vector."""
         if how.max_chars is not None:
             text = text[: how.max_chars]
-        response = self._get_client().invoke_model(
-            modelId=model_id,
-            body=json.dumps(how.body(text)),
-            contentType="application/json",
-            accept="application/json",
-        )
+        try:
+            response = self._get_client().invoke_model(
+                modelId=model_id,
+                body=json.dumps(how.body(text)),
+                contentType="application/json",
+                accept="application/json",
+            )
+        except Exception as exc:
+            if _aws_setup_problem(exc, region=self._region, profile=self._profile) is not None:
+                with self._client_lock:
+                    self._client = None
+            raise
         vector = how.vector(json.loads(response["body"].read()))
         if not isinstance(vector, list) or not vector:
             raise _NoEmbedding(f"{model_id} answered with no embedding.")
