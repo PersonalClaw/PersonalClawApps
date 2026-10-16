@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+import re
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -113,6 +114,17 @@ def test_the_token_is_a_masked_setting() -> None:
     assert token["x-meta"]["sensitive"] is True
     # And its help says what is true of THIS app: notifications need an account.
     assert "anonymous" not in token["x-meta"]["help"].lower()
+
+
+def test_the_token_help_names_the_token_github_takes() -> None:
+    """GitHub's notifications API takes only a personal access token (classic), with the
+    notifications scope. A fine-grained token, the kind GitHub recommends, reads nothing, so the
+    setting's help and the README both name the classic token and its scope."""
+    help_text = _manifest()["provider"]["settingsSchema"]["properties"]["token"]["x-meta"]["help"]
+    readme = (_HERE / "README.md").read_text(encoding="utf-8")
+    for where, text in (("the token's help in app.json", help_text), ("README.md", readme)):
+        assert "personal access token (classic)" in text, where
+        assert re.search(r"`?notifications`? scope", text), where
 
 
 # ── Behaviour: poll mapping + checkpoints ─────────────────────────────────
