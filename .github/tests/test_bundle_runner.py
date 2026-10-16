@@ -39,3 +39,21 @@ def test_declared_dependency_is_required_and_installed(tmp_path, capfd):
     assert "No module named 'apps_test_dependency'" in corrupted_output
 
     assert test_bundles.run_bundle(FIXTURE_BUNDLE, python=python, env=env) == 0
+
+
+def test_the_launcher_names_an_interpreter_it_cannot_find(tmp_path):
+    # The shell's own "not found" names neither the variable that picks the interpreter nor
+    # the setup that provides one, so the launcher says both before it gives up.
+    env = os.environ.copy()
+    env["PYTHON"] = str(tmp_path / "no-such-python")
+    result = subprocess.run(
+        ["sh", str(ROOT / "scripts/test-bundles")],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 127
+    assert "PYTHON" in result.stderr
+    assert "CONTRIBUTING.md" in result.stderr

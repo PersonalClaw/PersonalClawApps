@@ -21,7 +21,8 @@ PersonalClaw gateway via the platform's typed provider contracts. Full contract:
 - **Tests honor declared dependencies:** the `tests` job installs each bundle's
   `dependencies.pythonDependencies` before collection. Undeclared vendor SDKs
   remain absent, so model apps stub SDKs they deliberately do not declare. Run
-  `./scripts/test-bundles <bundle>` locally to use the exact same path.
+  `./scripts/test-bundles <bundle>` locally, from an environment with core and
+  pytest (CONTRIBUTING.md shows the setup), to use the exact same path.
 - **Store-card copy:** `description` must end in a full stop and its **lead sentence
   must fit 90 characters** — the card clamps to two lines, so a longer lead is shown
   cut mid-phrase. Put the detail in later sentences (the detail panel and search read
