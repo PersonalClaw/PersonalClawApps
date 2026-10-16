@@ -32,12 +32,14 @@ remote path is a canned-JSON fake. Isolation: ``tmp_path`` knowledge.db + ``PERS
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -502,6 +504,40 @@ def test_validate_repo_local_and_remote_rules(tmp_path, repo):
 async def test_poll_with_no_repo_is_a_soft_error_not_a_raise():
     result = await create_provider(None).poll("src", "")
     assert result.items == [] and "no repository for this source" in result.error
+
+
+@pytest.mark.asyncio
+async def test_a_local_poll_leaves_the_event_loop_free(repo, monkeypatch):
+    """A local read runs one git command per file, and a first poll reads the whole tree. Run on
+    the event loop, a first poll of a large repository froze every other request until it
+    finished; here each git command is slowed down, and a ticker on the loop must keep ticking
+    while the poll runs."""
+    real_git = GitRepoSourceProvider._git
+
+    def slow_git(self, repo_path, *args):
+        time.sleep(0.05)
+        return real_git(self, repo_path, *args)
+
+    monkeypatch.setattr(GitRepoSourceProvider, "_git", slow_git)
+    ticks = 0
+    done = asyncio.Event()
+
+    async def ticker():
+        nonlocal ticks
+        while not done.is_set():
+            ticks += 1
+            await asyncio.sleep(0.01)
+
+    task = asyncio.create_task(ticker())
+    await asyncio.sleep(0)
+    before = ticks
+    result = await create_provider({"repo": str(repo)}).poll("src", "")
+    during = ticks - before
+    done.set()
+    await task
+    assert not result.error
+    assert sorted(i.guid for i in result.items) == ["alpha.py", "beta.ts", "guide.md"]
+    assert during >= 5, f"the loop ticked {during} times during a poll of five slowed git commands"
 
 
 @pytest.mark.asyncio
