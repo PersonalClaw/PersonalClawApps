@@ -27,8 +27,8 @@ without breaking it:
 "Test connection" (Settings → Providers) is **measured**, not inferred: it issues an
 authenticated `GET /v1/models` against the configured Base URL and reports what came
 back. A key Anthropic rejects reads as rejected. The model list the picker offers stays
-curated (see `provider.py`), because excluding invitation-only ids is a decision no
-endpoint can make for us.
+curated (see `provider.py`), because leaving out the ids Anthropic serves only to
+organizations it has verified or invited is a decision no endpoint can make for us.
 
 ## Per-call sampling
 

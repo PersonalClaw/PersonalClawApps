@@ -406,6 +406,20 @@ def test_catalog_lists_the_curated_models():
     assert prov.SPEC.default_model in ids
 
 
+def test_the_curated_list_is_the_current_claude_models():
+    """The picker offers today's Claude models: the current rows of the sibling
+    ``anthropic-models`` catalog, whose Haiku is claude-haiku-4-5 until core prices the
+    current claude-haiku-5-5, knows its context window and knows it refuses a custom
+    temperature. The spec's curated first choice is derived from that list, by family."""
+    assert [m["id"] for m in prov._CURATED_MODELS] == [
+        "claude-fable-5-1",
+        "claude-opus-5-5",
+        "claude-sonnet-5-5",
+        "claude-haiku-4-5",
+    ]
+    assert prov.SPEC.default_model == "claude-opus-5-5"
+
+
 def test_manifest_and_provider_config_validate():
     from personalclaw.apps.manifest import AppManifest
 
