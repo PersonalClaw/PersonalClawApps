@@ -461,6 +461,52 @@ def test_an_answer_with_no_embedding_says_why(bedrock):
     assert "Unable to embed the input." in reason
 
 
+# ── one client for every embedding ──────────────────────────────────────────────────────────
+
+
+def _counting_sessions(monkeypatch) -> list[str | None]:
+    """Every AWS session the app makes from here on, by the profile it was made for."""
+    made: list[str | None] = []
+    real = prov._aws_session
+
+    def counting(profile, *, agents_model):
+        made.append(profile)
+        return real(profile, agents_model=agents_model)
+
+    monkeypatch.setattr(prov, "_aws_session", counting)
+    return made
+
+
+def test_embeddings_share_one_client(bedrock, monkeypatch):
+    """🔴 Red before: every embedding made a new AWS session and client, so the credentials were
+    resolved again each time. A profile that signs in through a credential_process ran that
+    program once per embedding: one process for every text a re-index or a search embedded."""
+    made = _counting_sessions(monkeypatch)
+    adapter = _adapter()
+
+    vectors = [_run(adapter.embed(TEXT, model="amazon.titan-embed-text-v2:0")) for _ in range(3)]
+
+    assert all(vectors), f"each text was embedded; Bedrock refused {bedrock.refused}"
+    assert len(made) == 1, f"one session for three embeddings, not {len(made)}"
+
+
+def test_a_call_that_fails_on_the_aws_setup_makes_a_new_client_next_time(bedrock, monkeypatch):
+    """The client is kept, so one made before the owner signed in must not stay without
+    credentials: a call that fails on the setup drops it, and the next one reads the setup again."""
+    made = _counting_sessions(monkeypatch)
+    adapter = _adapter()
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"):
+        monkeypatch.delenv(name)
+
+    assert _run(adapter.embed(TEXT, model="amazon.titan-embed-text-v2:0")) is None
+    assert "No AWS credentials were found" in _run(adapter.unavailable_reason())
+
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "embedding-test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "embedding-test")
+    assert _run(adapter.embed(TEXT, model="amazon.titan-embed-text-v2:0"))
+    assert len(made) == 2, "the failed call's client was dropped and a new one made"
+
+
 # ── two models AWS names alike are told apart ───────────────────────────────────────────────
 
 
