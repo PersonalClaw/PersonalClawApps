@@ -8,7 +8,7 @@ security gate. For building an app, see the
 ## App sources
 
 The Store lists installable apps from **sources**. Two kinds, persisted in
-`~/.personalclaw/app-sources.json`:
+`~/.personalclaw/apps/app-sources.json`:
 
 ```json
 {
@@ -18,12 +18,21 @@ The Store lists installable apps from **sources**. Two kinds, persisted in
 ```
 
 - A **local source** is a directory *containing app subdirectories* (each with
-  an `app.json`) — e.g. this repo's `apps/` tree, or wherever you cloned a
-  third-party collection. The first-party `apps/` directory is an always-present,
-  read-only default source; user-added local sources sit alongside it.
-- A **git source** is a repository URL. The catalog lists it without cloning —
-  the shallow clone (`--depth 1`, bounded) happens at install time, behind the
-  scanner gate. `.git` metadata is stripped from the installed copy.
+  an `app.json`), such as a clone of this repository or a third-party collection
+  you cloned.
+- A **git source** is a repository URL. Listing it clones it twice, shallow
+  (`--depth 1`) and time-bounded. A clone with no checkout looks for an
+  `app-registry.json` index, and what it finds is kept for an hour. A
+  checked-out clone is scanned for the apps the source holds, and that scan is
+  kept for five minutes. Apps are listed from the index when there is one.
+  Installing an app clones it again, behind the scanner gate, and `.git`
+  metadata is never installed.
+- **First-party apps** are listed from this repository's git URL, a default
+  source the Store cannot remove. Setting `apps.bundled_source_enabled` to false
+  switches it off. A gateway run from a development checkout, with this
+  repository beside core as `apps/`, also lists that directory as a read-only
+  local source, and so does any gateway with `PERSONALCLAW_FIRST_PARTY_APPS_DIR`
+  set to a clone of it. The local copy of an app wins over the git source's.
 
 Manage sources from the Apps page → Store, or via the API:
 
@@ -167,7 +176,7 @@ self-update only.)
 |---|---|
 | Installed apps | `~/.personalclaw/apps/<name>/` |
 | App state + config (survives updates) | `~/.personalclaw/apps/<name>/data/` |
-| Sources list | `~/.personalclaw/app-sources.json` |
+| Sources list | `~/.personalclaw/apps/app-sources.json` |
 | Quarantine (transient) | `~/.personalclaw/apps/.quarantine/` |
 | App-registered MCP servers | `~/.personalclaw/mcp.json` (namespaced `{app}:{server}`) |
 
