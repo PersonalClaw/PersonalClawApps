@@ -140,6 +140,17 @@ def test_no_token_returns_empty_and_keeps_checkpoints() -> None:
     assert cps == {"github": "X"}
 
 
+def test_a_missing_token_is_said_once_not_every_poll(caplog) -> None:
+    """🔴 Red before: the inbox polls every minute, and each poll without a token logged a
+    warning, sixty lines an hour for a token the owner simply had not set yet."""
+    provider = create_provider({})
+    with caplog.at_level("WARNING"):
+        for _ in range(3):
+            _poll(provider)
+    said = [r for r in caplog.records if "no token configured" in r.getMessage()]
+    assert len(said) == 1, [r.getMessage() for r in said]
+
+
 def test_threads_map_to_inbox_rows() -> None:
     p = create_provider({"token": "t"})
     p._fetch_notifications = _returns([_thread()])
