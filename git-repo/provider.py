@@ -53,6 +53,7 @@ Egress discipline (the channel/knowledge conformance rule, honored exactly):
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import fnmatch
@@ -396,7 +397,9 @@ class GitRepoSourceProvider(KnowledgeSourceProvider):
         try:
             if _is_remote(cfg.repo):
                 return await self._poll_remote(cfg, cursor, policy)
-            return self._poll_local(cfg, cursor)
+            # A local read runs one git command per file, and a first poll reads the whole
+            # tree: on the event loop, that froze every other request until it finished.
+            return await asyncio.to_thread(self._poll_local, cfg, cursor)
         except GitTooOld as exc:
             # PersonalClaw's git will not run a git this old, and its message says what it
             # needs, what it found and what to do: said whole, not cut like a failure's text.
