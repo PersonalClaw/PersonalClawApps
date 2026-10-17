@@ -190,6 +190,13 @@ Least privilege:
 - A token goes in the `env:` of the steps that call the API, never a job's or a
   workflow's.
 
+Every job sets `timeout-minutes`, so a hung step frees its runner instead of holding it
+for hours. Size a new job's cap at about twice its p95 over its retained runs, never below
+its longest run, rounded up to the next 5 minutes (at least 5); a job with no runs yet takes
+its nearest sibling's cap, or 30. A job that calls a reusable workflow (`uses:` at job
+level) carries its callee's caps and sets none. `.github/tests/test_every_job_has_a_timeout.py`
+holds this in the gate's `rails` part.
+
 To add an exception, when a pin cannot hold yet, add an `[[exception]]` entry with:
 
 - `file`: the file the violation names;

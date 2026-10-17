@@ -39,6 +39,7 @@ jobs:
     # Core is installed because manifest-validate parses every app.json with core's own
     # parser; Node is set up because ui-bundles rebuilds every committed UI bundle with npm.
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Runner identity
         # The image and architecture this job runs on, so a moved runner image shows in the log.
@@ -86,6 +87,7 @@ jobs:
     # (.github/bundle-lock/, every file hashed). Undeclared vendor SDKs remain absent, so
     # model apps still stub SDKs they deliberately do not declare.
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     # No job-level PERSONALCLAW_HOME: one home shared by every test defeats the
     # Path.home()/HOME patches some tests isolate themselves with, the same mismatch
     # documented in the core test job. The repository's conftest.py gives each test a
@@ -170,6 +172,7 @@ jobs:
     # reach a green quality job.
     needs: [tests]
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     env:
       # Same reason as the `tests` job: the verifier RUNS each declaring bundle's
       # pytest, so it needs the posture those tests are written against.
@@ -283,6 +286,7 @@ jobs:
     # human and would otherwise re-fail on dependabot's own unsigned commit.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Runner identity
         # The image and architecture this job runs on, so a moved runner image shows in the log.
