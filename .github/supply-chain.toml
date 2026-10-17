@@ -1,0 +1,49 @@
+# Supply-chain policy for this repository's CI, read by .github/tests/test_supply_chain.py (the
+# gate's `rails` part, so `make gate` and CI's `tests` job). See "Supply chain" in
+# CONTRIBUTING.md for how to pin, and how to add or renew an exception.
+
+# Each Node release line CI may pin, and the date it reaches end of life, from the Node.js
+# release schedule (github.com/nodejs/Release, schedule.json). A pin on a line past its date,
+# or on a line not listed here, fails. Add a line when the repository moves to it; leave past
+# lines in place, so a pin on one fails on its date.
+[node_end_of_life]
+"20" = 2026-04-30
+"22" = 2027-04-30
+"24" = 2028-04-30
+"26" = 2029-04-30
+
+# Audited write steps. Every write permission a job holds, its own or inherited from the top
+# of its workflow, and every actions/checkout that keeps its credentials
+# (permission = "persist-credentials"), must be named here with the steps that use it and
+# why. Anything not listed fails, and an entry that matches nothing fails.
+[[audited_write]]
+workflow = "core-main-canary.yml"
+job = "report"
+permission = "issues: write"
+steps = [
+  "Open or update the canary issue",
+  "Close the canary issue when the apps pass again",
+]
+reason = "Opens, comments on and closes the one issue titled \"Apps fail against core main\", which says the apps fail against core main."
+
+# Exceptions. One waives one rule (scope) for one reference in one file, and expires at most
+# 30 days after the day it is written or renewed. Renewing is a new expiry with a new reason.
+# An expired entry, one more than 30 days out, one that matches nothing, and one missing a
+# field all fail.
+[[exception]]
+file = ".github/workflows/ci.yml"
+reference = "quality-declarations Census the claims, install what a `tested` claim needs"
+scope = "run-install"
+owner = "maintainers"
+reason = "Installs each declaring app's own pythonDependencies ranges, because that is what installing the app gets; the quality verifier must test what users receive. It ends when https://github.com/PersonalClaw/PersonalClaw/issues/3918 audits that resolution."
+expires = 2026-11-16
+
+# The shape of an exception:
+#
+# [[exception]]
+# file = ".github/workflows/ci.yml"
+# reference = "tests Install core + pytest"   # the reference the violation reports
+# scope = "run-install"                       # the rule it waives
+# owner = "maintainers"
+# reason = "Why the pin cannot hold yet, and what ends the exception."
+# expires = 2026-11-15

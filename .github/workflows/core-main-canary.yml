@@ -78,7 +78,7 @@ jobs:
           uv venv --python 3.12.15 .venv
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
           echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
-          uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC" pytest pytest-asyncio pytest-xdist
+          uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC" pytest==9.1.1 pytest-asyncio==1.4.0 pytest-xdist==3.8.0
       - name: Every static check, the repository's tests, every bundle's suite
         # The same gate CI runs, against the resolved core. Its bundles part installs every
         # bundle's declared dependencies, which the quality verifier's test runs need too.
@@ -117,7 +117,6 @@ jobs:
       issues: write
     env:
       TITLE: "Apps fail against core main"
-      GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       RESULT: ${{ needs.check.result }}
       CORE: ${{ needs.check.outputs.core }}
@@ -128,6 +127,9 @@ jobs:
     steps:
       - name: Open or update the canary issue
         if: ${{ needs.check.result != 'success' }}
+        # The token goes only to the steps that call the API, never to the whole job.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           # The backticks in the body are Markdown code spans, not command substitution.
           # shellcheck disable=SC2016
@@ -141,6 +143,8 @@ jobs:
           fi
       - name: Close the canary issue when the apps pass again
         if: ${{ needs.check.result == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           existing=$(gh issue list --state open --search "\"$TITLE\" in:title" --limit 100 --json number,title --jq '[.[] | select(.title == env.TITLE)][0].number // empty')
           if [ -n "$existing" ]; then
