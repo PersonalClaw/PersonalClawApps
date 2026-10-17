@@ -5,8 +5,10 @@ PYTHON ?= .venv/bin/python
 
 .PHONY: gate static rails bundles
 
+# GATE_ARGS goes to the gate as written, for example GATE_ARGS="--jobs 4" (the default runs half
+# the CPUs' worth of bundles at once, at most 8).
 gate:
-	$(PYTHON) scripts/gate.py
+	$(PYTHON) scripts/gate.py $(GATE_ARGS)
 
 static rails bundles:
-	$(PYTHON) scripts/gate.py $@
+	$(PYTHON) scripts/gate.py $@ $(GATE_ARGS)

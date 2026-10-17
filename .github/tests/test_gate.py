@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+import planted_envs as planted
+
 ROOT = Path(__file__).resolve().parents[2]
 GATE = ROOT / "scripts" / "gate.py"
 
@@ -40,6 +42,7 @@ def _seeded(
     shutil.copy2(GATE, root / "scripts" / "gate.py")
     shutil.copy2(ROOT / "scripts" / "test_bundles.py", root / "scripts" / "test_bundles.py")
     shutil.copy2(ROOT / "scripts" / "core_lock.py", root / "scripts" / "core_lock.py")
+    shutil.copy2(ROOT / "scripts" / "bundle_lock.py", root / "scripts" / "bundle_lock.py")
     shutil.copy2(ROOT / ".github" / "scripts" / "run_checks.py", root / ".github" / "scripts")
     (root / ".github" / "scripts" / "check_planted.py").write_text(check, encoding="utf-8")
     (root / ".github" / "tests" / "test_planted.py").write_text(
@@ -53,6 +56,11 @@ def _seeded(
     (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
     if lock is not None:
         (root / "core.lock").write_text(lock, encoding="utf-8", newline="")
+    # The bundles part builds each bundle's environment from a lock: a planted one, against an
+    # empty local index, with a stub core, so no part reaches the network.
+    (root / ".gitignore").write_text(".bundle-venvs/\n.planted/\nout/\n__pycache__/\n", encoding="utf-8")
+    planted.lock(root, planted.Index(root / ".planted" / "index"), root / ".planted" / "lock")
+    planted.stub_core(root / ".planted" / "core")
     _git(root, "init", "-q")
     _git(root, "add", "-A")
     _git(
@@ -62,12 +70,15 @@ def _seeded(
     return root
 
 
-def _gate(root: Path, *args: str) -> subprocess.CompletedProcess:
+def _gate(root: Path, *args: str, results: str = "out") -> subprocess.CompletedProcess:
+    (core,) = (root / ".planted" / "core").glob("*.whl")
     return subprocess.run(
-        [sys.executable, str(root / "scripts" / "gate.py"), "--results", str(root / "out"), *args],
+        [sys.executable, str(root / "scripts" / "gate.py"), "--results", str(root / results),
+         *args],
         cwd=root,
         capture_output=True,
         text=True,
+        env=planted.environ(root / ".planted" / "lock", str(core), root / ".bundle-venvs"),
     )
 
 
@@ -216,3 +227,119 @@ def test_a_missing_or_bad_lock_is_recorded_as_none_and_warned_about(tmp_path, lo
     core = _receipt(root)["core"]
     assert (core["lock"], core["matches_lock"]) == (None, None)
     assert "warning" in run.stderr and "core.lock" in run.stderr
+
+
+# -- one results folder, one run --------------------------------------------------------------
+
+def test_a_second_run_in_the_same_results_folder_is_refused_and_names_results(tmp_path):
+    import fcntl
+
+    root = _seeded(tmp_path)
+    (root / "out").mkdir()
+    with open(root / "out" / ".gate.lock", "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        run = _gate(root, "static")
+    assert run.returncode == 2, run.stdout + run.stderr
+    assert "--results" in run.stderr and str(root / "out") in run.stderr
+    assert not (root / "out" / "receipt.json").exists()
+    # Another folder is the way to run a second one, and the first folder is free again after.
+    assert _gate(root, "static", results="elsewhere").returncode == 0
+    assert _gate(root, "static").returncode == 0
+
+
+def test_the_bundles_part_records_each_environment_and_the_jobs_it_ran_with(tmp_path):
+    root = _seeded(tmp_path)
+    run = _gate(root, "bundles", "--jobs", "2")
+    assert run.returncode == 0, run.stdout + run.stderr
+    receipt = _receipt(root)
+    assert receipt["bundles"]["jobs"] == 2
+    assert receipt["bundles"]["resolution"] == "locked"
+    (environment,) = receipt["bundles"]["environments"]
+    assert environment["action"] in {"built", "reused"}
+    assert set(environment["inputs"]) >= {"core", "requirements", "python", "abi", "os", "arch",
+                                          "uv", "index", "resolution"}
+    assert (root / "out" / "bundles" / "environments" / f"{environment['key']}.json").is_file()
+
+
+def test_changed_is_the_selection_the_receipt_records(tmp_path):
+    root = _seeded(tmp_path)
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "second-app" / "provider.py").write_text("X = 1\n", encoding="utf-8")
+    run = _gate(root, "bundles", "--changed", base)
+    assert run.returncode == 0, run.stdout + run.stderr
+    selection = _receipt(root)["selection"]
+    assert selection["bundles"] == ["second-app"], selection
+    assert base in selection["reason"]
+
+
+
+def test_a_part_left_running_by_a_killed_gate_still_keeps_a_second_gate_out(tmp_path):
+    import os
+    import signal
+    import time
+
+    root = _seeded(tmp_path)
+    marker, release = root / "started", root / "release"
+    (root / "second-app" / "test_ok.py").write_text(
+        "import pathlib, time\n\n"
+        "def test_ok():\n"
+        f"    pathlib.Path({str(marker)!r}).write_text('x')\n"
+        "    deadline = time.monotonic() + 30\n"
+        f"    while not pathlib.Path({str(release)!r}).exists() and time.monotonic() < deadline:\n"
+        "        time.sleep(0.02)\n", encoding="utf-8")
+    (core,) = (root / ".planted" / "core").glob("*.whl")
+    env = planted.environ(root / ".planted" / "lock", str(core), root / ".bundle-venvs")
+    gate = subprocess.Popen([sys.executable, str(root / "scripts" / "gate.py"), "--results",
+                             str(root / "out"), "bundles", "--bundle", "second-app"], cwd=root,
+                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    deadline = time.monotonic() + 60
+    while not marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert marker.exists(), "the bundle never started"
+    os.kill(gate.pid, signal.SIGKILL)
+    gate.wait()
+    try:
+        run = _gate(root, "bundles", "--bundle", "first-app")
+        assert run.returncode == 2, run.stdout + run.stderr
+        assert "--results" in run.stderr
+    finally:
+        release.touch()
+
+
+def test_a_bundle_s_pytest_left_running_by_a_stopped_gate_and_runner_keeps_a_second_gate_out(
+        tmp_path):
+    # Ctrl-C: the gate kills its runner, but the runner's pytest finishes its own cleanup and
+    # writes its JUnit into the folder, so it holds the folder's lock too.
+    import os
+    import signal
+    import time
+
+    root = _seeded(tmp_path)
+    marker, release = root / "started", root / "release"
+    (root / "second-app" / "test_ok.py").write_text(
+        "import pathlib, time\n\n"
+        "def test_ok():\n"
+        f"    pathlib.Path({str(marker)!r}).write_text('x')\n"
+        "    deadline = time.monotonic() + 30\n"
+        f"    while not pathlib.Path({str(release)!r}).exists() and time.monotonic() < deadline:\n"
+        "        time.sleep(0.02)\n", encoding="utf-8")
+    (core,) = (root / ".planted" / "core").glob("*.whl")
+    env = planted.environ(root / ".planted" / "lock", str(core), root / ".bundle-venvs")
+    gate = subprocess.Popen([sys.executable, str(root / "scripts" / "gate.py"), "--results",
+                             str(root / "out"), "bundles", "--bundle", "second-app"], cwd=root,
+                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    deadline = time.monotonic() + 60
+    while not marker.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert marker.exists(), "the bundle never started"
+    runner = next(int(line.split()[1].rstrip(",")) for line in
+                  (root / ".bundle-venvs" / ".runner.lock").read_text().splitlines())
+    os.kill(gate.pid, signal.SIGKILL)
+    os.kill(runner, signal.SIGKILL)
+    gate.wait()
+    try:
+        run = _gate(root, "bundles", "--bundle", "first-app", results="out")
+        assert run.returncode == 2, run.stdout + run.stderr
+        assert "--results" in run.stderr
+    finally:
+        release.touch()

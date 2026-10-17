@@ -21,11 +21,15 @@ Run them all as CI does with `make gate` (`python scripts/gate.py`; its parts ar
   it; never reach around.
 - **Manifest validity:** `manifest-validate` parses every `app.json` against
   core's real `AppManifest` and requires a stable round-trip.
-- **Tests honor declared dependencies:** the `tests` job installs each bundle's
-  `dependencies.pythonDependencies` before collection. Undeclared vendor SDKs
-  remain absent, so model apps stub SDKs they deliberately do not declare. Run
-  `./scripts/test-bundles <bundle>` locally, from an environment with core and
-  pytest (CONTRIBUTING.md shows the setup), to use the exact same path.
+- **Tests honor declared dependencies:** each bundle runs in an environment of its
+  own holding core, pytest and exactly its `dependencies.pythonDependencies`, installed
+  hashed from the bundle lock (`.github/bundle-lock/`). Undeclared vendor SDKs remain
+  absent, so model apps stub SDKs they deliberately do not declare, and a test must not
+  install packages (the run fails if one does). Changing `pythonDependencies` or
+  `core.lock` means `python scripts/bundle_lock.py write` and committing the lock. Run
+  `./scripts/test-bundles <bundle>` locally (`--jobs N`, `--changed <base>`), from an
+  environment with core and pytest (CONTRIBUTING.md shows the setup), to use the exact
+  same path. A pull request's CI runs only the bundles its change can affect.
 - **One core commit:** CI tests against the core commit in `core.lock` (one full
   40-character SHA), never core main. Install it locally with
   `uv pip install "personalclaw @ git+https://github.com/PersonalClaw/PersonalClaw@$(cat core.lock)"`;

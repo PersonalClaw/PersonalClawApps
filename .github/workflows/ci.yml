@@ -1,9 +1,11 @@
 # CI — first-party app bundles. Verifies every app against the platform contract.
-# Tests install each bundle's declared dependencies; undeclared vendor SDKs remain
-# absent so apps that intentionally omit them must stub them. Every job's work is a part
+# Each bundle's tests run in an environment of its own holding its declared dependencies,
+# installed hashed from the bundle lock; undeclared vendor SDKs remain absent so apps that
+# intentionally omit them must stub them. Every job's work is a part
 # of scripts/gate.py, the one apps gate a local run calls too (`make gate`). Jobs:
 # static (every .github/scripts/check_*.py, one row each) · tests (.github/tests once,
-# then each bundle's suite) · quality-declarations · dco (PR-only).
+# then each bundle's suite, four at once, each in a locked environment of its own; a pull
+# request runs only the bundles its change can affect) · quality-declarations · dco (PR-only).
 # Every job that installs core installs the one commit core.lock pins (read and exported by
 # scripts/core_lock.py, which prints it), so a re-run tests the same core. Core main's own
 # drift is the weekly canary's to report (core-main-canary.yml), not this workflow's.
@@ -79,9 +81,10 @@ jobs:
           if-no-files-found: error
 
   tests:
-    # Each bundle's test_*.py runs after its manifest-declared Python dependencies
-    # are installed. Undeclared vendor SDKs remain absent, so model apps still stub
-    # SDKs they deliberately do not declare.
+    # Each bundle's test_*.py runs in an environment holding core, the pytest pins and
+    # exactly its manifest-declared Python dependencies, installed from the bundle lock
+    # (.github/bundle-lock/, every file hashed). Undeclared vendor SDKs remain absent, so
+    # model apps still stub SDKs they deliberately do not declare.
     runs-on: ubuntu-24.04
     # No job-level PERSONALCLAW_HOME: one home shared by every test defeats the
     # Path.home()/HOME patches some tests isolate themselves with, the same mismatch
@@ -98,17 +101,23 @@ jobs:
             if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
           done
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # The whole history, so --changed can diff a pull request against its base (a shallow
+        # clone selects every bundle).
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         # browser-connector's tests drive its extension worker with Node's own test runner.
         with:
           node-version-file: .nvmrc
       - name: Install uv
+        # uv's download cache is restored, keyed on the bundle lock, so a lock change starts a
+        # fresh cache. The bundle environments themselves are built in every run.
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           version: "0.13.1"
           enable-cache: true
+          cache-dependency-glob: .github/bundle-lock/*/uv.lock
       - name: Read core.lock
         # CORE_SHA and CORE_SPEC for the steps below; the log line names the core under test.
         run: uv run --no-project --python 3.12.15 python scripts/core_lock.py export
@@ -127,11 +136,16 @@ jobs:
         # loads them, SDK calls bind, model apps prove the wire, declared core features, the
         # scratch home and the guards conftest.py installs) and each static check's
         # planted-defect tests. Its `bundles` part is scripts/test_bundles.py, the single
-        # definition of a bundle run shared by CI and local use: it discovers tested app
-        # bundles, installs each manifest's declared pythonDependencies, and invokes pytest
-        # separately per bundle to avoid basename clashes. Both parts run even when the first
-        # is red. --core refuses to run when the installed core is not the locked commit.
-        run: python scripts/gate.py rails bundles --core "$CORE_SHA" --results "$RUNNER_TEMP/gate"
+        # definition of a bundle run shared by CI and local use: it builds each bundle's
+        # environment from the bundle lock, hashed, and invokes pytest separately per bundle to
+        # avoid basename clashes, four bundles at once. On a pull request --changed runs only
+        # the bundles a change since the base can affect; a main-branch run takes every
+        # bundle. Both parts run even when the first is red. --core refuses to run when the
+        # installed core is not the locked commit. Never --float: that is the weekly canary's
+        # mode, not merge evidence.
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python scripts/gate.py rails bundles --core "$CORE_SHA" --jobs 4 ${BASE_SHA:+--changed "$BASE_SHA"} --results "$RUNNER_TEMP/gate"
       - name: Keep the gate's receipt and each bundle's results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

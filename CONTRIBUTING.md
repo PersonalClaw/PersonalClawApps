@@ -26,8 +26,8 @@ A PR that adds or changes an app must meet all of:
   `dependencies.pythonDependencies` (the app-install pipeline installs them);
   don't assume core ships them.
 - **Ship tests.** `test_provider.py` / `test_server.py` that pass under the
-  `tests` CI job. The job installs each bundle's declared
-  `dependencies.pythonDependencies`; undeclared vendor SDKs remain absent, so
+  `tests` CI job. The job runs each bundle in an environment holding exactly its
+  declared `dependencies.pythonDependencies`; undeclared vendor SDKs remain absent, so
   model apps must continue to stub SDKs they deliberately do not declare.
 - **Ship a `README.md` and a `LICENSE`** in the app directory.
 - **Manifest completeness.** `manifest-validate` parses every `app.json` against
@@ -62,9 +62,50 @@ uv pip install --python .venv/bin/python "personalclaw @ git+https://github.com/
 
 The runner starts `python` from your `PATH`, or the interpreter `PYTHON` names
 (`PYTHON=.venv/bin/python ./scripts/test-bundles <bundle>` needs no activation).
-It installs that bundle's declared Python dependencies into that environment
-with `uv`, then invokes pytest. With no bundle argument it runs every tested
-bundle, matching the CI job.
+It runs each bundle in an environment of its own under `.bundle-venvs/`, holding core,
+the pytest pins and exactly the Python dependencies the bundle's `app.json` declares,
+installed from the bundle lock with every file checked against its hash. So a bundle
+never sees a package another bundle declares. Bundles that declare the same
+dependencies share one environment; one that declares none gets the base environment.
+An environment is built once and reused while its key holds: the core commit, the exact
+requirements, the Python version and ABI, the OS, the architecture, the uv version and
+the index. It is built under a lock and renamed into place only when complete. It is
+reused only while it still holds what its receipt recorded and its interpreter is still
+the Python its key names (a `uv python upgrade` re-points the folder it links through);
+otherwise it is built again. One checkout runs one bundle runner at a time: a second
+run (or a second gate's `bundles` part) in the same checkout refuses at start and names
+the first; to validate two things at once, use a second checkout. Each run removes the
+folders a stopped build left and environments no run has used for seven days.
+A bundle whose tests install or remove a package fails the run by name: when several
+bundles shared the environment while it changed, each is run again alone to find which.
+Those runs alone only diagnose: a bundle's result is always its first run's.
+Each bundle's name is printed when it starts, and each build names the bundles waiting
+on it, so a hang names what it is in. A full run that finds no tested bundle exits 2.
+
+- `--jobs N` runs N bundles at once (default: half the CPUs, at most 8; CI passes 4).
+  Each still runs in its own pytest process, and its output prints as one block.
+- `--changed <base>` runs only the bundles whose folder differs from `<base>`
+  (`git diff <base>...HEAD` and your uncommitted changes; a rename counts as both its old
+  and its new path). A change outside the bundles
+  that can change every bundle's run (`core.lock`, `scripts/`, `apps_testkit/`,
+  `conftest.py`, `pytest.ini`, `.github/tests/`, the bundle lock, a workflow, ...) runs
+  every bundle, and so does an unknown base, a shallow clone or any git error. Docs,
+  root `*.md` files and the GitHub templates select no bundle.
+- `--list` prints the selection and why, and runs nothing.
+
+With no bundle argument it runs every tested bundle, matching the CI job.
+
+**The bundle lock.** `.github/bundle-lock/<platform>/` (`linux-x86_64` for CI,
+`darwin-arm64` for a Mac) holds a generated `pyproject.toml` and its `uv.lock`: core at
+the `core.lock` commit, the pytest pins, and one extra per bundle that declares
+`pythonDependencies`. After you change a bundle's `pythonDependencies` or `core.lock`, run
+`python scripts/bundle_lock.py write` and commit both platforms' files; the
+`bundle-lock` static check fails until you do, and the runner refuses a bundle whose
+declared dependencies the lock does not hold. Each platform has its own lock because one
+lock listing both dropped `sherpa-onnx-core` from `diarization-onnx`'s environment. When
+two bundles' ranges conflict, declare the pair in `CONFLICTS` in
+`scripts/bundle_lock.py` (uv's conflicting extras); never drop a bundle from the lock.
+No other platform has a lock yet; there, rely on CI.
 
 The whole gate CI runs is one command, from the same environment:
 
@@ -75,9 +116,15 @@ make gate            # or: python scripts/gate.py
 It runs every static check in `.github/scripts/` (each is a row of its own: `boundary`,
 `manifest-validate`, `ui-bundles`, ...), then `.github/tests`, then every bundle's suite,
 and keeps going past a red. `make static`, `make rails` and `make bundles` run one part, as
-each CI job does. Every run writes a receipt (the apps and core commits, the commit
-`core.lock` pins and whether the installed core is it, the toolchain and the bundles it
-chose) to `.local/scratch/gate/receipt.json`. A local run against another core warns and
+each CI job does; the gate passes `--jobs`, `--changed` and `--bundle` on to the runner,
+and `make gate GATE_ARGS="--jobs 4"` passes them through make. Every run writes a receipt
+(the apps and core commits, the commit `core.lock` pins and whether the installed core is
+it, the toolchain, the bundles it chose and why, and each bundle environment's key and
+inputs) to `.local/scratch/gate/receipt.json`. One results folder holds one run: a second
+gate started while one is running there refuses, and `--results DIR` runs it in another
+folder. The bundle environments always hold the locked core; the weekly canary alone
+passes `--float`, which resolves each bundle's declared ranges afresh against the core it
+tests, and its result is never a pull request's verdict. A local run against another core warns and
 goes on, so you can work against a core that is not pushed yet; `--core <sha>` refuses to
 run against any other core, and CI passes it the locked commit.
 
@@ -119,8 +166,10 @@ How to pin:
   `npm install -g name@1.2.3`), or from a lock (`npm ci`, `-r` with
   `--require-hashes`). Core comes from `"$CORE_SPEC"`, which `core.lock` pins; any other
   variable is a version the check cannot read. The check sees `run:` lines only, not an
-  install a script runs: `scripts/test_bundles.py`'s `uv pip install` of each bundle's
-  declared dependencies is outside it.
+  install a script runs. The bundle runner's installs are a script's, and it holds them
+  to the same bar itself: every package from the bundle lock with its hash
+  (`--require-hashes`), and core from its locked commit; a package the lock holds without
+  a hash is refused. Only the canary's `--float` run resolves declared ranges afresh.
 - **A setup step:** an exact `x.y.z` or a version file, never `check-latest`. Every
   Python a `uv` command names (`--python 3.12.15`) is exact too.
 - **Node:** `.nvmrc` is an exact release, on a line `node_end_of_life` lists and has not
@@ -152,10 +201,13 @@ To add an exception, when a pin cannot hold yet, add an `[[exception]]` entry wi
 
 To renew one, set a new `expires` and update its `reason`. The check fails on an
 exception that has expired, is more than 30 days out, matches no violation, or is
-missing a field. The policy file's own rules are never waived. Today's one exception
-covers the quality job's install of each declaring app's `pythonDependencies` ranges,
-until [the shipped-dependency audit](https://github.com/PersonalClaw/PersonalClaw/issues/3918)
-pins that resolution.
+missing a field. The policy file's own rules are never waived. Today's two exceptions
+cover the install of each declaring app's `pythonDependencies` ranges that core's quality
+verifier needs, in CI's quality job and in the canary, because the verifier runs each
+declaring app's tests itself, in its own environment. Both end when the verifier reads the
+bundle results the gate already wrote instead of rerunning each suite, or when
+[the shipped-dependency audit](https://github.com/PersonalClaw/PersonalClaw/issues/3918)
+pins that resolution, whichever comes first.
 
 Not here yet: the repository security settings, the scheduled pin-refresh pull requests
 from a GitHub App and the weekly SHA-to-tag check, dependency review and CodeQL in the

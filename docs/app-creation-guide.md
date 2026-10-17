@@ -45,11 +45,12 @@ parser, a provider stub implementing that type's SDK contract with real signatur
 an MIT `LICENSE`. No `permissions` block — add only what your provider actually uses, since
 the Store shows declared permissions as the install-consent surface.
 
-**3 — run its tests.** Use the same per-bundle runner as CI. It installs
-`dependencies.pythonDependencies` from the bundle's `app.json` into the active Python
-environment with `uv` (your test environment — a gateway installs them into
-`<home>/app-python` instead; see [Dependencies](#dependencies)), then runs pytest. Generated
-apps with no dependencies still run with no network, credentials, or gateway:
+**3 — run its tests.** Use the same per-bundle runner as CI. It runs your bundle in an
+environment of its own holding core, pytest and exactly the `dependencies.pythonDependencies`
+your `app.json` declares, installed from the repository's bundle lock (a gateway installs
+them into `<home>/app-python` instead; see [Dependencies](#dependencies)). After adding or
+changing a dependency, run `python scripts/bundle_lock.py write` and commit the lock.
+Generated apps with no dependencies still run with no network, credentials, or gateway:
 
 ```bash
 ./scripts/test-bundles my-tool

@@ -47,8 +47,10 @@ workflow shape the reader cannot judge (``workflow-shape``) are never waived. An
 one rule for one reference in one file, names an owner, a reason and an expiry at most 30 days
 out, and fails when it has expired, is further out, matches nothing or misses a field.
 
-What it does not see: an install a script runs rather than a ``run:`` line, such as
-``scripts/test_bundles.py``'s ``uv pip install`` of each bundle's declared dependencies.
+What it does not see: an install a script runs rather than a ``run:`` line. The one script that
+installs, ``scripts/test_bundles.py``, holds its own installs to this bar: every package from the
+bundle lock with its hash, core from its locked commit, and a refusal for a package the lock holds
+without a hash (``test_bundle_runner.py``). Only the canary's ``--float`` run resolves ranges.
 
 Each rule fails on a planted violation below, and passes on the planted baseline, so a rule that
 matched nothing could not pass.

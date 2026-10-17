@@ -38,6 +38,14 @@ owner = "maintainers"
 reason = "Installs each declaring app's own pythonDependencies ranges, because that is what installing the app gets; the quality verifier must test what users receive. It ends when https://github.com/PersonalClaw/PersonalClaw/issues/3918 audits that resolution."
 expires = 2026-11-16
 
+[[exception]]
+file = ".github/workflows/core-main-canary.yml"
+reference = "check Census the claims, install what a `tested` claim needs"
+scope = "run-install"
+owner = "maintainers"
+reason = "The canary's quality verifier runs each declaring app's tests in the canary's own environment, so it installs those apps' pythonDependencies ranges there, resolved afresh as an install of the app resolves them. It ends with the quality job's exception above, when core's verifier reads the bundle results instead of rerunning each suite."
+expires = 2026-11-16
+
 # The shape of an exception:
 #
 # [[exception]]

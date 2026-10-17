@@ -80,13 +80,42 @@ jobs:
           echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
           uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC" pytest==9.1.1 pytest-asyncio==1.4.0 pytest-xdist==3.8.0
       - name: Every static check, the repository's tests, every bundle's suite
-        # The same gate CI runs, against the resolved core. Its bundles part installs every
-        # bundle's declared dependencies, which the quality verifier's test runs need too.
+        # The same gate CI runs, against the resolved core, with --float: each bundle's
+        # environment resolves its declared ranges afresh, as an install of the app does,
+        # instead of installing the bundle lock. That makes this the floating canary, and its
+        # result is never merge evidence: CI's own runs install the lock.
         id: gate
         run: |
           set +e
-          python scripts/gate.py static rails bundles --core "$CORE_SHA" --results "$RUNNER_TEMP/gate"
+          python scripts/gate.py static rails bundles --core "$CORE_SHA" --float --jobs 4 --results "$RUNNER_TEMP/gate"
           echo "rc=$?" >> "$GITHUB_OUTPUT"
+      - name: "Census the claims, install what a `tested` claim needs"
+        # The bundle environments the gate builds are its own; the quality verifier runs each
+        # declaring app's tests in this job's environment, so the declaring apps'
+        # pythonDependencies go there, resolved afresh as an install of the app resolves them.
+        # The same census as ci.yml's quality job, under the same expiring exception.
+        run: |
+          deps=$(python - <<'PY'
+          import json, pathlib, sys
+          deps = []
+          for mf in sorted(pathlib.Path(".").glob("*/app.json")):
+              try:
+                  d = json.loads(mf.read_text(encoding="utf-8"))
+              except (OSError, ValueError) as exc:
+                  print(f"{mf}: unreadable ({exc}) — skipped for census", file=sys.stderr)
+                  continue
+              q = d.get("quality")
+              if isinstance(q, dict) and q.get("tested") is True:
+                  deps += (d.get("dependencies") or {}).get("pythonDependencies") or []
+          print(" ".join(sorted(set(deps))))
+          PY
+          )
+          if [ -n "$deps" ]; then
+            echo "installing declaring bundles' deps, resolved afresh: $deps"
+            uv pip install $deps
+          else
+            echo "no bundle claims quality.tested — no deps to install"
+          fi
       - name: Every declared quality claim is backed by the bundle's evidence
         id: quality
         run: |
