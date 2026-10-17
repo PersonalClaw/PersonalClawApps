@@ -48,12 +48,14 @@ A PR that adds or changes an app must meet all of:
   for it before you commit.
 
 Run one bundle locally with the same dependency posture as CI, from a Python
-environment that holds core and pytest, as the CI `tests` job builds it (core
-from `CORE_SPEC` in `.github/workflows/ci.yml`):
+environment that holds core and pytest, as the CI `tests` job builds it. CI tests
+against one core commit, the one `core.lock` at the repository root pins (one line,
+a full 40-character commit), so a re-run of an old CI run tests the same core.
+Install that core:
 
 ```bash
 uv venv --python 3.12.15 .venv
-uv pip install --python .venv/bin/python "personalclaw @ git+https://github.com/PersonalClaw/PersonalClaw@main" pytest pytest-asyncio pytest-xdist
+uv pip install --python .venv/bin/python "personalclaw @ git+https://github.com/PersonalClaw/PersonalClaw@$(cat core.lock)" pytest pytest-asyncio pytest-xdist
 . .venv/bin/activate
 ./scripts/test-bundles <bundle>
 ```
@@ -73,9 +75,29 @@ make gate            # or: python scripts/gate.py
 It runs every static check in `.github/scripts/` (each is a row of its own: `boundary`,
 `manifest-validate`, `ui-bundles`, ...), then `.github/tests`, then every bundle's suite,
 and keeps going past a red. `make static`, `make rails` and `make bundles` run one part, as
-each CI job does. Every run writes a receipt (the apps and core commits, the toolchain and
-the bundles it chose) to `.local/scratch/gate/receipt.json`; `--core <sha>` refuses to run
-against any other core.
+each CI job does. Every run writes a receipt (the apps and core commits, the commit
+`core.lock` pins and whether the installed core is it, the toolchain and the bundles it
+chose) to `.local/scratch/gate/receipt.json`. A local run against another core warns and
+goes on, so you can work against a core that is not pushed yet; `--core <sha>` refuses to
+run against any other core, and CI passes it the locked commit.
+
+### Core main and the `core.lock` bump
+
+Core main's own drift does not turn an apps pull request red: the weekly
+`core-main-canary.yml` workflow runs every core-dependent gate (every static check, the
+repository's tests, every bundle's suite and the quality declarations) against core
+main, and opens one issue titled "Apps fail against core main" when that fails, or
+comments on the open one. A green run closes it. It runs on a schedule and on dispatch
+only, so its result never counts as a pull request's verdict. Dispatch it with `core`
+set to a branch, tag or full commit to test another core.
+
+`core-lock-bump.yml` runs daily and on dispatch, and writes to its job summary the
+commit `core.lock` pins and core main's head. A bump reaches `core.lock` only as a pull
+request that changes nothing else and merges on its own CI. Opening and updating that
+one pull request is deferred until the pin-refresh GitHub App it needs exists: so are
+its fixed branch, and how the App's commit passes the DCO check. Until then the
+workflow reports the commit it would pin and opens nothing, and a maintainer bumps the
+pin by hand in a pull request like any other.
 
 Full contract: [`docs/app-creation-guide.md`](docs/app-creation-guide.md) and
 [`docs/platform-architecture.md`](docs/platform-architecture.md).

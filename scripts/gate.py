@@ -13,9 +13,13 @@ Parts:
 
 The gate never installs core. It records the core installed in the interpreter that runs the
 parts, and ``--core <sha>`` refuses to run at all when that core was built from another commit.
+CI passes ``--core`` the commit in ``core.lock``, so a CI run cannot test any other core. A local
+run without ``--core`` compares the installed core with ``core.lock`` and warns when they differ,
+then goes on, so work against a core that is not pushed yet stays possible.
 
 Every run writes a receipt, ``receipt.json`` under ``--results``: the apps commit (and whether the
-work tree had uncommitted changes), the core version and commit, the toolchain (Python, uv, Node,
+work tree had uncommitted changes), the core version and commit, what the install asked for, the
+commit ``core.lock`` pins and whether the two match, the toolchain (Python, uv, Node,
 npm and, in CI, the runner image), which bundles were selected and why, and each part's result.
 The static rows and the bundle results sit beside it.
 
@@ -44,7 +48,7 @@ DEFAULT_RESULTS = ROOT / ".local" / "scratch" / "gate"
 #: What the parts' interpreter reports about itself and the core installed in it.
 _PROBE = r"""
 import importlib.metadata as md, json, sys
-core = {"version": None, "commit": None, "source": None}
+core = {"version": None, "commit": None, "source": None, "requested": None}
 try:
     dist = md.distribution("personalclaw")
 except md.PackageNotFoundError:
@@ -52,7 +56,9 @@ except md.PackageNotFoundError:
 else:
     core["version"] = dist.version
     direct = json.loads(dist.read_text("direct_url.json") or "{}")
-    core["commit"] = (direct.get("vcs_info") or {}).get("commit_id")
+    vcs = direct.get("vcs_info") or {}
+    core["commit"] = vcs.get("commit_id")
+    core["requested"] = vcs.get("requested_revision")
     core["source"] = direct.get("url")
 print(json.dumps({"python": ".".join(map(str, sys.version_info[:3])), "core": core}))
 """
@@ -114,6 +120,34 @@ def _load_bundle_runner():
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def _lock(core: dict) -> None:
+    """Add the commit ``core.lock`` pins to *core*, and whether the installed core is it.
+
+    ``scripts/core_lock.py`` is the one reader of the file's format. A missing or malformed lock
+    is recorded as none and warned about; it is not this gate's to refuse (CI's own read step is).
+    """
+    spec = importlib.util.spec_from_file_location("_gate_core_lock", ROOT / "scripts" / "core_lock.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    try:
+        lock = module.read_lock(ROOT / "core.lock")
+    except ValueError as exc:
+        core["lock"], core["matches_lock"] = None, None
+        print(f"gate: warning: no usable core.lock ({exc}); the receipt records no lock",
+              file=sys.stderr)
+        return
+    core["lock"] = lock
+    core["matches_lock"] = core["commit"] == lock
+    if not core["matches_lock"]:
+        print(
+            f"gate: warning: core.lock pins {lock}, but the installed core is commit "
+            f"{core['commit'] or 'not recorded'} (version {core['version']}). CI tests the locked "
+            f'core; to match it locally: uv pip install "{module.spec(lock)}"',
+            file=sys.stderr,
+        )
 
 
 def _selection(named: list[str]) -> dict:
@@ -182,11 +216,15 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 2
+    # The tree's state before the gate loads anything: a loaded script's bytecode cache must
+    # not read as an uncommitted change.
+    apps = _apps()
+    _lock(core)
 
     results = args.results if args.results.is_absolute() else ROOT / args.results
     receipt = {
         "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "apps": _apps(),
+        "apps": apps,
         "core": core,
         "toolchain": _toolchain(probe),
         "ci": _ci(),
@@ -229,7 +267,8 @@ def main(argv: list[str] | None = None) -> int:
         with open(summary, "a", encoding="utf-8") as fh:
             fh.write(
                 "### Apps gate\n\n" + table + "\n"
-                f"apps `{apps['sha']}` · core `{core['commit']}` ({core['version']}) · "
+                f"apps `{apps['sha']}` · core `{core['commit']}` ({core['version']}; "
+                f"core.lock `{core['lock']}`, matches: {core['matches_lock']}) · "
                 f"Python {tc['python']} · {tc['uv']} · Node {tc['node']} · npm {tc['npm']} · "
                 f"{tc['runner']}\n\n"
             )

@@ -27,15 +27,19 @@ def _git(root: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def _seeded(tmp_path: Path, *, check: str = "print('OK')\n", rail: str | None = None) -> Path:
+def _seeded(
+    tmp_path: Path, *, check: str = "print('OK')\n", rail: str | None = None,
+    lock: str | None = None,
+) -> Path:
     """A committed repository holding the gate, the runners it calls, one planted static check,
-    one planted ``.github/tests`` test and one planted bundle."""
+    one planted ``.github/tests`` test, one planted bundle and, given *lock*, a ``core.lock``."""
     root = tmp_path / "tree"
     (root / "scripts").mkdir(parents=True)
     (root / ".github" / "scripts").mkdir(parents=True)
     (root / ".github" / "tests").mkdir(parents=True)
     shutil.copy2(GATE, root / "scripts" / "gate.py")
     shutil.copy2(ROOT / "scripts" / "test_bundles.py", root / "scripts" / "test_bundles.py")
+    shutil.copy2(ROOT / "scripts" / "core_lock.py", root / "scripts" / "core_lock.py")
     shutil.copy2(ROOT / ".github" / "scripts" / "run_checks.py", root / ".github" / "scripts")
     (root / ".github" / "scripts" / "check_planted.py").write_text(check, encoding="utf-8")
     (root / ".github" / "tests" / "test_planted.py").write_text(
@@ -47,6 +51,8 @@ def _seeded(tmp_path: Path, *, check: str = "print('OK')\n", rail: str | None = 
         (app / "app.json").write_text(json.dumps({"name": name}), encoding="utf-8")
         (app / "test_ok.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
     (root / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    if lock is not None:
+        (root / "core.lock").write_text(lock, encoding="utf-8", newline="")
     _git(root, "init", "-q")
     _git(root, "add", "-A")
     _git(
@@ -69,13 +75,17 @@ def _receipt(root: Path) -> dict:
     return json.loads((root / "out" / "receipt.json").read_text(encoding="utf-8"))
 
 
-def _installed_core_commit() -> str | None:
+def _installed_vcs() -> dict:
     try:
         dist = importlib.metadata.distribution("personalclaw")
     except importlib.metadata.PackageNotFoundError:
-        return None
+        return {}
     direct = json.loads(dist.read_text("direct_url.json") or "{}")
-    return (direct.get("vcs_info") or {}).get("commit_id")
+    return direct.get("vcs_info") or {}
+
+
+def _installed_core_commit() -> str | None:
+    return _installed_vcs().get("commit_id")
 
 
 def test_the_receipt_names_both_revisions_the_toolchain_and_the_parts(tmp_path):
@@ -170,3 +180,39 @@ def test_an_unknown_part_is_refused(tmp_path):
     run = _gate(root, "everything")
     assert run.returncode == 2
     assert "everything" in run.stderr
+
+
+# -- core.lock: the receipt records the lock beside the installed core -----------------------------
+
+def test_the_receipt_records_the_lock_and_warns_that_another_core_is_installed(tmp_path):
+    root = _seeded(tmp_path, lock="0" * 40 + "\n")
+    run = _gate(root, "static")
+    assert run.returncode == 0, run.stdout + run.stderr
+    core = _receipt(root)["core"]
+    assert core["lock"] == "0" * 40
+    assert core["matches_lock"] is False
+    assert core["requested"] == _installed_vcs().get("requested_revision")
+    # A local run warns and goes on: work against an unpushed core stays possible.
+    assert "warning" in run.stderr and "0" * 40 in run.stderr and "core.lock" in run.stderr
+
+
+def test_the_receipt_says_so_when_the_installed_core_is_the_locked_one(tmp_path):
+    commit = _installed_core_commit()
+    if not commit:
+        pytest.skip("the installed core does not record the commit it was built from")
+    root = _seeded(tmp_path, lock=commit + "\n")
+    run = _gate(root, "static")
+    assert run.returncode == 0, run.stdout + run.stderr
+    core = _receipt(root)["core"]
+    assert (core["lock"], core["matches_lock"]) == (commit, True)
+    assert "warning" not in run.stderr
+
+
+@pytest.mark.parametrize("lock", [None, "main\n"], ids=["no core.lock", "a branch name"])
+def test_a_missing_or_bad_lock_is_recorded_as_none_and_warned_about(tmp_path, lock):
+    root = _seeded(tmp_path, lock=lock)
+    run = _gate(root, "static")
+    assert run.returncode == 0, run.stdout + run.stderr
+    core = _receipt(root)["core"]
+    assert (core["lock"], core["matches_lock"]) == (None, None)
+    assert "warning" in run.stderr and "core.lock" in run.stderr

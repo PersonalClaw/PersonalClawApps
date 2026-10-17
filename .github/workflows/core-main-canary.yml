@@ -1,0 +1,153 @@
+# Core-main canary. Apps CI tests the one core commit core.lock pins, so core main's own drift
+# never turns an unrelated apps change red. This workflow is where that drift shows: weekly (and
+# on dispatch) it resolves core main to one commit, installs it, and runs every core-dependent
+# gate against it: every static check (manifest-validate among them), the repository's own tests,
+# every bundle's suite, and the quality declarations. Its receipt records the exact core and apps
+# pair it tested.
+#
+# A red opens one tracking issue, or comments on the open one; a green closes it. The issue is
+# found by its exact title (TITLE below), so the title stays as it is. Only the `report` job can
+# write, and only issues.
+#
+# It runs on a schedule and on dispatch only, never on a pull request or a push, so its result is
+# never a pull request's verdict. Dispatch it with `core` set to a branch, tag or full commit to
+# test another core (the default is main).
+name: Core main canary
+
+on:
+  schedule:
+    # Weekly, Monday 06:23 UTC. The daily core.lock bump keeps the pin current; this bounds how
+    # long a core main that breaks the apps can go unseen.
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      core:
+        description: "The core branch, tag or full commit to test (default: main)"
+        required: false
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-main-canary
+  cancel-in-progress: false
+
+env:
+  UV_PYTHON_PREFERENCE: only-managed
+
+jobs:
+  check:
+    name: Every core-dependent gate against core main
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      PERSONALCLAW_SKIP_APP_BACKENDS: "1"
+    outputs:
+      core: ${{ steps.core.outputs.sha }}
+      gate: ${{ steps.gate.outputs.rc }}
+      quality: ${{ steps.quality.outputs.rc }}
+    steps:
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.13.1"
+          enable-cache: true
+      - name: Resolve the core under test to one commit
+        # One commit for the whole run, so a core main that moves mid-run cannot mix two cores.
+        id: core
+        env:
+          CORE_REF: ${{ inputs.core || 'main' }}
+        run: uv run --no-project --python 3.12.15 python scripts/core_lock.py resolve "$CORE_REF" --export
+      - name: Install core + pytest
+        run: |
+          uv venv --python 3.12.15 .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+          uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC" pytest pytest-asyncio pytest-xdist
+      - name: Every static check, the repository's tests, every bundle's suite
+        # The same gate CI runs, against the resolved core. Its bundles part installs every
+        # bundle's declared dependencies, which the quality verifier's test runs need too.
+        id: gate
+        run: |
+          set +e
+          python scripts/gate.py static rails bundles --core "$CORE_SHA" --results "$RUNNER_TEMP/gate"
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+      - name: Every declared quality claim is backed by the bundle's evidence
+        id: quality
+        run: |
+          set +e
+          python -m personalclaw.apps.quality .
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+      - name: Keep the gate's receipt
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: canary-gate
+          path: ${{ runner.temp }}/gate
+          if-no-files-found: warn
+      - name: Red when any gate was red
+        env:
+          GATE_RC: ${{ steps.gate.outputs.rc }}
+          QUALITY_RC: ${{ steps.quality.outputs.rc }}
+        run: |
+          echo "core ${CORE_SHA} · apps ${GITHUB_SHA} · gate exit ${GATE_RC} · quality exit ${QUALITY_RC}"
+          [ "$GATE_RC" = "0" ] && [ "$QUALITY_RC" = "0" ]
+
+  report:
+    name: Open, update or close the canary issue
+    needs: check
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    env:
+      TITLE: "Apps fail against core main"
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RESULT: ${{ needs.check.result }}
+      CORE: ${{ needs.check.outputs.core }}
+      GATE_RC: ${{ needs.check.outputs.gate }}
+      QUALITY_RC: ${{ needs.check.outputs.quality }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      APPS: ${{ github.sha }}
+    steps:
+      - name: Open or update the canary issue
+        if: ${{ needs.check.result != 'success' }}
+        run: |
+          # The backticks in the body are Markdown code spans, not command substitution.
+          # shellcheck disable=SC2016
+          body=$(printf 'The core-main canary is red: the apps fail against core `%s` (apps `%s`).\n\n| gate | exit |\n|---|---|\n| static, rails, bundles | %s |\n| quality declarations | %s |\n\nRun: %s (its `canary-gate` artifact holds the receipt).\n\nApps CI is unaffected: it tests the core in `core.lock`. Fix the app, or the core, before a `core.lock` bump to this core can merge.\n\n_Updated by the core-main canary._\n' \
+            "${CORE:-not resolved}" "$APPS" "${GATE_RC:-not run}" "${QUALITY_RC:-not run}" "$RUN_URL")
+          existing=$(gh issue list --state open --search "\"$TITLE\" in:title" --limit 100 --json number,title --jq '[.[] | select(.title == env.TITLE)][0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi
+      - name: Close the canary issue when the apps pass again
+        if: ${{ needs.check.result == 'success' }}
+        run: |
+          existing=$(gh issue list --state open --search "\"$TITLE\" in:title" --limit 100 --json number,title --jq '[.[] | select(.title == env.TITLE)][0].number // empty')
+          if [ -n "$existing" ]; then
+            # The backticks in the body are Markdown code spans, not command substitution.
+            # shellcheck disable=SC2016
+            body=$(printf 'The core-main canary is green again against core `%s` (apps `%s`).\n\nRun: %s\n\n_Closed by the core-main canary._\n' "$CORE" "$APPS" "$RUN_URL")
+            gh issue close "$existing" --comment "$body"
+          else
+            echo "green, and no open canary issue to close"
+          fi

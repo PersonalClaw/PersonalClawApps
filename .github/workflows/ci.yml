@@ -4,6 +4,9 @@
 # of scripts/gate.py, the one apps gate a local run calls too (`make gate`). Jobs:
 # static (every .github/scripts/check_*.py, one row each) · tests (.github/tests once,
 # then each bundle's suite) · quality-declarations · dco (PR-only).
+# Every job that installs core installs the one commit core.lock pins (read and exported by
+# scripts/core_lock.py, which prints it), so a re-run tests the same core. Core main's own
+# drift is the weekly canary's to report (core-main-canary.yml), not this workflow's.
 name: CI
 
 on:
@@ -22,9 +25,6 @@ env:
   # Every uv step uses a uv-managed CPython, never the runner image's own: the image's
   # system 3.12 is a different patch from the one setup-python and core's 3.12 legs run.
   UV_PYTHON_PREFERENCE: only-managed
-  # Core is installed from main until PyPI has a release;
-  # switch to a pinned "personalclaw==<version>" then. (dated 2026-07-20)
-  CORE_SPEC: "personalclaw @ git+https://github.com/PersonalClaw/PersonalClaw@main"
 
 jobs:
   static:
@@ -54,6 +54,9 @@ jobs:
         with:
           version: "0.13.1"
           enable-cache: true
+      - name: Read core.lock
+        # CORE_SHA and CORE_SPEC for the steps below; the log line names the core under test.
+        run: uv run --no-project --python 3.12.15 python scripts/core_lock.py export
       - name: Install core (for the manifest-validate check)
         # A uv-managed venv, not `--system`: the runner's /usr is PEP-668 externally-managed.
         # Exported on PATH/env so later steps' `python` resolves to it.
@@ -63,7 +66,8 @@ jobs:
           echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
           uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC"
       - name: Every static check, one row each
-        run: python scripts/gate.py static --results "$RUNNER_TEMP/gate"
+        # --core refuses to run when the installed core is not the locked commit.
+        run: python scripts/gate.py static --core "$CORE_SHA" --results "$RUNNER_TEMP/gate"
       - name: Keep the gate's receipt
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -101,6 +105,9 @@ jobs:
         with:
           version: "0.13.1"
           enable-cache: true
+      - name: Read core.lock
+        # CORE_SHA and CORE_SPEC for the steps below; the log line names the core under test.
+        run: uv run --no-project --python 3.12.15 python scripts/core_lock.py export
       - name: Install core + pytest
         # uv-managed venv (not `--system`: the runner's /usr is PEP-668
         # externally-managed). Exporting VIRTUAL_ENV makes later `uv pip install`
@@ -119,8 +126,8 @@ jobs:
         # definition of a bundle run shared by CI and local use: it discovers tested app
         # bundles, installs each manifest's declared pythonDependencies, and invokes pytest
         # separately per bundle to avoid basename clashes. Both parts run even when the first
-        # is red.
-        run: python scripts/gate.py rails bundles --results "$RUNNER_TEMP/gate"
+        # is red. --core refuses to run when the installed core is not the locked commit.
+        run: python scripts/gate.py rails bundles --core "$CORE_SHA" --results "$RUNNER_TEMP/gate"
       - name: Keep the gate's receipt and each bundle's results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -167,6 +174,9 @@ jobs:
         with:
           version: "0.13.1"
           enable-cache: true
+      - name: Read core.lock
+        # CORE_SHA and CORE_SPEC for the steps below; the log line names the core under test.
+        run: uv run --no-project --python 3.12.15 python scripts/core_lock.py export
       - name: Install core + pytest
         # Mirrors static/tests: a uv-managed venv (the runner's /usr is
         # PEP-668 externally-managed, so `--system` is refused), exported on PATH/env so
@@ -177,6 +187,9 @@ jobs:
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
           echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
           uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC" pytest pytest-asyncio
+      - name: The installed core is the locked one
+        # This job runs core's verifier directly, not through the gate, so it checks the pin itself.
+        run: python scripts/core_lock.py verify
       - name: "Census the claims, install what a `tested` claim needs"
         # Two things, one manifest read.
         # (1) The census is PRINTED so a green run stays legible: "no app claimed
