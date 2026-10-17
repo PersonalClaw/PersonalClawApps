@@ -40,6 +40,7 @@ jobs:
   check:
     name: Every core-dependent gate against core main
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: read
     env:
@@ -142,6 +143,7 @@ jobs:
     needs: check
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions:
       issues: write
     env:
