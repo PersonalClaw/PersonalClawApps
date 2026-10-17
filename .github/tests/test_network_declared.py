@@ -1,4 +1,7 @@
-"""The network-declaration rail reds on a planted defect, and the tree is clean.
+"""The network-declaration rail reds on a planted defect.
+
+The real tree is the ``static`` job's ``network-declared`` row, which runs the script over it once per
+run; these tests prove the rail can go red.
 
 The rail is ``.github/scripts/check_network_declared.py``, which CI runs as a script. These tests
 drive that same script, unmodified, against seeded trees: a copy sits at the same place in each,
@@ -58,13 +61,6 @@ def _check(root: Path) -> subprocess.CompletedProcess:
     """Run the script in *root*, as CI runs it."""
     script = root / ".github" / "scripts" / SCRIPT.name
     return subprocess.run([sys.executable, str(script)], cwd=root, capture_output=True, text=True)
-
-
-def test_every_app_in_the_tree_that_reaches_the_network_declares_it():
-    """The real repository through the real script, exactly as CI runs it."""
-    run = _check(ROOT)
-    assert run.returncode == 0, run.stdout + run.stderr
-    assert run.stdout.splitlines()[-1].startswith("OK: "), run.stdout
 
 
 def test_a_clean_seeded_tree_is_green(tmp_path):

@@ -1,4 +1,7 @@
-"""The publication-hygiene rail reds on a planted defect, and the tree is clean.
+"""The publication-hygiene rail reds on a planted defect.
+
+The real tree is the ``static`` job's ``publication-hygiene`` row, which runs the script over it once per
+run; these tests prove the rail can go red.
 
 The rail is ``.github/scripts/check_publication_hygiene.py``, which CI runs as a script. These
 tests drive that same script, unmodified, against seeded git repositories: a copy sits at the
@@ -41,13 +44,6 @@ def _check(repo: Path) -> subprocess.CompletedProcess:
     """Run the script in *repo*, as CI runs it."""
     script = repo / ".github" / "scripts" / SCRIPT.name
     return subprocess.run([sys.executable, str(script)], cwd=repo, capture_output=True, text=True)
-
-
-def test_the_tracked_tree_is_fit_to_publish():
-    """The real repository through the real script, exactly as CI runs it."""
-    run = _check(ROOT)
-    assert run.returncode == 0, run.stdout + run.stderr
-    assert run.stdout.splitlines()[-1].startswith("OK: "), run.stdout
 
 
 def test_a_clean_seeded_tree_is_green(tmp_path):

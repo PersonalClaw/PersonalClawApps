@@ -119,7 +119,7 @@ def assert_ships_built(app_dir: Path) -> None:
       tracked files exist, so this is also the proof that the bundle is committed;
     * no setup hook, and no file in the app that a hook names, runs a JS toolchain.
 
-    That the committed bundle is the build of ``ui/src`` is the ``ui-bundles`` CI job's
+    That the committed bundle is the build of ``ui/src`` is CI's ``ui-bundles``
     check (``.github/scripts/check_ui_bundles.py``), because only a rebuild can show it.
     """
     entries = ui_entries(app_dir)

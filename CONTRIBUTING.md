@@ -18,7 +18,7 @@ PersonalClaw gateway through the platform's typed provider contracts.
 A PR that adds or changes an app must meet all of:
 
 - **SDK-only imports.** Import core **only** via `personalclaw.sdk.*` — never deep
-  internals. The `boundary` CI job rejects anything else. Need a symbol that
+  internals. CI's `boundary` check rejects anything else. Need a symbol that
   isn't exposed? Open a core issue to promote it to the SDK; don't reach around.
 - **Declare the minimum permissions.** The Store shows an app's declared
   permissions as the install-consent surface — request only what the app needs.
@@ -53,7 +53,7 @@ from `CORE_SPEC` in `.github/workflows/ci.yml`):
 
 ```bash
 uv venv --python 3.12.15 .venv
-uv pip install --python .venv/bin/python "personalclaw @ git+https://github.com/PersonalClaw/PersonalClaw@main" pytest pytest-asyncio
+uv pip install --python .venv/bin/python "personalclaw @ git+https://github.com/PersonalClaw/PersonalClaw@main" pytest pytest-asyncio pytest-xdist
 . .venv/bin/activate
 ./scripts/test-bundles <bundle>
 ```
@@ -63,6 +63,19 @@ The runner starts `python` from your `PATH`, or the interpreter `PYTHON` names
 It installs that bundle's declared Python dependencies into that environment
 with `uv`, then invokes pytest. With no bundle argument it runs every tested
 bundle, matching the CI job.
+
+The whole gate CI runs is one command, from the same environment:
+
+```bash
+make gate            # or: python scripts/gate.py
+```
+
+It runs every static check in `.github/scripts/` (each is a row of its own: `boundary`,
+`manifest-validate`, `ui-bundles`, ...), then `.github/tests`, then every bundle's suite,
+and keeps going past a red. `make static`, `make rails` and `make bundles` run one part, as
+each CI job does. Every run writes a receipt (the apps and core commits, the toolchain and
+the bundles it chose) to `.local/scratch/gate/receipt.json`; `--core <sha>` refuses to run
+against any other core.
 
 Full contract: [`docs/app-creation-guide.md`](docs/app-creation-guide.md) and
 [`docs/platform-architecture.md`](docs/platform-architecture.md).

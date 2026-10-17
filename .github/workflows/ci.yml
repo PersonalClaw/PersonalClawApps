@@ -1,9 +1,9 @@
 # CI — first-party app bundles. Verifies every app against the platform contract.
 # Tests install each bundle's declared dependencies; undeclared vendor SDKs remain
-# absent so apps that intentionally omit them must stub them. Jobs:
-# manifest-validate · tests · quality-declarations · boundary · live-writes-posture ·
-# prompt-cache-posture · settings-schema-posture · readme-census · store-card-copy · ui-bundles ·
-# dco (PR-only).
+# absent so apps that intentionally omit them must stub them. Every job's work is a part
+# of scripts/gate.py, the one apps gate a local run calls too (`make gate`). Jobs:
+# static (every .github/scripts/check_*.py, one row each) · tests (.github/tests once,
+# then each bundle's suite) · quality-declarations · dco (PR-only).
 name: CI
 
 on:
@@ -27,9 +27,15 @@ env:
   CORE_SPEC: "personalclaw @ git+https://github.com/PersonalClaw/PersonalClaw@main"
 
 jobs:
-  manifest-validate:
-    # Every app.json parses against core's own manifest parser (the real contract),
-    # not a hand-rolled schema — so a manifest that core would reject fails CI.
+  static:
+    # Every static check, in one job: scripts/gate.py's `static` part runs
+    # .github/scripts/run_checks.py, which finds every check_*.py there (so a new check is a
+    # row the first time it exists), runs each in a process of its own and keeps going past a
+    # red. Each check is its own row in the job summary, named as the docs cite it
+    # (boundary, manifest-validate, ui-bundles, ...), its output is a log group of its own,
+    # and a failed one is an annotation naming it. The job is red when any row is.
+    # Core is installed because manifest-validate parses every app.json with core's own
+    # parser; Node is set up because ui-bundles rebuilds every committed UI bundle with npm.
     runs-on: ubuntu-24.04
     steps:
       - name: Runner identity
@@ -40,54 +46,31 @@ jobs:
             if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
           done
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
       - name: Install uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           version: "0.13.1"
           enable-cache: true
-      - name: Install core (for personalclaw.apps.manifest)
-        # Install into a uv-managed venv, not `--system`: the runner's /usr is
-        # PEP-668 externally-managed and uv refuses `--system` there. Export the venv
-        # on PATH/env so later steps' `python` and `uv pip` resolve to it.
+      - name: Install core (for the manifest-validate check)
+        # A uv-managed venv, not `--system`: the runner's /usr is PEP-668 externally-managed.
+        # Exported on PATH/env so later steps' `python` resolves to it.
         run: |
           uv venv --python 3.12.15 .venv
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
           echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
           uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC"
-      - name: Validate every app.json
-        run: |
-          python - <<'PY'
-          import json, pathlib, sys
-          from personalclaw.apps.manifest import AppManifest
-          bad = []
-          for mf in sorted(pathlib.Path(".").glob("*/app.json")):
-              try:
-                  m = AppManifest.from_dict(json.loads(mf.read_text()))
-                  # round-trip must be stable (the parity contract apps rely on)
-                  assert AppManifest.from_dict(m.to_dict()).to_dict() == m.to_dict()
-                  errs = m.validate()
-                  if errs:
-                      bad.append(f"{mf}: " + "; ".join(errs))
-              except Exception as e:  # noqa: BLE001
-                  bad.append(f"{mf}: {type(e).__name__}: {e}")
-              # every published bundle ships its own LICENSE — a bundle is
-              # installed standalone, so the repo-root file does not travel with it
-              lic = mf.parent / "LICENSE"
-              if not lic.exists():
-                  bad.append(f"{mf.parent}: missing LICENSE (copy the repo-root MIT file)")
-                  continue
-              # a manifest that DECLARES a license must agree with the file it ships —
-              # a declared MIT-0 over an MIT file tells installers the wrong terms.
-              # Only known first-lines are mapped; an unrecognized file is not guessed at.
-              declared = json.loads(mf.read_text()).get("license")
-              first = lic.read_text().splitlines()[0].strip() if lic.read_text().strip() else ""
-              actual = {"MIT License": "MIT", "MIT No Attribution": "MIT-0"}.get(first)
-              if declared and actual and declared != actual:
-                  bad.append(f"{mf}: declares license {declared} but LICENSE file is {actual}")
-          if bad:
-              print("\n".join(bad)); sys.exit(1)
-          print(f"OK: {len(list(pathlib.Path('.').glob('*/app.json')))} manifests valid + licensed")
-          PY
+      - name: Every static check, one row each
+        run: python scripts/gate.py static --results "$RUNNER_TEMP/gate"
+      - name: Keep the gate's receipt
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gate-static
+          path: ${{ runner.temp }}/gate
+          if-no-files-found: error
 
   tests:
     # Each bundle's test_*.py runs after its manifest-declared Python dependencies
@@ -126,94 +109,25 @@ jobs:
           uv venv --python 3.12.15 .venv
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
           echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
-          uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC" pytest pytest-asyncio
-      - name: Test the per-bundle runner dependency rail
-        run: python -m pytest .github/tests/test_bundle_runner.py -q
-      - name: Every app's cli.setup / cli.doctor loads the way personalclaw setup / doctor load it
-        # Each bundle's own suite puts the app directory on sys.path first, so a step that cannot
-        # load from the installed copy still passes there. This loads each one as core does.
-        run: python -m pytest .github/tests/test_cli_steps_load.py -q
-      - name: Every chat-model app proves what its requests carry, and that it picks no model
-        # Each bundle's test_wire.py drives its real SDK client against apps_testkit/model_wire.py:
-        # the per-call temperature and max_tokens reach the request, a call no model is chosen for
-        # is refused, and the Default Model is the one named. This refuses a chat-model app that
-        # ships without those tests, or whose Default Model help promises anything else.
-        run: python -m pytest .github/tests/test_model_apps_prove_the_wire.py -q
-      - name: Every app's SDK imports are published and every SDK call binds
-        # The static rails in apps_testkit/sdk_contract.py, over every bundle. Only
-        # slack-channel's suite ran them, so vector-store-qdrant's CredentialStore() call,
-        # missing the home it requires, failed on every connect with nothing to name it.
-        run: python -m pytest .github/tests/test_sdk_calls_bind.py -q
-      - name: Every app declares the core features it relies on, by names PersonalClaw offers
-        # A name the installed PersonalClaw does not offer would make the app installable nowhere,
-        # and an app whose prompt offers the approval brief's answers must declare approval-answers,
-        # so a PersonalClaw that does not hand them over refuses it instead of quietly doing less.
-        run: python -m pytest .github/tests/test_core_features_declared.py -q
-      - name: Every app reads a model's stream inside closing_stream
-        # A stream an app stops reading part way and leaves open holds what its turn holds, an agent
-        # CLI's session among them, until the interpreter collects it: a Slack thread's next message
-        # waited, unsent, behind one. This refuses an app that reads a provider's stream another way.
-        run: python -m pytest .github/tests/test_model_streams_are_read_inside_closing_stream.py -q
-      - name: Every test runs against a scratch PersonalClaw home
-        # conftest.py gives every test its own; pytest.ini makes pytest load it however it starts.
-        run: python -m pytest .github/tests/test_scratch_home.py -q
-      - name: No test reaches a real local model server
-        # conftest.py refuses a connection to a local model server's port unless the test serves it.
-        run: python -m pytest .github/tests/test_local_model_ports_are_refused.py -q
-      - name: No test's git reaches the machine's own credential helper
-        # conftest.py gives every test's git no system or global configuration and an empty
-        # credential.helper, and refuses a git that could still sign in with the machine's helper.
-        run: python -m pytest .github/tests/test_no_test_git_reaches_the_machines_credential_helper.py -q
-      - name: No test's model library writes outside its home or reports on its use
-        # conftest.py tells the libraries a model app's tests load what every personalclaw
-        # command tells them, before anything is collected.
-        run: python -m pytest .github/tests/test_the_libraries_a_test_loads_stay_inside_the_home.py -q
-      - name: Every app's availability hook answers from metadata, naming only real extras
-        # The SDK's contract: a hook never imports the library it checks for (an import is the
-        # library's whole start-up, and every Models page asks). And every personalclaw[extra] an
-        # app tells a user to install is one core declares.
-        run: python -m pytest .github/tests/test_availability_hooks_answer_from_metadata.py -q
-      - name: The publication-hygiene rail reds on a planted defect
-        # Drives the rail's own script against seeded repos: one control per rule and field.
-        run: python -m pytest .github/tests/test_publication_hygiene.py -q
-      - name: Every app that runs agent work declares the least tier its tasks need
-        # The census names each first-party app's permissions.agent tier and why its tasks need it,
-        # so a new, dropped or widened tier fails until someone reads what the tasks use.
-        run: python -m pytest .github/tests/test_agent_tiers.py -q
-      - name: The network-declaration rail reds on a planted defect
-        # Drives the rail's own script against seeded trees: an undeclared reach, a declared
-        # `false`, an unreadable file and a lost floor signal each red it; a clean tree is green.
-        run: python -m pytest .github/tests/test_network_declared.py -q
-      - name: The launch-declaration rail reds on a planted defect
-        # Drives the rail's own script against seeded trees: an undeclared program, another program
-        # declared in its place, `*` standing in for a named one, npx running a package its entry
-        # does not name, an unreadable spawn, a stale hand-read spawn, an unparseable file and a lost
-        # floor app each red it; a clean tree is green.
-        run: python -m pytest .github/tests/test_launches_declared.py -q
-      - name: The egress-policy rail reds on a planted defect
-        # Drives the rail's own script against seeded trees: each shape of a request the owner's
-        # network settings do not reach, a failed check that lets the request go ahead, an unnamed
-        # pass-through, a stale entry, an unreadable file and a lost floor app each red it; a clean
-        # tree is green.
-        run: python -m pytest .github/tests/test_egress_policy.py -q
-      - name: The network-clients rail reds on a planted defect
-        # Drives the rail's own script against seeded trees: an httpx, aiohttp or urllib client,
-        # an SDK client with no guarded http_client, an AWS session with no before-send hook that
-        # asks the guard (or one registered after a client is made) and a client of boto3's
-        # default session each red it, as does a lost floor app; a channel app is outside it, a
-        # hook written any way is recognised, and a clean tree is green.
-        run: python -m pytest .github/tests/test_network_clients.py -q
-      - name: The active-home rail reds on a planted defect
-        # Drives the rail's own script against seeded trees: a path in the default home spelled in
-        # a default or a fallback, one built from the account's home, the variable read, a setting
-        # whose manifest default names one, the shell's resolution outside a client install, an
-        # unreadable file and a lost floor app each red it; a clean tree is green.
-        run: python -m pytest .github/tests/test_active_home.py -q
-      - name: Run each bundle's tests (per-bundle)
-        # The repository runner is the single definition shared by CI and local use:
-        # it discovers tested app bundles, installs each manifest's declared
-        # pythonDependencies, and invokes pytest separately to avoid basename clashes.
-        run: ./scripts/test-bundles
+          uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC" pytest pytest-asyncio pytest-xdist
+      - name: The repository's own tests, then each bundle's suite
+        # scripts/gate.py's `rails` part runs every .github/tests file in one pytest
+        # invocation over two workers: the rails over every bundle (cli steps load as core
+        # loads them, SDK calls bind, model apps prove the wire, declared core features, the
+        # scratch home and the guards conftest.py installs) and each static check's
+        # planted-defect tests. Its `bundles` part is scripts/test_bundles.py, the single
+        # definition of a bundle run shared by CI and local use: it discovers tested app
+        # bundles, installs each manifest's declared pythonDependencies, and invokes pytest
+        # separately per bundle to avoid basename clashes. Both parts run even when the first
+        # is red.
+        run: python scripts/gate.py rails bundles --results "$RUNNER_TEMP/gate"
+      - name: Keep the gate's receipt and each bundle's results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gate-tests
+          path: ${{ runner.temp }}/gate
+          if-no-files-found: error
 
   quality-declarations:
     # A `quality` block in app.json — {tested, designSystem, a11y} — is what the Store
@@ -254,7 +168,7 @@ jobs:
           version: "0.13.1"
           enable-cache: true
       - name: Install core + pytest
-        # Mirrors manifest-validate/tests: a uv-managed venv (the runner's /usr is
+        # Mirrors static/tests: a uv-managed venv (the runner's /usr is
         # PEP-668 externally-managed, so `--system` is refused), exported on PATH/env so
         # later steps' `python` and `uv pip` resolve to it. pytest is required, not
         # optional: verifying `tested: true` means running the bundle's tests for real.
@@ -283,7 +197,7 @@ jobs:
                   d = json.loads(mf.read_text(encoding="utf-8"))
               except (OSError, ValueError) as exc:
                   # NOT swallowed: said out loud, and the red is still raised — by
-                  # manifest-validate, and again by the verifier's own `manifest`
+                  # the static job's manifest-validate check, and again by the verifier's own `manifest`
                   # violation. This census must not be the thing that reports it.
                   print(f"{mf}: unreadable ({exc}) — skipped for census", file=sys.stderr)
                   continue
@@ -324,463 +238,6 @@ jobs:
         # Exit 1 on a dishonest claim AND on a tree with no */app.json at all (a
         # checker that silently checked nothing is the failure mode this guards).
         run: python -m personalclaw.apps.quality .
-
-  boundary:
-    # SDK-only import lint from the apps side: an installed app may import core ONLY
-    # via personalclaw.sdk.* — never deep internals. Mirrors core's
-    # tests/test_apps_import_boundary.py, run against this checkout.
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Runner identity
-        # The image and architecture this job runs on, so a moved runner image shows in the log.
-        run: |
-          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
-          for v in ImageOS ImageVersion RUNNER_ARCH; do
-            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
-          done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Pure-stdlib ast lint — no uv, no core install needed. (An earlier
-      # `uv python install` step was dead cruft: uv isn't set up in this job.)
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12.15"
-      - name: Lint app imports (personalclaw.sdk.* only)
-        run: |
-          python - <<'PY'
-          import ast, pathlib, sys
-          violations = {}
-          for f in sorted(pathlib.Path(".").rglob("*/*.py")):
-              if "__pycache__" in f.parts or f.name.startswith("test_"):
-                  continue
-              tree = ast.parse(f.read_text(encoding="utf-8"), filename=str(f))
-              bad = []
-              def check(mod):
-                  if mod and mod.startswith("personalclaw"):
-                      parts = mod.split(".")
-                      if not (len(parts) >= 2 and parts[1] == "sdk"):
-                          bad.append(mod)
-              for node in ast.walk(tree):
-                  if isinstance(node, ast.Import):
-                      for a in node.names:
-                          check(a.name)
-                  elif isinstance(node, ast.ImportFrom) and node.level == 0:
-                      check(node.module)
-              if bad:
-                  violations[str(f)] = sorted(set(bad))
-          if violations:
-              for f, mods in sorted(violations.items()):
-                  print(f"  {f}: {mods}")
-              print("\nApps must import core only via personalclaw.sdk.* — promote the "
-                    "needed symbol to an sdk submodule instead of reaching around it.")
-              sys.exit(1)
-          print("OK: all app imports go through personalclaw.sdk.*")
-          PY
-
-  live-writes-posture:
-    # Every channel app's send() must honor the platform's DISABLE_LIVE_WRITES kill
-    # switch. Core cannot enforce this — the transport owns
-    # its own wire call — so it is enforced here. Pure-stdlib AST lint, no core install:
-    # the script is a committed file (not an inline heredoc) so a contributor runs the
-    # EXACT same check locally that CI runs.
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Runner identity
-        # The image and architecture this job runs on, so a moved runner image shows in the log.
-        run: |
-          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
-          for v in ImageOS ImageVersion RUNNER_ARCH; do
-            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
-          done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12.15"
-      - name: Every channel send() honors DISABLE_LIVE_WRITES
-        run: python .github/scripts/check_live_writes_posture.py
-
-  child-process-env:
-    # Every process an app's code starts says where its environment comes from: an app's
-    # provider runs inside the gateway, whose environment holds every secret saved in
-    # PersonalClaw, so a child that runs someone else's program must get the SDK's child
-    # allowlist. Pure-stdlib AST rail, no core install, the same script run locally.
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Runner identity
-        # The image and architecture this job runs on, so a moved runner image shows in the log.
-        run: |
-          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
-          for v in ImageOS ImageVersion RUNNER_ARCH; do
-            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
-          done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12.15"
-      - name: Every child an app starts says where its environment comes from
-        run: python .github/scripts/check_child_process_env.py
-
-  launches-declared:
-    # Every program an app's code starts is declared under `launches`: install consent names each
-    # one, what of the owner's it runs with, the package an npx entry downloads and runs, and the
-    # hosts it reaches. Pure-stdlib AST rail, no core install, the same script run locally.
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Runner identity
-        # The image and architecture this job runs on, so a moved runner image shows in the log.
-        run: |
-          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
-          for v in ImageOS ImageVersion RUNNER_ARCH; do
-            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
-          done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12.15"
-      - name: Every program an app starts is declared
-        run: python .github/scripts/check_launches_declared.py
-
-  network-declared:
-    # Every app whose code reaches the network declares `"network": true`: install consent
-    # shows it, a backend's outbound tier follows it, and an action is judged by it to leave
-    # the machine. Pure-stdlib AST rail, no core install, the same script run locally.
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Runner identity
-        # The image and architecture this job runs on, so a moved runner image shows in the log.
-        run: |
-          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
-          for v in ImageOS ImageVersion RUNNER_ARCH; do
-            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
-          done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12.15"
-      - name: Every app that reaches the network declares it
-        run: python .github/scripts/check_network_declared.py
-
-  active-home:
-    # Every path an app keeps in PersonalClaw's home comes from the SDK (config_dir, app_data_dir),
-    # asked when it is used: an app that reads PERSONALCLAW_HOME, builds ~/.personalclaw from the
-    # account's home, or spells a path under it in its code or a manifest default writes the
-    # account's home whatever home PersonalClaw runs on. Pure-stdlib AST rail, no core install, the
-    # same script run locally.
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Runner identity
-        # The image and architecture this job runs on, so a moved runner image shows in the log.
-        run: |
-          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
-          for v in ImageOS ImageVersion RUNNER_ARCH; do
-            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
-          done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12.15"
-      - name: Every path an app keeps in PersonalClaw's home comes from the SDK
-        run: python .github/scripts/check_active_home.py
-
-  egress-policy:
-    # Every request an app makes through the SDK's egress guard runs under a policy built with
-    # egress_policy_for, so the owner's Settings → Security → Network egress (Denied hosts,
-    # Allowed hosts) applies to it, and a failed check refuses rather than letting the request go
-    # ahead. Pure-stdlib AST rail, no core install, the same script run locally.
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Runner identity
-        # The image and architecture this job runs on, so a moved runner image shows in the log.
-        run: |
-          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
-          for v in ImageOS ImageVersion RUNNER_ARCH; do
-            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
-          done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12.15"
-      - name: Every request an app makes honours the owner's network settings
-        run: python .github/scripts/check_egress_policy.py
-
-  network-clients:
-    # Every HTTP client an app opens has the egress guard inside it (the SDK's http_client,
-    # sync_http_client or http_session), and every AWS session asks the guard from a before-send
-    # hook registered before its first client, so a host on the owner's Denied hosts is never
-    # reached by a request the app's own client sends. Pure-stdlib AST rail, no core install,
-    # the same script run locally.
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Runner identity
-        # The image and architecture this job runs on, so a moved runner image shows in the log.
-        run: |
-          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
-          for v in ImageOS ImageVersion RUNNER_ARCH; do
-            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
-          done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12.15"
-      - name: Every HTTP client an app opens asks the egress guard
-        run: python .github/scripts/check_network_clients.py
-
-  prompt-cache-posture:
-    # Cross-app rail: every model-provider app must declare a `prompt_cache`
-    # posture explicitly, with the evidence beside it, and an EXPLICIT posture must
-    # actually translate the neutral marker. A cross-app sweep can't live in one app's
-    # test_*.py (the tests job runs pytest PER bundle), so it rides here alongside the
-    # other two cross-app sweeps. Pure stdlib — no core install needed.
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Runner identity
-        # The image and architecture this job runs on, so a moved runner image shows in the log.
-        run: |
-          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
-          for v in ImageOS ImageVersion RUNNER_ARCH; do
-            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
-          done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12.15"
-      - name: Check prompt-cache posture declarations
-        run: python .github/scripts/check_prompt_cache_posture.py
-
-  settings-schema-posture:
-    # Cross-app rail: one convention for `advanced` and `required` settings
-    # fields — optional tuning fields fold, required fields never fold, api_key is
-    # never required. Lives here with the other cross-app sweeps for the same reason
-    # they do: the tests job runs pytest PER bundle. Pure stdlib — no core install.
-    #
-    # Rule 4 (added 2026-09-07) also gates `x-meta.sensitive` on credential-shaped
-    # fields. That one MUST live here rather than in core: core's equivalent rail
-    # resolves the apps clone as a sibling of its own checkout, which does not exist on
-    # a runner, so its corpus half scans only core's 30 bundled manifests — a tree with
-    # zero credential-shaped fields — and so passes green while a real violation sits in
-    # this repo. It surfaced `openai-tools.api_key` only when run by hand from a
-    # workspace that happened to hold both clones.
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Runner identity
-        # The image and architecture this job runs on, so a moved runner image shows in the log.
-        run: |
-          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
-          for v in ImageOS ImageVersion RUNNER_ARCH; do
-            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
-          done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12.15"
-      - name: Check settings-schema advanced/required/sensitive posture
-        run: python .github/scripts/check_settings_schema_posture.py
-
-  settings-declared-reads:
-    # The OTHER half of the settings contract, and the half `settings-schema-posture`
-    # above is structurally blind to: a setting the provider CODE reads which the
-    # manifest schema never declares. Every rule in that rail iterates the declared
-    # properties, so an undeclared one is invisible to all of them and the schema reads
-    # clean.
-    #
-    # Two failures live there. A DEAD setting (the config form renders only declared
-    # properties, so the operator cannot set it and the read takes its default forever —
-    # `bedrock-models.max_tokens` and `claude-subscription.max_tokens`, both fixed in the
-    # commit that adds this rail) and an UNMASKABLE credential (core's masking keys
-    # entirely off a declared `x-meta.sensitive` property, so no masker can see an
-    # undeclared one — the defect all four published satellite exemplars carried, in
-    # repositories that have no catalogue CI at all).
-    #
-    # Pure stdlib — no core install. Cross-app by necessity: the tests job runs pytest
-    # PER bundle, so no bundle can see the denominator.
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Runner identity
-        # The image and architecture this job runs on, so a moved runner image shows in the log.
-        run: |
-          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
-          for v in ImageOS ImageVersion RUNNER_ARCH; do
-            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
-          done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12.15"
-      - name: Every setting the code reads is declared in the manifest schema
-        run: python .github/scripts/check_settings_declared_reads.py
-
-  settings-route-ratchet:
-    # Cross-app rail: provider settings moved out of the removed Settings/Tools
-    # route. Scan every tracked file because runtime refusals, CLI output, READMEs,
-    # and inline docs can all drift independently, while pytest runs per bundle.
-    # The committed script covers both arrow encodings and split-line forms.
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Runner identity
-        # The image and architecture this job runs on, so a moved runner image shows in the log.
-        run: |
-          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
-          for v in ImageOS ImageVersion RUNNER_ARCH; do
-            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
-          done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12.15"
-      - name: Reject references to the removed settings route
-        run: python .github/scripts/check_settings_route_references.py
-
-  trigger-source-adoption:
-    # Cross-app rail: every app that declares a `channel` transport must also declare
-    # a `trigger_source` provider, MEASURED over the channel apps DISCOVERED rather than
-    # against a remembered count — so a new channel app arriving without one reds too, not
-    # just an existing one losing its declaration. Section B of the same script holds the
-    # other half: no app reaches the event bus except through core's registered
-    # trigger_source handler. Lives here with the other cross-app sweeps for the same reason
-    # they do: the tests job runs pytest PER bundle, so no single bundle can see the
-    # denominator. Each app's own tests/test_trigger_source.py drives its source to a real
-    # fire; this job measures the ratio. Committed script, not an inline heredoc, so a
-    # contributor runs the EXACT same check locally. Pure stdlib — no core install.
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Runner identity
-        # The image and architecture this job runs on, so a moved runner image shows in the log.
-        run: |
-          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
-          for v in ImageOS ImageVersion RUNNER_ARCH; do
-            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
-          done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12.15"
-      - name: Every channel app declares a trigger source, and none hand-rolls glue
-        run: python .github/scripts/check_trigger_source_adoption.py
-
-  readme-census:
-    # The repo-root README's app census — headline bundle count, per-category counts,
-    # and the named bundles — must match the tree. This is the one fact in the repo
-    # that no app's own PR owns: nine consecutive app PRs each correctly left it
-    # alone and it drifted to "47 apps" over 64 bundles, with category counts that
-    # summed to 56. So a machine owns it. Cross-repo sweep, same reason as its
-    # neighbours: the tests job runs pytest PER bundle, and a README is no bundle's
-    # test. Committed script, not an inline heredoc, so a contributor runs the EXACT
-    # same check locally. Pure stdlib — no core install.
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Runner identity
-        # The image and architecture this job runs on, so a moved runner image shows in the log.
-        run: |
-          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
-          for v in ImageOS ImageVersion RUNNER_ARCH; do
-            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
-          done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12.15"
-      - name: README census matches the tree
-        run: python .github/scripts/check_readme_census.py
-      - name: Every app's README says the licence its LICENSE and app.json say
-        run: python .github/scripts/check_readme_license.py
-
-  store-card-copy:
-    # Cross-app rail: `description` is documented as "One or two sentences shown on the
-    # Store card", and the card renders it in a `line-clamp-2` paragraph — so a lead
-    # sentence longer than two lines is shown to the user as a fragment cut mid-phrase.
-    # The budget in the script is CALIBRATED against the real rendered grid (see its
-    # docstring); it is a character proxy for a pixel constraint, not a style preference.
-    # Rides here with the other cross-app sweeps for the same reason they do: the `tests`
-    # job runs pytest per bundle, so a check over the whole catalogue has no other home.
-    # Pure stdlib — no core install needed.
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Runner identity
-        # The image and architecture this job runs on, so a moved runner image shows in the log.
-        run: |
-          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
-          for v in ImageOS ImageVersion RUNNER_ARCH; do
-            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
-          done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12.15"
-      - name: Every lead sentence fits the Store card
-        run: python .github/scripts/check_store_card_copy.py
-
-  ui-bundles:
-    # Cross-app rail: an app's UI ships BUILT, in `<app>/ui/bundle/`, because an install copies
-    # the app as it is and must never need npm (the hook that ran `npm install && npx vite
-    # build` left a user without Node a page that could not load). The bundle is what users
-    # run and the sources are what reviewers read, so this job rebuilds every UI from its
-    # lockfile and fails when a committed bundle differs, stale or edited by hand. Rides here
-    # with the other cross-app sweeps: the `tests` job runs pytest per bundle, never npm.
-    # The script's vacuity floor fails a scan that found nothing to compare.
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Runner identity
-        # The image and architecture this job runs on, so a moved runner image shows in the log.
-        run: |
-          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
-          for v in ImageOS ImageVersion RUNNER_ARCH; do
-            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
-          done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12.15"
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .nvmrc
-      - name: Every committed UI bundle is the build of its sources
-        run: python .github/scripts/check_ui_bundles.py
-
-  publication-hygiene:
-    # Cross-repo rail: this repository is PUBLIC, so `git ls-files` is exactly what every
-    # clone receives — and `git rm` removes a path from the tree but never from history.
-    # That makes the PR the only cheap moment to refuse an unfit path. Catches per-PR
-    # screenshot dumps, scratch/residue names, build output, embedded git worktrees
-    # (`git add -A` stages each as a gitlink pointing at a local absolute path), dotenvs
-    # with real values, oversized binaries, and absolute paths into a real developer's home.
-    # Rides here with the other cross-app sweeps because the `tests` job runs pytest per
-    # bundle and these defects belong to no bundle. The script proves every pattern against
-    # a sample it must catch (and one it must spare) BEFORE trusting a clean scan.
-    # Pure stdlib — no core install needed.
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Runner identity
-        # The image and architecture this job runs on, so a moved runner image shows in the log.
-        run: |
-          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
-          for v in ImageOS ImageVersion RUNNER_ARCH; do
-            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
-          done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12.15"
-      - name: Every tracked path is fit to publish
-        run: python .github/scripts/check_publication_hygiene.py
-
-  test-values:
-    # No test value has a real token's format or a provider's key prefix: the repository is
-    # public and secret scanners read it. Pure-stdlib rail, no core install, the same script
-    # run locally.
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Runner identity
-        # The image and architecture this job runs on, so a moved runner image shows in the log.
-        run: |
-          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
-          for v in ImageOS ImageVersion RUNNER_ARCH; do
-            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
-          done
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12.15"
-      - name: No test value looks like a key
-        run: python .github/scripts/check_test_values.py
 
   dco:
     # Every commit in a PR must carry a Signed-off-by trailer (DCO),

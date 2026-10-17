@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -71,8 +72,11 @@ def run_bundle(
     python: str = sys.executable,
     install_dependencies: bool = True,
     env: Mapping[str, str] | None = None,
+    junit: Path | None = None,
 ) -> int:
-    """Install one bundle's declared dependencies, then run its tests."""
+    """Install one bundle's declared dependencies, then run its tests.
+
+    With *junit*, pytest also writes its JUnit XML report there."""
     bundle = bundle.resolve()
     print(f"\n=== {_label(bundle)} ===", flush=True)
     if not (bundle / "app.json").is_file():
@@ -101,7 +105,8 @@ def run_bundle(
 
     try:
         return subprocess.run(
-            [python, "-m", "pytest", str(bundle), "-q"],
+            [python, "-m", "pytest", str(bundle), "-q",
+             *([f"--junitxml={junit}"] if junit is not None else [])],
             cwd=ROOT,
             env=run_env,
             check=False,
@@ -124,6 +129,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=sys.executable,
         help="Python interpreter whose environment receives dependencies and runs pytest",
     )
+    parser.add_argument(
+        "--results",
+        type=Path,
+        help=(
+            "also write results.json (each bundle's exit code and time) and each bundle's "
+            "JUnit XML into this directory"
+        ),
+    )
     args = parser.parse_args(argv)
 
     bundles = [path if path.is_absolute() else ROOT / path for path in args.bundles]
@@ -133,10 +146,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("error: no tested app bundles found", file=sys.stderr)
         return 2
 
+    if args.results is not None:
+        args.results.mkdir(parents=True, exist_ok=True)
     failed: list[str] = []
+    results: list[dict] = []
     for bundle in bundles:
-        if run_bundle(bundle, python=args.python):
-            failed.append(_label(bundle.resolve()))
+        label = _label(bundle.resolve())
+        junit = None
+        if args.results is not None:
+            junit = (args.results / f"{label.replace('/', '__')}.junit.xml").resolve()
+        started = time.monotonic()
+        rc = run_bundle(bundle, python=args.python, junit=junit)
+        results.append({
+            "bundle": label,
+            "returncode": rc,
+            "seconds": round(time.monotonic() - started, 1),
+            "junit": junit.name if junit is not None and junit.is_file() else None,
+        })
+        if rc:
+            failed.append(label)
+        if args.results is not None:
+            # Written after every bundle, so a run stopped part way still says how far it got.
+            (args.results / "results.json").write_text(
+                json.dumps({"bundles": results}, indent=2) + "\n", encoding="utf-8"
+            )
 
     if failed:
         print(f"\nFAILED bundles: {', '.join(failed)}", file=sys.stderr)

@@ -1,4 +1,7 @@
-"""The egress-policy rail reds on a planted defect, and the tree is clean.
+"""The egress-policy rail reds on a planted defect.
+
+The real tree is the ``static`` job's ``egress-policy`` row, which runs the script over it once per
+run; these tests prove the rail can go red.
 
 The rail is ``.github/scripts/check_egress_policy.py``, which CI runs as a script. These tests
 drive that same script, unmodified, against seeded trees: a copy sits at the same place in each,
@@ -108,13 +111,6 @@ def _with(tmp_path: Path, app: str, source: str) -> subprocess.CompletedProcess:
     apps = _known()
     apps[app] = {"provider.py": source}
     return _check(_seeded(tmp_path, apps))
-
-
-def test_every_request_in_the_tree_honours_the_owners_network_settings():
-    """The real repository through the real script, exactly as CI runs it."""
-    run = _check(ROOT)
-    assert run.returncode == 0, run.stdout + run.stderr
-    assert run.stdout.splitlines()[-1].startswith("OK: "), run.stdout
 
 
 def test_a_clean_seeded_tree_is_green(tmp_path):
