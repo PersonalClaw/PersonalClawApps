@@ -1,4 +1,7 @@
-"""The active-home rail reds on a planted defect, and the tree is clean.
+"""The active-home rail reds on a planted defect.
+
+The real tree is the ``static`` job's ``active-home`` row, which runs the script over it once per
+run; these tests prove the rail can go red.
 
 The rail is ``.github/scripts/check_active_home.py``, which CI runs as a script. These tests drive
 that same script, unmodified, against seeded trees: a copy sits at the same place in each, so the
@@ -79,13 +82,6 @@ def _red_for(tmp_path: Path, app: str, fields: dict, files: dict[str, str]) -> s
     run = _check(_seeded(tmp_path, apps))
     assert run.returncode == 1, run.stdout
     return run.stdout
-
-
-def test_no_app_in_the_tree_works_out_personalclaws_home_itself():
-    """The real repository through the real script, exactly as CI runs it."""
-    run = _check(ROOT)
-    assert run.returncode == 0, run.stdout + run.stderr
-    assert run.stdout.splitlines()[-1].startswith("OK: "), run.stdout
 
 
 def test_a_clean_seeded_tree_is_green(tmp_path):

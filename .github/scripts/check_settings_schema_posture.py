@@ -58,7 +58,7 @@ its subject reds instead of silently widening the rule.
 A few names end in a credential noun and never hold one, whatever app declares them:
 ``idempotency_key`` is the workflows API's idempotency token. Those are exempted by name
 in ``NOT_A_CREDENTIAL``. The field that name lives on can ship in core (the bundled
-``run-workflow-action``), which this stdlib job cannot read, so the floor for those entries
+``run-workflow-action``), which this stdlib check cannot read, so the floor for those entries
 is core's ``test_app_manifest_secret_fields.py``: it compares this rail's verdicts with
 core's over both repos' manifests, and fails an entry no shipped field carries.
 

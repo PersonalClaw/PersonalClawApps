@@ -13,8 +13,11 @@ PersonalClaw gateway via the platform's typed provider contracts. Full contract:
 
 ## The hard rules (CI enforces these)
 
+Run them all as CI does with `make gate` (`python scripts/gate.py`; its parts are
+`static`, `rails` and `bundles`). Each static check is a row of its own in the result.
+
 - **SDK boundary:** import core **only** via `personalclaw.sdk.*`. The `boundary`
-  job fails on any deeper import. Missing symbol → open a core issue to promote
+  check fails on any deeper import. Missing symbol → open a core issue to promote
   it; never reach around.
 - **Manifest validity:** `manifest-validate` parses every `app.json` against
   core's real `AppManifest` and requires a stable round-trip.
@@ -26,11 +29,11 @@ PersonalClaw gateway via the platform's typed provider contracts. Full contract:
 - **Store-card copy:** `description` must end in a full stop and its **lead sentence
   must fit 90 characters** — the card clamps to two lines, so a longer lead is shown
   cut mid-phrase. Put the detail in later sentences (the detail panel and search read
-  the whole field). The `store-card-copy` job enforces it.
+  the whole field). The `store-card-copy` check enforces it.
 - **UI bundles ship built:** an app with a `ui/package.json` commits its built
   `ui/bundle/`, because an install copies the app as it is and never runs npm. After
   editing `ui/src/`, run `npm ci && npm run build` in `ui/` and commit the result. The
-  `ui-bundles` job rebuilds every bundle and fails on any difference.
+  `ui-bundles` check rebuilds every bundle and fails on any difference.
 
 ## Nothing published names what is private
 

@@ -141,7 +141,7 @@ for search and renders in full in the detail panel, but nobody reads it on the c
 with a sentence that stands alone in **90 characters or fewer** and put the detail in the
 sentences after it; end the description with a full stop. A longer lead is cut mid-phrase
 on the card, which reads as a rendering bug rather than a summary. CI's `store-card-copy`
-job enforces both (`.github/scripts/check_store_card_copy.py` — the 90 is measured against
+check enforces both (`.github/scripts/check_store_card_copy.py` — the 90 is measured against
 the real grid, not a style preference).
 
 ### Recommended metadata
@@ -669,7 +669,7 @@ widens what a program inherits, asks for consent again:
 - **`writes`** is each place outside your app's folder its code writes, the programs it starts
   included (`~/.npm`, where npx keeps what it downloads).
 
-The `launches-declared` CI job (`.github/scripts/check_launches_declared.py`) reads every spawn in
+CI's `launches-declared` check (`.github/scripts/check_launches_declared.py`) reads every spawn in
 your app's own code (`subprocess`, `asyncio.create_subprocess_*`, `os.system`, `os.exec*`,
 `os.spawn*`, `pty.spawn`) and fails the app for a program its manifest does not declare, or an
 `npx` that runs a package its entry does not name. Start a program by name (a literal argv,
@@ -840,7 +840,7 @@ bare imports of `react` and `@personalclaw/app-sdk` for you (no bundling them).
 
 Ship that bundle built. An install copies your app as it is and never builds anything, so
 a page written in TSX is built ahead of time and its output committed: Minutes and Growth
-build into `ui/bundle/`, and the `ui-bundles` CI job rebuilds them and fails when the
+build into `ui/bundle/`, and CI's `ui-bundles` check rebuilds them and fails when the
 committed file differs. Don't build it from an install hook: the hook has 60 seconds, and
 the user may have no Node at all.
 

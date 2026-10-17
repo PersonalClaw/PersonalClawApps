@@ -1,0 +1,240 @@
+"""The one apps gate: the static checks, the repository's own tests, then every bundle's suite.
+
+CI and a local run call this same script. CI's ``static`` job runs the ``static`` part, its
+``tests`` job the ``rails`` and ``bundles`` parts, and ``make gate`` (or this script with no part
+named) runs all three, in that order. Each part runs even when an earlier one is red, and the gate
+exits 1 when any part failed.
+
+Parts:
+
+- ``static``: ``.github/scripts/run_checks.py``, every static check on its own row.
+- ``rails``: ``python -m pytest .github/tests -n 2``, once.
+- ``bundles``: ``scripts/test_bundles.py``, each bundle's suite with its declared dependencies.
+
+The gate never installs core. It records the core installed in the interpreter that runs the
+parts, and ``--core <sha>`` refuses to run at all when that core was built from another commit.
+
+Every run writes a receipt, ``receipt.json`` under ``--results``: the apps commit (and whether the
+work tree had uncommitted changes), the core version and commit, the toolchain (Python, uv, Node,
+npm and, in CI, the runner image), which bundles were selected and why, and each part's result.
+The static rows and the bundle results sit beside it.
+
+    python scripts/gate.py [static] [rails] [bundles] [--python PY] [--bundle NAME]...
+                           [--core SHA] [--results DIR]
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import os
+import platform
+import shutil
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+PARTS = ("static", "rails", "bundles")
+DEFAULT_RESULTS = ROOT / ".local" / "scratch" / "gate"
+
+#: What the parts' interpreter reports about itself and the core installed in it.
+_PROBE = r"""
+import importlib.metadata as md, json, sys
+core = {"version": None, "commit": None, "source": None}
+try:
+    dist = md.distribution("personalclaw")
+except md.PackageNotFoundError:
+    pass
+else:
+    core["version"] = dist.version
+    direct = json.loads(dist.read_text("direct_url.json") or "{}")
+    core["commit"] = (direct.get("vcs_info") or {}).get("commit_id")
+    core["source"] = direct.get("url")
+print(json.dumps({"python": ".".join(map(str, sys.version_info[:3])), "core": core}))
+"""
+
+
+def _out(argv: list[str], cwd: Path = ROOT) -> str | None:
+    """A command's first line of output, or None when it cannot run or fails."""
+    try:
+        proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, check=False)
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    lines = proc.stdout.strip().splitlines()
+    return lines[0].strip() if lines else ""
+
+
+def _apps() -> dict:
+    """The apps commit, and whether the work tree differs from it (None: not a git checkout)."""
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=normal"],
+            cwd=ROOT, capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        status = None
+    dirty = None if status is None or status.returncode else bool(status.stdout.strip())
+    return {"sha": _out(["git", "rev-parse", "HEAD"]), "dirty": dirty}
+
+
+def _ci() -> dict | None:
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return None
+    keys = ("GITHUB_SHA", "GITHUB_REF", "GITHUB_EVENT_NAME", "GITHUB_RUN_ID",
+            "GITHUB_RUN_ATTEMPT", "GITHUB_JOB")
+    return {k.removeprefix("GITHUB_").lower(): os.environ.get(k) for k in keys}
+
+
+def _runner() -> str:
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        parts = (os.environ.get(k, "") for k in ("ImageOS", "ImageVersion", "RUNNER_ARCH"))
+        return " ".join(parts).strip()
+    return f"local {platform.system()} {platform.machine()}"
+
+
+def _toolchain(probe: dict) -> dict:
+    return {
+        "python": probe["python"],
+        "uv": _out(["uv", "--version"]),
+        "node": _out(["node", "--version"]),
+        "npm": _out(["npm", "--version"]),
+        "runner": _runner(),
+    }
+
+
+def _load_bundle_runner():
+    spec = importlib.util.spec_from_file_location("_gate_test_bundles", ROOT / "scripts" / "test_bundles.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def _selection(named: list[str]) -> dict:
+    if named:
+        return {"bundles": sorted(named), "reason": "named on the command line"}
+    runner = _load_bundle_runner()
+    return {
+        "bundles": [b.relative_to(ROOT).as_posix() for b in runner.discover_bundles()],
+        "reason": "every app bundle that ships tests",
+    }
+
+
+def _run_part(part: str, *, python: str, results: Path, bundles: list[str]) -> int:
+    if part == "static":
+        argv = [python, ".github/scripts/run_checks.py", "--report", str(results / "static.json")]
+    elif part == "rails":
+        # The fixtures are bundles the runner's own test drives, not tests of this folder.
+        argv = [python, "-m", "pytest", ".github/tests", "-n", "2", "-q",
+                "--ignore=.github/tests/fixtures"]
+    else:
+        argv = [python, "scripts/test_bundles.py", "--python", python,
+                "--results", str(results / "bundles"), *bundles]
+    print(f"\n=== gate: {part}: {' '.join(argv)}", flush=True)
+    try:
+        return subprocess.run(argv, cwd=ROOT, check=False).returncode
+    except OSError as exc:
+        print(f"gate: could not start the {part} part: {exc}", file=sys.stderr)
+        return 127
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="python scripts/gate.py",
+        description="Run the apps gate: static checks, the repository's tests, the bundle suites.",
+    )
+    parser.add_argument("parts", nargs="*", metavar="part",
+                        help=f"which parts to run, of {', '.join(PARTS)} (default: all, in order)")
+    parser.add_argument("--python", default=sys.executable,
+                        help="interpreter whose environment holds core and pytest (default: this one)")
+    parser.add_argument("--bundle", action="append", default=[], metavar="NAME",
+                        help="run only this bundle's suite (repeatable; default: every tested bundle)")
+    parser.add_argument("--core", metavar="SHA",
+                        help="refuse to run unless the installed core was built from this commit")
+    parser.add_argument("--results", type=Path, default=DEFAULT_RESULTS,
+                        help="where the receipt and results go (default: .local/scratch/gate)")
+    args = parser.parse_args(argv)
+    unknown = [p for p in args.parts if p not in PARTS]
+    if unknown:
+        parser.error(f"unknown part(s): {', '.join(unknown)}; the parts are {', '.join(PARTS)}")
+    parts = [p for p in PARTS if p in args.parts] if args.parts else list(PARTS)
+
+    raw = _out([args.python, "-c", _PROBE])
+    if raw is None:
+        print(f"gate: cannot run the interpreter {args.python}", file=sys.stderr)
+        return 2
+    probe = json.loads(raw)
+    core = probe["core"]
+    if args.core:
+        want = args.core.strip().lower()
+        have = (core["commit"] or "").lower()
+        if len(want) < 7 or not have.startswith(want):
+            print(
+                f"gate: the core named, {args.core}, is not the core installed in {args.python} "
+                f"(installed: version {core['version']}, commit {core['commit'] or 'not recorded'}). "
+                "Install the named core into that environment, then run the gate again.",
+                file=sys.stderr,
+            )
+            return 2
+
+    results = args.results if args.results.is_absolute() else ROOT / args.results
+    receipt = {
+        "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "apps": _apps(),
+        "core": core,
+        "toolchain": _toolchain(probe),
+        "ci": _ci(),
+        "selection": _selection(args.bundle) if "bundles" in parts else None,
+        "parts": [],
+    }
+    for stale in ("static.json", "bundles", "receipt.json"):
+        target = results / stale
+        if target.is_dir():
+            shutil.rmtree(target)
+        elif target.exists():
+            target.unlink()
+    results.mkdir(parents=True, exist_ok=True)
+
+    for part in parts:
+        started = time.monotonic()
+        rc = _run_part(part, python=args.python, results=results, bundles=args.bundle)
+        receipt["parts"].append({
+            "part": part,
+            "result": "pass" if rc == 0 else "FAIL",
+            "returncode": rc,
+            "seconds": round(time.monotonic() - started, 1),
+        })
+
+    static = results / "static.json"
+    if static.is_file():
+        receipt["static_checks"] = json.loads(static.read_text(encoding="utf-8"))["checks"]
+    receipt["verdict"] = "pass" if all(p["returncode"] == 0 for p in receipt["parts"]) else "FAIL"
+    receipt["finished"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    (results / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+
+    rows = ["| part | result | seconds |", "|---|---|---|"]
+    rows += [f"| {p['part']} | {p['result']} | {p['seconds']:.1f} |" for p in receipt["parts"]]
+    table = "\n".join(rows) + "\n"
+    print("\n" + table, end="")
+    print(f"gate: {receipt['verdict']}; receipt in {results / 'receipt.json'}")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if os.environ.get("GITHUB_ACTIONS") == "true" and summary:
+        apps, tc = receipt["apps"], receipt["toolchain"]
+        with open(summary, "a", encoding="utf-8") as fh:
+            fh.write(
+                "### Apps gate\n\n" + table + "\n"
+                f"apps `{apps['sha']}` · core `{core['commit']}` ({core['version']}) · "
+                f"Python {tc['python']} · {tc['uv']} · Node {tc['node']} · npm {tc['npm']} · "
+                f"{tc['runner']}\n\n"
+            )
+    return 0 if receipt["verdict"] == "pass" else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

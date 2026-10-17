@@ -18,7 +18,7 @@ count **providers, not bundles**, and those five appear once per provider. 71
 providers over 65 bundles, plus the 4 provider-less bundles, is 75 entries over
 69 bundles; that is the whole gap between the headline and the sum of the counts.
 
-Nobody has to keep that true by hand: the `readme-census` CI job
+Nobody has to keep that true by hand: CI's `readme-census` check
 (`.github/scripts/check_readme_census.py`) checks the headline, every count
 below, and every bundle name against the tree, so a new app cannot land
 unlisted.
