@@ -23,6 +23,9 @@ build/
 # Virtualenvs
 venv/
 .venv/
+# The bundle runner's environments (scripts/test_bundles.py), one folder per key, each
+# environment's own folder named .venv.
+.bundle-venvs/
 
 # Linked git worktrees (`git worktree add .worktrees/<name>`). Root-anchored because each
 # entry is an EMBEDDED GIT REPOSITORY: `git add -A` stages it as a gitlink pointing at a

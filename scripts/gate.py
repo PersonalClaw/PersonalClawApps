@@ -9,7 +9,10 @@ Parts:
 
 - ``static``: ``.github/scripts/run_checks.py``, every static check on its own row.
 - ``rails``: ``python -m pytest .github/tests -n 2``, once.
-- ``bundles``: ``scripts/test_bundles.py``, each bundle's suite with its declared dependencies.
+- ``bundles``: ``scripts/test_bundles.py``, each bundle's suite in a locked environment holding
+  only what it declares, ``--jobs`` at once; ``--changed BASE`` runs only the bundles a change
+  since BASE can affect, and ``--float`` (the weekly canary's mode, never merge evidence) resolves
+  each bundle's declared ranges afresh instead of installing the bundle lock.
 
 The gate never installs core. It records the core installed in the interpreter that runs the
 parts, and ``--core <sha>`` refuses to run at all when that core was built from another commit.
@@ -21,15 +24,24 @@ Every run writes a receipt, ``receipt.json`` under ``--results``: the apps commi
 work tree had uncommitted changes), the core version and commit, what the install asked for, the
 commit ``core.lock`` pins and whether the two match, the toolchain (Python, uv, Node,
 npm and, in CI, the runner image), which bundles were selected and why, and each part's result.
-The static rows and the bundle results sit beside it.
+The static rows and the bundle results sit beside it, with each bundle environment's receipt
+(its key and the inputs the key is a digest of) under ``bundles/environments/``.
+
+One results folder holds one run: a second gate started on the same folder refuses, and names
+``--results`` as the way to run it elsewhere, so two validations side by side never clobber each
+other's receipt. Each part it starts holds that folder's lock too, and so does every bundle's
+pytest, so a part or a pytest left running by a gate that was stopped still keeps a second gate
+out. The bundle environments are one per checkout: a second gate's bundles part in the same
+checkout refuses, naming the run that holds them.
 
     python scripts/gate.py [static] [rails] [bundles] [--python PY] [--bundle NAME]...
-                           [--core SHA] [--results DIR]
+                           [--jobs N] [--changed BASE] [--float] [--core SHA] [--results DIR]
 """
 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import importlib.util
 import json
 import os
@@ -118,6 +130,8 @@ def _load_bundle_runner():
     spec = importlib.util.spec_from_file_location("_gate_test_bundles", ROOT / "scripts" / "test_bundles.py")
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
+    # The runner's dataclasses look their module up in sys.modules while it is still loading.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -150,29 +164,41 @@ def _lock(core: dict) -> None:
         )
 
 
-def _selection(named: list[str]) -> dict:
+def _selection(named: list[str], changed: str | None) -> dict:
     if named:
         return {"bundles": sorted(named), "reason": "named on the command line"}
     runner = _load_bundle_runner()
-    return {
-        "bundles": [b.relative_to(ROOT).as_posix() for b in runner.discover_bundles()],
-        "reason": "every app bundle that ships tests",
-    }
+    bundles, reason = runner.select((), changed, changed is not None, ROOT)
+    return {"bundles": [b.relative_to(ROOT).as_posix() for b in bundles], "reason": reason}
 
 
-def _run_part(part: str, *, python: str, results: Path, bundles: list[str]) -> int:
+def _runner_flags(args) -> list[str]:
+    flags = []
+    if args.jobs is not None:
+        flags += ["--jobs", str(args.jobs)]
+    if args.changed is not None:
+        flags += ["--changed", args.changed]
+    if args.floating:
+        flags.append("--float")
+    if args.core:
+        flags += ["--core-commit", args.core]
+    return flags
+
+
+def _run_part(part: str, *, python: str, results: Path, bundles: list[str],
+              flags: list[str], keep: tuple[int, ...] = ()) -> int:
     if part == "static":
         argv = [python, ".github/scripts/run_checks.py", "--report", str(results / "static.json")]
     elif part == "rails":
-        # The fixtures are bundles the runner's own test drives, not tests of this folder.
-        argv = [python, "-m", "pytest", ".github/tests", "-n", "2", "-q",
-                "--ignore=.github/tests/fixtures"]
+        argv = [python, "-m", "pytest", ".github/tests", "-n", "2", "-q"]
     else:
-        argv = [python, "scripts/test_bundles.py", "--python", python,
-                "--results", str(results / "bundles"), *bundles]
+        argv = [python, "scripts/test_bundles.py", "--results", str(results / "bundles"),
+                *flags, *bundles]
     print(f"\n=== gate: {part}: {' '.join(argv)}", flush=True)
     try:
-        return subprocess.run(argv, cwd=ROOT, check=False).returncode
+        # *keep*: the results folder's lock, so a part outlives a killed gate still holding it.
+        env = {**os.environ, **({"GATE_RESULTS_LOCK_FD": str(keep[0])} if keep else {})}
+        return subprocess.run(argv, cwd=ROOT, check=False, pass_fds=keep, env=env).returncode
     except OSError as exc:
         print(f"gate: could not start the {part} part: {exc}", file=sys.stderr)
         return 127
@@ -189,6 +215,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="interpreter whose environment holds core and pytest (default: this one)")
     parser.add_argument("--bundle", action="append", default=[], metavar="NAME",
                         help="run only this bundle's suite (repeatable; default: every tested bundle)")
+    parser.add_argument("--jobs", type=int, metavar="N",
+                        help="bundles to run at once (default: half the CPUs, at most 8)")
+    parser.add_argument("--changed", metavar="BASE",
+                        help="run only the bundles a change since BASE can affect")
+    parser.add_argument("--float", action="store_true", dest="floating",
+                        help="resolve each bundle's declared ranges afresh, not from the bundle "
+                             "lock (the weekly canary's mode; never merge evidence)")
     parser.add_argument("--core", metavar="SHA",
                         help="refuse to run unless the installed core was built from this commit")
     parser.add_argument("--results", type=Path, default=DEFAULT_RESULTS,
@@ -198,6 +231,22 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         parser.error(f"unknown part(s): {', '.join(unknown)}; the parts are {', '.join(PARTS)}")
     parts = [p for p in PARTS if p in args.parts] if args.parts else list(PARTS)
+    if args.bundle and args.changed is not None:
+        parser.error("name bundles with --bundle or pass --changed, not both")
+
+    results = args.results if args.results.is_absolute() else ROOT / args.results
+    results.mkdir(parents=True, exist_ok=True)
+    # One results folder, one run: held until this process and every part it starts have exited.
+    held = open(results / ".gate.lock", "a")
+    try:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print(
+            f"gate: another gate run is using {results}. Wait for it, or run this one with "
+            "--results DIR to keep its receipt and results in another folder.",
+            file=sys.stderr,
+        )
+        return 2
 
     raw = _out([args.python, "-c", _PROBE])
     if raw is None:
@@ -221,14 +270,13 @@ def main(argv: list[str] | None = None) -> int:
     apps = _apps()
     _lock(core)
 
-    results = args.results if args.results.is_absolute() else ROOT / args.results
     receipt = {
         "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "apps": apps,
         "core": core,
         "toolchain": _toolchain(probe),
         "ci": _ci(),
-        "selection": _selection(args.bundle) if "bundles" in parts else None,
+        "selection": _selection(args.bundle, args.changed) if "bundles" in parts else None,
         "parts": [],
     }
     for stale in ("static.json", "bundles", "receipt.json"):
@@ -241,7 +289,8 @@ def main(argv: list[str] | None = None) -> int:
 
     for part in parts:
         started = time.monotonic()
-        rc = _run_part(part, python=args.python, results=results, bundles=args.bundle)
+        rc = _run_part(part, python=args.python, results=results, bundles=args.bundle,
+                       flags=_runner_flags(args), keep=(held.fileno(),))
         receipt["parts"].append({
             "part": part,
             "result": "pass" if rc == 0 else "FAIL",
@@ -249,6 +298,11 @@ def main(argv: list[str] | None = None) -> int:
             "seconds": round(time.monotonic() - started, 1),
         })
 
+    ran = results / "bundles" / "results.json"
+    if ran.is_file():
+        summary = json.loads(ran.read_text(encoding="utf-8"))
+        receipt["selection"] = summary.get("selection") or receipt["selection"]
+        receipt["bundles"] = {k: summary.get(k) for k in ("jobs", "resolution", "environments")}
     static = results / "static.json"
     if static.is_file():
         receipt["static_checks"] = json.loads(static.read_text(encoding="utf-8"))["checks"]
