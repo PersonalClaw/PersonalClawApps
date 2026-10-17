@@ -19,6 +19,9 @@ permissions:
   contents: read
 
 env:
+  # Every uv step uses a uv-managed CPython, never the runner image's own: the image's
+  # system 3.12 is a different patch from the one setup-python and core's 3.12 legs run.
+  UV_PYTHON_PREFERENCE: only-managed
   # Core is installed from main until PyPI has a release;
   # switch to a pinned "personalclaw==<version>" then. (dated 2026-07-20)
   CORE_SPEC: "personalclaw @ git+https://github.com/PersonalClaw/PersonalClaw@main"
@@ -29,17 +32,25 @@ jobs:
     # not a hand-rolled schema — so a manifest that core would reject fails CI.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
+          version: "0.13.1"
           enable-cache: true
       - name: Install core (for personalclaw.apps.manifest)
         # Install into a uv-managed venv, not `--system`: the runner's /usr is
         # PEP-668 externally-managed and uv refuses `--system` there. Export the venv
         # on PATH/env so later steps' `python` and `uv pip` resolve to it.
         run: |
-          uv venv --python 3.12 .venv
+          uv venv --python 3.12.15 .venv
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
           echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
           uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC"
@@ -90,21 +101,29 @@ jobs:
     env:
       PERSONALCLAW_SKIP_APP_BACKENDS: "1"
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         # browser-connector's tests drive its extension worker with Node's own test runner.
         with:
-          node-version: "24"
+          node-version-file: .nvmrc
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
+          version: "0.13.1"
           enable-cache: true
       - name: Install core + pytest
         # uv-managed venv (not `--system`: the runner's /usr is PEP-668
         # externally-managed). Exporting VIRTUAL_ENV makes later `uv pip install`
         # and `python` in this job resolve to the venv automatically.
         run: |
-          uv venv --python 3.12 .venv
+          uv venv --python 3.12.15 .venv
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
           echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
           uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC" pytest pytest-asyncio
@@ -217,14 +236,22 @@ jobs:
       # pytest, so it needs the posture those tests are written against.
       PERSONALCLAW_SKIP_APP_BACKENDS: "1"
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         # The verifier runs each bundle's pytest, browser-connector's Node-driven worker tests included.
         with:
-          node-version: "24"
+          node-version-file: .nvmrc
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
+          version: "0.13.1"
           enable-cache: true
       - name: Install core + pytest
         # Mirrors manifest-validate/tests: a uv-managed venv (the runner's /usr is
@@ -232,7 +259,7 @@ jobs:
         # later steps' `python` and `uv pip` resolve to it. pytest is required, not
         # optional: verifying `tested: true` means running the bundle's tests for real.
         run: |
-          uv venv --python 3.12 .venv
+          uv venv --python 3.12.15 .venv
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
           echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
           uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC" pytest pytest-asyncio
@@ -304,12 +331,19 @@ jobs:
     # tests/test_apps_import_boundary.py, run against this checkout.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Pure-stdlib ast lint — no uv, no core install needed. (An earlier
       # `uv python install` step was dead cruft: uv isn't set up in this job.)
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.15"
       - name: Lint app imports (personalclaw.sdk.* only)
         run: |
           python - <<'PY'
@@ -350,10 +384,17 @@ jobs:
     # EXACT same check locally that CI runs.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.15"
       - name: Every channel send() honors DISABLE_LIVE_WRITES
         run: python .github/scripts/check_live_writes_posture.py
 
@@ -364,10 +405,17 @@ jobs:
     # allowlist. Pure-stdlib AST rail, no core install, the same script run locally.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.15"
       - name: Every child an app starts says where its environment comes from
         run: python .github/scripts/check_child_process_env.py
 
@@ -377,10 +425,17 @@ jobs:
     # hosts it reaches. Pure-stdlib AST rail, no core install, the same script run locally.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.15"
       - name: Every program an app starts is declared
         run: python .github/scripts/check_launches_declared.py
 
@@ -390,10 +445,17 @@ jobs:
     # the machine. Pure-stdlib AST rail, no core install, the same script run locally.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.15"
       - name: Every app that reaches the network declares it
         run: python .github/scripts/check_network_declared.py
 
@@ -405,10 +467,17 @@ jobs:
     # same script run locally.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.15"
       - name: Every path an app keeps in PersonalClaw's home comes from the SDK
         run: python .github/scripts/check_active_home.py
 
@@ -419,10 +488,17 @@ jobs:
     # ahead. Pure-stdlib AST rail, no core install, the same script run locally.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.15"
       - name: Every request an app makes honours the owner's network settings
         run: python .github/scripts/check_egress_policy.py
 
@@ -434,10 +510,17 @@ jobs:
     # the same script run locally.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.15"
       - name: Every HTTP client an app opens asks the egress guard
         run: python .github/scripts/check_network_clients.py
 
@@ -449,10 +532,17 @@ jobs:
     # other two cross-app sweeps. Pure stdlib — no core install needed.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.15"
       - name: Check prompt-cache posture declarations
         run: python .github/scripts/check_prompt_cache_posture.py
 
@@ -471,10 +561,17 @@ jobs:
     # workspace that happened to hold both clones.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.15"
       - name: Check settings-schema advanced/required/sensitive posture
         run: python .github/scripts/check_settings_schema_posture.py
 
@@ -497,10 +594,17 @@ jobs:
     # PER bundle, so no bundle can see the denominator.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.15"
       - name: Every setting the code reads is declared in the manifest schema
         run: python .github/scripts/check_settings_declared_reads.py
 
@@ -511,10 +615,17 @@ jobs:
     # The committed script covers both arrow encodings and split-line forms.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.15"
       - name: Reject references to the removed settings route
         run: python .github/scripts/check_settings_route_references.py
 
@@ -531,10 +642,17 @@ jobs:
     # contributor runs the EXACT same check locally. Pure stdlib — no core install.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.15"
       - name: Every channel app declares a trigger source, and none hand-rolls glue
         run: python .github/scripts/check_trigger_source_adoption.py
 
@@ -549,10 +667,17 @@ jobs:
     # same check locally. Pure stdlib — no core install.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.15"
       - name: README census matches the tree
         run: python .github/scripts/check_readme_census.py
       - name: Every app's README says the licence its LICENSE and app.json say
@@ -569,10 +694,17 @@ jobs:
     # Pure stdlib — no core install needed.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.15"
       - name: Every lead sentence fits the Store card
         run: python .github/scripts/check_store_card_copy.py
 
@@ -586,13 +718,20 @@ jobs:
     # The script's vacuity floor fails a scan that found nothing to compare.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
-      - uses: actions/setup-node@v7
+          python-version: "3.12.15"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version-file: .nvmrc
       - name: Every committed UI bundle is the build of its sources
         run: python .github/scripts/check_ui_bundles.py
 
@@ -609,10 +748,17 @@ jobs:
     # Pure stdlib — no core install needed.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.15"
       - name: Every tracked path is fit to publish
         run: python .github/scripts/check_publication_hygiene.py
 
@@ -622,10 +768,17 @@ jobs:
     # run locally.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.12"
+          python-version: "3.12.15"
       - name: No test value looks like a key
         run: python .github/scripts/check_test_values.py
 
@@ -641,7 +794,14 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Verify DCO sign-off on every commit

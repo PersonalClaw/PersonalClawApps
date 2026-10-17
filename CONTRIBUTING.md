@@ -52,7 +52,7 @@ environment that holds core and pytest, as the CI `tests` job builds it (core
 from `CORE_SPEC` in `.github/workflows/ci.yml`):
 
 ```bash
-uv venv --python 3.12 .venv
+uv venv --python 3.12.15 .venv
 uv pip install --python .venv/bin/python "personalclaw @ git+https://github.com/PersonalClaw/PersonalClaw@main" pytest pytest-asyncio
 . .venv/bin/activate
 ./scripts/test-bundles <bundle>
