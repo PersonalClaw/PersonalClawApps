@@ -55,7 +55,7 @@ Install that core:
 
 ```bash
 uv venv --python 3.12.15 .venv
-uv pip install --python .venv/bin/python "personalclaw @ git+https://github.com/PersonalClaw/PersonalClaw@$(cat core.lock)" pytest pytest-asyncio pytest-xdist
+uv pip install --python .venv/bin/python "personalclaw @ git+https://github.com/PersonalClaw/PersonalClaw@$(cat core.lock)" pytest==9.1.1 pytest-asyncio==1.4.0 pytest-xdist==3.8.0
 . .venv/bin/activate
 ./scripts/test-bundles <bundle>
 ```
@@ -98,6 +98,69 @@ one pull request is deferred until the pin-refresh GitHub App it needs exists: s
 its fixed branch, and how the App's commit passes the DCO check. Until then the
 workflow reports the commit it would pin and opens nothing, and a maintainer bumps the
 pin by hand in a pull request like any other.
+
+### Supply chain
+
+CI's inputs are pinned, and every job holds only the GitHub token permissions it needs.
+`.github/tests/test_supply_chain.py` holds both (it runs in the gate's `rails` part, so
+`make gate` and CI's `tests` job), and `.github/supply-chain.toml` holds its Node
+end-of-life table, the audited write steps and the exceptions.
+
+How to pin:
+
+- **An action:** `uses: owner/action@<40-character commit SHA> # vX.Y.Z`, the SHA of
+  that release tag. Dependabot's weekly `github-actions` update moves the SHA and its
+  comment together.
+- **An image** (`container:`, `services:`, `docker://`, a Dockerfile `FROM`):
+  `name@sha256:<digest>` for one platform, with the platform beside it (`# linux/amd64`,
+  or `--platform=` on a `FROM`). An image named through an `ARG` is judged by the
+  `ARG`'s default. None exists today.
+- **A tool a `run:` line installs:** an exact version (`pytest==9.1.1`,
+  `npm install -g name@1.2.3`), or from a lock (`npm ci`, `-r` with
+  `--require-hashes`). Core comes from `"$CORE_SPEC"`, which `core.lock` pins; any other
+  variable is a version the check cannot read. The check sees `run:` lines only, not an
+  install a script runs: `scripts/test_bundles.py`'s `uv pip install` of each bundle's
+  declared dependencies is outside it.
+- **A setup step:** an exact `x.y.z` or a version file, never `check-latest`. Every
+  Python a `uv` command names (`--python 3.12.15`) is exact too.
+- **Node:** `.nvmrc` is an exact release, on a line `node_end_of_life` lists and has not
+  passed, that meets every locked package's `engines.node`. When the repository moves to
+  a new line, add it to the table and leave the old lines in place.
+- **A `package.json` CI installs from** (each app's `ui/`) has
+  `packageManager: npm@<exact>`.
+
+Least privilege:
+
+- Every job declares its permissions, or its workflow does at the top. No `write-all`,
+  and a write at the top must reach a job that uses it.
+- Every write permission a job holds, and every `actions/checkout` that keeps its
+  credentials, is an `[[audited_write]]` entry: the workflow, the job, the permission
+  (or `persist-credentials`), the steps that use it and why. Today's one entry is the
+  core-main canary's `report` job, which holds `issues: write` for its tracking issue.
+  Every other checkout sets `persist-credentials: false`.
+- A token goes in the `env:` of the steps that call the API, never a job's or a
+  workflow's.
+
+To add an exception, when a pin cannot hold yet, add an `[[exception]]` entry with:
+
+- `file`: the file the violation names;
+- `reference`: its reference, as the check prints it;
+- `scope`: the rule id it waives;
+- `owner`;
+- `reason`: why, and what ends it;
+- `expires`: a date at most 30 days out.
+
+To renew one, set a new `expires` and update its `reason`. The check fails on an
+exception that has expired, is more than 30 days out, matches no violation, or is
+missing a field. The policy file's own rules are never waived. Today's one exception
+covers the quality job's install of each declaring app's `pythonDependencies` ranges,
+until [the shipped-dependency audit](https://github.com/PersonalClaw/PersonalClaw/issues/3918)
+pins that resolution.
+
+Not here yet: the repository security settings, the scheduled pin-refresh pull requests
+from a GitHub App and the weekly SHA-to-tag check, dependency review and CodeQL in the
+merge verdict, and the identities a release records. Nothing refreshes the pytest pins in
+the workflows until Dependabot's `uv` ecosystem watches them.
 
 Full contract: [`docs/app-creation-guide.md`](docs/app-creation-guide.md) and
 [`docs/platform-architecture.md`](docs/platform-architecture.md).

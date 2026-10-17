@@ -31,6 +31,11 @@ Run them all as CI does with `make gate` (`python scripts/gate.py`; its parts ar
   `uv pip install "personalclaw @ git+https://github.com/PersonalClaw/PersonalClaw@$(cat core.lock)"`;
   the gate warns when the installed core differs. Core main's drift is the weekly
   canary's to report; a `core.lock` change arrives only as its own pull request.
+- **Supply chain:** actions by commit SHA with their tag as a comment, exact versions
+  in `run:` installs, and least-privilege jobs: a write permission or a kept checkout
+  credential is listed in `.github/supply-chain.toml`, and a token goes only on the
+  steps that call the API. Exceptions there expire within 30 days.
+  `test_supply_chain.py` holds it (CONTRIBUTING.md, "Supply chain").
 - **Store-card copy:** `description` must end in a full stop and its **lead sentence
   must fit 90 characters** — the card clamps to two lines, so a longer lead is shown
   cut mid-phrase. Put the detail in later sentences (the detail panel and search read

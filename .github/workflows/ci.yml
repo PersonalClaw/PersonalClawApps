@@ -46,6 +46,8 @@ jobs:
             if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
           done
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
@@ -96,6 +98,8 @@ jobs:
             if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
           done
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         # browser-connector's tests drive its extension worker with Node's own test runner.
         with:
@@ -116,7 +120,7 @@ jobs:
           uv venv --python 3.12.15 .venv
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
           echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
-          uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC" pytest pytest-asyncio pytest-xdist
+          uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC" pytest==9.1.1 pytest-asyncio==1.4.0 pytest-xdist==3.8.0
       - name: The repository's own tests, then each bundle's suite
         # scripts/gate.py's `rails` part runs every .github/tests file in one pytest
         # invocation over two workers: the rails over every bundle (cli steps load as core
@@ -165,6 +169,8 @@ jobs:
             if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
           done
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         # The verifier runs each bundle's pytest, browser-connector's Node-driven worker tests included.
         with:
@@ -186,7 +192,7 @@ jobs:
           uv venv --python 3.12.15 .venv
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
           echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
-          uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC" pytest pytest-asyncio
+          uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC" pytest==9.1.1 pytest-asyncio==1.4.0
       - name: The installed core is the locked one
         # This job runs core's verifier directly, not through the gate, so it checks the pin itself.
         run: python scripts/core_lock.py verify
@@ -272,8 +278,10 @@ jobs:
             if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
           done
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # The check reads local history only (git rev-list, git show), so no credential stays.
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Verify DCO sign-off on every commit
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
