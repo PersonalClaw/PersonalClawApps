@@ -1,0 +1,56 @@
+# core.lock bump. Daily (and on dispatch) this compares core main's head with the commit
+# core.lock pins and writes both to the job summary.
+#
+# A bump arrives only as a pull request whose one change is core.lock, opened or updated on one
+# fixed branch by the pin-refresh GitHub App, and merged only on its own CI verdict. That half is
+# deferred until the App exists (repository settings wait on other work). Until then:
+# - without the App's credentials, this run reports the commit it would pin, opens no pull
+#   request and pushes nothing;
+# - with them, it fails loudly, because the pull-request half is not built yet.
+# Still open with that half: the fixed branch, and how the App's commit passes the dco job.
+#
+# Nothing here writes core.lock to main, and the job holds no write permission.
+name: core.lock bump
+
+on:
+  schedule:
+    # Daily, 05:41 UTC, so the pin trails core main by at most a day once the App opens the bump.
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: core-lock-bump
+  cancel-in-progress: true
+
+env:
+  UV_PYTHON_PREFERENCE: only-managed
+
+jobs:
+  bump:
+    name: Compare core main with core.lock
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.13.1"
+      - name: Report the commit a bump would pin
+        # Only whether the App's credentials are configured reaches the step, never their values.
+        # Core main is read from the public core repository with git, so no token is needed.
+        env:
+          APP_CREDENTIALS: ${{ vars.PIN_REFRESH_APP_ID != '' && secrets.PIN_REFRESH_APP_PRIVATE_KEY != '' }}
+        run: uv run --no-project --python 3.12.15 python scripts/core_lock.py bump --app-credentials "$APP_CREDENTIALS"

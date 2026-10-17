@@ -26,6 +26,11 @@ Run them all as CI does with `make gate` (`python scripts/gate.py`; its parts ar
   remain absent, so model apps stub SDKs they deliberately do not declare. Run
   `./scripts/test-bundles <bundle>` locally, from an environment with core and
   pytest (CONTRIBUTING.md shows the setup), to use the exact same path.
+- **One core commit:** CI tests against the core commit in `core.lock` (one full
+  40-character SHA), never core main. Install it locally with
+  `uv pip install "personalclaw @ git+https://github.com/PersonalClaw/PersonalClaw@$(cat core.lock)"`;
+  the gate warns when the installed core differs. Core main's drift is the weekly
+  canary's to report; a `core.lock` change arrives only as its own pull request.
 - **Store-card copy:** `description` must end in a full stop and its **lead sentence
   must fit 90 characters** — the card clamps to two lines, so a longer lead is shown
   cut mid-phrase. Put the detail in later sentences (the detail panel and search read
