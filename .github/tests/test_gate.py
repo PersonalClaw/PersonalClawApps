@@ -483,3 +483,120 @@ def test_a_bundle_s_pytest_left_running_by_a_stopped_gate_and_runner_keeps_a_sec
         assert "--results" in run.stderr
     finally:
         release.touch()
+
+
+# -- the static and rails parts hold the results folder too, and Ctrl-C ----------------------------
+
+def _waits(marker: Path, release: Path, indent: str = "") -> str:
+    lines = [
+        "import pathlib, time",
+        f"pathlib.Path({str(marker)!r}).write_text('x')",
+        "deadline = time.monotonic() + 30",
+        f"while not pathlib.Path({str(release)!r}).exists() and time.monotonic() < deadline:",
+        "    time.sleep(0.02)",
+    ]
+    return "".join(f"{indent}{line}\n" for line in lines)
+
+
+def _until(path: Path, seconds: float = 60) -> None:
+    import time
+
+    deadline = time.monotonic() + seconds
+    while not path.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert path.exists(), f"{path.name} never appeared"
+
+
+def _free_again(root: Path, *args: str, seconds: float = 60) -> subprocess.CompletedProcess:
+    """A gate on the same folder, retried until the last of the stopped run has let it go."""
+    import time
+
+    deadline = time.monotonic() + seconds
+    while True:
+        run = _gate(root, *args)
+        if run.returncode != 2 or time.monotonic() > deadline:
+            return run
+        time.sleep(0.2)
+
+
+@pytest.mark.parametrize("part", ["static", "rails"])
+def test_a_static_or_rails_part_left_running_by_a_killed_gate_keeps_a_second_gate_out(
+        tmp_path, part):
+    # The static part writes static.json, which a later gate's receipt reads; the rails part runs
+    # in the same folder's checkout. Either, outliving its gate, holds the folder.
+    import os
+    import signal
+
+    marker, release = tmp_path / "started", tmp_path / "release"
+    if part == "static":
+        root = _seeded(tmp_path, check=_waits(marker, release) + "print('OK')\n")
+    else:
+        root = _seeded(tmp_path, rail="def test_planted():\n" + _waits(marker, release, "    "))
+    (core,) = (root / ".planted" / "core").glob("*.whl")
+    env = planted.environ(root / ".planted" / "lock", str(core), root / ".bundle-venvs")
+    gate = subprocess.Popen([sys.executable, str(root / "scripts" / "gate.py"), "--results",
+                             str(root / "out"), part, "--jobs", "1"], cwd=root, env=env,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        _until(marker)
+        os.kill(gate.pid, signal.SIGKILL)
+        gate.wait()
+        run = _gate(root, "static")
+        assert run.returncode == 2, run.stdout + run.stderr
+        assert "--results" in run.stderr
+    finally:
+        release.touch()
+    assert _free_again(root, "static").returncode == 0
+
+
+WAITS_THROUGH_AN_INTERRUPT = """\
+import pathlib, time
+
+def _wait(release):
+    deadline = time.monotonic() + 30
+    while not pathlib.Path(release).exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+def test_ok():
+    pathlib.Path({marker!r}).write_text('x')
+    try:
+        _wait({release!r})
+    except KeyboardInterrupt:
+        # A pytest finishing its own cleanup after Ctrl-C: still writing into the folder.
+        pathlib.Path({interrupted!r}).write_text('x')
+        _wait({release!r})
+"""
+
+
+def test_an_interrupt_keeps_a_second_gate_out_while_the_interrupted_pytest_finishes(tmp_path):
+    # Ctrl-C reaches the gate, its runner and the bundle's pytest at once, as the terminal sends
+    # SIGINT to the whole foreground process group.
+    import json as _json
+    import os
+    import signal
+
+    root = _seeded(tmp_path)
+    marker, release = tmp_path / "started", tmp_path / "release"
+    interrupted = tmp_path / "interrupted"
+    (root / "second-app" / "test_ok.py").write_text(WAITS_THROUGH_AN_INTERRUPT.format(
+        marker=str(marker), release=str(release), interrupted=str(interrupted)), encoding="utf-8")
+    (core,) = (root / ".planted" / "core").glob("*.whl")
+    env = planted.environ(root / ".planted" / "lock", str(core), root / ".bundle-venvs")
+    gate = subprocess.Popen([sys.executable, str(root / "scripts" / "gate.py"), "--results",
+                             str(root / "out"), "bundles", "--bundle", "second-app"], cwd=root,
+                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True)
+    try:
+        _until(marker)
+        os.killpg(gate.pid, signal.SIGINT)
+        gate.wait(timeout=60)
+        _until(interrupted)
+        run = _gate(root, "bundles", "--bundle", "first-app")
+        assert run.returncode == 2, run.stdout + run.stderr
+        assert "--results" in run.stderr
+    finally:
+        release.touch()
+    assert _free_again(root, "bundles", "--bundle", "first-app").returncode == 0
+    # The interrupted bundle never counts as passed.
+    rows = _json.loads((root / "out" / "bundles" / "results.json").read_text())["bundles"]
+    assert [r["bundle"] for r in rows] == ["first-app"], rows

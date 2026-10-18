@@ -255,3 +255,73 @@ def test_a_bundle_folder_uv_normalizes_is_checked_under_its_normalized_extra(tmp
     damaged = lock.replace('alpha-app = [\n    { name = "dep-alpha" },\n]\n', "", 1)
     assert damaged != lock
     assert any("Alpha_App extra" in p for p in module.edge_problems(damaged, project))
+
+
+# -- versions: the lock holds a version each requirement allows ---------------------------------
+
+def test_both_committed_locks_hold_a_version_every_requirement_allows():
+    module = _module()
+    for name in module.PLATFORMS:
+        lock = (LOCKS / name / "uv.lock").read_text(encoding="utf-8")
+        project = (LOCKS / name / "pyproject.toml").read_text(encoding="utf-8")
+        assert module.version_problems(lock, project) == [], name
+
+
+def test_check_fails_on_a_lock_that_holds_a_package_below_a_bundle_s_floor(tmp_path):
+    # A hand merge that kept one side's package entry: openai at a version alibaba-models'
+    # "openai>=1.0" (and every other bundle that declares it) excludes. Offline: it stops before uv.
+    root = _inputs(tmp_path)
+    lock = root / ".github" / "bundle-lock" / "linux-x86_64" / "uv.lock"
+    text = lock.read_text(encoding="utf-8")
+    entry = re.search(r'(?m)^name = "openai"\nversion = "[^"]+"\n', text)
+    assert entry, "the committed lock holds no openai entry"
+    lock.write_text(text.replace(entry.group(0), 'name = "openai"\nversion = "0.9.0"\n', 1),
+                    encoding="utf-8")
+    problems = _module(root).check(root)
+    assert any(p.startswith("linux-x86_64:") and "openai at 0.9.0" in p and "openai>=1.0" in p
+               and "alibaba-models" in p for p in problems), problems
+    assert not any(p.startswith("darwin-arm64:") for p in problems), problems
+
+
+def test_a_requirement_whose_marker_excludes_the_lock_s_platform_asks_no_version(tmp_path):
+    module = _module()
+    project = module.pyproject(ROOT, marker=module.PLATFORMS["linux-x86_64"], base=[],
+                               core=None)
+    project = project.replace("[project.optional-dependencies]\n",
+                              "[project.optional-dependencies]\nplanted-app = "
+                              "[\"dep-mac>=9; sys_platform == 'darwin'\"]\n", 1)
+    lock = '[[package]]\nname = "dep-mac"\nversion = "1.0.0"\n'
+    assert module.version_problems(lock, project) == []
+
+
+# -- staleness: every other input the generator reads ------------------------------------------
+
+ALL_PLATFORMS = ["linux-x86_64", "darwin-arm64"]
+
+
+@pytest.mark.parametrize(("old", "new", "stale"), [
+    ('PYTHON = "3.12.15"', 'PYTHON = "3.12.16"', ALL_PLATFORMS),
+    ('INDEX = "https://pypi.org/simple"', 'INDEX = "https://index.example.com/simple"',
+     ALL_PLATFORMS),
+    ("\"linux-x86_64\": \"sys_platform == 'linux' and platform_machine == 'x86_64'\"",
+     "\"linux-x86_64\": \"sys_platform == 'linux' and platform_machine == 'aarch64'\"",
+     ["linux-x86_64"]),
+    ("CONFLICTS: list[tuple[str, str]] = []",
+     'CONFLICTS: list[tuple[str, str]] = [("alibaba-models", "deepseek-models")]',
+     ALL_PLATFORMS),
+], ids=["the pinned Python", "the index", "a platform marker", "CONFLICTS"])
+def test_check_fails_when_a_generator_input_moves_without_a_fresh_lock(
+        tmp_path, monkeypatch, old, new, stale):
+    root = _inputs(tmp_path)
+    script = root / "scripts" / "bundle_lock.py"
+    text = script.read_text(encoding="utf-8")
+    assert text.count(old) == 1, old
+    script.write_text(text.replace(old, new), encoding="utf-8")
+    module = _module(root)
+    # A platform the change leaves current goes on to uv's own check; that needs the network,
+    # and is not this rule.
+    monkeypatch.setattr(module, "uv_lock", lambda *args: 0)
+    assert module.check(root) == [
+        f"{p}: pyproject.toml differs from what the bundles' app.json files and core.lock generate"
+        for p in stale
+    ]
