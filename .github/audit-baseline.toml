@@ -1,0 +1,27 @@
+# The dependency audit's waivers, read by `python scripts/audit_locks.py run` (CI's `audit` job
+# on every pull request, and the nightly audit.yml on main).
+#
+# A waiver covers exactly one advisory on one package in one lock, and expires at most 30 days
+# after the day it is written or renewed. Renewing is a new expiry with a new reason. An expired
+# waiver, one more than 30 days out, one missing a field, and one that matches no finding all
+# fail the audit, so the list cannot rot. `file`, `scope` and `reference` are the finding's own,
+# as the audit's summary prints them: `file` is the lock from the repository root (a platform's
+# `.github/bundle-lock/<platform>/uv.lock`, or a bundle's `package-lock.json`), `scope` is
+# `pip-audit` for a uv.lock and `npm-audit` for a package-lock.json, and `reference` is
+# "<package> <advisory>".
+#
+# Only a high or critical finding (or a Python one, which pip-audit reports unrated) fails the
+# run when it is not waived. A moderate or low one is reported and gates nothing. Fix a finding
+# with an in-range update of the lock first (`python scripts/bundle_lock.py write`, or
+# `npm update <package>` in the bundle's ui/ folder, then rebuild its bundle); waive only what no
+# in-range update fixes, and say in `reason` what ends the waiver.
+#
+# None is in force today. The shape of one:
+#
+# [[waiver]]
+# file = ".github/bundle-lock/linux-x86_64/uv.lock"
+# scope = "pip-audit"
+# reference = "example-package GHSA-xxxx-xxxx-xxxx"
+# owner = "maintainers"
+# reason = "Why no in-range update fixes it, and what ends the waiver."
+# expires = 2026-11-15

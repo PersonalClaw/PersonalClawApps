@@ -43,6 +43,11 @@ Run them all as CI does with `make gate` (`python scripts/gate.py`; its parts ar
   credential is listed in `.github/supply-chain.toml`, and a token goes only on the
   steps that call the API. Exceptions there expire within 30 days.
   `test_supply_chain.py` holds it (CONTRIBUTING.md, "Supply chain").
+- **Dependency audit:** CI's `audit` job and the nightly `audit.yml` run
+  `scripts/audit_locks.py` over every bundle lock's environment graphs and every UI
+  bundle's `package-lock.json`. A high or critical finding fails unless a dated waiver in
+  `.github/audit-baseline.toml` covers it (at most 30 days out); fix it with an in-range
+  lock update first (CONTRIBUTING.md, "Dependency audit").
 - **Store-card copy:** `description` must end in a full stop and its **lead sentence
   must fit 90 characters** — the card clamps to two lines, so a longer lead is shown
   cut mid-phrase. Put the detail in later sentences (the detail panel and search read

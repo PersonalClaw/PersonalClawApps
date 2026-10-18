@@ -199,9 +199,10 @@ Least privilege:
   and a write at the top must reach a job that uses it.
 - Every write permission a job holds, and every `actions/checkout` that keeps its
   credentials, is an `[[audited_write]]` entry: the workflow, the job, the permission
-  (or `persist-credentials`), the steps that use it and why. Today's one entry is the
-  core-main canary's `report` job, which holds `issues: write` for its tracking issue.
-  Every other checkout sets `persist-credentials: false`.
+  (or `persist-credentials`), the steps that use it and why. Today's two entries are the
+  `report` jobs of the core-main canary and of the nightly dependency audit, each holding
+  `issues: write` for its one tracking issue. Every other checkout sets
+  `persist-credentials: false`.
 - A token goes in the `env:` of the steps that call the API, never a job's or a
   workflow's.
 
@@ -226,6 +227,36 @@ exception that has expired, is more than 30 days out, matches no violation, or i
 missing a field. The policy file's own rules are never waived. No exception is in force
 today: the quality checks in CI and in the canary read the bundle results their gate
 wrote, so neither installs an app's dependency ranges any more.
+
+### Dependency audit
+
+`scripts/audit_locks.py` audits the locks the apps ship, read from the committed locks and
+never from a fresh resolution: every bundle environment's Python graph for each platform's
+bundle lock (the base environment and one per bundle extra, exported with the bundle
+runner's own `uv export`, so it is what an environment installs), audited by `pip-audit`
+pinned to the lock's versions, and every `package-lock.json` a bundle ships, audited by
+`npm audit --package-lock-only`. CI's `audit` job runs it on every pull request and main
+run, beside `static` and `tests`; the nightly `audit.yml` runs it on main, where an
+advisory lands without a commit, and keeps one issue titled "Dependency audit is red".
+
+It fails on a tool that did not run (exit 2: a missing audit is never a clean one), on a
+high or critical finding no live waiver covers (a Python finding is unrated, and gates as
+high), and on a waiver that is expired, more than 30 days out, missing a field or matching
+no finding. Moderate and low findings are listed in the job summary and gate nothing. It
+needs the network, so no gate part runs it. To run it locally:
+
+    uv venv .local/scratch/audit/.venv && uv pip install --python .local/scratch/audit/.venv/bin/python pip-audit==2.10.1
+    .local/scratch/audit/.venv/bin/python scripts/audit_locks.py run --pip-audit .local/scratch/audit/.venv/bin/python --work .local/scratch/audit/work
+
+Fix a finding with an in-range update first: `python scripts/bundle_lock.py write` for a
+bundle lock (after the bundle's floor moves, if the fix is outside its range), or `npm
+update <package>` in the bundle's `ui/` and a rebuild of its bundle. Waive only what no
+in-range update fixes, with a `[[waiver]]` in `.github/audit-baseline.toml`: `file` (the
+lock, from the repository root), `scope` (`pip-audit` or `npm-audit`), `reference`
+(`<package> <advisory>`, as the summary prints it), `owner`, `reason` (why, and what ends
+it) and `expires` (at most 30 days out). No waiver is in force today. Core's own graph is
+core's audit's; the dependencies core brings into every bundle environment are audited
+here.
 
 Not here yet: the repository security settings, the scheduled pin-refresh pull requests
 from a GitHub App and the weekly SHA-to-tag check, dependency review and CodeQL in the

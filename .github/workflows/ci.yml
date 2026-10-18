@@ -8,7 +8,8 @@
 # request runs only the bundles its change can affect, plus every bundle claiming
 # quality.tested; then the gate's quality part, core's verifier over the bundle results that
 # run just wrote, which runs no suite, its verdict shown by the quality-declarations step)
-# · dco (PR-only).
+# · audit (scripts/audit_locks.py: the dependency audit of every bundle lock and UI npm lock,
+# waivers in .github/audit-baseline.toml; nightly on main too, in audit.yml) · dco (PR-only).
 # Every job that installs core installs the one commit core.lock pins (read and exported by
 # scripts/core_lock.py, which prints it), so a re-run tests the same core. Core main's own
 # drift is the weekly canary's to report (core-main-canary.yml), not this workflow's.
@@ -193,6 +194,52 @@ jobs:
           name: gate-tests
           path: ${{ runner.temp }}/gate
           if-no-files-found: error
+
+  audit:
+    # The dependency audit of the locks the apps ship (scripts/audit_locks.py): every bundle
+    # environment's Python graph, exported from each platform's .github/bundle-lock/*/uv.lock
+    # with the bundle runner's own export (the base environment and one per bundle extra), and
+    # every package-lock.json a bundle ships. It fails on a tool that did not run, on a high or
+    # critical finding no live waiver in .github/audit-baseline.toml covers, and on a waiver
+    # that is expired, more than 30 days out, missing a field or stale. Every other finding is
+    # listed in the job summary. It runs beside static and tests, so it adds no wall time to a
+    # pull request; a new advisory on a dependency no pull request touched stops merging until
+    # it is fixed or waived, which is the point. The nightly audit.yml runs it on main, where an
+    # advisory lands without a commit.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        # npm audit reads each UI bundle's package-lock.json.
+        with:
+          node-version-file: .nvmrc
+      - name: Install uv
+        # The exports read the committed locks offline, so no cache is kept.
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+          enable-cache: false
+      # pip-audit is in no lock, so it is named as an exact release, in a venv of its own: no
+      # bundle's dependencies and no core are installed into it, so what it audits is only the
+      # exported locks.
+      - name: pip-audit, in a venv of its own
+        run: |
+          uv venv --python 3.12.15 "$RUNNER_TEMP/audit-venv"
+          uv pip install --python "$RUNNER_TEMP/audit-venv/bin/python" pip-audit==2.10.1
+      - name: Audit the locks the apps ship
+        run: >-
+          "$RUNNER_TEMP/audit-venv/bin/python" scripts/audit_locks.py run
+          --pip-audit "$RUNNER_TEMP/audit-venv/bin/python" --work "$RUNNER_TEMP/audit"
 
   dco:
     # Every commit in a PR must carry a Signed-off-by trailer (DCO),
