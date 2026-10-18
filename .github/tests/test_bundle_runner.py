@@ -12,6 +12,8 @@ The planted controls, one each:
 - isolation: two bundles that declare different packages each see only their own, and a bundle
   that declares none sees neither;
 - ``--jobs 2`` names a failing bundle and exits 1;
+- bundles start largest test files first (``tests/`` counted too), ties by name, and each
+  environment is built in the order its first bundle starts; ``results.json`` stays sorted;
 - the key changes with each of its inputs (core, dependency set, Python version, ABI, OS,
   architecture, uv version, index, resolution), and the live inputs are the host's own;
 - two runs building one environment at once give one build and one reuse;
@@ -1063,3 +1065,55 @@ def test_a_lock_holding_a_version_below_a_bundle_s_floor_is_refused(tmp_path):
     assert run.returncode == 2, run.stdout + run.stderr
     assert "dep-alpha" in run.stderr and "0.5.0" in run.stderr and ">=1" in run.stderr
     assert "scripts/bundle_lock.py write" in run.stderr
+
+
+# -- start order ------------------------------------------------------------------------------
+
+def _padded(lines: int) -> dict[str, str]:
+    """A passing test file of about *lines* lines: the size the runner ranks a suite by."""
+    return {"test_ok.py": "def test_ok():\n    assert True\n" + "# padding\n" * lines}
+
+
+def _started(stderr: str) -> list[str]:
+    return [line.removesuffix(": started") for line in stderr.splitlines()
+            if line.endswith(": started")]
+
+
+def test_bundles_start_largest_test_files_first(world):
+    # Under --jobs, a long suite that starts last runs alone at the end. Names run against size
+    # here, so a run in name order starts them backwards.
+    root, index, core = world
+    planted.bundle(root, "a-small", tests=_padded(1))
+    planted.bundle(root, "m-large", tests=_padded(400))
+    planted.bundle(root, "z-medium", tests=_padded(100))
+    nested = planted.bundle(root, "b-nested")
+    (nested / "test_ok.py").unlink()  # only tests/ holds its suite
+    (nested / "tests").mkdir()
+    (nested / "tests" / "test_ok.py").write_text(_padded(250)["test_ok.py"], encoding="utf-8")
+    run = _run(root, planted.lock(root, index), core, "--jobs", "1", "--results", "out")
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert _started(run.stderr) == ["m-large", "b-nested", "z-medium", "a-small"], run.stderr
+    assert [b["bundle"] for b in _results(root)["bundles"]] == [
+        "a-small", "b-nested", "m-large", "z-medium"], "results.json stays sorted by bundle"
+
+
+def test_bundles_whose_test_files_are_the_same_size_start_by_name(world):
+    root, index, core = world
+    for name in ("c-app", "a-app", "b-app"):
+        planted.bundle(root, name, tests=_padded(10))
+    run = _run(root, planted.lock(root, index), core, "--jobs", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert _started(run.stderr) == ["a-app", "b-app", "c-app"], run.stderr
+
+
+def test_environments_are_built_in_the_order_their_first_bundle_starts(world):
+    # The bundle that starts first waits on its own environment, not on one built for later.
+    root, index, core = world
+    planted.bundle(root, "a-small", deps=["dep-alpha>=1"], tests=_padded(1))
+    planted.bundle(root, "z-large", deps=["dep-beta>=1"], tests=_padded(400))
+    run = _run(root, planted.lock(root, index), core, "--jobs", "1")
+    assert run.returncode == 0, run.stdout + run.stderr
+    built = [line.split("building for ", 1)[1] for line in run.stderr.splitlines()
+             if "building for " in line]
+    assert built[:2] == ["z-large", "a-small"], run.stderr
+    assert _started(run.stderr) == ["z-large", "a-small"], run.stderr

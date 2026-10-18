@@ -87,6 +87,8 @@ on it, so a hang names what it is in. A full run that finds no tested bundle exi
 
 - `--jobs N` runs N bundles at once (default: half the CPUs, at most 8; CI passes 4).
   Each still runs in its own pytest process, and its output prints as one block.
+  Bundles start largest test files first (ties by name), and environments are built in
+  the order their first bundle starts, so the longest suites don't run alone at the end.
 - `--changed <base>` runs only the bundles whose folder differs from `<base>`
   (`git diff <base>...HEAD` and your uncommitted changes; a rename counts as both its old
   and its new path). A change outside the bundles
