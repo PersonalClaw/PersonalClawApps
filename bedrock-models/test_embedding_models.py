@@ -203,7 +203,9 @@ class _Bedrock:
         #: An answer to send in place of the documented one, for the next call.
         self.next_answer: dict[str, Any] | None = None
         self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), _handler_for(self))
-        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self._thread = threading.Thread(
+            target=self._httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+        )
 
     @property
     def url(self) -> str:

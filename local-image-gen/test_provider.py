@@ -139,7 +139,9 @@ class _FakeComfy:
                 return self._json(404, {"error": "no such path"})
 
         self._srv = ThreadingHTTPServer(("127.0.0.1", 0), _H)
-        self._thread = threading.Thread(target=self._srv.serve_forever, daemon=True)
+        self._thread = threading.Thread(
+            target=self._srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+        )
 
     @property
     def endpoint(self) -> str:

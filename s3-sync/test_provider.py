@@ -485,7 +485,9 @@ class _StubServer(http.server.ThreadingHTTPServer):
 @pytest.fixture
 def stub():
     srv = _StubServer()
-    t = threading.Thread(target=srv.serve_forever, daemon=True)
+    t = threading.Thread(
+        target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+    )
     t.start()
     try:
         yield srv
