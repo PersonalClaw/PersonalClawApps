@@ -99,8 +99,11 @@ class _AsksOnce:
         self.approved: list[str] = []
         self.rejected: list[str] = []
         self._answered = asyncio.Event()
+        #: Set once the turn reaches the model: everything before it is building the message.
+        self.reached = asyncio.Event()
 
     async def stream(self, message, timeout=120.0):
+        self.reached.set()
         yield LLMEvent(kind="permission_request", request_id="req-1", options=[], **self._call)
         await asyncio.wait_for(self._answered.wait(), timeout=5)
         yield LLMEvent(kind="text_chunk", text="Done." if self.approved else "Not run.")
@@ -161,8 +164,38 @@ async def _asked(slack: MockSlackClient, runtime: _AsksOnce) -> dict:
     raise AssertionError("the thread never asked about the call")
 
 
+#: How long a turn has from reaching the model to its end: asking, the answer, the reply.
+TURN_BOUND = 5.0
+#: How long a turn may take to reach the model. Building the message is CPU work on the event
+#: loop (the prompts and skills a fresh home is seeded with, a first turn's imports), so its wall
+#: time grows with the machine's load: it is a hang guard, kept apart from the turn's bound.
+REACH_GUARD = 30.0
+
+
+async def _reached(runtime: _AsksOnce, turn) -> None:
+    """Once the turn has reached the model; a turn that ends or hangs before it fails here."""
+    reached = asyncio.ensure_future(runtime.reached.wait())
+    done, _ = await asyncio.wait(
+        {reached, turn}, timeout=REACH_GUARD, return_when=asyncio.FIRST_COMPLETED
+    )
+    if reached in done:
+        return
+    reached.cancel()
+    if turn.done():
+        turn.result()  # the turn's own error, if it raised one
+        raise AssertionError("the turn ended without reaching the model")
+    turn.cancel()
+    raise AssertionError(f"the turn did not reach the model in {REACH_GUARD:.0f} s")
+
+
+async def _to_its_end(runtime: _AsksOnce, turn) -> None:
+    """The turn, run to its end within TURN_BOUND of reaching the model."""
+    await _reached(runtime, turn)
+    await asyncio.wait_for(turn, timeout=TURN_BOUND)
+
+
 async def _ran_unasked(slack: MockSlackClient, runtime: _AsksOnce, turn) -> None:
-    await asyncio.wait_for(turn, timeout=5)
+    await _to_its_end(runtime, turn)
     assert runtime.approved == ["req-1"]
     assert _prompts(slack) == [], "a call PersonalClaw approves was asked about"
 

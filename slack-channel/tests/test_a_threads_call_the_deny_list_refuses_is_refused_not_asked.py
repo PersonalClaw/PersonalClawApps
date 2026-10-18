@@ -25,6 +25,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from slack_helpers import MockSlackClient
+import test_a_threads_call_runs_unasked_only_when_personalclaw_says_so as unasked
 from test_a_threads_call_runs_unasked_only_when_personalclaw_says_so import (
     DM,
     OWNER,
@@ -32,6 +33,8 @@ from test_a_threads_call_runs_unasked_only_when_personalclaw_says_so import (
     _AsksOnce,
     _asked,
     _prompts,
+    _reached,
+    _to_its_end,
 )
 from test_a_threads_call_runs_unasked_only_when_personalclaw_says_so import (  # noqa: F401
     _the_owners_dm,
@@ -73,6 +76,7 @@ def _turn(runtime: _AsksOnce, slack: MockSlackClient) -> "asyncio.Future[None]":
 
 async def _refused(slack: MockSlackClient, runtime: _AsksOnce, turn) -> None:
     """The call was refused before anyone was asked, and the turn went on to its end."""
+    await _reached(runtime, turn)
     for _ in range(500):
         if _prompts(slack):
             turn.cancel()
@@ -173,6 +177,35 @@ async def test_an_ordinary_command_personalclaw_approves_still_runs_unasked(dash
     slack = MockSlackClient()
     runtime = _AsksOnce()
     with patch("slack_runtime.handler.sel") as said:
-        await asyncio.wait_for(_turn(runtime, slack), timeout=5)
+        await _to_its_end(runtime, _turn(runtime, slack))
     assert runtime.approved == ["req-1"] and _prompts(slack) == []
     assert [r["outcome"] for r in _rows(said)] == ["auto_approved"]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_slow_to_reach_the_model_still_has_its_whole_bound(dashboard, monkeypatch):
+    """Building the message is CPU work on the event loop, so on a loaded machine it can take
+    longer than the turn's bound. That time is the hang guard's, not the turn's: a build that
+    holds the loop for twice the bound still leaves the turn its whole bound once it reaches
+    the model. Scaled down (a 0.5 s bound, a 1 s build) so it costs a second, not ten."""
+    import time
+
+    from personalclaw.context import ContextBuilder
+
+    bound = 0.5
+    monkeypatch.setattr(unasked, "TURN_BOUND", bound)
+    real = ContextBuilder.build_message
+    built: list[float] = []
+
+    def slow_build(self, *args, **kwargs):
+        time.sleep(2 * bound)  # holds the event loop, as a starved CPU does
+        built.append(2 * bound)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(ContextBuilder, "build_message", slow_build)
+    _add_pattern(hooks={"auto_approve_tools": ["write_file"]})
+    slack = MockSlackClient()
+    runtime = _AsksOnce()
+    await _to_its_end(runtime, _turn(runtime, slack))
+    assert built == [2 * bound], "the build was not slowed, so this proves nothing"
+    assert runtime.approved == ["req-1"] and _prompts(slack) == []
