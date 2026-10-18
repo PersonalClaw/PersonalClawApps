@@ -121,8 +121,14 @@ make gate            # or: python scripts/gate.py
 
 It runs every static check in `.github/scripts/` (each is a row of its own: `boundary`,
 `manifest-validate`, `ui-bundles`, ...), then `.github/tests`, then every bundle's suite,
-and keeps going past a red. `make static`, `make rails` and `make bundles` run one part, as
-each CI job does; the gate passes `--jobs`, `--changed` and `--bundle` on to the runner,
+then the `quality` part: core's verifier (`python -m personalclaw.apps.quality . --results
+DIR`) over the bundle results that same run wrote, so every `quality` claim is judged as CI
+judges it. It keeps going past a red, so a red bundle's claim is still judged. `make static`,
+`make rails` and `make bundles` run one part; `make quality` runs `bundles quality`, because the
+`quality` part judges only its own run's bundle results and fails, naming the missing
+`results.json`, when there are none. `python scripts/gate.py --verdict quality` reads a
+finished run's quality result back from its receipt, which is how CI's
+`quality-declarations` step shows it; the gate passes `--jobs`, `--changed` and `--bundle` on to the runner,
 and `make gate GATE_ARGS="--jobs 4"` passes them through make. Every run writes a receipt
 (the apps and core commits, the commit `core.lock` pins and whether the installed core is
 it, the toolchain, the bundles it chose and why, and each bundle environment's key and

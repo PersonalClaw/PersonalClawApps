@@ -301,8 +301,11 @@ def ci_problems(wf: dict, text: str) -> tuple[list[str], list[str]]:
         if export_at is None or export_at > min(install_at):
             problems.append(f"{name}: installs core without first reading core.lock")
         after = [_run(s) for s in steps[max(install_at) + 1:]]
+        # A gate run with --core probes the installed core before it runs anything. A
+        # `--verdict` step only reads a finished run's receipt, so it checks no installed core.
         if not any("scripts/core_lock.py verify" in r
-                   or ("scripts/gate.py" in r and '--core "$CORE_SHA"' in r) for r in after):
+                   or ("scripts/gate.py" in r and '--core "$CORE_SHA"' in r
+                       and "--verdict" not in r) for r in after):
             problems.append(f"{name}: never checks that the installed core is the locked one")
     return problems, installing
 

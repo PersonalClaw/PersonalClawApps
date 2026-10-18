@@ -6,8 +6,9 @@
 # static (every .github/scripts/check_*.py, one row each) · tests (.github/tests once,
 # then each bundle's suite, four at once, each in a locked environment of its own; a pull
 # request runs only the bundles its change can affect, plus every bundle claiming
-# quality.tested; then quality-declarations, core's verifier over the bundle results the
-# job just wrote, which runs no suite) · dco (PR-only).
+# quality.tested; then the gate's quality part, core's verifier over the bundle results that
+# run just wrote, which runs no suite, its verdict shown by the quality-declarations step)
+# · dco (PR-only).
 # Every job that installs core installs the one commit core.lock pins (read and exported by
 # scripts/core_lock.py, which prints it), so a re-run tests the same core. Core main's own
 # drift is the weekly canary's to report (core-main-canary.yml), not this workflow's.
@@ -144,12 +145,14 @@ jobs:
         # environment from the bundle lock, hashed, and invokes pytest separately per bundle to
         # avoid basename clashes, four bundles at once. On a pull request --changed runs only
         # the bundles a change since the base can affect; a main-branch run takes every
-        # bundle. Both parts run even when the first is red. --core refuses to run when the
-        # installed core is not the locked commit. Never --float: that is the weekly canary's
-        # mode, not merge evidence.
+        # bundle. Its `quality` part then judges the quality claims from the bundle results this
+        # same run wrote (see the quality-declarations step below). Every part runs even when an
+        # earlier one is red. --core refuses to run when the installed core is not the locked
+        # commit. Never --float: that is the weekly canary's mode, not merge evidence. These are
+        # the parts `make gate` runs too, after the static part this workflow runs in its own job.
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: python scripts/gate.py rails bundles --core "$CORE_SHA" --jobs 4 ${BASE_SHA:+--changed "$BASE_SHA"} --results "$RUNNER_TEMP/gate"
+        run: python scripts/gate.py rails bundles quality --core "$CORE_SHA" --jobs 4 ${BASE_SHA:+--changed "$BASE_SHA"} --results "$RUNNER_TEMP/gate"
       - name: quality-declarations
         # A `quality` block in app.json — {tested, designSystem, a11y} — is what the Store
         # renders as a badge row, so for a FIRST-PARTY app it is a promise, not decoration.
@@ -158,21 +161,23 @@ jobs:
         # is empty — and exits 1 on any claim the bundle cannot back. An axis left absent, or
         # declared honestly false ("legacy"/"n/a"), claims nothing and is never punished.
         #
-        # The check IS core's module, invoked verbatim — deliberately not a second
-        # implementation here. Re-deriving the token-lint patterns or the pass rules in this
-        # repo would mint exactly the declared-vs-actual drift it exists to catch, one layer
-        # down.
+        # The check IS core's module, which the gate's `quality` part invokes verbatim —
+        # deliberately not a second implementation here. Re-deriving the token-lint patterns or
+        # the pass rules in this repo would mint exactly the declared-vs-actual drift it exists
+        # to catch, one layer down.
         #
-        # A `tested` claim is judged from the bundle results the gate step above just wrote
-        # (bundles/results.json and each bundle's JUnit), never by running a suite again:
-        # `--results` starts no pytest. A claimant with a failed result, or with no result at
-        # all, is a violation, and --changed always runs every claimant. It runs whatever the
-        # gate's verdict, so a red bundle's claim is reported too; a cancelled run skips it.
-        # The core it imports is the one the gate step's --core already checked. It exits 1 too
-        # on a tree with no */app.json at all (a checker that silently checked nothing is the
-        # failure mode this guards).
+        # The judging happens in the gate step above, in the same run as the bundles: a
+        # `tested` claim is judged from the bundle results that run wrote (bundles/results.json
+        # and each bundle's JUnit), never by running a suite again. A claimant with a failed
+        # result, or with no result at all, is a violation, and --changed always runs every
+        # claimant. The gate runs the part whatever the bundles' verdict, so a red bundle's
+        # claim is reported too. This step judges nothing itself: --verdict reads the quality
+        # row from that run's receipt and exits with it, so the verdict stands on a line of its
+        # own. A receipt with no quality row (the gate died before the part ran), no receipt at
+        # all, or a receipt for another core fails here and says so; it never passes. A
+        # cancelled run skips it.
         if: ${{ !cancelled() }}
-        run: python -m personalclaw.apps.quality . --results "$RUNNER_TEMP/gate/bundles"
+        run: python scripts/gate.py --verdict quality --core "$CORE_SHA" --results "$RUNNER_TEMP/gate"
       - name: Keep the gate's receipt and each bundle's results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

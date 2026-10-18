@@ -14,7 +14,7 @@ PersonalClaw gateway via the platform's typed provider contracts. Full contract:
 ## The hard rules (CI enforces these)
 
 Run them all as CI does with `make gate` (`python scripts/gate.py`; its parts are
-`static`, `rails` and `bundles`). Each static check is a row of its own in the result.
+`static`, `rails`, `bundles` and `quality`). Each static check is a row of its own in the result.
 
 - **SDK boundary:** import core **only** via `personalclaw.sdk.*`. The `boundary`
   check fails on any deeper import. Missing symbol → open a core issue to promote
@@ -30,8 +30,9 @@ Run them all as CI does with `make gate` (`python scripts/gate.py`; its parts ar
   `./scripts/test-bundles <bundle>` locally (`--jobs N`, `--changed <base>`), from an
   environment with core and pytest (CONTRIBUTING.md shows the setup), to use the exact
   same path. A pull request's CI runs only the bundles its change can affect, plus every
-  bundle claiming `quality.tested`: the `tests` job's last step, `quality-declarations`,
-  judges those claims from the results that job just recorded and runs no suite itself.
+  bundle claiming `quality.tested`: the gate's `quality` part judges those claims from the
+  results its own `bundles` part just recorded and runs no suite itself, and the `tests`
+  job's `quality-declarations` step shows that verdict.
 - **One core commit:** CI tests against the core commit in `core.lock` (one full
   40-character SHA), never core main. Install it locally with
   `uv pip install "personalclaw @ git+https://github.com/PersonalClaw/PersonalClaw@$(cat core.lock)"`;
