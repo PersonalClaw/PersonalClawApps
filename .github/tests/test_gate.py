@@ -166,6 +166,17 @@ def test_without_jobs_the_rails_take_the_runner_s_default(tmp_path):
     assert _receipt(root)["parts"][0]["workers"] == workers
 
 
+def test_the_static_checks_run_as_many_at_once_as_jobs_and_the_receipt_says_how_many(tmp_path):
+    """On a pull request that changes one bundle, the static job is the longest one, so its
+    checks take the same --jobs as the bundles and the rails."""
+    root = _seeded(tmp_path)
+    run = _gate(root, "static", "--jobs", "3")
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert ".github/scripts/run_checks.py --jobs 3 --report" in run.stdout
+    (static,) = _receipt(root)["parts"]
+    assert (static["part"], static["workers"]) == ("static", 3)
+
+
 def test_with_no_part_named_the_gate_runs_all_four_in_order(tmp_path):
     root = _seeded(tmp_path)
     run = _gate(root)

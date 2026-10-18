@@ -8,7 +8,9 @@ and the gate exits 1 when any part failed.
 
 Parts:
 
-- ``static``: ``.github/scripts/run_checks.py``, every static check on its own row.
+- ``static``: ``.github/scripts/run_checks.py``, every static check on its own row, ``--jobs``
+  checks at once (the bundle runner's default when ``--jobs`` is not given); the receipt records
+  how many.
 - ``rails``: ``python -m pytest .github/tests -n N``, once, on ``--jobs`` workers (the bundle
   runner's default when ``--jobs`` is not given). They are a fixed cost in every pull request's
   run, so they get the same workers the bundles do; the receipt records how many.
@@ -210,7 +212,8 @@ def _rails_workers(jobs: int | None) -> int:
 def _run_part(part: str, *, python: str, results: Path, bundles: list[str],
               flags: list[str], keep: tuple[int, ...] = (), workers: int = 2) -> int:
     if part == "static":
-        argv = [python, ".github/scripts/run_checks.py", "--report", str(results / "static.json")]
+        argv = [python, ".github/scripts/run_checks.py", "--jobs", str(workers),
+                "--report", str(results / "static.json")]
     elif part == "rails":
         argv = [python, "-m", "pytest", ".github/tests", "-n", str(workers), "-q"]
     elif part == "quality":
@@ -278,8 +281,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bundle", action="append", default=[], metavar="NAME",
                         help="run only this bundle's suite (repeatable; default: every tested bundle)")
     parser.add_argument("--jobs", type=int, metavar="N",
-                        help="bundles to run at once, and the rails' pytest workers (default: "
-                             "half the CPUs, at most 8)")
+                        help="bundles and static checks to run at once, and the rails' pytest "
+                             "workers (default: half the CPUs, at most 8)")
     parser.add_argument("--changed", metavar="BASE",
                         help="run only the bundles a change since BASE can affect")
     parser.add_argument("--float", action="store_true", dest="floating",
@@ -356,7 +359,7 @@ def main(argv: list[str] | None = None) -> int:
             target.unlink()
     results.mkdir(parents=True, exist_ok=True)
 
-    workers = _rails_workers(args.jobs) if "rails" in parts else 2
+    workers = _rails_workers(args.jobs) if {"static", "rails"} & set(parts) else 2
     for part in parts:
         started = time.monotonic()
         rc = _run_part(part, python=args.python, results=results, bundles=args.bundle,
@@ -367,7 +370,7 @@ def main(argv: list[str] | None = None) -> int:
             "returncode": rc,
             "seconds": round(time.monotonic() - started, 1),
         }
-        if part == "rails":
+        if part in ("static", "rails"):
             row["workers"] = workers
         receipt["parts"].append(row)
 

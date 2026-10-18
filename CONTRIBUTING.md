@@ -133,7 +133,9 @@ judges it. It keeps going past a red, so a red bundle's claim is still judged. `
 `quality` part judges only its own run's bundle results and fails, naming the missing
 `results.json`, when there are none. `python scripts/gate.py --verdict quality` reads a
 finished run's quality result back from its receipt, which is how CI's
-`quality-declarations` step shows it; the gate passes `--jobs`, `--changed` and `--bundle` on to the runner,
+`quality-declarations` step shows it; `--jobs` also sets how many static checks run at once
+(each still prints as one block, and the table keeps name order) and the rails' pytest workers;
+the gate passes `--jobs`, `--changed` and `--bundle` on to the runner,
 and `make gate GATE_ARGS="--jobs 4"` passes them through make. Every run writes a receipt
 (the apps and core commits, the commit `core.lock` pins and whether the installed core is
 it, the toolchain, the bundles it chose and why, and each bundle environment's key and
