@@ -341,7 +341,7 @@ def _add(wf, job, step, at=-1):
     steps.insert(len(steps) if at == -1 else at, step)
 
 
-_GATE_STEP = "scripts/gate.py rails"
+_GATE_STEP = "scripts/gate.py bundles"
 
 
 def _verdict_step(wf):
@@ -363,7 +363,7 @@ def _verdict_runs_the_part_again(wf):
 
 def _module_called_directly(wf):
     """The shape before the gate had a quality part: the step calls core's verifier itself."""
-    _replace(wf, "tests", _GATE_STEP, " rails bundles quality ", " rails bundles ")
+    _replace(wf, "tests", _GATE_STEP, " bundles quality ", " bundles ")
     _verdict_step(wf)["run"] = ('python -m personalclaw.apps.quality . --results '
                                 '"$RUNNER_TEMP/gate/bundles"')
 

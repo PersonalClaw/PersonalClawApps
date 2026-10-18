@@ -165,7 +165,7 @@ pin by hand in a pull request like any other.
 
 CI's inputs are pinned, and every job holds only the GitHub token permissions it needs.
 `.github/tests/test_supply_chain.py` holds both (it runs in the gate's `rails` part, so
-`make gate` and CI's `tests` job), and `.github/supply-chain.toml` holds its Node
+`make gate` and CI's `static` job), and `.github/supply-chain.toml` holds its Node
 end-of-life table, the audited write steps and the exceptions.
 
 How to pin:

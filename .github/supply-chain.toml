@@ -1,5 +1,5 @@
 # Supply-chain policy for this repository's CI, read by .github/tests/test_supply_chain.py (the
-# gate's `rails` part, so `make gate` and CI's `tests` job). See "Supply chain" in
+# gate's `rails` part, so `make gate` and CI's `static` job). See "Supply chain" in
 # CONTRIBUTING.md for how to pin, and how to add or renew an exception.
 
 # Each Node release line CI may pin, and the date it reaches end of life, from the Node.js
