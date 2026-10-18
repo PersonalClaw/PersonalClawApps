@@ -39,7 +39,10 @@ A full run that finds no tested bundle exits 2; only ``--changed`` on a diff no 
 selects none and passes.
 
 ``--jobs N`` runs N bundles at once (default: half the CPUs, at most 8). Each bundle still runs in
-its own pytest process, and its output is printed as one block when it finishes.
+its own pytest process, and its output is printed as one block when it finishes. Bundles start
+largest test files first (ties by name), and environments are built in the order their first
+bundle starts, so the longest suites run at once rather than last; ``results.json`` stays sorted
+by bundle.
 ``--changed BASE`` runs only the bundles whose folder differs from BASE (``git diff BASE...HEAD``
 and the uncommitted work tree); a change outside every bundle that can change any bundle's run
 selects every bundle, as does a diff git cannot read. It also always runs every bundle whose
@@ -135,6 +138,19 @@ def discover_bundles(root: Path = ROOT) -> list[Path]:
         for bundle in sorted(root.iterdir())
         if bundle.is_dir() and (bundle / "app.json").is_file() and _has_tests(bundle)
     ]
+
+
+def test_bytes(bundle: Path) -> int:
+    """The size of a bundle's test files: the runner's estimate of how long its suite runs."""
+    return sum(path.stat().st_size for pattern in ("test_*.py", "tests/test_*.py")
+               for path in bundle.glob(pattern))
+
+
+def longest_first(bundles: Sequence[Path]) -> list[Path]:
+    """*bundles* in the order a run starts them: largest test files first, then by label. Under
+    ``--jobs`` the longest suites then start at once instead of whenever their name comes up, so
+    none of them is left running alone at the end."""
+    return sorted(bundles, key=lambda bundle: (-test_bytes(bundle), _label(bundle)))
 
 
 def declared_dependencies(bundle: Path) -> list[str]:
@@ -866,6 +882,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
+    # Longest suites first, and each environment built in the order its first bundle starts.
+    rank = {_label(bundle): i for i, bundle in enumerate(longest_first(bundles))}
+    plans.sort(key=lambda item: min(rank[_label(b)] for b in item.bundles))
+    work = sorted(((item, b) for item in plans for b in item.bundles),
+                  key=lambda pair: rank[_label(pair[1])])
+
     summary["swept"] = sweep(envs, {item.key for item in plans})
     if summary["swept"]:
         print(f"removed {len(summary['swept'])} environment folder(s) left by a stopped build or "
@@ -1036,7 +1058,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         save()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
-        for future in [pool.submit(run_one, item, b) for item in plans for b in item.bundles]:
+        for future in [pool.submit(run_one, item, b) for item, b in work]:
             future.result()
     builder.shutdown()
     for key, labels in sorted(suspects.items()):
