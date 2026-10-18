@@ -22,6 +22,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 
 #: What the child runs: core's loader, nothing else. Its exit status is the verdict.
@@ -60,17 +62,24 @@ def _load_error(bundle: Path, name: str, ref: str, home: Path) -> str:
     return (proc.stderr.strip().splitlines() or ["(no output)"])[-1]
 
 
-def test_every_declared_cli_step_loads_through_cores_loader(tmp_path):
-    steps = _steps(ROOT)
-    # Vacuity floor: 14 apps declare 28 steps as this rail lands; a glob that matched nothing
-    # would pass every assertion below.
-    assert len(steps) >= 20, f"only {len(steps)} cli steps found — did the manifest key move?"
-    broken = [
-        f"{name} cli.{kind} ({ref}): {error}"
-        for bundle, name, kind, ref in steps
-        if (error := _load_error(bundle, name, ref, tmp_path))
-    ]
-    assert not broken, "core's CLI runner cannot load:\n  " + "\n  ".join(broken)
+STEPS = _steps(ROOT)
+
+
+def test_the_census_finds_every_declared_cli_step():
+    """Vacuity floor: 17 apps declare 34 steps today. A glob that matched nothing would leave the
+    parametrized rail below with no case to run, and an empty parametrize is a skip, not a red."""
+    assert len(STEPS) >= 20, f"only {len(STEPS)} cli steps found — did the manifest key move?"
+
+
+# One test per step, so pytest-xdist spreads the steps over the rails' workers: each loads in a
+# fresh interpreter of its own, and run one after another they were the rails' longest test.
+@pytest.mark.parametrize(
+    ("bundle", "name", "kind", "ref"), STEPS,
+    ids=[f"{name}-{kind}" for _, name, kind, _ in STEPS],
+)
+def test_the_declared_cli_step_loads_through_cores_loader(bundle, name, kind, ref, tmp_path):
+    error = _load_error(bundle, name, ref, tmp_path)
+    assert not error, f"core's CLI runner cannot load {name} cli.{kind} ({ref}): {error}"
 
 
 def _probe_step(tmp_path: Path, body: str) -> str:

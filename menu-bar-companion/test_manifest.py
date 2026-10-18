@@ -99,7 +99,8 @@ def test_the_declared_quality_bar_is_backed_by_this_bundles_own_evidence():
 
     ``verify_app``'s default runner spawns ``pytest <bundle>``; calling it from inside that
     very suite would recurse forever. So the ``tested`` axis's RUN belongs to CI (the
-    ``quality-declarations`` job executes it for real, and a red bundle fails the build),
+    ``quality-declarations`` step of the ``tests`` job judges it from the bundle's recorded
+    result, and a red bundle fails the build),
     and what this pins is the evidence SHAPE — that every axis declared here has something
     to check at all. Declaring an axis with nothing behind it is a violation, not a free
     pass, which is the whole reason a badge is worth reading.

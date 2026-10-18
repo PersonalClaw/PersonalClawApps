@@ -910,9 +910,11 @@ def test_the_check_reads_every_workflow_action_checkout_and_package_ci_has():
     parsed = [parse_workflow(n, t) for n, t in repository["workflows"].items()]
     steps = [s for w in parsed for j in w["jobs"] for s in j["steps"]]
     assert {w["name"] for w in parsed} >= {"ci.yml", "core-lock-bump.yml", "core-main-canary.yml"}
-    assert sum(1 for s in steps if s["uses"]) >= 18
+    # 15 and 5 since the quality check became a step of the tests job: its own job's checkout,
+    # setup-uv and download-artifact went with it.
+    assert sum(1 for s in steps if s["uses"]) >= 15
     assert sum(1 for s in steps if (s["uses"] or {}).get("reference", "").startswith(
-        "actions/checkout@")) >= 6
+        "actions/checkout@")) >= 5
     assert set(repository["packages"]) >= {"growth/ui", "minutes/ui"}
     assert all(e["package_json"] and e["lock"] for e in repository["packages"].values())
 

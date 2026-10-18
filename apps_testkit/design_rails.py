@@ -4,7 +4,7 @@ One implementation, parameterized by app directory, imported by each bundle's
 ``test_design_system.py`` — a rail copy-pasted per app is the drift these rails
 exist to stop. The assertions pin the CALL SITES that ``quality.designSystem``
 depends on, so a regression fails here with a reason rather than failing in the
-``quality-declarations`` job as an unexplained token count.
+``quality-declarations`` check as an unexplained token count.
 
 App-SPECIFIC rails (a pinned control shape, a banned local constant) stay in the
 app's own test file; only the bundle-contract rails live here.
