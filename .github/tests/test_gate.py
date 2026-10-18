@@ -9,6 +9,7 @@ exactly what was seeded; none of them runs a real check or a real bundle suite.
 from __future__ import annotations
 
 import importlib.metadata
+import importlib.util
 import json
 import shutil
 import subprocess
@@ -139,6 +140,30 @@ def test_a_red_rail_reds_the_gate(tmp_path):
     run = _gate(root, "rails")
     assert run.returncode == 1
     assert [(p["part"], p["result"]) for p in _receipt(root)["parts"]] == [("rails", "FAIL")]
+
+
+def test_the_rails_run_on_as_many_workers_as_jobs_and_the_receipt_says_how_many(tmp_path):
+    """The rails are a fixed cost in every pull request's run, so they take the same --jobs as the
+    bundles (CI's four), not a fixed two."""
+    root = _seeded(tmp_path)
+    run = _gate(root, "rails", "--jobs", "3")
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "-m pytest .github/tests -n 3 -q" in run.stdout
+    (rails,) = _receipt(root)["parts"]
+    assert (rails["part"], rails["workers"]) == ("rails", 3)
+
+
+def test_without_jobs_the_rails_take_the_runner_s_default(tmp_path):
+    root = _seeded(tmp_path)
+    run = _gate(root, "rails")
+    assert run.returncode == 0, run.stdout + run.stderr
+    spec = importlib.util.spec_from_file_location("_runner", ROOT / "scripts" / "test_bundles.py")
+    runner = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = runner
+    spec.loader.exec_module(runner)
+    workers = runner.default_jobs()
+    assert f"-m pytest .github/tests -n {workers} -q" in run.stdout
+    assert _receipt(root)["parts"][0]["workers"] == workers
 
 
 def test_with_no_part_named_the_gate_runs_all_three_in_order(tmp_path):
