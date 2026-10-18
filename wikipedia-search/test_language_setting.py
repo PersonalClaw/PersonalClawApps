@@ -8,6 +8,8 @@ again when a search would use it, before any request is made.
 
 from __future__ import annotations
 
+# A one-bundle CI run measures this line; it changes nothing the tests do.
+
 import json
 import sys
 from pathlib import Path
