@@ -136,7 +136,7 @@ jobs:
           uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC" pytest==9.1.1 pytest-asyncio==1.4.0 pytest-xdist==3.8.0
       - name: The repository's own tests, then each bundle's suite
         # scripts/gate.py's `rails` part runs every .github/tests file in one pytest
-        # invocation over two workers: the rails over every bundle (cli steps load as core
+        # invocation over --jobs (four) workers: the rails over every bundle (cli steps load as core
         # loads them, SDK calls bind, model apps prove the wire, declared core features, the
         # scratch home and the guards conftest.py installs) and each static check's
         # planted-defect tests. Its `bundles` part is scripts/test_bundles.py, the single

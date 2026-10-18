@@ -8,7 +8,9 @@ exits 1 when any part failed.
 Parts:
 
 - ``static``: ``.github/scripts/run_checks.py``, every static check on its own row.
-- ``rails``: ``python -m pytest .github/tests -n 2``, once.
+- ``rails``: ``python -m pytest .github/tests -n N``, once, on ``--jobs`` workers (the bundle
+  runner's default when ``--jobs`` is not given). They are a fixed cost in every pull request's
+  run, so they get the same workers the bundles do; the receipt records how many.
 - ``bundles``: ``scripts/test_bundles.py``, each bundle's suite in a locked environment holding
   only what it declares, ``--jobs`` at once; ``--changed BASE`` runs only the bundles a change
   since BASE can affect, plus every bundle claiming ``quality.tested`` (the quality check reads
@@ -186,12 +188,17 @@ def _runner_flags(args) -> list[str]:
     return flags
 
 
+def _rails_workers(jobs: int | None) -> int:
+    """The rails' pytest-xdist workers: ``--jobs`` when given, else the bundle runner's default."""
+    return jobs if jobs is not None else _load_bundle_runner().default_jobs()
+
+
 def _run_part(part: str, *, python: str, results: Path, bundles: list[str],
-              flags: list[str], keep: tuple[int, ...] = ()) -> int:
+              flags: list[str], keep: tuple[int, ...] = (), workers: int = 2) -> int:
     if part == "static":
         argv = [python, ".github/scripts/run_checks.py", "--report", str(results / "static.json")]
     elif part == "rails":
-        argv = [python, "-m", "pytest", ".github/tests", "-n", "2", "-q"]
+        argv = [python, "-m", "pytest", ".github/tests", "-n", str(workers), "-q"]
     else:
         argv = [python, "scripts/test_bundles.py", "--results", str(results / "bundles"),
                 *flags, *bundles]
@@ -217,7 +224,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bundle", action="append", default=[], metavar="NAME",
                         help="run only this bundle's suite (repeatable; default: every tested bundle)")
     parser.add_argument("--jobs", type=int, metavar="N",
-                        help="bundles to run at once (default: half the CPUs, at most 8)")
+                        help="bundles to run at once, and the rails' pytest workers (default: "
+                             "half the CPUs, at most 8)")
     parser.add_argument("--changed", metavar="BASE",
                         help="run only the bundles a change since BASE can affect")
     parser.add_argument("--float", action="store_true", dest="floating",
@@ -288,16 +296,20 @@ def main(argv: list[str] | None = None) -> int:
             target.unlink()
     results.mkdir(parents=True, exist_ok=True)
 
+    workers = _rails_workers(args.jobs) if "rails" in parts else 2
     for part in parts:
         started = time.monotonic()
         rc = _run_part(part, python=args.python, results=results, bundles=args.bundle,
-                       flags=_runner_flags(args), keep=(held.fileno(),))
-        receipt["parts"].append({
+                       flags=_runner_flags(args), keep=(held.fileno(),), workers=workers)
+        row = {
             "part": part,
             "result": "pass" if rc == 0 else "FAIL",
             "returncode": rc,
             "seconds": round(time.monotonic() - started, 1),
-        })
+        }
+        if part == "rails":
+            row["workers"] = workers
+        receipt["parts"].append(row)
 
     ran = results / "bundles" / "results.json"
     if ran.is_file():
