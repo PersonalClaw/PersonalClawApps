@@ -107,7 +107,9 @@ class ProviderHost:
         self.requests: list[dict[str, Any]] = []
         self._lock = threading.Lock()
         self._httpd = ThreadingHTTPServer((HOST, 0), _handler_for(self))
-        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self._thread = threading.Thread(
+            target=self._httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+        )
 
     @property
     def url(self) -> str:
