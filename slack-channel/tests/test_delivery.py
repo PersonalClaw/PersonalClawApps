@@ -13,7 +13,29 @@ def _delivery(client=None, owner="U_OWNER"):
     return SlackDelivery(client or MagicMock(), lambda: owner)
 
 
+def test_the_wait_between_open_dm_attempts_is_a_real_sleep():
+    """Outside the class below, whose fixture records the waits: the app itself sleeps."""
+    import asyncio
+
+    import slack_runtime.delivery as delivery_mod
+
+    assert delivery_mod._backoff is asyncio.sleep
+
+
 class TestOpenDmRetry:
+    @pytest.fixture(autouse=True)
+    def waits(self, monkeypatch):
+        """Each wait ``open_dm`` asks for between attempts, recorded instead of slept."""
+        import slack_runtime.delivery as delivery_mod
+
+        asked: list[float] = []
+
+        async def record(seconds):
+            asked.append(seconds)
+
+        monkeypatch.setattr(delivery_mod, "_backoff", record)
+        return asked
+
     @pytest.mark.asyncio
     async def test_success_first_attempt(self):
         client = MagicMock()
@@ -23,7 +45,7 @@ class TestOpenDmRetry:
         assert client.open_dm.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_retries_on_server_error(self):
+    async def test_retries_on_server_error(self, waits):
         from slack_sdk.errors import SlackApiError
 
         resp = MagicMock(); resp.status_code = 500
@@ -31,9 +53,10 @@ class TestOpenDmRetry:
         client.open_dm = AsyncMock(side_effect=[SlackApiError("500", resp), "D_OK"])
         d = _delivery(client)
         assert await d.open_dm("U1", max_attempts=2) == "D_OK"
+        assert waits == [1]
 
     @pytest.mark.asyncio
-    async def test_raises_on_non_retryable(self):
+    async def test_raises_on_non_retryable(self, waits):
         from slack_sdk.errors import SlackApiError
 
         resp = MagicMock(); resp.status_code = 403
@@ -43,9 +66,10 @@ class TestOpenDmRetry:
         with pytest.raises(SlackApiError):
             await d.open_dm("U1", max_attempts=3)
         assert client.open_dm.call_count == 1
+        assert waits == []
 
     @pytest.mark.asyncio
-    async def test_retries_on_rate_limit(self):
+    async def test_retries_on_rate_limit(self, waits):
         from slack_sdk.errors import SlackApiError
 
         resp = MagicMock(); resp.status_code = 429
@@ -53,9 +77,10 @@ class TestOpenDmRetry:
         client.open_dm = AsyncMock(side_effect=[SlackApiError("429", resp), SlackApiError("429", resp), "D_OK"])
         d = _delivery(client)
         assert await d.open_dm("U1", max_attempts=3) == "D_OK"
+        assert waits == [1, 2]
 
     @pytest.mark.asyncio
-    async def test_raises_after_max_attempts(self):
+    async def test_raises_after_max_attempts(self, waits):
         from slack_sdk.errors import SlackApiError
 
         resp = MagicMock(); resp.status_code = 500
@@ -65,6 +90,7 @@ class TestOpenDmRetry:
         with pytest.raises(SlackApiError):
             await d.open_dm("U1", max_attempts=2)
         assert client.open_dm.call_count == 2
+        assert waits == [1], "no wait after the last attempt"
 
 
 class TestDeliveryRendering:

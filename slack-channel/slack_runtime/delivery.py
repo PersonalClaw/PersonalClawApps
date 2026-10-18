@@ -48,6 +48,12 @@ _TASK_ENDINGS = {
 }
 
 
+#: How ``open_dm`` waits between attempts: ``attempt`` seconds after each failed one. A module
+#: name rather than ``asyncio.sleep`` itself, so a test can record the waits instead of sitting
+#: through them.
+_backoff = asyncio.sleep
+
+
 class SlackDelivery:
     """Renders + delivers gateway results to Slack. Implements ChannelDelivery."""
 
@@ -82,7 +88,7 @@ class SlackDelivery:
                     "open_dm attempt %d/%d failed, retrying in %ds", attempt, max_attempts, attempt,
                     exc_info=True,
                 )
-                await asyncio.sleep(attempt)
+                await _backoff(attempt)
         return ""
 
     async def deliver_text(
