@@ -58,10 +58,13 @@ jobs:
         with:
           node-version-file: .nvmrc
       - name: Install uv
+        # prune-cache: setup-uv's default turned false in v10, and an unpruned cache keeps every
+        # downloaded wheel (.github/tests/test_uv_cache_is_pruned.py holds every step to it).
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: "0.13.1"
           enable-cache: true
+          prune-cache: true
       - name: Read core.lock
         # CORE_SHA and CORE_SPEC for the steps below; the log line names the core under test.
         run: uv run --no-project --python 3.12.15 python scripts/core_lock.py export
@@ -116,12 +119,17 @@ jobs:
         with:
           node-version-file: .nvmrc
       - name: Install uv
-        # uv's download cache is restored, keyed on the bundle lock, so a lock change starts a
-        # fresh cache. The bundle environments themselves are built in every run.
+        # uv's cache is restored, keyed on the bundle lock, so a lock change starts a fresh
+        # cache. It is pruned for CI before it is saved (`uv cache prune --ci`), so it keeps only
+        # the wheels uv built from source, not every wheel it downloaded: setup-uv's default
+        # turned false in v10, and the unpruned cache grew to 3.2 GB, which every run restored
+        # first (.github/tests/test_uv_cache_is_pruned.py). The bundle environments themselves
+        # are built in every run.
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: "0.13.1"
           enable-cache: true
+          prune-cache: true
           cache-dependency-glob: .github/bundle-lock/*/uv.lock
       - name: Read core.lock
         # CORE_SHA and CORE_SPEC for the steps below; the log line names the core under test.
