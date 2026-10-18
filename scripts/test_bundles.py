@@ -379,11 +379,18 @@ def _lock_dir(bundle_lock) -> Path:
     return ROOT / ".github" / "bundle-lock" / name
 
 
-def _export(lock_dir: Path, extra: str | None) -> str:
-    argv = ["uv", "export", "--no-config", "--frozen", "-q", "--project", str(lock_dir),
+def export_argv(lock_dir: Path, extra: str | None) -> list[str]:
+    """The ``uv export`` of one environment's graph from the bundle lock, as a bundle installs it:
+    *extra* is the bundle's folder, or None for the base environment. The dependency audit
+    (``scripts/audit_locks.py``) exports with this same argv, so it audits what is installed."""
+    return ["uv", "export", "--no-config", "--frozen", "-q", "--project", str(lock_dir),
             "--default-index", _load("bundle_lock").project_index(lock_dir),
             "--no-emit-project", "--no-emit-package", "personalclaw", "--no-header",
             "--no-annotate", *(["--extra", extra] if extra else [])]
+
+
+def _export(lock_dir: Path, extra: str | None) -> str:
+    argv = export_argv(lock_dir, extra)
     run = subprocess.run(argv, capture_output=True, text=True, check=False, env=_uv_env())
     if run.returncode:
         raise Refusal(f"uv export of the bundle lock in {lock_dir} failed: {run.stderr.strip()}")

@@ -1,0 +1,117 @@
+# Nightly dependency audit. CI's `audit` job audits the locks the apps ship on every pull request
+# and every main run (scripts/audit_locks.py); this workflow runs the same command every night on
+# main, because a new advisory lands without a commit. It reads only the committed locks: every
+# bundle environment's Python graph from each platform's .github/bundle-lock/*/uv.lock, and every
+# package-lock.json a bundle ships. It is red on a tool that did not run, on a high or critical
+# finding no live waiver in .github/audit-baseline.toml covers, and on a waiver that is expired,
+# more than 30 days out, missing a field or stale.
+#
+# A red opens one tracking issue, or comments on the open one; a green closes it. The issue is
+# found by its exact title (TITLE below), so the title stays as it is. Only the `report` job can
+# write, and only issues.
+#
+# It runs on a schedule and on dispatch only, never on a pull request or a push, so its result is
+# never a pull request's verdict; CI's own `audit` job is.
+name: Dependency audit
+
+on:
+  schedule:
+    # Nightly, 04:47 UTC: off the hour and clear of the core.lock bump (05:41) and the canary.
+    - cron: "47 4 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-audit
+  cancel-in-progress: false
+
+env:
+  UV_PYTHON_PREFERENCE: only-managed
+
+jobs:
+  audit:
+    name: Audit the locks the apps ship
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        # npm audit reads each UI bundle's package-lock.json.
+        with:
+          node-version-file: .nvmrc
+      - name: Install uv
+        # The exports read the committed locks offline, so no cache is kept.
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.1"
+          enable-cache: false
+      # pip-audit is in no lock, so it is named as an exact release, and nothing refreshes it yet:
+      # moving it is a reviewed edit of this line and of ci.yml's. A venv of its own, with no
+      # bundle's dependencies and no core installed into it, so what it audits is only the
+      # exported locks.
+      - name: pip-audit, in a venv of its own
+        run: |
+          uv venv --python 3.12.15 "$RUNNER_TEMP/audit-venv"
+          uv pip install --python "$RUNNER_TEMP/audit-venv/bin/python" pip-audit==2.10.1
+      - name: Audit the locks the apps ship
+        run: >-
+          "$RUNNER_TEMP/audit-venv/bin/python" scripts/audit_locks.py run
+          --pip-audit "$RUNNER_TEMP/audit-venv/bin/python" --work "$RUNNER_TEMP/audit"
+
+  report:
+    name: Open, update or close the audit issue
+    needs: audit
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      TITLE: "Dependency audit is red"
+      GH_REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      APPS: ${{ github.sha }}
+    steps:
+      - name: Open or update the audit issue
+        if: ${{ needs.audit.result != 'success' }}
+        # The token goes only to the steps that call the API, never to the whole job.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The backticks in the body are Markdown code spans, not command substitution.
+          # shellcheck disable=SC2016
+          body=$(printf 'The nightly dependency audit is red on apps `%s`: a tool did not run, a high or critical finding has no live waiver, or a waiver is expired, too long or stale.\n\nRun: %s (its job summary lists every finding and every waiver problem).\n\nFix it with an in-range lock update, or add a dated waiver to `.github/audit-baseline.toml` with its reason (CONTRIBUTING.md, "Dependency audit").\n\n_Updated by the nightly dependency audit._\n' \
+            "$APPS" "$RUN_URL")
+          existing=$(gh issue list --state open --search "\"$TITLE\" in:title" --limit 100 --json number,title --jq '[.[] | select(.title == env.TITLE)][0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi
+      - name: Close the audit issue when the audit passes again
+        if: ${{ needs.audit.result == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing=$(gh issue list --state open --search "\"$TITLE\" in:title" --limit 100 --json number,title --jq '[.[] | select(.title == env.TITLE)][0].number // empty')
+          if [ -n "$existing" ]; then
+            # The backticks in the body are Markdown code spans, not command substitution.
+            # shellcheck disable=SC2016
+            body=$(printf 'The nightly dependency audit is green again on apps `%s`.\n\nRun: %s\n\n_Closed by the nightly dependency audit._\n' "$APPS" "$RUN_URL")
+            gh issue close "$existing" --comment "$body"
+          else
+            echo "green, and no open audit issue to close"
+          fi

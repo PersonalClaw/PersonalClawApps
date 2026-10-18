@@ -1279,6 +1279,7 @@ def test_the_loader_finds_a_dockerfile_and_the_package_a_workflow_installs_from(
 def test_the_policy_file_names_today_s_one_write_and_dates_every_exception_it_holds():
     policy = tomllib.loads((ROOT / POLICY_FILE).read_text(encoding="utf-8"))
     writes = [(e["workflow"], e["job"], e["permission"]) for e in policy.get("audited_write", [])]
-    assert writes == [("core-main-canary.yml", "report", "issues: write")]
+    assert writes == [("core-main-canary.yml", "report", "issues: write"),
+                      ("audit.yml", "report", "issues: write")]
     for entry in policy.get("exception", []):
         assert type(entry["expires"]) is dt.date
