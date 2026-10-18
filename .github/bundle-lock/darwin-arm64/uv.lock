@@ -231,7 +231,7 @@ requires-dist = [
     { name = "openai", marker = "extra == 'openrouter-models'", specifier = ">=1.0" },
     { name = "openai", marker = "extra == 'together-models'", specifier = ">=1.0" },
     { name = "openai", marker = "extra == 'vllm-models'", specifier = ">=1.0" },
-    { name = "personalclaw", git = "https://github.com/PersonalClaw/PersonalClaw?rev=2ae56863629a1cd4fbd1eecc721da6da8bc2e838" },
+    { name = "personalclaw", git = "https://github.com/PersonalClaw/PersonalClaw?rev=5815abab552ae0370cb80fccf9c9447b230a3c2c" },
     { name = "pillow", marker = "extra == 'design-critique'", specifier = ">=10,<13" },
     { name = "piper-tts", marker = "extra == 'piper-tts'", specifier = ">=1.2" },
     { name = "pyannote-audio", marker = "extra == 'diarization-pyannote'", specifier = ">=3.1" },
@@ -1418,7 +1418,7 @@ wheels = [
 [[package]]
 name = "personalclaw"
 version = "0.2.1"
-source = { git = "https://github.com/PersonalClaw/PersonalClaw?rev=2ae56863629a1cd4fbd1eecc721da6da8bc2e838#2ae56863629a1cd4fbd1eecc721da6da8bc2e838" }
+source = { git = "https://github.com/PersonalClaw/PersonalClaw?rev=5815abab552ae0370cb80fccf9c9447b230a3c2c#5815abab552ae0370cb80fccf9c9447b230a3c2c" }
 dependencies = [
     { name = "aiohttp" },
     { name = "argon2-cffi" },
