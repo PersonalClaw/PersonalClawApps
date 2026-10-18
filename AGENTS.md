@@ -29,7 +29,9 @@ Run them all as CI does with `make gate` (`python scripts/gate.py`; its parts ar
   `core.lock` means `python scripts/bundle_lock.py write` and committing the lock. Run
   `./scripts/test-bundles <bundle>` locally (`--jobs N`, `--changed <base>`), from an
   environment with core and pytest (CONTRIBUTING.md shows the setup), to use the exact
-  same path. A pull request's CI runs only the bundles its change can affect.
+  same path. A pull request's CI runs only the bundles its change can affect, plus every
+  bundle claiming `quality.tested`: the `quality-declarations` job judges those claims from
+  the `tests` job's recorded results and runs no suite itself.
 - **One core commit:** CI tests against the core commit in `core.lock` (one full
   40-character SHA), never core main. Install it locally with
   `uv pip install "personalclaw @ git+https://github.com/PersonalClaw/PersonalClaw@$(cat core.lock)"`;

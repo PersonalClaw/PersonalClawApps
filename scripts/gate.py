@@ -11,7 +11,8 @@ Parts:
 - ``rails``: ``python -m pytest .github/tests -n 2``, once.
 - ``bundles``: ``scripts/test_bundles.py``, each bundle's suite in a locked environment holding
   only what it declares, ``--jobs`` at once; ``--changed BASE`` runs only the bundles a change
-  since BASE can affect, and ``--float`` (the weekly canary's mode, never merge evidence) resolves
+  since BASE can affect, plus every bundle claiming ``quality.tested`` (the quality check reads
+  their recorded results), and ``--float`` (the weekly canary's mode, never merge evidence) resolves
   each bundle's declared ranges afresh instead of installing the bundle lock.
 
 The gate never installs core. It records the core installed in the interpreter that runs the
