@@ -397,8 +397,8 @@ def bump_problems(wf: dict, text: str) -> list[str]:
 def test_ci_installs_core_only_from_core_lock():
     problems, installing = ci_problems(*_load("ci.yml"))
     assert problems == []
-    # The vacuity floor: the rules above saw the three jobs that install core.
-    assert installing == ["static", "tests", "quality-declarations"]
+    # The vacuity floor: the rules above saw the two jobs that install core.
+    assert installing == ["static", "tests"]
 
 
 def test_the_canary_keeps_its_rules():
@@ -444,7 +444,7 @@ CI_PLANTS = {
         lambda wf, t: (wf["env"].__setitem__("CORE_SPEC", "personalclaw"), t)[1],
         "workflow-level CORE_SPEC"),
     "core is installed from a literal spec": (
-        lambda wf, t: (_edit(wf, "quality-declarations", '"$CORE_SPEC"', '"$CORE_SPEC"',
+        lambda wf, t: (_edit(wf, "tests", '"$CORE_SPEC"', '"$CORE_SPEC"',
                              f'"personalclaw @ git+{CORE_URL}@{SHA}"'), t)[1],
         "installs core from a literal spec"),
     "a new job installs core without the step": (
@@ -455,9 +455,9 @@ CI_PLANTS = {
     "the gate runs without --core": (
         lambda wf, t: (_edit(wf, "static", "scripts/gate.py", ' --core "$CORE_SHA"', ""), t)[1],
         'static: runs the gate without --core "$CORE_SHA"'),
-    "the quality job never verifies its core": (
-        lambda wf, t: (_drop(wf, "quality-declarations", "scripts/core_lock.py verify"), t)[1],
-        "quality-declarations: never checks"),
+    "the tests job never verifies its core": (
+        lambda wf, t: (_edit(wf, "tests", "scripts/gate.py", ' --core "$CORE_SHA"', ""), t)[1],
+        "tests: never checks"),
     "a write permission at the top": (
         lambda wf, t: (wf.__setitem__("permissions", {"contents": "write"}), t)[1],
         "not contents: read"),

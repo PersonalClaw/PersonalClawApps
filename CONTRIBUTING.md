@@ -92,7 +92,7 @@ on it, so a hang names what it is in. A full run that finds no tested bundle exi
   every bundle, and so does an unknown base, a shallow clone or any git error. Docs,
   root `*.md` files and the GitHub templates select no bundle. Every bundle whose
   `app.json` claims `quality.tested` runs whatever changed, and the selection's reason
-  names them: the quality job judges that claim from this run's results only.
+  names them: the quality check judges that claim from this run's results only.
 - `--results DIR` writes `DIR/results.json` (with each bundle's JUnit beside it). Its
   `apps` list, `{"app", "outcome": "pass" | "fail", "junit"}` per bundle that finished, is
   what `python -m personalclaw.apps.quality . --results DIR` reads instead of running any
