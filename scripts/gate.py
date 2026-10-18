@@ -1,8 +1,8 @@
 """The one apps gate: the static checks, the repository's own tests, every bundle's suite, then the
 quality claims judged from that suite's results.
 
-CI and a local run call this same script. CI's ``static`` job runs the ``static`` part, its
-``tests`` job the ``rails``, ``bundles`` and ``quality`` parts, and ``make gate`` (or this script
+CI and a local run call this same script. CI's ``static`` job runs the ``static`` and ``rails``
+parts, its ``tests`` job the ``bundles`` and ``quality`` parts, and ``make gate`` (or this script
 with no part named) runs all four, in that order. Each part runs even when an earlier one is red,
 and the gate exits 1 when any part failed.
 
