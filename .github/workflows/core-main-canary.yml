@@ -64,10 +64,13 @@ jobs:
         with:
           node-version-file: .nvmrc
       - name: Install uv
+        # prune-cache: setup-uv's default turned false in v10, and an unpruned cache keeps every
+        # downloaded wheel (.github/tests/test_uv_cache_is_pruned.py holds every step to it).
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: "0.13.1"
           enable-cache: true
+          prune-cache: true
       - name: Resolve the core under test to one commit
         # One commit for the whole run, so a core main that moves mid-run cannot mix two cores.
         id: core
