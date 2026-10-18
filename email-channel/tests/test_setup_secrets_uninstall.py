@@ -16,6 +16,7 @@ builds it, and core's own keep-data uninstall, which is the Apps page's Uninstal
 
 from __future__ import annotations
 
+import copy
 import json
 import secrets
 from pathlib import Path
@@ -42,13 +43,75 @@ PASSWORD = secrets.token_hex(12)
 SMTP_PASSWORD = secrets.token_hex(12)
 
 
+# --- scan once per file: begin (kept the same in slack-channel's copy of this file) ---
+class _Remembering:
+    """Stands in for core's ``default_scanner`` while a test runs; scans through the real one."""
+
+    def __init__(self, owner, real):
+        self._owner = owner
+        self._real = real
+
+    def scan(self, staged_dir, *args, **kwargs):
+        return self._owner._scan(self._real, Path(staged_dir), args, kwargs)
+
+    def __getattr__(self, name):
+        # Anything else the installer asks of the scanner goes to the real one, unchanged.
+        return getattr(self._real, name)
+
+
+class ScanOnce:
+    """Core's install scan, run once per staged bundle's bytes for one test file.
+
+    Each install in this file runs core's real installer; only its supply-chain scan, the slow
+    part, is remembered by what was scanned: core's own digest of the staged bundle (every path
+    and byte) plus the scan's other arguments. A repeat on the same bytes gets a copy of the
+    first report; a bundle changed in any file is scanned afresh. Staging, the signature check,
+    consent, hooks, writing the home and uninstalling all stay real.
+    ``.github/tests/test_install_scan_once.py`` checks this copy and the other one.
+    """
+
+    def __init__(self):
+        self._reports = {}
+        #: How many installs ran core's real scan, and how many reused a report.
+        self.real_scans = 0
+        self.reused = 0
+
+    def use(self, monkeypatch):
+        """Route core's installer through this file's reports for the current test."""
+        real = app_manager.default_scanner
+        if not isinstance(real, _Remembering):
+            monkeypatch.setattr(app_manager, "default_scanner", _Remembering(self, real))
+
+    def _scan(self, real, staged, args, kwargs):
+        from personalclaw.apps.disclosure import bundle_digest
+
+        key = (bundle_digest(staged), repr(args), repr(sorted(kwargs.items())))
+        if key in self._reports:
+            self.reused += 1
+            # A copy: the installer sets the report's signature on what it is handed.
+            return copy.deepcopy(self._reports[key])
+        report = real.scan(staged, *args, **kwargs)
+        self.real_scans += 1
+        self._reports[key] = copy.deepcopy(report)  # as the scan returned it
+        return report
+# --- scan once per file: end ---
+
+
+@pytest.fixture(scope="module")
+def scans():
+    """Core's install scan of this bundle, run once for this file and reused while its bytes
+    are the same (``ScanOnce`` above)."""
+    return ScanOnce()
+
+
 @pytest.fixture
-def home(_isolate_home, monkeypatch):
+def home(_isolate_home, monkeypatch, scans):
     """The real bundle installed into the isolated home, nothing configured."""
     for key in (CRED_IMAP_PASS, CRED_SMTP_PASS):
         # setenv first so teardown restores the variable even if the code under test sets it.
         monkeypatch.setenv(key, "")
         monkeypatch.delenv(key)
+    scans.use(monkeypatch)
     assert app_manager.install(_BUNDLE, confirm=True).ok
     yield _isolate_home
     app_manager.force_uninstall(_APP)  # a no-op once the test removed it
