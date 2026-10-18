@@ -282,3 +282,83 @@ def test_a_declared_licence_its_file_contradicts_reds_the_manifest_check(tmp_pat
     run = _run(root)
     assert run.returncode == 1
     assert "wrong-app/app.json: declares license MIT-0 but LICENSE file is MIT" in run.stdout
+
+
+# -- several checks at once ---------------------------------------------------------------------
+
+def _meets(started: Path, name: str, others: list[str], seconds: float = 10) -> str:
+    """A check that marks itself started, then passes only once every one of *others* has started
+    too: the rows run at once, or it waits *seconds* and fails."""
+    return (
+        "import pathlib, sys, time\n"
+        f"here = pathlib.Path({str(started)!r})\n"
+        f"(here / {name!r}).touch()\n"
+        f"deadline = time.monotonic() + {seconds}\n"
+        f"while not all((here / o).exists() for o in {others!r}):\n"
+        "    if time.monotonic() > deadline:\n"
+        f"        print('{name}: the others never started beside it'); sys.exit(1)\n"
+        "    time.sleep(0.02)\n"
+        f"print('OK: {name} ran beside the others')\n"
+    )
+
+
+def test_jobs_runs_the_checks_at_once_and_a_red_still_has_its_row(tmp_path):
+    started = tmp_path / "started"
+    started.mkdir()
+    names = ["one", "two", "three"]
+    checks = {f"check_{n}.py": _meets(started, n, [o for o in names if o != n]) for n in names}
+    root = _seeded(tmp_path, {**checks, "check_zz_red.py": _RED})
+    run = _run(root, "--jobs", "4")
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert _rows(run.stdout) == {"one": "pass", "two": "pass", "three": "pass",
+                                 "zz-red": "FAIL"}, run.stdout
+    assert "planted defect: the-file.py" in run.stdout
+
+
+def test_under_jobs_each_block_is_whole_and_the_table_and_report_keep_name_order(tmp_path):
+    # Finishing in reverse name order: the log holds each check's output as one block, and the
+    # table and the report list the rows by name, as a run one at a time does.
+    report = tmp_path / "report.json"
+    checks = {
+        f"check_{name}.py": (f"import time\ntime.sleep({pause})\n"
+                             f"print('first line of {name}')\nprint('last line of {name}')\n")
+        for name, pause in (("alpha", 0.6), ("beta", 0.3), ("gamma", 0.0))
+    }
+    root = _seeded(tmp_path, checks)
+    run = _run(root, "--jobs", "3", "--report", str(report))
+    assert run.returncode == 0, run.stdout + run.stderr
+    for name in ("alpha", "beta", "gamma"):
+        assert f"first line of {name}\nlast line of {name}\n" in run.stdout, run.stdout
+    table = [line.split("|")[1].strip() for line in run.stdout.splitlines()
+             if line.startswith("| ") and "| pass |" in line]
+    assert table == ["alpha", "beta", "gamma"], run.stdout
+    rows = json.loads(report.read_text(encoding="utf-8"))["checks"]
+    assert [r["row"] for r in rows] == ["alpha", "beta", "gamma"]
+
+
+def test_without_jobs_the_checks_run_one_at_a_time(tmp_path):
+    # Guard: run by hand, the runner still runs one check at a time.
+    running = tmp_path / "running"
+    running.mkdir()
+    alone = (
+        "import pathlib, sys, time\n"
+        f"here = pathlib.Path({str(running)!r})\n"
+        "if any(here.iterdir()):\n"
+        "    print('another check is running'); sys.exit(1)\n"
+        "me = here / pathlib.Path(__file__).stem\n"
+        "me.touch()\n"
+        "time.sleep(0.2)\n"
+        "me.unlink()\n"
+        "print('OK')\n"
+    )
+    root = _seeded(tmp_path, {f"check_{n}.py": alone for n in ("one", "two", "three")})
+    run = _run(root)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert _rows(run.stdout) == {"one": "pass", "two": "pass", "three": "pass"}
+
+
+def test_jobs_must_be_at_least_one(tmp_path):
+    root = _seeded(tmp_path, {"check_ok.py": _OK})
+    run = _run(root, "--jobs", "0")
+    assert run.returncode == 2
+    assert "--jobs" in run.stderr

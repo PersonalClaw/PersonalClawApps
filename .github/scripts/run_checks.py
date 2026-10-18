@@ -12,6 +12,10 @@ group of its own, and a failed check is an annotation that names it. ``--report 
 the rows as JSON, which the gate keeps in its receipt; ``--list`` prints each row's name and script
 without running anything.
 
+``--jobs N`` runs N checks at once (default 1, one at a time, as by hand); the gate passes its own
+``--jobs``. Each check still runs in its own process, its output is printed as one block when it
+finishes, and the table and the report list the rows by name, whatever order they finished in.
+
 Rows keep the names the checks had as CI jobs of their own, because the docs cite them: a row is
 the script's name without ``check_``, with hyphens, except where the job's name differed.
 
@@ -21,6 +25,7 @@ the script's name without ``check_``, with hyphens, except where the job's name 
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import os
 import subprocess
@@ -86,7 +91,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--report", type=Path, help="also write the rows as JSON to this file")
     parser.add_argument("--list", action="store_true", help="print each row and its script; run nothing")
+    parser.add_argument("--jobs", type=int, default=1, metavar="N",
+                        help="checks to run at once (default: 1)")
     args = parser.parse_args(argv)
+    if args.jobs < 1:
+        parser.error("--jobs must be at least 1")
 
     scripts = discover()
     if args.list:
@@ -99,9 +108,8 @@ def main(argv: list[str] | None = None) -> int:
 
     ci = _in_ci()
     rows = []
-    for script in scripts:
-        row = run_one(script)
-        rows.append(row)
+
+    def show(row: dict) -> None:
         failed = row["returncode"] != 0
         if ci:
             print(f"::group::{row['row']} ({row['script']})", flush=True)
@@ -119,6 +127,15 @@ def main(argv: list[str] | None = None) -> int:
         elif failed:
             print(f"--- {row['row']} FAILED (exit {row['returncode']})")
         sys.stdout.flush()
+
+    # Each block is printed by this thread alone, as its check finishes, so blocks never mix.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        for future in concurrent.futures.as_completed(
+                [pool.submit(run_one, script) for script in scripts]):
+            row = future.result()
+            rows.append(row)
+            show(row)
+    rows.sort(key=lambda r: r["script"])
 
     failed_rows = [r["row"] for r in rows if r["returncode"] != 0]
     report = table(rows)
