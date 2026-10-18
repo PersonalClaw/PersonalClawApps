@@ -15,7 +15,10 @@ nothing; one that is killed part way leaves only a temporary folder, which the n
 key or the sweep deletes. Each build names the bundles waiting on it before it starts. An
 environment is reused only while its receipt is complete, what it holds is still what its receipt
 recorded at build time, and its interpreter is still the Python and ABI its key names (a patch
-upgrade re-points the folder uv links it through); otherwise it is built again.
+upgrade re-points the folder uv links it through); otherwise it is built again. Each bundle asks
+again just before its pytest starts: one whose environment's interpreter moved to another Python
+during the run (a ``uv python upgrade`` that landed after the reuse check) is not run and fails
+with exit 2, naming both Pythons, and the environment is discarded at the end.
 
 One checkout runs one bundle runner at a time: a run holds ``.bundle-venvs/.runner.lock``
 exclusively, and so does every pytest it starts, until the last of them has exited. A second run
@@ -399,8 +402,9 @@ def plan(bundles: Sequence[Path], *, floating: bool, core: str,
         project_text = (lock_dir / "pyproject.toml").read_text(encoding="utf-8")
         project = tomllib.loads(project_text)
         fixed = bundle_lock.lock_environment(project_text)
-        broken = bundle_lock.edge_problems((lock_dir / "uv.lock").read_text(encoding="utf-8"),
-                                           project_text)
+        lock_text = (lock_dir / "uv.lock").read_text(encoding="utf-8")
+        broken = (bundle_lock.edge_problems(lock_text, project_text)
+                  + bundle_lock.version_problems(lock_text, project_text))
         if broken:
             raise Refusal(f"the bundle lock in {lock_dir} no longer holds what its project asks "
                           f"for: {'; '.join(broken)}. Run `python scripts/bundle_lock.py write` "
@@ -550,6 +554,22 @@ def _complete(final: Path, key: str, inputs: Mapping[str, str]) -> bool:
         return False
     core = inputs.get("core") or ""
     return not (re.fullmatch(r"[0-9a-f]{40}", core) and probe["core_commit"] != core)
+
+
+def interpreter_moved(final: Path, inputs: Mapping[str, str]) -> str | None:
+    """Why *final*'s interpreter is no longer the Python its key names, or None while it is.
+
+    :func:`_complete` asks this once, when an environment is reused. A ``uv python upgrade`` that
+    lands while a run goes on re-points the folder the environment links through after that, so
+    each bundle asks again just before its pytest starts."""
+    try:
+        probe = _probe(str(_python(final)))
+    except (OSError, ValueError) as error:
+        return f"its interpreter cannot run ({error})"
+    if (probe["python"], probe["abi"]) != (inputs.get("python"), inputs.get("abi")):
+        return (f"its interpreter is now Python {probe['python']} ({probe['abi']}), not the "
+                f"{inputs.get('python')} ({inputs.get('abi')}) its key and receipt name")
+    return None
 
 
 #: How long an environment no run plans for is kept, unused, before a run removes it.
@@ -908,9 +928,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         started = time.monotonic()
         final = environment(item)
         notes: list[str] = []
+        moved = interpreter_moved(final, item.inputs) if final is not None else None
         if final is None:
             rc, output = 2, ""
             notes.append(f"error: {label}: its environment {item.key[:12]} could not be built")
+        elif moved:
+            # Not run: its result would be a Python's that no receipt names. The environment is
+            # discarded at the end, and the next run builds it again.
+            rc, output = 2, ""
+            with guard:
+                changed_envs.add(item.key)
+            notes.append(f"error: {label}: not run, because environment {item.key[:12]} moved "
+                         f"during this run: {moved}. The next run builds it again.")
         else:
             with guard:
                 # Named before it runs, so a bundle that hangs is the one that started and

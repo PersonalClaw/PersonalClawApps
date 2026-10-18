@@ -72,7 +72,10 @@ requirements, the Python version and ABI, the OS, the architecture, the uv versi
 the index. It is built under a lock and renamed into place only when complete. It is
 reused only while it still holds what its receipt recorded and its interpreter is still
 the Python its key names (a `uv python upgrade` re-points the folder it links through);
-otherwise it is built again. One checkout runs one bundle runner at a time: a second
+otherwise it is built again. Each bundle checks that interpreter again just before it runs,
+so a bundle whose environment moved to another Python during the run is not run: it fails
+with exit 2, naming both Pythons, and the next run builds the environment again. One
+checkout runs one bundle runner at a time: a second
 run (or a second gate's `bundles` part) in the same checkout refuses at start and names
 the first; to validate two things at once, use a second checkout. Each run removes the
 folders a stopped build left and environments no run has used for seven days.

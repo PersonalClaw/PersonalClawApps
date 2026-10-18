@@ -25,7 +25,11 @@ cache: a lock written from cached metadata once recorded ``sherpa-onnx`` with no
 so ``sherpa-onnx-core`` was missing and the hashed install refused it. ``check`` reads each lock
 offline and refuses one in which a package names a dependency the lock holds no entry for, and
 says which, and refuses one whose own root entry no longer depends on what an extra (or the base)
-asks for, which ``uv lock --check`` accepts, before it asks ``uv lock --check``. Every uv call runs
+asks for, which ``uv lock --check`` accepts, before it asks ``uv lock --check``. It also refuses a
+lock that holds a package at a version one of its project's requirements excludes (a hand merge
+that kept one side's package entry while the other raised a bundle's floor), naming the package,
+the version, the requirement and the bundles that declare it; the runner refuses the same lock
+before it builds anything. Every uv call runs
 without the uv settings ``UV_SETTINGS`` names, which uv reads from the environment even under
 ``--no-config``, so none of them can make a lock written or checked locally differ from the one
 CI checks; a local uv of another version than CI's still can. Neither catches a lock whose cached
@@ -306,6 +310,55 @@ def edge_problems(lock_text: str, project_text: str) -> list[str]:
     return problems
 
 
+def version_problems(lock_text: str, project_text: str) -> list[str]:
+    """Each package the lock holds at a version a requirement of its project excludes: a hand
+    merge that kept one side's package entry while the other side raised a bundle's floor.
+    The edge and name checks pass such a lock, and so does ``uv export --frozen``, which exports
+    the old version as it is. A requirement whose marker is false on the lock's platform and
+    Python asks nothing, a direct reference (core's commit) names no version, and a package the
+    lock holds no entry for is :func:`missing_dependencies`' and the runner's to name. Read
+    offline. Each problem names the package, the version held, the requirement and its users."""
+    from packaging.requirements import InvalidRequirement, Requirement
+    from packaging.version import InvalidVersion, Version
+
+    project = tomllib.loads(project_text).get("project") or {}
+    held: dict[str, set[str]] = {}
+    for entry in tomllib.loads(lock_text).get("package") or []:
+        if entry.get("version"):
+            held.setdefault(entry["name"], set()).add(str(entry["version"]))
+    fixed = lock_environment(project_text)
+    groups = [("the base", "", project.get("dependencies") or [])]
+    groups += [(extra, canonical(extra), requirements) for extra, requirements in
+               sorted((project.get("optional-dependencies") or {}).items())]
+    excluded: dict[tuple[str, str, str], list[str]] = {}
+    for who, extra, requirements in groups:
+        for text in requirements:
+            if not applies(text, fixed, extra):
+                continue
+            try:
+                requirement = Requirement(text)
+            except InvalidRequirement:
+                excluded.setdefault((requirement_name(text), "?", text.strip()), []).append(who)
+                continue
+            versions = held.get(canonical(requirement.name))
+            if requirement.url or not requirement.specifier or not versions:
+                continue
+
+            def allowed(version: str) -> bool:
+                try:
+                    return requirement.specifier.contains(Version(version), prereleases=True)
+                except InvalidVersion:
+                    return False
+
+            if not any(allowed(v) for v in versions):
+                shown = f"{canonical(requirement.name)}{requirement.specifier}"
+                key = (canonical(requirement.name), ", ".join(sorted(versions)), shown)
+                excluded.setdefault(key, []).append(who)
+    return [f"the lock holds {name} at {versions}, which {shown} excludes "
+            f"({', '.join(sorted(users))})"
+            for (name, versions, shown), users in sorted(excluded.items())]
+
+
 def write(root: Path = ROOT) -> int:
     for name, marker in PLATFORMS.items():
         directory = root / ".github" / "bundle-lock" / name
@@ -334,8 +387,9 @@ def check(root: Path = ROOT) -> list[str]:
                             "files and core.lock generate")
             continue
         text = (directory / "uv.lock").read_text(encoding="utf-8")
-        missing = missing_dependencies(text) + edge_problems(text, project.read_text(
-            encoding="utf-8"))
+        project_text = project.read_text(encoding="utf-8")
+        missing = (missing_dependencies(text) + edge_problems(text, project_text)
+                   + version_problems(text, project_text))
         if missing:
             problems += [f"{name}: {line}" for line in missing]
         elif uv_lock(directory, "--check"):

@@ -1000,3 +1000,66 @@ def test_the_launcher_names_an_interpreter_it_cannot_find(tmp_path):
     assert result.returncode == 127
     assert "PYTHON" in result.stderr
     assert "CONTRIBUTING.md" in result.stderr
+
+
+# -- an interpreter moved while a run goes on -------------------------------------------------
+
+#: What `uv python upgrade` does to an environment while a run is using it: the folder its python
+#: links through now holds another patch. Planted the way the reuse test plants it.
+UPGRADES_THE_INTERPRETER = r'''
+import os
+import sys
+from pathlib import Path
+
+
+def test_upgrades():
+    bin_dir = Path(sys.executable).parent
+    os.rename(bin_dir / "python", bin_dir / "python-real")
+    drift = bin_dir.parent.parent / "drift"
+    drift.mkdir()
+    (drift / "sitecustomize.py").write_text(
+        "import platform\nplatform.python_version = lambda: '3.0.1'\n", encoding="utf-8")
+    (bin_dir / "python").write_text(
+        f'#!/bin/sh\nPYTHONPATH="{drift}${{PYTHONPATH:+:$PYTHONPATH}}" '
+        'exec "$(dirname "$0")/python-real" "$@"\n', encoding="utf-8")
+    (bin_dir / "python").chmod(0o755)
+'''
+
+
+def test_an_interpreter_moved_to_another_patch_during_a_run_stops_the_bundles_still_to_run(world):
+    # The reuse check runs once, before an environment's first bundle. A patch upgrade that lands
+    # after it must not put the bundles still to run on a Python their receipts do not name.
+    root, index, core = world
+    planted.bundle(root, "a-upgrades", tests={"test_upgrades.py": UPGRADES_THE_INTERPRETER})
+    planted.bundle(root, "b-runs-after")
+    lock_dir = planted.lock(root, index)
+    run = _run(root, lock_dir, core, "--jobs", "1", "--results", "out")
+    assert run.returncode == 1, run.stdout + run.stderr
+    rows = {r["bundle"]: r["returncode"] for r in _results(root)["bundles"]}
+    assert rows == {"a-upgrades": 0, "b-runs-after": 2}, rows
+    assert "b-runs-after" in run.stderr and "3.0.1" in run.stderr, run.stderr
+    assert "=== b-runs-after ===\n1 passed" not in run.stdout
+    assert not _envs(root), "the environment whose interpreter moved is discarded"
+
+
+# -- a lock that holds a version below a bundle's floor ---------------------------------------
+
+def test_a_lock_holding_a_version_below_a_bundle_s_floor_is_refused(tmp_path):
+    # A hand-resolved merge: app.json and the generated project take the side that raised the
+    # floor, the package's own entry stays at the old version. Names and extras still match.
+    root = planted.tree(tmp_path)
+    index = planted.Index(tmp_path / "index")
+    index.add("dep-alpha", "0.5.0")
+    core = planted.stub_core(tmp_path / "core")
+    planted.bundle(root, "alpha-app", deps=["dep-alpha>=0.1"])
+    lock_dir = planted.lock(root, index)
+    assert 'name = "dep-alpha"\nversion = "0.5.0"\n' in (lock_dir / "uv.lock").read_text()
+    planted.bundle(root, "alpha-app", deps=["dep-alpha>=1"])
+    project = lock_dir / "pyproject.toml"
+    text = project.read_text(encoding="utf-8")
+    assert text.count('"dep-alpha>=0.1"') == 1
+    project.write_text(text.replace('"dep-alpha>=0.1"', '"dep-alpha>=1"'), encoding="utf-8")
+    run = _run(root, lock_dir, core)
+    assert run.returncode == 2, run.stdout + run.stderr
+    assert "dep-alpha" in run.stderr and "0.5.0" in run.stderr and ">=1" in run.stderr
+    assert "scripts/bundle_lock.py write" in run.stderr
