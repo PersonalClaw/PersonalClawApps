@@ -9,10 +9,12 @@ no result at all, is a violation. This file holds the apps half of that contract
   passing claimant passes; a failing one, and one the run never ran, each fail the verifier;
 - ``--changed`` always runs every bundle that claims ``quality.tested`` and says why, so a pull
   request that touches none of them still records a result for each;
-- ``ci.yml``: the ``tests`` job's ``quality-declarations`` step runs the verifier once, after the
-  gate step and whatever its verdict, over the ``bundles`` folder that step just wrote; no other
-  job runs the verifier or downloads results to judge, and the tests job still uploads its
-  results folder; the canary passes its own gate's results.
+- ``ci.yml``: the ``tests`` job's one gate run runs the ``bundles`` and ``quality`` parts, so the
+  gate's quality part judges the bundle results that same run wrote; its ``quality-declarations``
+  step, after it and whatever its verdict, reads that verdict back with ``gate.py --verdict
+  quality`` from the same folder under the locked core. Nothing in CI calls core's verifier
+  except through the gate, no other job judges or downloads results to judge, and the tests job
+  still uploads its results folder; the canary passes its own gate's results.
 
 Each workflow rule runs over the real file and over a planted violation of it.
 """
@@ -201,18 +203,46 @@ def _runs_verifier(step: dict) -> bool:
     return bool(_VERIFY.search(_run(step)))
 
 
+#: A gate run, and the parts it names (``--verdict`` runs none, so it is not one).
+_GATE_RUN = re.compile(r"scripts/gate\.py(?P<parts>(?:\s+(?:static|rails|bundles|quality)\b)*)")
+_VERDICT = re.compile(r"scripts/gate\.py\s+--verdict\s+quality\b")
+
+
+def _gate_parts(step: dict) -> list[str] | None:
+    """The parts a step's gate run names, or None for a step that starts no gate run."""
+    run = _run(step)
+    if "scripts/gate.py" not in run or "--verdict" in run:
+        return None
+    found = _GATE_RUN.search(run)
+    return found["parts"].split() if found else []
+
+
+def _always(step: dict) -> bool:
+    return "!cancelled()" in str(step.get("if", "")) or "always()" in str(step.get("if", ""))
+
+
 def ci_quality_problems(wf: dict) -> list[str]:
-    """The quality check is a step of the tests job, after its gate step, over the results that
-    step just wrote; no other job runs it, and no job downloads results to run it."""
+    """The tests job's one gate run runs the ``bundles`` and ``quality`` parts, so the claims are
+    judged from the results that same run wrote; its ``quality-declarations`` step, after it and
+    whatever its verdict, reads that verdict back from the run's receipt with ``--verdict
+    quality`` under the locked core. Nothing in CI calls core's verifier but the gate, no other
+    job judges, and no job downloads results to judge."""
     problems: list[str] = []
     jobs = wf.get("jobs") or {}
     tests = jobs.get("tests") or {}
     steps = _steps(tests)
-    gate_at = [i for i, s in enumerate(steps) if "scripts/gate.py" in _run(s)]
+    gate_at = [i for i, s in enumerate(steps) if _gate_parts(s) is not None]
     written = None
-    if len(gate_at) != 1 or not re.search(r"\bbundles\b", _run(steps[gate_at[0]])):
-        problems.append("tests: no single step runs the gate's bundles part")
-    else:
+    if len(gate_at) != 1:
+        problems.append(f"tests: {len(gate_at)} steps start a gate run, not one; a second run "
+                        "clears the first's results before its quality part could judge them")
+    if gate_at:
+        parts = _gate_parts(steps[gate_at[0]]) or []
+        if "bundles" not in parts:
+            problems.append("tests: the gate step does not run the bundles part")
+        if "quality" not in parts:
+            problems.append("tests: the gate step does not run the quality part, so no claim is "
+                            "judged from this run's bundle results")
         given = _RESULTS.search(_run(steps[gate_at[0]]))
         written = _folder(given.group(1)) if given else None
         if written is None:
@@ -222,38 +252,40 @@ def ci_quality_problems(wf: dict) -> list[str]:
                and _folder((s.get("with") or {}).get("path", "")) == written]
     if not uploads:
         problems.append("tests: never uploads the gate's results folder")
-    elif "always()" not in str(uploads[0].get("if", "")) and \
-            "!cancelled()" not in str(uploads[0].get("if", "")):
+    elif not _always(uploads[0]):
         problems.append("tests: uploads its results only when the job passed")
 
-    verify_at = [i for i, s in enumerate(steps) if _runs_verifier(s)]
-    verify = _verify_results(steps)
-    if len(verify) != 1:
-        problems.append(f"tests: runs core's verifier {len(verify)} time(s), not once")
-    elif verify[0] is None:
-        problems.append("tests: runs core's verifier without --results, so it reruns every "
-                        "claimant's suite")
+    verdict_at = [i for i, s in enumerate(steps) if _VERDICT.search(_run(s))]
+    if len(verdict_at) != 1:
+        problems.append(f"tests: reads the gate's quality verdict {len(verdict_at)} time(s), "
+                        "not once")
     else:
-        if written is not None and verify[0] != f"{written}/bundles":
-            problems.append(f"tests: --results {verify[0]} is not the bundle results the gate "
-                            f"wrote, {written}/bundles")
-        if gate_at and verify_at[0] < gate_at[0]:
-            problems.append("tests: runs core's verifier before the gate writes its results")
-        step = steps[verify_at[0]]
+        step = steps[verdict_at[0]]
+        if gate_at and verdict_at[0] < gate_at[0]:
+            problems.append("tests: reads the quality verdict before the gate step runs")
+        given = _RESULTS.search(_run(step))
+        read = _folder(given.group(1)) if given else None
+        if written is not None and read != written:
+            problems.append(f"tests: the verdict step reads --results {read}, not the folder the "
+                            f"gate wrote, {written}")
+        if '--core "$CORE_SHA"' not in _run(step):
+            problems.append('tests: the verdict step reads the receipt without --core "$CORE_SHA", '
+                            "so a receipt for another core would do")
         if step.get("name") != "quality-declarations":
-            problems.append(f"tests: the verifier step is named {step.get('name')!r}, not "
+            problems.append(f"tests: the verdict step is named {step.get('name')!r}, not "
                             "'quality-declarations', the name the docs cite")
-        if "!cancelled()" not in str(step.get("if", "")) and "always()" not in str(step.get("if", "")):
-            problems.append("tests: the quality check runs only when the gate passed, so a red "
-                            "bundle's claim goes unreported")
+        if not _always(step):
+            problems.append("tests: the quality verdict is read only when the gate passed, so a "
+                            "red bundle's claim goes unreported")
     for name, job in jobs.items():
-        if name == "tests":
-            continue
         for step in _steps(job):
             if _runs_verifier(step):
-                problems.append(f"{name}: runs core's verifier in a job of its own, a runner "
-                                "hop after tests")
-            if str(step.get("uses", "")).startswith("actions/download-artifact@"):
+                where = ("calls core's verifier directly, not through the gate's quality part"
+                         if name == "tests" else
+                         "runs core's verifier in a job of its own, a runner hop after tests")
+                problems.append(f"{name}: {where}")
+            if name != "tests" and str(step.get("uses", "")).startswith(
+                    "actions/download-artifact@"):
                 problems.append(f"{name}: downloads an artifact to judge what tests already holds")
     return problems
 
@@ -281,7 +313,7 @@ def canary_quality_problems(wf: dict) -> list[str]:
     return problems
 
 
-def test_the_tests_job_s_quality_step_reads_the_results_it_just_wrote():
+def test_the_tests_job_judges_claims_in_its_gate_run_and_shows_the_verdict_on_its_own_step():
     assert ci_quality_problems(_load("ci.yml")) == []
 
 
@@ -309,46 +341,72 @@ def _add(wf, job, step, at=-1):
     steps.insert(len(steps) if at == -1 else at, step)
 
 
-def _verifier_step(wf):
-    return next(s for s in _steps(_job(wf, "tests")) if _runs_verifier(s))
+_GATE_STEP = "scripts/gate.py rails"
 
 
-def _move_verifier_before_gate(wf):
+def _verdict_step(wf):
+    return next(s for s in _steps(_job(wf, "tests")) if _VERDICT.search(_run(s)))
+
+
+def _move_verdict_before_gate(wf):
     steps = _job(wf, "tests")["steps"]
-    step = _verifier_step(wf)
+    step = _verdict_step(wf)
     steps.remove(step)
-    steps.insert(next(i for i, s in enumerate(steps) if "scripts/gate.py" in _run(s)), step)
+    steps.insert(next(i for i, s in enumerate(steps) if _GATE_STEP in _run(s)), step)
+
+
+def _verdict_runs_the_part_again(wf):
+    """A second gate run for the quality part: it clears the bundle results the first wrote."""
+    step = _verdict_step(wf)
+    step["run"] = 'python scripts/gate.py quality --core "$CORE_SHA" --results "$RUNNER_TEMP/gate"'
+
+
+def _module_called_directly(wf):
+    """The shape before the gate had a quality part: the step calls core's verifier itself."""
+    _replace(wf, "tests", _GATE_STEP, " rails bundles quality ", " rails bundles ")
+    _verdict_step(wf)["run"] = ('python -m personalclaw.apps.quality . --results '
+                                '"$RUNNER_TEMP/gate/bundles"')
 
 
 def _split_back_into_a_job(wf):
-    step = _verifier_step(wf)
+    step = _verdict_step(wf)
     _job(wf, "tests")["steps"].remove(step)
     wf["jobs"]["quality-declarations"] = {"needs": ["tests"], "steps": [
         {"uses": "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
-         "with": {"name": "gate-tests", "path": "${{ runner.temp }}/gate"}}, step]}
+         "with": {"name": "gate-tests", "path": "${{ runner.temp }}/gate"}},
+        {"run": 'python -m personalclaw.apps.quality . --results "$RUNNER_TEMP/gate/bundles"'}]}
 
 
 CI_PLANTS = {
-    "the verifier without --results": (
-        lambda wf: _replace(wf, "tests", "personalclaw.apps.quality",
-                            ' --results "$RUNNER_TEMP/gate/bundles"', ""),
-        "without --results"),
-    "--results pointing elsewhere": (
-        lambda wf: _replace(wf, "tests", "personalclaw.apps.quality",
-                            "$RUNNER_TEMP/gate/bundles", "$RUNNER_TEMP/elsewhere"),
-        "is not the bundle results the gate wrote"),
-    "no quality step at all": (
-        lambda wf: _job(wf, "tests")["steps"].remove(_verifier_step(wf)),
-        "runs core's verifier 0 time(s)"),
-    "the verifier run twice": (
-        lambda wf: _add(wf, "tests", dict(_verifier_step(wf), name="planted")),
-        "runs core's verifier 2 time(s)"),
-    "the verifier before the gate": (_move_verifier_before_gate, "before the gate writes"),
-    "the verifier only on a green gate": (
-        lambda wf: _verifier_step(wf).pop("if"),
-        "runs only when the gate passed"),
+    "the gate step without the quality part": (
+        lambda wf: _replace(wf, "tests", _GATE_STEP, " bundles quality ", " bundles "),
+        "does not run the quality part"),
+    "the gate step without the bundles part": (
+        lambda wf: _replace(wf, "tests", _GATE_STEP, " bundles quality ", " quality "),
+        "does not run the bundles part"),
+    "the quality part run again by a second gate run": (
+        _verdict_runs_the_part_again, "2 steps start a gate run"),
+    "core's verifier called directly again": (
+        _module_called_directly, "calls core's verifier directly"),
+    "no verdict step at all": (
+        lambda wf: _job(wf, "tests")["steps"].remove(_verdict_step(wf)),
+        "reads the gate's quality verdict 0 time(s)"),
+    "the verdict read twice": (
+        lambda wf: _add(wf, "tests", dict(_verdict_step(wf), name="planted"), at=-2),
+        "reads the gate's quality verdict 2 time(s)"),
+    "the verdict before the gate": (_move_verdict_before_gate, "before the gate step runs"),
+    "the verdict from another folder": (
+        lambda wf: _replace(wf, "tests", "--verdict quality", '"$RUNNER_TEMP/gate"',
+                            '"$RUNNER_TEMP/elsewhere"'),
+        "not the folder the gate wrote"),
+    "the verdict without --core": (
+        lambda wf: _replace(wf, "tests", "--verdict quality", ' --core "$CORE_SHA"', ""),
+        'without --core "$CORE_SHA"'),
+    "the verdict only on a green gate": (
+        lambda wf: _verdict_step(wf).pop("if"),
+        "read only when the gate passed"),
     "the step renamed": (
-        lambda wf: _verifier_step(wf).__setitem__("name", "Quality"),
+        lambda wf: _verdict_step(wf).__setitem__("name", "Quality"),
         "not 'quality-declarations'"),
     "split back into a job of its own": (_split_back_into_a_job, "in a job of its own"),
     "an artifact downloaded elsewhere": (

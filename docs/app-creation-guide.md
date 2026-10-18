@@ -723,8 +723,9 @@ worked examples.
 ```
 
 The Store renders this as a badge row, so in this repo it is a promise, not
-decoration: the `quality-declarations` step, the last of CI's `tests` job, runs core's verifier
-(`python -m personalclaw.apps.quality . --results <the bundle results that job just wrote>`) and
+decoration: the gate's `quality` part (`make gate` runs it, and so does CI's `tests` job, whose
+`quality-declarations` step shows its verdict) runs core's verifier
+(`python -m personalclaw.apps.quality . --results <the bundle results that same run wrote>`) and
 **exits 1 on a claim the bundle
 cannot back**. What each claim must show:
 

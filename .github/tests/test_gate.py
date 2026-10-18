@@ -1,7 +1,7 @@
 """``scripts/gate.py`` runs the parts asked of it, keeps going past a red, and writes its receipt.
 
 The gate is the one apps gate: CI's ``static`` job runs its ``static`` part, the ``tests`` job its
-``rails`` and ``bundles`` parts, and ``make gate`` all three. These tests drive the same script,
+``rails``, ``bundles`` and ``quality`` parts, and ``make gate`` all four. These tests drive the same script,
 unmodified, from a copy in a seeded git repository whose parts are planted, so what it runs is
 exactly what was seeded; none of them runs a real check or a real bundle suite.
 """
@@ -166,12 +166,12 @@ def test_without_jobs_the_rails_take_the_runner_s_default(tmp_path):
     assert _receipt(root)["parts"][0]["workers"] == workers
 
 
-def test_with_no_part_named_the_gate_runs_all_three_in_order(tmp_path):
+def test_with_no_part_named_the_gate_runs_all_four_in_order(tmp_path):
     root = _seeded(tmp_path)
     run = _gate(root)
     assert run.returncode == 0, run.stdout + run.stderr
     receipt = _receipt(root)
-    assert [p["part"] for p in receipt["parts"]] == ["static", "rails", "bundles"]
+    assert [p["part"] for p in receipt["parts"]] == ["static", "rails", "bundles", "quality"]
     assert receipt["selection"] == {
         "bundles": ["first-app", "second-app"],
         "reason": "every app bundle that ships tests",
@@ -180,6 +180,121 @@ def test_with_no_part_named_the_gate_runs_all_three_in_order(tmp_path):
     assert [(b["bundle"], b["returncode"]) for b in results["bundles"]] == [
         ("first-app", 0), ("second-app", 0),
     ]
+
+
+# -- the quality part: the claims, judged from the bundle results this run wrote -------------------
+
+def _claims_tested(root: Path, name: str, *, passes: bool = True) -> None:
+    """Make *name* claim ``quality.tested``; with *passes* false, its one test fails."""
+    app = root / name
+    (app / "app.json").write_text(json.dumps({"name": name, "quality": {"tested": True}}),
+                                  encoding="utf-8")
+    if not passes:
+        (app / "test_ok.py").write_text("def test_ok():\n    assert False, 'planted'\n",
+                                        encoding="utf-8")
+
+
+def _parts(root: Path) -> list[tuple[str, str]]:
+    return [(p["part"], p["result"]) for p in _receipt(root)["parts"]]
+
+
+def test_the_quality_part_fails_a_claim_whose_bundle_failed_even_after_a_red_bundles_part(
+        tmp_path):
+    root = _seeded(tmp_path)
+    _claims_tested(root, "first-app", passes=False)
+    run = _gate(root, "bundles", "quality")
+    assert run.returncode == 1, run.stdout + run.stderr
+    # A red bundle does not stop the quality part: its claim is still judged, and reported.
+    assert _parts(root) == [("bundles", "FAIL"), ("quality", "FAIL")]
+    assert "first-app" in run.stdout and 'records outcome "fail"' in run.stdout
+    verdict = _gate(root, "--verdict", "quality")
+    assert verdict.returncode == 1, verdict.stdout + verdict.stderr
+    assert "quality: FAIL" in verdict.stdout
+
+
+def test_the_quality_part_passes_a_claim_its_bundle_backs(tmp_path):
+    root = _seeded(tmp_path)
+    _claims_tested(root, "first-app")
+    run = _gate(root, "bundles", "quality")
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert _parts(root) == [("bundles", "pass"), ("quality", "pass")]
+    assert "every declared claim is backed" in run.stdout
+    verdict = _gate(root, "--verdict", "quality")
+    assert verdict.returncode == 0, verdict.stdout + verdict.stderr
+    assert "quality: pass" in verdict.stdout
+
+
+def test_the_quality_part_without_bundle_results_fails_and_names_what_is_missing(tmp_path):
+    root = _seeded(tmp_path)
+    run = _gate(root, "quality")
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert _parts(root) == [("quality", "FAIL")]
+    assert str(root / "out" / "bundles" / "results.json") in run.stderr
+    assert "bundles quality" in run.stderr
+
+
+def test_the_quality_part_never_judges_an_earlier_run_s_bundle_results(tmp_path):
+    root = _seeded(tmp_path)
+    _claims_tested(root, "first-app")
+    assert _gate(root, "bundles").returncode == 0
+    assert (root / "out" / "bundles" / "results.json").is_file()
+    run = _gate(root, "quality")
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert "results.json" in run.stderr
+
+
+# -- --verdict PART: one part's result, read back from the receipt ---------------------------------
+
+def _write_receipt(root: Path, parts: list[dict], commit: str = "a" * 40) -> Path:
+    (root / "out").mkdir(exist_ok=True)
+    receipt = root / "out" / "receipt.json"
+    receipt.write_text(json.dumps({"core": {"commit": commit}, "parts": parts}), encoding="utf-8")
+    return receipt
+
+
+def _row(part: str, result: str, returncode: int) -> dict:
+    return {"part": part, "result": result, "returncode": returncode, "seconds": 1.0}
+
+
+@pytest.mark.parametrize(("result", "returncode"), [("pass", 0), ("FAIL", 1)])
+def test_the_verdict_exits_with_the_receipt_s_row_and_leaves_the_folder_alone(
+        tmp_path, result, returncode):
+    root = _seeded(tmp_path)
+    receipt = _write_receipt(root, [_row("bundles", "FAIL", 1), _row("quality", result, returncode)])
+    run = _gate(root, "--verdict", "quality", "--core", "a" * 12)
+    assert run.returncode == returncode, run.stdout + run.stderr
+    assert f"quality: {result}" in run.stdout
+    assert receipt.is_file(), "reading a verdict must not clear the results it reads"
+
+
+def test_the_verdict_fails_when_the_receipt_has_no_row_for_the_part(tmp_path):
+    root = _seeded(tmp_path)
+    _write_receipt(root, [_row("rails", "pass", 0), _row("bundles", "pass", 0)])
+    run = _gate(root, "--verdict", "quality")
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert "no quality row" in run.stderr
+
+
+def test_the_verdict_fails_when_there_is_no_receipt(tmp_path):
+    root = _seeded(tmp_path)
+    run = _gate(root, "--verdict", "quality")
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert "no receipt" in run.stderr and str(root / "out" / "receipt.json") in run.stderr
+
+
+def test_the_verdict_fails_for_a_receipt_of_another_core(tmp_path):
+    root = _seeded(tmp_path)
+    _write_receipt(root, [_row("quality", "pass", 0)], commit="b" * 40)
+    run = _gate(root, "--verdict", "quality", "--core", "a" * 40)
+    assert run.returncode == 1, run.stdout + run.stderr
+    assert "a" * 40 in run.stderr and "b" * 40 in run.stderr
+
+
+def test_the_verdict_is_refused_beside_parts_to_run(tmp_path):
+    root = _seeded(tmp_path)
+    run = _gate(root, "bundles", "--verdict", "quality")
+    assert run.returncode == 2
+    assert "--verdict" in run.stderr
 
 
 def test_bundles_named_on_the_command_line_are_the_selection(tmp_path):

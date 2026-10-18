@@ -1,9 +1,10 @@
-"""The one apps gate: the static checks, the repository's own tests, then every bundle's suite.
+"""The one apps gate: the static checks, the repository's own tests, every bundle's suite, then the
+quality claims judged from that suite's results.
 
 CI and a local run call this same script. CI's ``static`` job runs the ``static`` part, its
-``tests`` job the ``rails`` and ``bundles`` parts, and ``make gate`` (or this script with no part
-named) runs all three, in that order. Each part runs even when an earlier one is red, and the gate
-exits 1 when any part failed.
+``tests`` job the ``rails``, ``bundles`` and ``quality`` parts, and ``make gate`` (or this script
+with no part named) runs all four, in that order. Each part runs even when an earlier one is red,
+and the gate exits 1 when any part failed.
 
 Parts:
 
@@ -16,7 +17,19 @@ Parts:
   since BASE can affect, plus every bundle claiming ``quality.tested`` (the quality check reads
   their recorded results), and ``--float`` (the weekly canary's mode, never merge evidence) resolves
   each bundle's declared ranges afresh instead of installing the bundle lock.
+- ``quality``: core's verifier, ``python -m personalclaw.apps.quality . --results DIR/bundles``,
+  over the bundle results the ``bundles`` part of this same run wrote: each app's declared
+  ``quality`` block against its evidence, a ``tested`` claim against its bundle's recorded result,
+  with no suite run again. It runs after ``bundles`` whatever that part's verdict, so a red
+  bundle's claim is still judged and reported. A run starts by clearing its results folder, so
+  the part never judges an earlier run's results: run alone, or after a ``bundles`` part that
+  wrote nothing, it fails and names the missing ``results.json``.
 
+``--verdict PART`` runs nothing: it reads ``receipt.json`` under ``--results`` and exits with the
+result recorded for that part (0 for pass, 1 otherwise), so a later CI step can show one part's
+verdict on a line of its own. A missing receipt, a receipt with no row for the part (the gate
+stopped before it ran) and, with ``--core``, a receipt for another core each fail, naming what is
+wrong. It never passes on what it could not read.
 The gate never installs core. It records the core installed in the interpreter that runs the
 parts, and ``--core <sha>`` refuses to run at all when that core was built from another commit.
 CI passes ``--core`` the commit in ``core.lock``, so a CI run cannot test any other core. A local
@@ -37,8 +50,9 @@ pytest, so a part or a pytest left running by a gate that was stopped still keep
 out. The bundle environments are one per checkout: a second gate's bundles part in the same
 checkout refuses, naming the run that holds them.
 
-    python scripts/gate.py [static] [rails] [bundles] [--python PY] [--bundle NAME]...
+    python scripts/gate.py [static] [rails] [bundles] [quality] [--python PY] [--bundle NAME]...
                            [--jobs N] [--changed BASE] [--float] [--core SHA] [--results DIR]
+    python scripts/gate.py --verdict PART [--core SHA] [--results DIR]
 """
 
 from __future__ import annotations
@@ -57,7 +71,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PARTS = ("static", "rails", "bundles")
+PARTS = ("static", "rails", "bundles", "quality")
 DEFAULT_RESULTS = ROOT / ".local" / "scratch" / "gate"
 
 #: What the parts' interpreter reports about itself and the core installed in it.
@@ -199,6 +213,17 @@ def _run_part(part: str, *, python: str, results: Path, bundles: list[str],
         argv = [python, ".github/scripts/run_checks.py", "--report", str(results / "static.json")]
     elif part == "rails":
         argv = [python, "-m", "pytest", ".github/tests", "-n", str(workers), "-q"]
+    elif part == "quality":
+        ran = results / "bundles" / "results.json"
+        if not ran.is_file():
+            # The run cleared its folder when it started, so a results.json here is this run's.
+            print(f"\n=== gate: quality: no bundle results to judge", flush=True)
+            print(f"gate: the quality part judges the bundle results this run's bundles part "
+                  f"wrote, and there are none: {ran} is missing. Run both in one gate run: "
+                  "python scripts/gate.py bundles quality", file=sys.stderr)
+            return 1
+        argv = [python, "-m", "personalclaw.apps.quality", ".", "--results",
+                str(results / "bundles")]
     else:
         argv = [python, "scripts/test_bundles.py", "--results", str(results / "bundles"),
                 *flags, *bundles]
@@ -210,6 +235,35 @@ def _run_part(part: str, *, python: str, results: Path, bundles: list[str],
     except OSError as exc:
         print(f"gate: could not start the {part} part: {exc}", file=sys.stderr)
         return 127
+
+
+def _verdict(part: str, results: Path, core: str | None) -> int:
+    """Exit with the result *part* has in the receipt under *results*; fail on anything unread."""
+    path = results / "receipt.json"
+    try:
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        print(f"gate: no receipt at {path}: the gate run that writes it did not finish, so "
+              f"there is no {part} verdict to read", file=sys.stderr)
+        return 1
+    except (OSError, ValueError) as exc:
+        print(f"gate: cannot read the receipt at {path}: {exc}", file=sys.stderr)
+        return 1
+    if core:
+        want = core.strip().lower()
+        have = str(((receipt.get("core") or {}).get("commit")) or "").lower()
+        if len(want) < 7 or not have.startswith(want):
+            print(f"gate: the receipt at {path} is for core {have or 'not recorded'}, not the "
+                  f"core named, {core}", file=sys.stderr)
+            return 1
+    rows = [p for p in receipt.get("parts") or [] if p.get("part") == part]
+    if not rows:
+        print(f"gate: the receipt at {path} has no {part} row: the gate stopped before its "
+              f"{part} part ran, or was not asked to run it", file=sys.stderr)
+        return 1
+    row = rows[-1]
+    print(f"{part}: {row.get('result')} (exit {row.get('returncode')}, {row.get('seconds')} s)")
+    return 0 if row.get("returncode") == 0 and row.get("result") == "pass" else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -235,6 +289,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="refuse to run unless the installed core was built from this commit")
     parser.add_argument("--results", type=Path, default=DEFAULT_RESULTS,
                         help="where the receipt and results go (default: .local/scratch/gate)")
+    parser.add_argument("--verdict", metavar="PART", choices=PARTS,
+                        help="run nothing; exit with PART's result in the receipt under --results")
     args = parser.parse_args(argv)
     unknown = [p for p in args.parts if p not in PARTS]
     if unknown:
@@ -244,6 +300,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("name bundles with --bundle or pass --changed, not both")
 
     results = args.results if args.results.is_absolute() else ROOT / args.results
+    if args.verdict:
+        if args.parts:
+            parser.error("--verdict reads a finished run's receipt and runs nothing; name no part")
+        return _verdict(args.verdict, results, args.core)
     results.mkdir(parents=True, exist_ok=True)
     # One results folder, one run: held until this process and every part it starts have exited.
     held = open(results / ".gate.lock", "a")
