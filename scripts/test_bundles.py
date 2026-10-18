@@ -39,8 +39,18 @@ selects none and passes.
 its own pytest process, and its output is printed as one block when it finishes.
 ``--changed BASE`` runs only the bundles whose folder differs from BASE (``git diff BASE...HEAD``
 and the uncommitted work tree); a change outside every bundle that can change any bundle's run
-selects every bundle, as does a diff git cannot read. ``--float`` resolves each bundle's declared
-ranges afresh instead of installing the lock: the weekly canary's mode, never merge evidence.
+selects every bundle, as does a diff git cannot read. It also always runs every bundle whose
+``app.json`` claims ``quality.tested``, and says so in the selection's reason: core's quality
+verifier judges that claim from this run's results, and a claimant the run left out has no result,
+which fails the claim. ``--float`` resolves each bundle's declared ranges afresh instead of
+installing the lock: the weekly canary's mode, never merge evidence.
+
+``--results DIR`` writes ``DIR/results.json`` after every bundle, with each bundle's JUnit XML and
+each environment's receipt beside it. Its ``apps`` list is the file core's quality verifier reads
+(``python -m personalclaw.apps.quality TREE --results DIR``): one entry per bundle that finished,
+``{"app": <folder>, "outcome": "pass" | "fail", "junit": <file in DIR>}``, ``pass`` only for a
+bundle whose result is 0; ``junit`` is left out when pytest wrote none. A bundle still running when
+the run stopped has no entry, so a claim on it fails rather than passes.
 
     python scripts/test_bundles.py [BUNDLE ...] [--jobs N] [--changed BASE] [--float]
                                    [--core-commit SHA] [--results DIR] [--list]
@@ -138,6 +148,32 @@ def declared_dependencies(bundle: Path) -> list[str]:
     return dependencies
 
 
+def claims_tested(bundle: Path) -> bool:
+    """Whether the bundle's ``app.json`` claims ``quality.tested`` (exactly ``true``, as core's
+    ``QualityDeclaration.claims()`` reads it). An unreadable manifest claims nothing here: the
+    manifest-validate check and the verifier's own ``manifest`` violation report it."""
+    try:
+        data = json.loads((bundle / "app.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    quality = data.get("quality") if isinstance(data, dict) else None
+    return isinstance(quality, dict) and quality.get("tested") is True
+
+
+def quality_results(rows: Sequence[Mapping]) -> list[dict]:
+    """The ``apps`` list of ``results.json``, in the format core's quality verifier reads: one
+    entry per finished bundle at the top of the tree, ``pass`` only for a result of 0."""
+    entries = []
+    for row in sorted(rows, key=lambda r: r["bundle"]):
+        if "/" in row["bundle"]:
+            continue  # not an app folder of the tree; the verifier would refuse the whole file
+        entry = {"app": row["bundle"], "outcome": "pass" if row["returncode"] == 0 else "fail"}
+        if row.get("junit"):
+            entry["junit"] = row["junit"]
+        entries.append(entry)
+    return entries
+
+
 def default_jobs() -> int:
     return max(1, min(8, (os.cpu_count() or 2) // 2))
 
@@ -217,6 +253,14 @@ def select_changed(base: str | None, root: Path = ROOT) -> tuple[list[Path], str
         reason += f" (and {len(inert)} path(s) no bundle reads)"
     if deleted:
         reason += f"; deleted, so nothing to run: {', '.join(sorted(deleted))}"
+    # The quality verifier judges a `tested` claim from this run's results only, so every
+    # claimant runs, touched or not: one left out would have no result, and its claim would fail.
+    claimants = sorted(name for name, b in tested.items()
+                       if name not in chosen and claims_tested(b))
+    if claimants:
+        chosen.update(claimants)
+        reason += ("; plus every bundle claiming quality.tested, whose result the quality check "
+                   f"reads: {', '.join(claimants)}")
     return [tested[name] for name in sorted(chosen)], reason
 
 
@@ -729,7 +773,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="the core commit environments hold (default: core.lock's); a "
                              "locked run refuses any other")
     parser.add_argument("--results", type=Path,
-                        help="also write results.json, each bundle's JUnit XML and each "
+                        help="also write results.json (whose `apps` list core's quality verifier "
+                             "reads with --results), each bundle's JUnit XML and each "
                              "environment's receipt into this directory")
     parser.add_argument("--list", action="store_true",
                         help="print the selection and its reason, and run nothing")
@@ -764,6 +809,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if results_dir is None:
             return
         summary["bundles"].sort(key=lambda row: row["bundle"])
+        summary["apps"] = quality_results(summary["bundles"])
         (results_dir / "results.json").write_text(json.dumps(summary, indent=2) + "\n",
                                                   encoding="utf-8")
 

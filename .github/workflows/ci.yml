@@ -5,7 +5,9 @@
 # of scripts/gate.py, the one apps gate a local run calls too (`make gate`). Jobs:
 # static (every .github/scripts/check_*.py, one row each) · tests (.github/tests once,
 # then each bundle's suite, four at once, each in a locked environment of its own; a pull
-# request runs only the bundles its change can affect) · quality-declarations · dco (PR-only).
+# request runs only the bundles its change can affect, plus every bundle claiming
+# quality.tested) · quality-declarations (core's verifier over the tests job's recorded
+# bundle results; it runs no suite) · dco (PR-only).
 # Every job that installs core installs the one commit core.lock pins (read and exported by
 # scripts/core_lock.py, which prints it), so a re-run tests the same core. Core main's own
 # drift is the weekly canary's to report (core-main-canary.yml), not this workflow's.
@@ -168,15 +170,18 @@ jobs:
     # The check IS core's module, invoked verbatim — deliberately not a second
     # implementation here. Re-deriving the token-lint patterns or the pass rules in this
     # repo would mint exactly the declared-vs-actual drift the job exists to catch, one
-    # layer down. `needs: [tests]` so a declaring app whose own suite is red can never
-    # reach a green quality job.
+    # layer down.
+    #
+    # A `tested` claim is judged from the `tests` job's own bundle results (its gate-tests
+    # artifact: bundles/results.json and each bundle's JUnit), never by running a suite
+    # again: `--results` starts no pytest. A claimant with a failed result, or with no result
+    # at all, is a violation, and the tests job's --changed selection always runs every
+    # claimant. So this job installs core and nothing else. It runs after `tests` whatever
+    # that job's verdict, so a red bundle's claim is reported here too; a cancelled run skips it.
     needs: [tests]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    env:
-      # Same reason as the `tests` job: the verifier RUNS each declaring bundle's
-      # pytest, so it needs the posture those tests are written against.
-      PERSONALCLAW_SKIP_APP_BACKENDS: "1"
     steps:
       - name: Runner identity
         # The image and architecture this job runs on, so a moved runner image shows in the log.
@@ -188,10 +193,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        # The verifier runs each bundle's pytest, browser-connector's Node-driven worker tests included.
-        with:
-          node-version-file: .nvmrc
       - name: Install uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
@@ -200,80 +201,33 @@ jobs:
       - name: Read core.lock
         # CORE_SHA and CORE_SPEC for the steps below; the log line names the core under test.
         run: uv run --no-project --python 3.12.15 python scripts/core_lock.py export
-      - name: Install core + pytest
-        # Mirrors static/tests: a uv-managed venv (the runner's /usr is
-        # PEP-668 externally-managed, so `--system` is refused), exported on PATH/env so
-        # later steps' `python` and `uv pip` resolve to it. pytest is required, not
-        # optional: verifying `tested: true` means running the bundle's tests for real.
+      - name: Install core
+        # Core alone: the verifier reads recorded results, so no pytest and no app's
+        # dependencies. A uv-managed venv (the runner's /usr is PEP-668 externally-managed),
+        # exported on PATH/env so later steps' `python` resolves to it.
         run: |
           uv venv --python 3.12.15 .venv
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
           echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
-          uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC" pytest==9.1.1 pytest-asyncio==1.4.0
+          uv pip install --python "$PWD/.venv/bin/python" "$CORE_SPEC"
       - name: The installed core is the locked one
         # This job runs core's verifier directly, not through the gate, so it checks the pin itself.
         run: python scripts/core_lock.py verify
-      - name: "Census the claims, install what a `tested` claim needs"
-        # Two things, one manifest read.
-        # (1) The census is PRINTED so a green run stays legible: "no app claimed
-        #     anything" and "claims were checked and held" are different facts, and a
-        #     guard whose log cannot tell them apart is how a guard rots unnoticed.
-        # (2) The deps matter because the verifier really runs the bundle's pytest — an
-        #     HONEST `tested: true` on an app that needs its SDK (slack-channel →
-        #     slack-sdk) would otherwise red as a lie. Scoped to DECLARING bundles only:
-        #     the reason `tests` installs per bundle is to keep torch out of every job.
-        run: |
-          deps=$(python - <<'PY'
-          import json, pathlib, sys
-          axes = {"tested": 0, "designSystem": 0, "a11y": 0}
-          claiming, deps = [], []
-          apps = sorted(pathlib.Path(".").glob("*/app.json"))
-          for mf in apps:
-              try:
-                  d = json.loads(mf.read_text(encoding="utf-8"))
-              except (OSError, ValueError) as exc:
-                  # NOT swallowed: said out loud, and the red is still raised — by
-                  # the static job's manifest-validate check, and again by the verifier's own `manifest`
-                  # violation. This census must not be the thing that reports it.
-                  print(f"{mf}: unreadable ({exc}) — skipped for census", file=sys.stderr)
-                  continue
-              q = d.get("quality")
-              if not isinstance(q, dict):
-                  continue
-              # The three VERIFIABLE values, mirroring QualityDeclaration.claims():
-              # `true` / `"v2"` is a claim; anything else (absent, false, "legacy",
-              # "n/a") claims nothing and is not counted or punished.
-              claimed = []
-              if q.get("tested") is True:
-                  claimed.append("tested")
-                  deps += (d.get("dependencies") or {}).get("pythonDependencies") or []
-              if q.get("designSystem") == "v2":
-                  claimed.append("designSystem")
-              if q.get("a11y") is True:
-                  claimed.append("a11y")
-              for a in claimed:
-                  axes[a] += 1
-              if claimed:
-                  claiming.append(f"{mf.parent.name}({'+'.join(claimed)})")
-          print(
-              f"quality claims over {len(apps)} app(s): tested={axes['tested']} "
-              f"designSystem={axes['designSystem']} a11y={axes['a11y']} — declared by: "
-              f"{', '.join(claiming) or '(none)'}",
-              file=sys.stderr,
-          )
-          print(" ".join(sorted(set(deps))))
-          PY
-          )
-          if [ -n "$deps" ]; then
-            echo "installing declaring bundles' deps: $deps"
-            uv pip install $deps
-          else
-            echo "no bundle claims quality.tested — no deps to install"
-          fi
+      - name: The tests job's bundle results
+        # The gate-tests artifact this run's `tests` job uploaded: bundles/results.json (its
+        # `apps` list is the verifier's input) and each bundle's JUnit beside it. A missing
+        # artifact fails here, before anything is judged.
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: gate-tests
+          path: ${{ runner.temp }}/gate
       - name: Every declared claim is backed by the bundle's evidence
-        # Exit 1 on a dishonest claim AND on a tree with no */app.json at all (a
-        # checker that silently checked nothing is the failure mode this guards).
-        run: python -m personalclaw.apps.quality .
+        # --results: each `tested` claim is judged from the tests job's results and no pytest
+        # starts. A claimant whose result is "fail", or which has no result, is a violation;
+        # an unreadable results file exits 1 naming it. Exit 1 too on a tree with no
+        # */app.json at all (a checker that silently checked nothing is the failure mode this
+        # guards).
+        run: python -m personalclaw.apps.quality . --results "$RUNNER_TEMP/gate/bundles"
 
   dco:
     # Every commit in a PR must carry a Signed-off-by trailer (DCO),

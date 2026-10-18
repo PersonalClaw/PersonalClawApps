@@ -29,22 +29,7 @@ reason = "Opens, comments on and closes the one issue titled \"Apps fail against
 # Exceptions. One waives one rule (scope) for one reference in one file, and expires at most
 # 30 days after the day it is written or renewed. Renewing is a new expiry with a new reason.
 # An expired entry, one more than 30 days out, one that matches nothing, and one missing a
-# field all fail.
-[[exception]]
-file = ".github/workflows/ci.yml"
-reference = "quality-declarations Census the claims, install what a `tested` claim needs"
-scope = "run-install"
-owner = "maintainers"
-reason = "Installs each declaring app's own pythonDependencies ranges, because that is what installing the app gets; the quality verifier must test what users receive. It ends when https://github.com/PersonalClaw/PersonalClaw/issues/3918 audits that resolution."
-expires = 2026-11-16
-
-[[exception]]
-file = ".github/workflows/core-main-canary.yml"
-reference = "check Census the claims, install what a `tested` claim needs"
-scope = "run-install"
-owner = "maintainers"
-reason = "The canary's quality verifier runs each declaring app's tests in the canary's own environment, so it installs those apps' pythonDependencies ranges there, resolved afresh as an install of the app resolves them. It ends with the quality job's exception above, when core's verifier reads the bundle results instead of rerunning each suite."
-expires = 2026-11-16
+# field all fail. None is in force today.
 
 # The shape of an exception:
 #

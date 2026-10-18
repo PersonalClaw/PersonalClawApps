@@ -724,12 +724,13 @@ worked examples.
 
 The Store renders this as a badge row, so in this repo it is a promise, not
 decoration: the `quality-declarations` CI job runs core's verifier
-(`python -m personalclaw.apps.quality .`) and **exits 1 on a claim the bundle
+(`python -m personalclaw.apps.quality . --results <the tests job's bundle results>`) and
+**exits 1 on a claim the bundle
 cannot back**. What each claim must show:
 
 | Claim | Evidence CI checks |
 |---|---|
-| `tested: true` | at least one `test_*.py` (root or `tests/`) **and** `python -m pytest <bundle>` passes |
+| `tested: true` | at least one `test_*.py` (root or `tests/`) **and** the `tests` job's run of the bundle passed. The quality job reads that recorded result and runs no suite itself; a bundle that claims `tested` runs in every pull request's `tests` job, touched or not, and a claim with no recorded result fails |
 | `designSystem: "v2"` | every `*.ts`/`*.tsx` in the bundle passes token-lint — the same rule the host frontend is held to (`node_modules`/`dist`, `*.test.tsx` and `*.config.ts` are excluded) |
 | `a11y: true` | the bundle ships `a11y/axe-report.json` — `{"appVersion", "tool", "violations": []}` — whose `appVersion` equals the manifest's and whose `violations` is empty |
 

@@ -90,38 +90,15 @@ jobs:
           set +e
           python scripts/gate.py static rails bundles --core "$CORE_SHA" --float --jobs 4 --results "$RUNNER_TEMP/gate"
           echo "rc=$?" >> "$GITHUB_OUTPUT"
-      - name: "Census the claims, install what a `tested` claim needs"
-        # The bundle environments the gate builds are its own; the quality verifier runs each
-        # declaring app's tests in this job's environment, so the declaring apps'
-        # pythonDependencies go there, resolved afresh as an install of the app resolves them.
-        # The same census as ci.yml's quality job, under the same expiring exception.
-        run: |
-          deps=$(python - <<'PY'
-          import json, pathlib, sys
-          deps = []
-          for mf in sorted(pathlib.Path(".").glob("*/app.json")):
-              try:
-                  d = json.loads(mf.read_text(encoding="utf-8"))
-              except (OSError, ValueError) as exc:
-                  print(f"{mf}: unreadable ({exc}) — skipped for census", file=sys.stderr)
-                  continue
-              q = d.get("quality")
-              if isinstance(q, dict) and q.get("tested") is True:
-                  deps += (d.get("dependencies") or {}).get("pythonDependencies") or []
-          print(" ".join(sorted(set(deps))))
-          PY
-          )
-          if [ -n "$deps" ]; then
-            echo "installing declaring bundles' deps, resolved afresh: $deps"
-            uv pip install $deps
-          else
-            echo "no bundle claims quality.tested — no deps to install"
-          fi
       - name: Every declared quality claim is backed by the bundle's evidence
+        # --results: each `tested` claim is judged from the bundle results the gate above just
+        # wrote (every bundle, each in its floating environment), and no pytest starts. A
+        # claimant whose result is "fail", or which has none (the gate stopped before it), is a
+        # violation.
         id: quality
         run: |
           set +e
-          python -m personalclaw.apps.quality .
+          python -m personalclaw.apps.quality . --results "$RUNNER_TEMP/gate/bundles"
           echo "rc=$?" >> "$GITHUB_OUTPUT"
       - name: Keep the gate's receipt
         if: ${{ !cancelled() }}

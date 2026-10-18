@@ -94,13 +94,16 @@ def load(path: Path, name: str):
 
 
 def bundle(root: Path, name: str, *, deps: list[str] | None = None,
-           tests: dict[str, str] | None = None) -> Path:
-    """A planted app bundle: an app.json declaring *deps*, and its test files."""
+           tests: dict[str, str] | None = None, quality: dict | None = None) -> Path:
+    """A planted app bundle: an app.json declaring *deps* and, given one, the *quality* block,
+    and its test files."""
     app = root / name
     app.mkdir(parents=True, exist_ok=True)
     manifest = {"name": name, "version": "0.0.0"}
     if deps:
         manifest["dependencies"] = {"pythonDependencies": deps}
+    if quality is not None:
+        manifest["quality"] = quality
     (app / "app.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     for filename, code in (tests or {"test_ok.py": "def test_ok():\n    assert True\n"}).items():
         (app / filename).write_text(code, encoding="utf-8")

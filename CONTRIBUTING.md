@@ -90,7 +90,13 @@ on it, so a hang names what it is in. A full run that finds no tested bundle exi
   that can change every bundle's run (`core.lock`, `scripts/`, `apps_testkit/`,
   `conftest.py`, `pytest.ini`, `.github/tests/`, the bundle lock, a workflow, ...) runs
   every bundle, and so does an unknown base, a shallow clone or any git error. Docs,
-  root `*.md` files and the GitHub templates select no bundle.
+  root `*.md` files and the GitHub templates select no bundle. Every bundle whose
+  `app.json` claims `quality.tested` runs whatever changed, and the selection's reason
+  names them: the quality job judges that claim from this run's results only.
+- `--results DIR` writes `DIR/results.json` (with each bundle's JUnit beside it). Its
+  `apps` list, `{"app", "outcome": "pass" | "fail", "junit"}` per bundle that finished, is
+  what `python -m personalclaw.apps.quality . --results DIR` reads instead of running any
+  suite again. A claimant with a `fail`, or with no entry, fails that check.
 - `--list` prints the selection and why, and runs nothing.
 
 With no bundle argument it runs every tested bundle, matching the CI job.
@@ -208,13 +214,9 @@ To add an exception, when a pin cannot hold yet, add an `[[exception]]` entry wi
 
 To renew one, set a new `expires` and update its `reason`. The check fails on an
 exception that has expired, is more than 30 days out, matches no violation, or is
-missing a field. The policy file's own rules are never waived. Today's two exceptions
-cover the install of each declaring app's `pythonDependencies` ranges that core's quality
-verifier needs, in CI's quality job and in the canary, because the verifier runs each
-declaring app's tests itself, in its own environment. Both end when the verifier reads the
-bundle results the gate already wrote instead of rerunning each suite, or when
-[the shipped-dependency audit](https://github.com/PersonalClaw/PersonalClaw/issues/3918)
-pins that resolution, whichever comes first.
+missing a field. The policy file's own rules are never waived. No exception is in force
+today: the quality checks in CI and in the canary read the bundle results their gate
+wrote, so neither installs an app's dependency ranges any more.
 
 Not here yet: the repository security settings, the scheduled pin-refresh pull requests
 from a GitHub App and the weekly SHA-to-tag check, dependency review and CodeQL in the
