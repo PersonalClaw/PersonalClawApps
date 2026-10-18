@@ -579,6 +579,40 @@ def test_ok():
 """
 
 
+def _popen_as_a_terminal_would(argv: list[str], **kw) -> subprocess.Popen:
+    """Start *argv* with SIGINT at its default, as a terminal's foreground job has it.
+
+    A command a non-interactive shell starts in the background (``cmd &``) starts with SIGINT
+    ignored, and every process it starts inherits that; Python then never turns SIGINT into
+    ``KeyboardInterrupt``, so Ctrl-C reaches nothing. A Python handler in this process becomes
+    the default disposition across exec, so the gate starts with SIGINT at its default whatever
+    the shell that started these tests ignores."""
+    import signal
+
+    previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        return subprocess.Popen(argv, **kw)
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+def test_a_gate_started_for_the_interrupt_test_gets_sigint_at_its_default_when_it_is_ignored_here():
+    # The control: these tests started in the background, where SIGINT is ignored. Without the
+    # reset, the process below inherits the ignore and the interrupt test waits out its markers.
+    import signal
+
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        child = _popen_as_a_terminal_would(
+            [sys.executable, "-c",
+             "import signal; print(signal.getsignal(signal.SIGINT) is signal.default_int_handler)"],
+            stdout=subprocess.PIPE, text=True)
+        out, _ = child.communicate(timeout=60)
+    finally:
+        signal.signal(signal.SIGINT, previous)
+    assert out.strip() == "True", out
+
+
 def test_an_interrupt_keeps_a_second_gate_out_while_the_interrupted_pytest_finishes(tmp_path):
     # Ctrl-C reaches the gate, its runner and the bundle's pytest at once, as the terminal sends
     # SIGINT to the whole foreground process group.
@@ -593,10 +627,10 @@ def test_an_interrupt_keeps_a_second_gate_out_while_the_interrupted_pytest_finis
         marker=str(marker), release=str(release), interrupted=str(interrupted)), encoding="utf-8")
     (core,) = (root / ".planted" / "core").glob("*.whl")
     env = planted.environ(root / ".planted" / "lock", str(core), root / ".bundle-venvs")
-    gate = subprocess.Popen([sys.executable, str(root / "scripts" / "gate.py"), "--results",
-                             str(root / "out"), "bundles", "--bundle", "second-app"], cwd=root,
-                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                            start_new_session=True)
+    gate = _popen_as_a_terminal_would(
+        [sys.executable, str(root / "scripts" / "gate.py"), "--results", str(root / "out"),
+         "bundles", "--bundle", "second-app"], cwd=root, env=env,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     try:
         _until(marker)
         os.killpg(gate.pid, signal.SIGINT)
