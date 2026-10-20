@@ -1,0 +1,103 @@
+# DCO — every commit a pull request brings, and its title, checked against the commit policy.
+#
+# scripts/check_commit_provenance.py, core's own check, in `pr` mode: rule 1 (a Signed-off-by
+# matching the author), rule 3 (no co-author or tool marks on a maintainer's commit) and rule 5
+# (no marker, in a commit message or in the title, that would start no run). Rule 2, the
+# committer list, applies on main only: on a pull request a contributor commits their own work.
+# Every push to main runs all four, in provenance.yml.
+#
+# WHY ITS OWN WORKFLOW, not a job in ci.yml. Rule 5 reads the title, so this workflow runs again
+# when a pull request is edited. In ci.yml that would run every job again on each edit of a title
+# or a description, and cancel the run in progress.
+#
+# WHAT RULE 5 CANNOT CATCH HERE. GitHub starts no `pull_request` run for a pull request whose
+# head commit's message carries a marker, so that marker stops this workflow as it stops CI.
+# Rule 5 here catches a marker in the title and in every commit before the head. A marker in the
+# head commit leaves the dco check with no result at all: once the check is a required status,
+# the pull request cannot merge until a push without the marker runs it; until then nothing here
+# holds it back. On main the marker would start no provenance.yml run either, and that push's
+# commits would land unchecked for good.
+#
+# WHOSE COPY OF THE CHECK RUNS. The pull request's own: under `pull_request` GitHub runs this
+# file and the check as the pull request has them, so a base-branch copy of the check would guard
+# nothing the pull request could not change in this file as well. Review of the pull request is
+# what guards an edit to either. On main, provenance.yml runs the previous main commit's copy of
+# the check and of MAINTAINERS.
+#
+# There is no remediation comment, as core posts: a `pull_request` token is read-only for a fork,
+# and each violation is already an annotation naming the commit and the rule.
+name: DCO
+
+on:
+  pull_request:
+    # `edited`: rule 5 reads the title, so a title edited after the last push is checked again,
+    # and removing a marker from it clears the red without a new push.
+    types: [opened, edited, synchronize, reopened]
+
+# One run per pull request in flight: a new push or edit supersedes the check in progress, and
+# the run that replaces it reads the pull request as it then is.
+concurrency:
+  group: dco-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    # The commits come from the commits API, as core's DCO workflow reads them. It returns at
+    # most 250 and then stops paginating without an error, and it answers for the pull request
+    # as it is when asked, so the check is handed the pull request's own count and head, and
+    # refuses a list that falls short of the one or does not end at the other.
+    # Dependabot is exempt from the sign-off rule, per COMMIT by its exact author address, not by
+    # the run's triggering actor: it still holds after a maintainer pushes a fix onto a
+    # dependabot branch, which changes github.actor to a human.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read   # list the pull request's commits
+    steps:
+      - name: Runner identity
+        # The image and architecture this job runs on, so a moved runner image shows in the log.
+        run: |
+          echo "ImageOS=${ImageOS:-} ImageVersion=${ImageVersion:-} RUNNER_ARCH=${RUNNER_ARCH:-}"
+          for v in ImageOS ImageVersion RUNNER_ARCH; do
+            if [ -z "${!v:-}" ]; then echo "::error::runner identity: $v is empty"; exit 1; fi
+          done
+      # The check and MAINTAINERS, and nothing else: the check reads only the JSON below, never
+      # a git object, so no history is fetched.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            scripts/check_commit_provenance.py
+            MAINTAINERS
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      # Besides the checkout, which fetches with the job token and keeps no credential, the token
+      # reaches one step: this one, which runs nothing but `gh api`. The check that parses what
+      # the pull request supplied runs in the next step, with no token at all.
+      - name: Fetch the pull request's commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/$REPO/pulls/$PR/commits" > "$RUNNER_TEMP/commits.json"
+      - name: Verify DCO sign-off on every commit
+        env:
+          COMMITS: ${{ github.event.pull_request.commits }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        # The runner image's own python3, isolated: the check is standard-library Python, and
+        # nothing is installed. Exit 1 is a violation, exit 2 is a check that could not run; both
+        # fail, and each violation is an annotation naming the commit and the rule. The title is
+        # read from the event file, never pasted into this script.
+        run: |
+          set -euo pipefail
+          python3 -I scripts/check_commit_provenance.py --mode pr \
+            --maintainers MAINTAINERS \
+            --commits-json "$RUNNER_TEMP/commits.json" \
+            --expected-count "$COMMITS" \
+            --expected-head "$HEAD_SHA" \
+            --event "$GITHUB_EVENT_PATH"
