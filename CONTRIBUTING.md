@@ -286,6 +286,45 @@ Every commit must carry a `Signed-off-by` trailer (`git commit -s`) — the same
 enforced by CI. It certifies you can submit the change under the project's MIT
 license, without a CLA.
 
+The check is core's own, copied unchanged into `scripts/check_commit_provenance.py`
+(`.github/tests/test_check_commit_provenance.py` holds the copy to core's file, and names the
+core commit it came from; a rule changes in core first). It holds every commit to these rules,
+so every commit on `main` can say where it came from:
+
+- **Rule 1, a sign-off that matches the author:** `Signed-off-by: <author name> <author email>`,
+  as a line of its own, exactly as git records the author. Commit with the email your GitHub
+  account uses: when your pull request is squashed, GitHub records that email as the author, and
+  a sign-off with another email then fails on `main`. Dependabot's own commits, by its exact
+  author address, are exempt.
+- **Rule 2, a committer listed in [`MAINTAINERS`](MAINTAINERS),** name and email both, checked
+  on `main` only: GitHub, for a squash merge, and the maintainer. On a pull request you commit
+  your own work.
+- **Rule 3, no co-author or tool marks on a maintainer's commit:** no `Co-authored-by`,
+  `Generated-by`, `Assisted-by` or session trailer, no "Generated with" footer and no link to a
+  tool's session. An author counts as a maintainer when their name or their email matches one
+  `MAINTAINERS` lists. A contributor's own `Co-authored-by` is fine.
+- **Rule 5, no marker that tells GitHub to start no run:** no `[skip ci]`, `[ci skip]`,
+  `[no ci]`, `[skip actions]`, `[actions skip]` or `skip-checks: true`, in any commit message or
+  in the pull request's title. A push whose head carries one starts no run, so its commits would
+  land unchecked.
+
+Rule 4, which ties a pushed commit to the tree its merge verdict checked, is not checked yet: it
+needs the record the merge controller will write.
+
+Every pull request runs rules 1, 3 and 5 in the `dco` workflow (`.github/workflows/dco.yml`),
+over its commits as the commits API lists them, and again whenever it is edited, so an edited
+title is checked too. A red run's annotations name each commit and the rule it breaks. One case
+it cannot judge: a marker in the head commit's message stops GitHub from starting that run at
+all, so the check has no result for that head. Once the check is a required status, a pull
+request that breaks a rule cannot merge, and neither can one whose head carries a marker, until
+a push without it runs the check.
+
+Every push to `main` runs rules 1, 2, 3 and 5 over the commits it landed, in `provenance.yml`: a
+workflow of its own that nothing cancels, running the previous `main` commit's copy of the check
+and of `MAINTAINERS`, so a push that edits the check or `MAINTAINERS` cannot pass itself.
+`provenance.yml` itself runs as pushed, so an edit to it is guarded only by review of its pull
+request.
+
 ## Git hygiene
 
 - Branch off `main`: `feature-<slug>` / `bugfix-<slug>` / `improvement-<slug>`,
