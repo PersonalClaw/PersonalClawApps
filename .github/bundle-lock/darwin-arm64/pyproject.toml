@@ -4,7 +4,7 @@
 name = "apps-bundle-lock"
 version = "0"
 requires-python = "==3.12.15"
-dependencies = ["personalclaw @ git+https://github.com/PersonalClaw/PersonalClaw@8806b6dd539a90c19d981854cd9f1c82ea29efb5", "pytest==9.1.1", "pytest-asyncio==1.4.0", "pytest-xdist==3.8.0"]
+dependencies = ["personalclaw @ git+https://github.com/PersonalClaw/PersonalClaw@2ba0fb86a138f77d9284f89f86e58882d104e823", "pytest==9.1.1", "pytest-asyncio==1.4.0", "pytest-xdist==3.8.0"]
 
 [project.optional-dependencies]
 alibaba-models = ["openai>=1.0"]
