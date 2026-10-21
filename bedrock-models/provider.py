@@ -54,6 +54,7 @@ from personalclaw.sdk.model import (
     own_model,
     per_call_temperature,
     require_model,
+    thinks_adaptively,
     wire_efforts,
 )
 from personalclaw.sdk.net import (
@@ -135,37 +136,14 @@ def _thinks(model_id: str, *, effort_sent: bool) -> bool:
 # vendor's model alike. So a model that thinks adaptively declares the levels it takes, which are
 # the levels core's own Anthropic wire sends it (the SDK's ``wire_efforts``), and every other model
 # declares none; the catalog lists each model with its levels, and the wire sends a level only to a
-# model that declares it.
-
-#: ``anthropic.claude-<family>-<major>[-<minor>]`` anywhere in a Bedrock id, so a model's inference
-#: profiles (``global.``, ``us.``) and its dated or ``-v1:0`` forms all count. A minor is one or
-#: two digits, so a date suffix (``-20250929``) is never read as one. The older version-first
-#: spelling (``claude-3-7-sonnet``) names no model that thinks adaptively.
-_CLAUDE_VERSION_RE = re.compile(
-    r"anthropic\.claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d{1,2}))?(?![0-9])"
-)
-
-#: The first version of each line that thinks adaptively. Sonnet 4.6 does too; the Fable and
-#: Mythos lines do from their first.
-_ADAPTIVE_FROM = {"opus": (4, 6), "sonnet": (5, 0), "haiku": (5, 0)}
-
-
-def _thinks_adaptively(model_id: str) -> bool:
-    """Whether *model_id* names a Claude model that takes adaptive thinking: the Fable and Mythos
-    lines, Opus 4.6 and later, Sonnet 4.6, and Sonnet and Haiku 5 and later."""
-    named = _CLAUDE_VERSION_RE.search((model_id or "").lower())
-    if named is None:
-        return False
-    family, version = named.group(1), (int(named.group(2)), int(named.group(3) or 0))
-    if family in ("fable", "mythos"):
-        return True
-    return version >= _ADAPTIVE_FROM[family] or (family == "sonnet" and version == (4, 6))
+# model that declares it. Which models think adaptively is core's rule, the one its own Anthropic
+# wire asks a model by, in any spelling of a Bedrock id (the SDK's ``thinks_adaptively``).
 
 
 def _efforts(model_id: str) -> tuple[str, ...]:
     """The reasoning-effort levels this wire sends *model_id*, lowest first: the levels core's
     Anthropic wire sends a model that thinks adaptively, and none for any other model."""
-    return wire_efforts("anthropic", model_id) if _thinks_adaptively(model_id) else ()
+    return wire_efforts("anthropic", model_id) if thinks_adaptively(model_id) else ()
 
 
 # ── Prompt caching: Bedrock's OWN wire form ───────────────────────────────────

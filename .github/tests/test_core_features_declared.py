@@ -65,6 +65,9 @@ The rails over every bundle, against the installed core:
     ``efforts``, or the levels core's own wire sends through ``wire_efforts`` from
     ``personalclaw.sdk.model``) declares ``model-efforts``: on a PersonalClaw without it the app
     would not load, or its listing would fail, and no composer would read the levels.
+17. every app whose shipped code asks which models take adaptive thinking (``thinks_adaptively``
+    from ``personalclaw.sdk.model``) declares ``adaptive-thinking``: on a PersonalClaw without it
+    the app would not load at all.
 """
 
 from __future__ import annotations
@@ -143,6 +146,9 @@ KNOWN_EFFORT_DECLARERS = {"anthropic-models", "bedrock-models", "openrouter-mode
 #: The keywords a model's levels are declared with (rail 16): a listed model's own, and the reader
 #: ``register_branded_app`` takes them from a vendor's record with.
 _EFFORT_KEYWORDS = frozenset({"efforts", "efforts_of"})
+
+#: The apps that ask the SDK which models take adaptive thinking, for rail 17.
+KNOWN_ADAPTIVE_ASKERS = {"bedrock-models"}
 
 
 @pytest.fixture(autouse=True)
@@ -953,3 +959,49 @@ def test_the_scan_tells_an_app_that_declares_its_models_levels_from_one_that_doe
         "wire-app": True,
         "other-app": False,
     }
+
+
+def _asks_which_models_think_adaptively(bundle: Path) -> bool:
+    """Whether the bundle's shipped code takes ``thinks_adaptively`` from the SDK."""
+    for path in sdk_contract.shipped_sources(bundle):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "personalclaw.sdk.model":
+                if any(alias.name == "thinks_adaptively" for alias in node.names):
+                    return True
+    return False
+
+
+def test_every_app_that_asks_which_models_think_adaptively_declares_it():
+    from personalclaw.sdk.features import ADAPTIVE_THINKING
+
+    askers = {bundle.name for bundle in BUNDLES if _asks_which_models_think_adaptively(bundle)}
+    assert KNOWN_ADAPTIVE_ASKERS <= askers, (
+        f"the scan no longer sees these apps ask which models think adaptively: "
+        f"{sorted(KNOWN_ADAPTIVE_ASKERS - askers)}"
+    )
+    undeclared = sorted(
+        name for name in askers if ADAPTIVE_THINKING not in _declared(ROOT / name)
+    )
+    assert undeclared == [], (
+        f"these apps import thinks_adaptively without declaring "
+        f"'requiresCoreFeatures': ['{ADAPTIVE_THINKING}'] in app.json: {undeclared}"
+    )
+
+
+def test_the_scan_tells_an_app_that_asks_which_models_think_adaptively_from_one_that_does_not(
+    tmp_path,
+):
+    """Positive and negative control for rail 17."""
+    sources = {
+        "asker-app": "from personalclaw.sdk.model import thinks_adaptively, wire_efforts\n",
+        "other-app": "from personalclaw.sdk.model import wire_efforts\n",
+    }
+    seen = {}
+    for name, source in sources.items():
+        app = tmp_path / name
+        app.mkdir()
+        (app / "app.json").write_text(f'{{"name": "{name}", "version": "0.1.0"}}')
+        (app / "provider.py").write_text(source, encoding="utf-8")
+        seen[name] = _asks_which_models_think_adaptively(app)
+    assert seen == {"asker-app": True, "other-app": False}

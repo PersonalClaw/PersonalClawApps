@@ -507,3 +507,18 @@ def test_a_model_declares_levels_exactly_where_core_says_it_thinks_adaptively():
         if prov._efforts(model_id) != core:
             differ[model_id] = {"app": prov._efforts(model_id), "core": core}
     assert differ == {}
+
+
+def test_the_app_asks_the_sdk_which_models_think_adaptively(monkeypatch):
+    """Which models take adaptive thinking is core's rule, beside the wire that asks a model in that
+    shape, and the SDK hands it out (``thinks_adaptively``). The app takes it from there and asks it
+    for every model's levels, keeping no copy of its own, so a model line core starts asking that
+    way is one this wire asks too."""
+    from personalclaw.sdk.model import thinks_adaptively
+
+    assert prov.thinks_adaptively is thinks_adaptively
+    assert not [name for name in vars(prov) if "adaptive" in name.lower() and name.startswith("_")]
+    opus = "anthropic.claude-opus-4-7-v1:0"
+    assert prov._efforts(opus)
+    monkeypatch.setattr(prov, "thinks_adaptively", lambda _model_id: False)
+    assert prov._efforts(opus) == ()
