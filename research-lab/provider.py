@@ -118,6 +118,7 @@ class ResearchLabProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
             ),
             ToolDefinition(
                 name="research_list",
@@ -126,6 +127,7 @@ class ResearchLabProvider(ToolProvider):
                 parameters={"type": "object", "properties": {}},
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
             ),
             ToolDefinition(
                 name="research_next",
@@ -151,6 +153,7 @@ class ResearchLabProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
             ),
             ToolDefinition(
                 name="research_record",
@@ -183,6 +186,7 @@ class ResearchLabProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
             ),
             ToolDefinition(
                 name="research_report",
@@ -200,6 +204,7 @@ class ResearchLabProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
             ),
         ]
 

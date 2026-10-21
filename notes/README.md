@@ -143,9 +143,14 @@ backtracking guard, over the user's own files. That is why it is not the default
 `storage: true` (the notebook), `network: false`. That is the whole declaration — there is
 no remote and no wire call anywhere in this bundle.
 
+Each tool also declares what a call does past this machine (`consequences`): none sends
+anything to anyone but you or spends money, so none of its calls asks you a second time for
+either. PersonalClaw reads that declaration from 0.2.3, the oldest release this version
+installs on.
+
 ## Tests
 
-`test_provider.py` — 111 tests: the reference and revision grammars and every refusal,
+`test_provider.py` — 119 tests: the reference and revision grammars and every refusal,
 symlink containment, write/append/no-op-rewrite, revision reads, history, restore-as-a-new-
 commit, both delete paths, listing (including the unaddressable-file count), literal and
 regex search with their caps, repo adoption with a pathspec-scoped commit, the
@@ -186,7 +191,7 @@ Stated plainly, because the difference matters.
 
 **Validated:**
 
-- 111 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
+- 119 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
   `PERSONALCLAW_SKIP_APP_BACKENDS=1`).
 - `app.json` parses against core's own `AppManifest` and round-trips stably.
 - SDK-only imports (`personalclaw.sdk.{tool,security,util,cli,manifest}`) — clean under the

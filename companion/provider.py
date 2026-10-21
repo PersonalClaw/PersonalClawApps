@@ -94,6 +94,7 @@ class CompanionProvider(ToolProvider):
                 parameters={"type": "object", "properties": {}},
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
             ),
             ToolDefinition(
                 name="companion_remind",
@@ -137,6 +138,7 @@ class CompanionProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
             ),
             ToolDefinition(
                 name="companion_watch",
@@ -162,6 +164,7 @@ class CompanionProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
             ),
             ToolDefinition(
                 name="companion_list",
@@ -174,6 +177,7 @@ class CompanionProvider(ToolProvider):
                 parameters={"type": "object", "properties": {}},
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
                 max_output=60_000,
             ),
             ToolDefinition(
@@ -187,6 +191,7 @@ class CompanionProvider(ToolProvider):
                 parameters={"type": "object", "properties": {}},
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
                 max_output=60_000,
             ),
             ToolDefinition(
@@ -205,6 +210,7 @@ class CompanionProvider(ToolProvider):
                 },
                 requires_approval=True,
                 risk_level=RiskLevel.DESTRUCTIVE,
+                consequences=(),
             ),
         ]
 

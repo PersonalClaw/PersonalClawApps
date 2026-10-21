@@ -54,6 +54,77 @@ async def test_lists_web_search_tool():
     assert by["web_search"].requires_approval is False
 
 
+#: What a call to each tool may do past this machine (``ToolDefinition.consequences``): "sends"
+#: when it sends something to anyone but the owner, "spends" when it spends money, () for
+#: neither. A tool that declares nothing is taken to be able to do both. Each tool here reads.
+CONSEQUENCES = {
+    "web_search": (),  # a query to the search provider the owner turned on
+    "web_fetch": (),  # reads a page through the guarded fetch
+    "web_extract": (),  # reads a page and pulls fields out of it
+}
+
+
+@pytest.mark.asyncio
+async def test_each_tool_declares_what_a_call_does_past_this_machine():
+    tools = {t.name: t.consequences for t in await WebToolProvider().list_tools()}
+    assert tools == CONSEQUENCES
+
+
+@pytest.mark.asyncio
+async def test_every_tool_reaches_only_a_read(monkeypatch):
+    """What earns each tool its (): every tool runs, and each reaches only a read, the search
+    provider's search or the SDK's page fetch and extraction. Those are the only ways out this
+    module imports or reaches (beside the provenance record and the guard's refusal), whatever it
+    imports them as, so a tool that sent anything else, to a channel, a person or a host, would
+    have to import or reach more."""
+    from types import SimpleNamespace
+
+    import provider as web
+    from apps_testkit.ways_out import ways_out
+
+    imports, reached = ways_out([web.__file__], ("personalclaw.sdk.net", "personalclaw.sdk.search"))
+    assert imports == {
+        "json", "logging", "typing", "personalclaw.sdk.mcp", "personalclaw.sdk.net",
+        "personalclaw.sdk.search", "personalclaw.sdk.security", "personalclaw.sdk.tool",
+    }, imports
+    assert reached == {
+        "personalclaw.sdk.net.EgressBlocked", "personalclaw.sdk.net.record_seen_urls",
+        "personalclaw.sdk.net.web_extract", "personalclaw.sdk.net.web_fetch",
+        "personalclaw.sdk.search.DEFAULT_DEPTH", "personalclaw.sdk.search.DEFAULT_SEARCH_USE_CASE",
+        "personalclaw.sdk.search.VALID_DEPTHS", "personalclaw.sdk.search.VALID_SEARCH_USE_CASES",
+        "personalclaw.sdk.search.search_with_fallback",
+    }, reached
+
+    fake = _Fake("tavily")
+    reg.register_provider(fake)
+    read: list[tuple[str, str]] = []
+
+    async def _web_fetch(url, **_kwargs):
+        read.append(("fetch", url))
+        return SimpleNamespace(
+            ok=True, url=url, content="page", truncated=False, next_index=None, title="t",
+            char_count=4, total_chars=4, extractor="plain", start_char=0, end_char=4,
+        )
+
+    async def _web_extract(url, instructions, **_kwargs):
+        read.append(("extract", url))
+        return SimpleNamespace(ok=True, url=url, data={"price": 1}, title="t")
+
+    monkeypatch.setattr(web, "web_fetch", _web_fetch)
+    monkeypatch.setattr(web, "web_extract", _web_extract)
+    calls = [
+        ("web_search", {"query": "hello"}),
+        ("web_fetch", {"url": "https://example.test/item"}),
+        ("web_extract", {"url": "https://example.test/item", "instructions": "the price"}),
+    ]
+    assert {name for name, _ in calls} == set(CONSEQUENCES)
+    for name, args in calls:
+        result = await WebToolProvider().invoke(name, args)
+        assert result.success, (name, result.error)
+    assert [c["query"] for c in fake.calls] == ["hello"]
+    assert read == [("fetch", "https://example.test/item"), ("extract", "https://example.test/item")]
+
+
 @pytest.mark.asyncio
 async def test_web_search_returns_normalized_payload():
     fake = _Fake("tavily")

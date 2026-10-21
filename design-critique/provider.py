@@ -1934,6 +1934,7 @@ class DesignCritiqueProvider(ToolProvider):
                 requires_approval=False,
                 # Reaches the network (through core's egress guard), so not SAFE.
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
                 max_output=_MAX_OUTPUT_CHARS,
             ),
             ToolDefinition(
@@ -1960,6 +1961,7 @@ class DesignCritiqueProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
                 max_output=_MAX_OUTPUT_CHARS,
             ),
             ToolDefinition(
@@ -1986,6 +1988,7 @@ class DesignCritiqueProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
                 max_output=_MAX_OUTPUT_CHARS,
             ),
         ]

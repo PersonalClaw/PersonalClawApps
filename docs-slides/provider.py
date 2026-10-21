@@ -146,6 +146,7 @@ class DocsSlidesProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
             ),
             ToolDefinition(
                 name="document_from_brief",
@@ -184,6 +185,7 @@ class DocsSlidesProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
             ),
             ToolDefinition(
                 name="docs_slides_formats",
@@ -195,6 +197,7 @@ class DocsSlidesProvider(ToolProvider):
                 parameters={"type": "object", "properties": {}},
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
             ),
         ]
 

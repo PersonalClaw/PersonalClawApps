@@ -1,11 +1,12 @@
 {
   "name": "research-lab",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "Research Lab",
   "description": "Unattended research campaigns as an agent tool. One question becomes a tree of sub-questions that hourly cycles work down through subagents, recording findings with their sources. When the tree is answered — or the cycle budget runs out — it synthesizes everything into one markdown report on your machine.",
   "icon": "FlaskConical",
   "author": "PersonalClaw",
   "license": "MIT",
+  "minPersonalClawVersion": "0.2.3",
   "tags": [
     "tool",
     "research",

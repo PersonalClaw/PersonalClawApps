@@ -203,6 +203,91 @@ def test_declared_risk_matches_what_each_tool_actually_does(provider) -> None:
     assert tools["radar_status"].risk_level is RiskLevel.SAFE
 
 
+#: What a call to each tool may do past this machine (``ToolDefinition.consequences``): "sends"
+#: when it sends something to anyone but the owner, "spends" when it spends money, () for
+#: neither. A tool that declares nothing is taken to be able to do both, so every call to it that
+#: is not a read asks the owner a second time before it runs.
+CONSEQUENCES = {
+    "triage_issues": (),  # lists the issues and labels; nothing is labelled, commented or closed
+    "record_investigation": (),  # an append to the local note log
+    "issue_notes": (),  # a read of that log
+    "radar_status": (),  # a read of the last sweep
+}
+
+
+def test_each_tool_declares_what_a_call_does_past_this_machine(provider) -> None:
+    tools = {t.name: t.consequences for t in run(provider.list_tools())}
+    assert tools == CONSEQUENCES
+
+
+class _Exited:
+    """A command that has already exited 0 with *out* on its stdout."""
+
+    returncode = 0
+
+    def __init__(self, out: bytes) -> None:
+        self._out = out
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        return self._out, b""
+
+
+#: The tracker commands that only read: the open issues and the repository's labels.
+READS = {("gh", "issue", "list"), ("gh", "label", "list"), ("glab", "issue", "list"),
+         ("glab", "label", "list")}
+
+
+def test_every_command_any_tool_starts_only_reads_the_tracker(
+    monkeypatch, provider, gh_payload, glab_payload
+) -> None:
+    """What earns triage_issues its (): every tool runs, on both trackers, and every command any of
+    them starts lists issues or labels. A tool that labelled, commented on or closed an issue would
+    be sending to the issue's people, and would declare "sends"."""
+    started: list[list[str]] = []
+
+    async def _start(*argv, **_kwargs):
+        started.append(list(argv))
+        if "label" in argv:
+            return _Exited(json.dumps([{"name": n} for n in REPO_LABELS]).encode())
+        return _Exited(json.dumps(gh_payload if argv[0] == "gh" else glab_payload).encode())
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _start)
+    calls = [
+        ("triage_issues", {"repo": "acme/widget"}),
+        ("triage_issues", {"repo": "gitlab:acme/tools/widget"}),
+        ("record_investigation", {"issue": "acme/widget#101", "note": "reproduced on main"}),
+        ("issue_notes", {"issue": "acme/widget#101"}),
+        ("radar_status", {"repo": "acme/widget"}),
+    ]
+    assert {name for name, _ in calls} == set(CONSEQUENCES)
+    for name, args in calls:
+        assert run(provider.invoke(name, args)).success, name
+    assert {argv[0] for argv in started} == {"gh", "glab"}
+    assert all(tuple(argv[:3]) in READS for argv in started), started
+
+
+def test_no_tool_has_a_way_out_the_run_does_not_watch() -> None:
+    """The run above watches the one way out these modules take, a command started through
+    ``asyncio``. A tool that sent by another way (an HTTP client, the SDK's fetch, a socket, a
+    shell) would import it or reach it, which the run would not see, so the modules are held to
+    the imports they make and every name they reach under ``asyncio`` and ``os``, whatever they
+    are imported as."""
+    import provider as app
+    import triage
+    from apps_testkit.ways_out import ways_out
+
+    imports, reached = ways_out([app.__file__, triage.__file__], ("asyncio", "os"))
+    assert imports == {
+        "__future__", "asyncio", "dataclasses", "datetime", "json", "logging", "os", "pathlib",
+        "personalclaw.sdk.model", "personalclaw.sdk.security", "personalclaw.sdk.tool",
+        "personalclaw.sdk.util", "re", "shutil", "triage", "typing",
+    }, imports
+    assert reached == {
+        "asyncio.Semaphore", "asyncio.create_subprocess_exec", "asyncio.gather",
+        "asyncio.subprocess.PIPE", "asyncio.wait_for", "os.fsync",
+    }, reached
+
+
 # ── Repository and issue references ─────────────────────────────────────────
 
 

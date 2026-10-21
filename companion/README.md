@@ -198,9 +198,14 @@ declaration, and it is backed by a test: the bundle's sources are AST-scanned fo
 `ssl`, `http`, `urllib`, `requests`, `httpx`, `aiohttp`, `smtplib`, `ftplib` and `subprocess`,
 and there are none. This app shells out to nothing and opens no connection.
 
+Each tool also declares what a call does past this machine (`consequences`): none sends
+anything to anyone but you or spends money (a reminder or a watch notifies you alone), so none
+of its calls asks you a second time for either. PersonalClaw reads that declaration from 0.2.3,
+the oldest release this version installs on.
+
 ## Tests
 
-`test_provider.py` — 162 tests: the watch-path grammar and every refusal (traversal, empty
+`test_provider.py` — 166 tests: the watch-path grammar and every refusal (traversal, empty
 segments, `**`, a glob outside the last segment, an option-lookalike segment, a forged log line,
 a NUL, an unexpanded variable, over-length, over-depth, PersonalClaw's own home and the sibling
 that is not it), the cron grammar and its floor on both sides, `at` in three zones plus the
@@ -265,7 +270,7 @@ Stated plainly, because the difference matters.
 
 **Validated:**
 
-- 162 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
+- 169 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
   `PERSONALCLAW_SKIP_APP_BACKENDS=1`).
 - `app.json` parses against core's own `AppManifest` and round-trips stably, with both providers
   (`tool` + `trigger`) resolving to their declared implementations.

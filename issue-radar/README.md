@@ -198,13 +198,18 @@ at the boundary, and never let untrusted text forge a log record):
 
 No `cron`, no `agent`, no `api`. That is the whole declaration.
 
+Each tool also declares what a call does past this machine (`consequences`): none sends
+anything to anyone but you or spends money, so none of its calls asks you a second time for
+either. PersonalClaw reads that declaration from 0.2.3, the oldest release this version
+installs on.
+
 ## Tests
 
 ```bash
 python -m pytest issue-radar -q
 ```
 
-151 tests, no network, no gateway, no credentials and no `gh`/`glab` — both tracker payloads
+154 tests, no network, no gateway, no credentials and no `gh`/`glab` — both tracker payloads
 come from `fixtures/gh_issues.json` and `fixtures/glab_issues.json`, and the model leg runs
 against a fake registry entry. No pytest plugins required: `asyncio.run` rather than
 `pytest.mark.asyncio`, so a bare `pytest` runs them. The ones to read first are
@@ -239,7 +244,7 @@ Stated plainly, because the difference matters.
 
 **Validated:**
 
-- 151 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
+- 154 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
   `PERSONALCLAW_SKIP_APP_BACKENDS=1`).
 - `app.json` parses against core's own `AppManifest` and round-trips stably.
 - SDK-only imports (`personalclaw.sdk.{tool,model,security,util,cli,manifest}`) — clean

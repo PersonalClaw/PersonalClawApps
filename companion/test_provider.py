@@ -976,6 +976,60 @@ async def test_the_tool_surface_is_six_tools_with_declared_risk(
         assert tool.provider == "companion"
 
 
+#: What a call to each tool may do past this machine (``ToolDefinition.consequences``): "sends"
+#: when it sends something to anyone but the owner, "spends" when it spends money, () for
+#: neither. A tool that declares nothing is taken to be able to do both, so every call to it that
+#: is not a read asks the owner a second time before it runs. A reminder or a watch goes off as a
+#: notification to the owner, and to nobody else.
+CONSEQUENCES = {
+    "companion_status": (),
+    "companion_remind": (),
+    "companion_watch": (),
+    "companion_list": (),
+    "companion_day_plan": (),
+    "companion_dismiss": (),
+}
+
+#: Everything a ``notify`` action reads: what kind of note, and its title and body. The note is
+#: raised to the owner; the action has nowhere to name anybody else.
+OWNER_NOTE = {"kind", "title_template", "body_template"}
+
+
+@pytest.mark.asyncio
+async def test_each_tool_declares_what_a_call_does_past_this_machine(
+    provider: CompanionProvider,
+) -> None:
+    tools = {t.name: t.consequences for t in await provider.list_tools()}
+    assert tools == CONSEQUENCES
+
+
+@pytest.mark.asyncio
+async def test_every_automation_a_tool_makes_tells_only_the_owner(
+    provider: CompanionProvider,
+) -> None:
+    """What earns companion_remind and companion_watch their (): every tool runs, and each row the
+    companion serves afterwards notifies the owner and names nobody else. A row that messaged a
+    channel or a person would be sending, and its tool would declare "sends"."""
+    remind = await provider.invoke("companion_remind", {"title": "Standup", "at": future()})
+    calls = [
+        ("companion_status", {}),
+        ("companion_remind", {"title": "Review", "cron": "30 8 * * 1-5"}),
+        ("companion_watch", {"path": "/tmp/*.md", "label": "drafts"}),
+        ("companion_list", {}),
+        ("companion_day_plan", {}),
+        ("companion_dismiss", {"id": remind.metadata["id"]}),
+    ]
+    assert {name for name, _ in calls} == set(CONSEQUENCES)
+    for name, args in calls:
+        result = await provider.invoke(name, args)
+        assert result.success, (name, result.error)
+    rows = [loaded.trigger for loaded in create_trigger_store(ALL_ON).load()]
+    assert len(rows) == 3  # the recurring reminder, the watch and the day brief
+    for row in rows:
+        assert row.workflow["provider"] == NOTIFY_PROVIDER, row.id
+        assert set(row.workflow["config"]) <= OWNER_NOTE, row.id
+
+
 @pytest.mark.asyncio
 async def test_an_unknown_tool_names_what_does_exist(provider: CompanionProvider) -> None:
     result = await provider.invoke("companion_teleport", {})

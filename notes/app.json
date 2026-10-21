@@ -1,11 +1,12 @@
 {
   "name": "notes",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Notes",
   "description": "A git-backed markdown notebook. Notes are plain `.md` files in a git repository on your machine, so every version is recoverable, the whole notebook is portable, and it stays readable in any editor without PersonalClaw. Drafting and history live here; indexed recall stays with Knowledge — this app builds no index of its own.",
   "icon": "NotebookPen",
   "author": "PersonalClaw",
   "license": "MIT",
+  "minPersonalClawVersion": "0.2.3",
   "tags": [
     "tool",
     "notes",

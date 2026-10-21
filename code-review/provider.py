@@ -156,6 +156,7 @@ class CodeReviewProvider(ToolProvider):
                 # GitHub" is a narrower claim than "no side-effects on this host", and SAFE
                 # asserts the second one — the same call the install scanner warns about.
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
                 max_output=60_000,
             ),
             ToolDefinition(
@@ -182,6 +183,7 @@ class CodeReviewProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.CAUTION,  # a bounded append to the local findings log
+                consequences=(),
             ),
             ToolDefinition(
                 name="review_findings",
@@ -203,6 +205,7 @@ class CodeReviewProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,  # a read of the local log, nothing else
+                consequences=(),
                 max_output=60_000,
             ),
         ]

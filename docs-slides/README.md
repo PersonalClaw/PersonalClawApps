@@ -92,9 +92,14 @@ configure — `personalclaw doctor` reports which formats your build can render.
 
 `storage: true` (the rendered files), `network: false`. That is the whole declaration.
 
+Each tool also declares what a call does past this machine (`consequences`): none sends
+anything to anyone but you or spends money, so none of its calls asks you a second time for
+either. PersonalClaw reads that declaration from 0.2.3, the oldest release this version
+installs on.
+
 ## Tests
 
-`test_provider.py` (39 tests) proves the two file-producing tools by **rendering and then
+`test_provider.py` (41 tests) proves the two file-producing tools by **rendering and then
 reading back**: the `.pptx` is parsed with core's own `pptx_parser` and the `.docx` with its
 `docx_parser`, so "openable" is measured, not inferred from a byte count — a test that only
 checked for a non-empty file would pass on 30 KB of unopenable zip. Also covered: the
@@ -115,7 +120,7 @@ Stated plainly, because the difference matters.
 
 **Validated:**
 
-- 39 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
+- 41 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
   `PERSONALCLAW_SKIP_APP_BACKENDS=1`).
 - `app.json` parses and validates against core's own `AppManifest`.
 - SDK-only imports (`personalclaw.sdk.{documents,tool,util,cli,manifest}`) — clean under

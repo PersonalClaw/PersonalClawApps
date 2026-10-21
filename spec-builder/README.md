@@ -185,9 +185,14 @@ Files this app did not create are reported and left in place.
 remote and no wire call anywhere in this bundle. `spec_seed` reaches a repository through the
 local `git` binary, not over a socket.
 
+Each tool also declares what a call does past this machine (`consequences`): none sends
+anything to anyone but you or spends money, so none of its calls asks you a second time for
+either. PersonalClaw reads that declaration from 0.2.3, the oldest release this version
+installs on.
+
 ## Tests
 
-`test_provider.py` — 172 tests: the id, section, source-path and revision grammars and every
+`test_provider.py` — 178 tests: the id, section, source-path and revision grammars and every
 refusal, symlink containment on both the store and the repository, store CRUD with the
 append/replace/no-op cases and the caps, tolerant load, the two bullet grammars, readiness in
 every failing shape, the compiled node sequence and gate order, the command-stays-an-input
@@ -242,7 +247,7 @@ Stated plainly, because the difference matters.
 
 **Validated:**
 
-- 172 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
+- 178 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
   `PERSONALCLAW_SKIP_APP_BACKENDS=1`).
 - `app.json` parses against core's own `AppManifest` and round-trips stably.
 - SDK-only imports (`personalclaw.sdk.{tool,security,util,cli,manifest,git}`) — clean under the

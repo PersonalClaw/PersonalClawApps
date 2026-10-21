@@ -197,6 +197,7 @@ class IssueRadarProvider(ToolProvider):
                 # Spawns the local `gh`/`glab` and writes the sweep to disk — read-only
                 # against the tracker, but not SAFE (SAFE = local read, no exec).
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
                 max_output=60_000,
             ),
             ToolDefinition(
@@ -237,6 +238,7 @@ class IssueRadarProvider(ToolProvider):
                 requires_approval=False,
                 # A bounded append to the local note log — a write, so not SAFE.
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
             ),
             ToolDefinition(
                 name="issue_notes",
@@ -256,6 +258,7 @@ class IssueRadarProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
                 max_output=60_000,
             ),
             ToolDefinition(
@@ -277,6 +280,7 @@ class IssueRadarProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
                 max_output=60_000,
             ),
         ]

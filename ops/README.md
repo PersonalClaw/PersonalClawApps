@@ -249,9 +249,15 @@ approves nothing on its own, so any other call that needs approval (a shell comm
 change) asks you, whatever your own approval settings say, and `ops_apply_fix`, which the
 sweep is told never to call, would ask you too, on top of its own gates.
 
+Each tool also declares what a call does past this machine (`consequences`). Eight say they
+send nothing to anyone but you and spend no money. `ops_apply_fix` declares nothing: it runs
+your runbook's command, which may page a rota or scale up what bills, and this app cannot read
+which, so approving it asks you a second time. PersonalClaw reads that declaration from 0.2.3,
+the oldest release this version installs on.
+
 ## Tests
 
-`test_provider.py` — 178 tests: the three identifier grammars and every refusal, alarm
+`test_provider.py` — 181 tests: the three identifier grammars and every refusal, alarm
 normalization across the Alertmanager/bare-object/bare-list shapes and the severity alias
 table, fingerprint identity, the file-digest and alarm-identity halves of the dedupe, the
 unparseable-timestamp fallback and the read-file index forgetting a removed file, reopen
@@ -300,7 +306,7 @@ Stated plainly, because the difference matters.
 
 **Validated:**
 
-- 178 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
+- 181 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
   `PERSONALCLAW_SKIP_APP_BACKENDS=1`).
 - `app.json` parses against core's own `AppManifest` and round-trips stably.
 - SDK-only imports (`personalclaw.sdk.{tool,security,util,cli,settings,manifest}`) — clean

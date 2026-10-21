@@ -1238,6 +1238,84 @@ async def test_the_tool_surface_is_the_nine_tools_with_one_gated_destructive(
     assert not any(t.interactive for t in tools)
 
 
+#: What a call to each tool may do past this machine (``ToolDefinition.consequences``): "sends"
+#: when it sends something to anyone but the owner, "spends" when it spends money, () for
+#: neither, and None for a tool that declares nothing, which is taken to be able to do both: each
+#: call to it asks the owner a second time before it runs. ops_apply_fix runs the command the
+#: operator's runbook declares, which may restart a host, page a rota or scale up what bills, so
+#: what it reaches is the runbook's to say, not this app's.
+CONSEQUENCES = {
+    "ops_watch": (),
+    "ops_queue": (),
+    "ops_incident": (),
+    "ops_claim": (),
+    "ops_investigate": (),
+    "ops_record": (),
+    "ops_propose_fix": (),
+    "ops_apply_fix": None,
+    "ops_resolve": (),
+}
+
+
+@pytest.mark.asyncio
+async def test_each_tool_declares_what_a_call_does_past_this_machine(app: OpsProvider) -> None:
+    tools = {t.name: t.consequences for t in await app.list_tools()}
+    assert tools == CONSEQUENCES
+
+
+@pytest.mark.asyncio
+async def test_the_one_tool_that_declares_nothing_is_the_one_that_starts_a_command(
+    app: OpsProvider, spool: Path, books: Path, monkeypatch
+) -> None:
+    """What earns the other eight their (): every tool runs, and the only one that starts a
+    process is ops_apply_fix, while the manifest grants no network. A process reaches whatever its
+    command does, so the tool that starts one declares nothing; a tool that only keeps the ledger
+    reaches nobody."""
+    raw = json.loads((HERE / "app.json").read_text(encoding="utf-8"))
+    assert raw["permissions"]["network"] is False
+    write_runbook(books, "worker-backlog")
+    write_alarm(spool, "a.json")
+    watched = await app.invoke("ops_watch", {})
+    incident_id = watched.metadata["opened"][0]
+    starters: list[str] = []
+    current = [""]
+    real_run = rb_mod.subprocess.run
+
+    def _run(argv, **kwargs):
+        starters.append(current[0])
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(rb_mod.subprocess, "run", _run)
+    calls = [
+        ("ops_watch", {}),
+        ("ops_queue", {}),
+        ("ops_claim", {"incident": incident_id}),
+        ("ops_investigate", {"incident": incident_id}),
+        ("ops_record", {"incident": incident_id, "finding": "consumer down"}),
+        ("ops_propose_fix", {"incident": incident_id, "summary": "restart",
+                             "blast_radius": "one host", "rollback": "by hand",
+                             "action": "restart-worker"}),
+        ("ops_incident", {"incident": incident_id}),
+    ]
+    for tool, args in calls:
+        current[0] = tool
+        result = await app.invoke(tool, args)
+        assert result.success, f"{tool}: {result.error}"
+    proposal = result.metadata["proposals"][-1]
+    for tool, args in [
+        ("ops_apply_fix", {"incident": incident_id, "proposal": proposal["id"],
+                           "confirm_token": proposal["confirm_token"], "confirm": True}),
+        ("ops_resolve", {"incident": incident_id, "state": "resolved", "note": "done"}),
+    ]:
+        current[0] = tool
+        result = await app.invoke(tool, args)
+        assert result.success, f"{tool}: {result.error}"
+    assert {tool for tool, _ in calls} | {"ops_apply_fix", "ops_resolve"} == set(CONSEQUENCES)
+    declared = {t.name: t.consequences for t in await app.list_tools()}
+    undeclared = {name for name, consequences in declared.items() if consequences is None}
+    assert set(starters) == undeclared == {"ops_apply_fix"}
+
+
 def test_constructing_the_provider_creates_nothing_on_disk(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "ledger"
     monkeypatch.setattr(inc_mod, "app_data_dir", lambda _n: root)

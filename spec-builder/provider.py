@@ -133,6 +133,7 @@ class SpecBuilderProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
             ),
             ToolDefinition(
                 name="spec_write",
@@ -177,6 +178,7 @@ class SpecBuilderProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
             ),
             ToolDefinition(
                 name="spec_read",
@@ -199,6 +201,7 @@ class SpecBuilderProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
                 max_output=80_000,
             ),
             ToolDefinition(
@@ -211,6 +214,7 @@ class SpecBuilderProvider(ToolProvider):
                 parameters={"type": "object", "properties": {}},
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
             ),
             ToolDefinition(
                 name="spec_seed",
@@ -245,6 +249,7 @@ class SpecBuilderProvider(ToolProvider):
                 # Read-only against the REPOSITORY, but it spawns `git` and writes the
                 # fetched content into the spec — not SAFE (SAFE = local read, no exec).
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
                 max_output=60_000,
             ),
             ToolDefinition(
@@ -263,6 +268,7 @@ class SpecBuilderProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
             ),
             ToolDefinition(
                 name="spec_compile",
@@ -290,6 +296,7 @@ class SpecBuilderProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
                 max_output=80_000,
             ),
             ToolDefinition(
@@ -306,6 +313,7 @@ class SpecBuilderProvider(ToolProvider):
                 },
                 requires_approval=True,
                 risk_level=RiskLevel.DESTRUCTIVE,
+                consequences=(),
             ),
         ]
 
