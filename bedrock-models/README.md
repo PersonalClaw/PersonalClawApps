@@ -67,7 +67,9 @@ xhigh and max for Opus 4.7 and later, Sonnet and Haiku 5 and later and the Fable
 and low, medium, high and max for Opus 4.6 and Sonnet 4.6. Every other model, Nova, Mistral and the
 older Claude models (which take a thinking budget instead) among them, is listed with none, so the
 composer offers it no effort, and a level asked of it is never sent: its turn runs at the model's
-own default. A profile is listed with the levels of the model it routes to.
+own default. A profile is listed with the levels of the model it routes to. Which models think
+adaptively is PersonalClaw's own rule, the one its Anthropic client asks a model by (the SDK's
+`thinks_adaptively`), so this version needs a PersonalClaw that offers `adaptive-thinking`.
 
 ## Prompt caching
 
