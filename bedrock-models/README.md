@@ -13,8 +13,9 @@ as a self-contained directory:
 - `provider.py` — the implementation, exposed via `create_provider`.
 - `test_access_and_credentials.py`, `test_catalog.py`, `test_media_names_its_model.py`,
   `test_media_says_why.py`, `test_provider.py`, `test_stream_timeout.py` — the app's own tests.
-- `test_wire.py` — proves a call's per-call temperature and output budget reach the request, against
-  a recording endpoint.
+- `test_wire.py` — proves a call's per-call temperature and output budget reach the request, and
+  that each listed model is sent exactly the reasoning-effort levels it declares, against a
+  recording endpoint.
 - `test_embedding_models.py` — proves every embedding model offered embeds, each with the request and
   answer AWS documents for it, against a loopback Bedrock that holds each request to its model's schema.
 - `test_image_models.py` — proves every image model offered makes an image from a prompt, each with its
@@ -56,6 +57,17 @@ speech; a model that writes embeddings is an embedding model when this app knows
 ([Embeddings](#embeddings)). A profile is offered for what the model it routes to does. Rerank, image-editing and video-analysis models are not listed, nor is
 Nova Sonic, which takes only a two-way audio stream: nothing here can use them. Image and video
 generation list their own models from the same listing ([Images and video](#images-and-video)).
+
+## Reasoning effort
+
+A chat's reasoning effort reaches a Claude model as adaptive thinking at that level, the one way
+this app asks a model to reason. So the models that think adaptively are listed with the levels
+they take, which are the levels PersonalClaw's own Anthropic client sends them: low, medium, high,
+xhigh and max for Opus 4.7 and later, Sonnet and Haiku 5 and later and the Fable and Mythos lines,
+and low, medium, high and max for Opus 4.6 and Sonnet 4.6. Every other model, Nova, Mistral and the
+older Claude models (which take a thinking budget instead) among them, is listed with none, so the
+composer offers it no effort, and a level asked of it is never sent: its turn runs at the model's
+own default. A profile is listed with the levels of the model it routes to.
 
 ## Prompt caching
 

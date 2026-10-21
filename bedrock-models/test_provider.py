@@ -1167,12 +1167,15 @@ async def test_a_claude_model_that_thinks_by_default_gets_room_to_think_and_answ
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model", ["global.anthropic.claude-opus-4-7", "us.anthropic.claude-sonnet-4-6"]
+)
 async def test_a_claude_model_asked_for_a_reasoning_effort_gets_room_to_think(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, model: str
 ) -> None:
-    """🔴 Red before: an effort turns adaptive thinking on for any Claude model, and the request
-    still carried 8,192."""
-    cap = await _cap_sent(monkeypatch, "us.anthropic.claude-sonnet-4-20250514-v1:0", effort="high")
+    """🔴 Red before: an effort turns adaptive thinking on for a Claude model that takes it, and
+    the request still carried 8,192."""
+    cap = await _cap_sent(monkeypatch, model, effort="high")
     assert 8_192 < cap <= _LOWEST_THINKING_CEILING
 
 
@@ -1182,6 +1185,9 @@ async def test_a_claude_model_asked_for_a_reasoning_effort_gets_room_to_think(
     [
         # An older Claude that thinks only when asked, asked for nothing.
         ("us.anthropic.claude-sonnet-4-20250514-v1:0", ""),
+        # It takes a thinking budget, never adaptive thinking, so it declares no levels and a
+        # level asked of it is sent no thinking.
+        ("us.anthropic.claude-sonnet-4-20250514-v1:0", "high"),
         # Not Claude: no thinking is sent to it, an effort or not.
         ("amazon.nova-pro-v1:0", ""),
         ("amazon.nova-pro-v1:0", "high"),
@@ -1217,12 +1223,35 @@ async def test_extended_thinking_drops_the_custom_temperature(monkeypatch: pytes
     """Thinking on Anthropic-on-Bedrock rejects a custom temperature, so a reasoning turn sends
     none; the output cap still goes."""
     client = _install_fake_boto3(monkeypatch, [_stop_event(), _usage_event(10, 2)])
-    provider = _bedrock_built({}, temperature=0.8, max_tokens=2048)
+    provider = _bedrock_built(
+        {}, temperature=0.8, max_tokens=2048, model="global.anthropic.claude-opus-4-7"
+    )
     await provider.start()
 
     _ = [ev async for ev in provider.complete([{"role": "user", "content": "q"}], reasoning_effort="high")]
 
     assert client.last_request["inferenceConfig"] == {"maxTokens": 2048}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model", ["m", "amazon.nova-pro-v1:0", "us.anthropic.claude-sonnet-4-20250514-v1:0"]
+)
+async def test_a_level_a_model_does_not_declare_keeps_its_temperature(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    """🔴 Red before: any level asked of any model dropped the temperature and sent thinking
+    fields, which a model that declares no levels refuses. Nothing of the level is sent to it, so
+    its turn samples at the temperature it was asked for."""
+    client = _install_fake_boto3(monkeypatch, [_stop_event(), _usage_event(10, 2)])
+    provider = _bedrock_built({}, temperature=0.8, max_tokens=2048, model=model)
+    await provider.start()
+
+    messages = [{"role": "user", "content": "q"}]
+    _ = [ev async for ev in provider.complete(messages, reasoning_effort="high")]
+
+    assert client.last_request["inferenceConfig"] == {"maxTokens": 2048, "temperature": 0.8}
+    assert "additionalModelRequestFields" not in client.last_request
 
 
 @pytest.mark.asyncio

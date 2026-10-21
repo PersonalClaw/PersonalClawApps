@@ -437,3 +437,73 @@ def test_profiles_with_no_model_listing_raise_why_the_models_could_not_be_listed
 
     with pytest.raises(RuntimeError, match="models refused"):
         prov._list_bedrock_models_sync("us-east-1", "")
+
+
+# ── each model declares the reasoning levels this app's wire sends it ───────────────────────
+
+OPUS = "anthropic.claude-opus-4-7"
+
+
+def test_a_profile_declares_the_levels_of_the_model_it_routes_to(monkeypatch):
+    """A profile's levels are its model's, as its capabilities are: a profile of a Claude model
+    that thinks adaptively declares that model's levels, and a profile of an older Claude or of
+    Nova declares none, like the model itself."""
+    foundation = [
+        *FOUNDATION_MODELS,
+        _record(OPUS, "Claude Opus 4.7", "Anthropic", ["TEXT", "IMAGE"], ["TEXT"],
+                streams=True, invoked=["INFERENCE_PROFILE"]),
+    ]
+    profiles = [*PROFILES, _routes(f"global.{OPUS}", "Global Anthropic Claude Opus 4.7", OPUS)]
+    monkeypatch.setitem(sys.modules, "boto3", _fake_boto3(foundation, profiles))
+
+    models = _run(prov.create_catalog({"region": "us-east-1"}).list_models())
+
+    assert {m.id: m.efforts for m in models if "chat" in m.capabilities} == {
+        f"global.{OPUS}": ["low", "medium", "high", "xhigh", "max"],
+        f"us.{CLAUDE}": [],
+        f"global.{CLAUDE}": [],
+        "amazon.nova-pro-v1:0": [],
+        "us.amazon.nova-pro-v1:0": [],
+        "mistral.voxtral-small-24b-2507": [],
+    }
+    assert all(m.efforts == [] for m in models if "chat" not in m.capabilities)
+
+
+def _bedrock_claude_ids():
+    """Bedrock ids for every Claude family and version a listing may name, each in the forms a
+    listing names it by: the foundation model, dated and versioned, and an inference profile."""
+    for family in ("opus", "sonnet", "haiku", "fable", "mythos"):
+        for major in (3, 4, 5, 6):
+            for minor in ("", "-0", "-1", "-5", "-6", "-7", "-8", "-9", "-50"):
+                base = f"anthropic.claude-{family}-{major}{minor}"
+                yield base
+                yield f"{base}-20250929-v1:0"
+                yield f"us.{base}-v1:0"
+                yield f"global.{base}"
+    # The older spelling, version first, and the first Claude models.
+    yield "anthropic.claude-3-7-sonnet-20250219-v1:0"
+    yield "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+    yield "anthropic.claude-v2:1"
+    yield "anthropic.claude-instant-v1"
+
+
+def test_a_model_declares_levels_exactly_where_core_says_it_thinks_adaptively():
+    """This wire asks a model to reason in one shape, adaptive thinking, so the models that declare
+    levels are the ones core's own rule says think adaptively (``thinking_shape``), each with that
+    rule's levels, and every other model, an older Claude or another vendor's, declares none. Held
+    to core's rule itself, across every Claude family and version, so the two cannot drift."""
+    from personalclaw.llm.catalog import thinking_shape
+
+    others = (
+        "amazon.nova-pro-v1:0",
+        "us.amazon.nova-premier-v1:0",
+        "mistral.mistral-large-2407-v1:0",
+        "cohere.command-r-plus-v1:0",
+    )
+    differ = {}
+    for model_id in (*_bedrock_claude_ids(), *others):
+        shape = thinking_shape(model_id)
+        core = shape.efforts if shape.adaptive else ()
+        if prov._efforts(model_id) != core:
+            differ[model_id] = {"app": prov._efforts(model_id), "core": core}
+    assert differ == {}

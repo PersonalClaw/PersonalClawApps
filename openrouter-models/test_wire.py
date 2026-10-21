@@ -8,7 +8,9 @@ is built the way the product builds one saved from the Add-instance form, and ca
 calls a bound model.
 
 It rides core's branded-app factory (``register_branded_app``), which reads both. So this drives
-the app's real ``openai`` client against a fake endpoint that records the request.
+the app's real ``openai`` client against a fake endpoint that records the request. The
+reasoning-effort levels each listed model declares are held to the request the same way: what the
+catalog lists for a model is what its request carries.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # the repo root: apps_testkit
 
+from apps_testkit.egress import HOST, owner_egress  # noqa: E402
 from apps_testkit.model_wire import (  # noqa: E402
     LISTED,
     MODEL,
@@ -92,3 +95,60 @@ async def test_no_model_chosen_is_refused_and_the_default_model_is_named(listing
         server=listing,
     )
     assert report == blank_model_expected(APP_DIR)
+
+
+# ── Reasoning efforts: the levels a model is listed with are the levels its request carries ──
+
+#: Every level a native chat can hold, lowest first.
+LADDER = ("low", "medium", "high", "xhigh", "max")
+
+#: Models OpenRouter lists, by the ids it names them with: reasoning models, which take
+#: ``reasoning_effort``, and models that refuse it.
+DECLARED = {
+    "openai/o3": ["low", "medium", "high"],
+    "openai/gpt-5-mini": ["low", "medium", "high"],
+    "openai/gpt-4o": [],
+    "anthropic/claude-sonnet-4.5": [],
+    "qwen/qwen3.7-flash": [],
+}
+
+
+@pytest.fixture
+def reasoners():
+    """An endpoint that lists each model in :data:`DECLARED`. It is on this computer, so its
+    owner allows its host in Settings → Security → Network egress, as she would for her own."""
+    with RecordingModelServer(models=tuple(DECLARED)) as recording:
+        owner_egress(allow_hosts=[HOST])
+        yield recording
+
+
+@pytest.mark.asyncio
+async def test_each_listed_model_is_sent_exactly_the_levels_it_declares(reasoners):
+    """🔴 Red before: every model was listed with no levels, and a listed model declares what its
+    listing says, so the composer offered no reasoning effort even on OpenRouter's reasoning
+    models. Each model now declares the levels core's Chat Completions client sends it as
+    themselves: every level of the ladder, asked of each model through the catalog and the wire,
+    goes out verbatim when the model declares it, a level it does not declare goes as a lower one
+    or not at all, and a model that declares none is sent no ``reasoning_effort`` at any level."""
+    catalog = provider.create_catalog({"api_key": "k-wire", "endpoint": reasoners.url})
+    rows = await catalog.list_models()
+    assert {row.id: row.efforts for row in rows} == DECLARED
+
+    for row in rows:
+        sent = {}
+        for level in LADDER:
+            built = provider._factory(entry=_entry(reasoners.url), model=row.id)
+            await built.start()
+            try:
+                async for _event in built.complete(
+                    [{"role": "user", "content": "hi"}], reasoning_effort=level
+                ):
+                    pass
+            finally:
+                await built.shutdown()
+            sent[level] = reasoners.calls()[-1]["body"].get("reasoning_effort")
+        assert [level for level in LADDER if sent[level] == level] == row.efforts, row.id
+        if not row.efforts:
+            assert set(sent.values()) == {None}, row.id
+        else:
+            assert set(sent.values()) <= set(row.efforts), row.id

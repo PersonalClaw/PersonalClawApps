@@ -28,6 +28,7 @@ from personalclaw.sdk.model import (
     output_cap,
     own_model,
     per_call_temperature,
+    wire_efforts,
 )
 from personalclaw.sdk.net import CONNECTOR, egress_policy_for, fetch
 
@@ -248,8 +249,16 @@ class AnthropicCatalog(ModelCatalog):
         self._endpoint = (endpoint or _DEFAULT_ENDPOINT).rstrip("/")
 
     async def list_models(self) -> list[ModelInfo]:
+        # Each model declares the reasoning-effort levels core's Messages client
+        # (``AnthropicProvider``) sends it as themselves: a model's listing is what the composer
+        # offers it, and a row with no levels would offer none.
         return [
-            ModelInfo(id=m["id"], name=m["id"], capabilities=list(m["capabilities"]))
+            ModelInfo(
+                id=m["id"],
+                name=m["id"],
+                capabilities=list(m["capabilities"]),
+                efforts=list(wire_efforts("anthropic", m["id"])),
+            )
             for m in _ANTHROPIC_MODELS
         ]
 

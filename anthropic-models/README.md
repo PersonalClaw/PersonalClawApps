@@ -12,8 +12,9 @@ as a self-contained directory:
 - `app.json` — the manifest (identity, provider/backend/UI declarations, permissions).
 - `provider.py` — the implementation, exposed via `create_provider`.
 - `test_catalog.py`, `test_provider.py` — the app's own tests.
-- `test_wire.py` — proves a call's per-call temperature and output budget reach the request, against
-  a recording endpoint.
+- `test_wire.py` — proves a call's per-call temperature and output budget reach the request, and
+  that each listed model is sent exactly the reasoning-effort levels it declares, against a
+  recording endpoint.
 
 It imports only the PersonalClaw **SDK** (never core internals), so core can evolve
 without breaking it:
@@ -39,6 +40,15 @@ the temperature as a keyword argument that the 1.x SDK removed, and on 1.x every
 failed before it was sent. Anthropic's newer models refuse a custom temperature: Opus 4.7 and
 later and Fable 5 reject any, and Sonnet 5 a non-default one. A temperature sweep bound to one
 of them fails at the API.
+
+## Reasoning effort
+
+Each model is listed with the reasoning-effort levels PersonalClaw's own Messages client sends it
+as themselves, so the composer offers a chat exactly those. A model that thinks adaptively is
+sent the level itself: low, medium, high, xhigh and max for Opus 4.7 and later, Sonnet and Haiku 5
+and later and the Fable line, and the same without xhigh for Opus 4.6 and Sonnet 4.6. An older
+model is sent a thinking budget for each of the five. `test_wire.py` sends every level to every
+listed model and holds what each request carries to what the model declares.
 
 ## Install
 

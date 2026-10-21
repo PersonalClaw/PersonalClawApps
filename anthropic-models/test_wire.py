@@ -8,7 +8,9 @@ is built the way the product builds one saved from the Add-instance form, and ca
 calls a bound model.
 
 The factory is this app's own. The Messages API requires a cap, so one is always sent. So this
-drives the app's real ``anthropic`` client against a fake endpoint that records the request.
+drives the app's real ``anthropic`` client against a fake endpoint that records the request. The
+reasoning-effort levels each listed model declares are held to the request the same way: what the
+catalog lists for a model is what its request carries.
 """
 
 from __future__ import annotations
@@ -94,3 +96,66 @@ async def test_no_model_chosen_is_refused_and_the_default_model_is_named(listing
         server=listing,
     )
     assert report == blank_model_expected(APP_DIR)
+
+
+# ── Reasoning efforts: the levels a model is listed with are the levels its request carries ──
+
+#: Every level a native chat can hold, lowest first.
+LADDER = ("low", "medium", "high", "xhigh", "max")
+
+#: A cap above every thinking budget the wire sends, so each level's budget is its own and none is
+#: cut down to the same size as another's.
+ROOMY = 128_000
+
+
+def _reasoning_sent(call: dict) -> dict:
+    """What one recorded Messages call asked of the model's reasoning: its ``thinking`` and
+    ``output_config`` fields, ``{}`` when it carries neither."""
+    return {key: call["body"][key] for key in ("thinking", "output_config") if key in call["body"]}
+
+
+def _sent_as_themselves(sent: dict[str, dict]) -> list[str]:
+    """The levels the wire sent as themselves, lowest first: each whose request asked for
+    reasoning, and asked differently from every lower level's. A level sent as a lower one (the
+    request a lower level gets) is not."""
+    levels = []
+    for i, level in enumerate(LADDER):
+        if sent[level] and all(sent[level] != sent[lower] for lower in LADDER[:i]):
+            levels.append(level)
+    return levels
+
+
+@pytest.mark.asyncio
+async def test_each_listed_model_declares_exactly_the_levels_the_wire_sends_it(server):
+    """🔴 Red before: every curated row was listed with no levels, and a listed model declares what
+    its listing says, so the composer offered no reasoning effort on any Claude model this app
+    lists. Each row now declares the levels core's Messages client sends that model as themselves:
+    every level of the ladder, asked of each model through the wire, is sent as itself exactly
+    when the model declares it, and an adaptive model's request names the level verbatim."""
+    catalog = provider.create_catalog({"api_key": "k-wire", "endpoint": server.url})
+    rows = await catalog.list_models()
+    assert rows, "the catalog lists no model"
+
+    report: dict[str, tuple[list[str], list[str]]] = {}
+    for row in rows:
+        sent: dict[str, dict] = {}
+        for level in LADDER:
+            built = provider._factory(entry=_entry(server.url), model=row.id, max_tokens=ROOMY)
+            await built.start()
+            try:
+                async for _event in built.complete(
+                    [{"role": "user", "content": "hi"}], reasoning_effort=level
+                ):
+                    pass
+            finally:
+                await built.shutdown()
+            sent[level] = _reasoning_sent(server.calls()[-1])
+            if level in row.efforts and sent[level].get("thinking", {}).get("type") == "adaptive":
+                assert sent[level]["output_config"] == {"effort": level}, (row.id, level)
+        report[row.id] = (row.efforts, _sent_as_themselves(sent))
+
+    differ = {model: pair for model, pair in report.items() if pair[0] != pair[1]}
+    assert differ == {}, "(declared, sent as themselves) for each model where they differ"
+    # Core's Messages client reasons with every Claude model, adaptively or with a budget, so no
+    # row this app lists declares none.
+    assert [model for model, (declared, _) in report.items() if not declared] == []

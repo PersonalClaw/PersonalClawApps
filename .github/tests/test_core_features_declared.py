@@ -60,6 +60,11 @@ The rails over every bundle, against the installed core:
     guard itself (``http_client``, ``sync_http_client``, ``http_session`` or ``RequestGuard`` from
     ``personalclaw.sdk.net``), declares ``guarded-clients``: on a PersonalClaw without it the app
     would not load at all.
+16. every app whose shipped code declares the reasoning-effort levels of the models it lists
+    (``ModelInfo(…, efforts=…)``, ``register_branded_app(…, efforts_of=…)``, a curated row's
+    ``efforts``, or the levels core's own wire sends through ``wire_efforts`` from
+    ``personalclaw.sdk.model``) declares ``model-efforts``: on a PersonalClaw without it the app
+    would not load, or its listing would fail, and no composer would read the levels.
 """
 
 from __future__ import annotations
@@ -130,6 +135,14 @@ KNOWN_GUARDED_CLIENTS = {"bedrock-models", "google-models", "openai-tools"}
 #: What an app imports to open an HTTP client the egress guard is inside, or to ask the guard
 #: itself (rail 15).
 _GUARDED_CLIENT_NAMES = frozenset({"http_client", "sync_http_client", "http_session", "RequestGuard"})
+
+#: The apps that declare the reasoning-effort levels of the models they list, for rail 16: each
+#: model app with a catalog of its own.
+KNOWN_EFFORT_DECLARERS = {"anthropic-models", "bedrock-models", "openrouter-models"}
+
+#: The keywords a model's levels are declared with (rail 16): a listed model's own, and the reader
+#: ``register_branded_app`` takes them from a vendor's record with.
+_EFFORT_KEYWORDS = frozenset({"efforts", "efforts_of"})
 
 
 @pytest.fixture(autouse=True)
@@ -868,3 +881,75 @@ def test_the_scan_tells_an_app_that_opens_a_guarded_client_from_one_that_does_no
     (other / "provider.py").write_text("from personalclaw.sdk.net import fetch\n")
     assert _opens_a_guarded_client(opener) is True
     assert _opens_a_guarded_client(other) is False
+
+
+def _declares_its_models_levels(bundle: Path) -> bool:
+    """Whether the bundle's shipped code declares its models' reasoning-effort levels: a call with
+    an ``efforts`` or ``efforts_of`` keyword, a row with an ``efforts`` key, or ``wire_efforts``
+    taken from the SDK."""
+    for path in sdk_contract.shipped_sources(bundle):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "personalclaw.sdk.model":
+                if any(alias.name == "wire_efforts" for alias in node.names):
+                    return True
+            elif isinstance(node, ast.Call):
+                if any(kw.arg in _EFFORT_KEYWORDS for kw in node.keywords):
+                    return True
+            elif isinstance(node, ast.Dict):
+                if any(isinstance(k, ast.Constant) and k.value == "efforts" for k in node.keys):
+                    return True
+    return False
+
+
+def test_every_app_that_declares_its_models_levels_declares_it():
+    from personalclaw.sdk.features import MODEL_EFFORTS
+
+    declarers = {bundle.name for bundle in BUNDLES if _declares_its_models_levels(bundle)}
+    assert KNOWN_EFFORT_DECLARERS <= declarers, (
+        f"the scan no longer sees these apps declare their models' levels: "
+        f"{sorted(KNOWN_EFFORT_DECLARERS - declarers)}"
+    )
+    undeclared = sorted(
+        name for name in declarers if MODEL_EFFORTS not in _declared(ROOT / name)
+    )
+    assert undeclared == [], (
+        f"these apps declare their models' reasoning-effort levels without declaring "
+        f"'requiresCoreFeatures': ['{MODEL_EFFORTS}'] in app.json: {undeclared}"
+    )
+
+
+def test_the_scan_tells_an_app_that_declares_its_models_levels_from_one_that_does_not(tmp_path):
+    """Positive and negative control for rail 16: one app for each way to declare levels, and one
+    that lists its models with none of them."""
+    sources = {
+        "lister-app": (
+            "from personalclaw.sdk.model import ModelInfo\n"
+            "ROW = ModelInfo(id='m', name='m', efforts=['low', 'high'])\n"
+        ),
+        "brander-app": (
+            "from personalclaw.sdk.model import register_branded_app\n"
+            "def register(spec):\n"
+            "    return register_branded_app(spec, efforts_of=lambda record: [])\n"
+        ),
+        "curator-app": "ROWS = ({'id': 'm', 'capabilities': ['chat'], 'efforts': []},)\n",
+        "wire-app": "from personalclaw.sdk.model import ModelInfo, wire_efforts\n",
+        "other-app": (
+            "from personalclaw.sdk.model import ModelInfo\n"
+            "ROW = ModelInfo(id='m', name='m', capabilities=['chat'])\n"
+        ),
+    }
+    seen = {}
+    for name, source in sources.items():
+        app = tmp_path / name
+        app.mkdir()
+        (app / "app.json").write_text(f'{{"name": "{name}", "version": "0.1.0"}}')
+        (app / "provider.py").write_text(source, encoding="utf-8")
+        seen[name] = _declares_its_models_levels(app)
+    assert seen == {
+        "lister-app": True,
+        "brander-app": True,
+        "curator-app": True,
+        "wire-app": True,
+        "other-app": False,
+    }
