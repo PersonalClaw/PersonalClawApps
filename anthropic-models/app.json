@@ -1,12 +1,15 @@
 {
   "name": "anthropic-models",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "displayName": "Anthropic",
   "description": "Anthropic Claude chat models (Messages API). Bring your own Anthropic API key.",
   "icon": "Sparkles",
   "heroImage": "assets/hero.svg",
   "author": "PersonalClaw",
   "license": "MIT",
+  "requiresCoreFeatures": [
+    "model-efforts"
+  ],
   "tags": [
     "model",
     "llm",

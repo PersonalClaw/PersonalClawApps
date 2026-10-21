@@ -54,6 +54,7 @@ from personalclaw.sdk.model import (
     own_model,
     per_call_temperature,
     require_model,
+    wire_efforts,
 )
 from personalclaw.sdk.net import (
     EgressBlocked,
@@ -118,12 +119,53 @@ def _is_claude(model_id: str) -> bool:
 
 
 def _thinks(model_id: str, *, effort_sent: bool) -> bool:
-    """Whether a request to *model_id* carries extended thinking: a Claude model asked for a
-    reasoning effort (``complete`` sends adaptive thinking with it), or one that thinks on every
-    request whether or not an effort is sent."""
+    """Whether a request to *model_id* carries extended thinking: a Claude model sent a reasoning
+    effort (``complete`` sends adaptive thinking with it), or one that thinks on every request
+    whether or not an effort is sent."""
     if not _is_claude(model_id):
         return False
     return effort_sent or bool(_THINKS_BY_DEFAULT_RE.search(model_id))
+
+
+# ── Reasoning efforts ─────────────────────────────────────────────────────────────────────────
+#
+# This wire asks a model to reason in one shape: ``thinking: {type: adaptive}`` with the level as
+# ``output_config.effort`` (``complete``). The Claude models that think adaptively take it; every
+# other model refuses it, an older Claude (which takes a thinking budget instead) and every other
+# vendor's model alike. So a model that thinks adaptively declares the levels it takes, which are
+# the levels core's own Anthropic wire sends it (the SDK's ``wire_efforts``), and every other model
+# declares none; the catalog lists each model with its levels, and the wire sends a level only to a
+# model that declares it.
+
+#: ``anthropic.claude-<family>-<major>[-<minor>]`` anywhere in a Bedrock id, so a model's inference
+#: profiles (``global.``, ``us.``) and its dated or ``-v1:0`` forms all count. A minor is one or
+#: two digits, so a date suffix (``-20250929``) is never read as one. The older version-first
+#: spelling (``claude-3-7-sonnet``) names no model that thinks adaptively.
+_CLAUDE_VERSION_RE = re.compile(
+    r"anthropic\.claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d{1,2}))?(?![0-9])"
+)
+
+#: The first version of each line that thinks adaptively. Sonnet 4.6 does too; the Fable and
+#: Mythos lines do from their first.
+_ADAPTIVE_FROM = {"opus": (4, 6), "sonnet": (5, 0), "haiku": (5, 0)}
+
+
+def _thinks_adaptively(model_id: str) -> bool:
+    """Whether *model_id* names a Claude model that takes adaptive thinking: the Fable and Mythos
+    lines, Opus 4.6 and later, Sonnet 4.6, and Sonnet and Haiku 5 and later."""
+    named = _CLAUDE_VERSION_RE.search((model_id or "").lower())
+    if named is None:
+        return False
+    family, version = named.group(1), (int(named.group(2)), int(named.group(3) or 0))
+    if family in ("fable", "mythos"):
+        return True
+    return version >= _ADAPTIVE_FROM[family] or (family == "sonnet" and version == (4, 6))
+
+
+def _efforts(model_id: str) -> tuple[str, ...]:
+    """The reasoning-effort levels this wire sends *model_id*, lowest first: the levels core's
+    Anthropic wire sends a model that thinks adaptively, and none for any other model."""
+    return wire_efforts("anthropic", model_id) if _thinks_adaptively(model_id) else ()
 
 
 # ── Prompt caching: Bedrock's OWN wire form ───────────────────────────────────
@@ -972,15 +1014,16 @@ class BedrockProvider(ModelProvider):
     def sampling_temperature(self) -> float | None:
         """The ``inferenceConfig.temperature`` a :meth:`stream` request carries, if any.
 
-        :meth:`complete` with a reasoning effort turns extended thinking on, which takes no custom
-        temperature and drops it — a per-turn fact about the native loop, which one-shot sampling
-        (the caller that reads this back) never takes."""
+        :meth:`complete` with a reasoning effort its model declares turns extended thinking on,
+        which takes no custom temperature and drops it — a per-turn fact about the native loop,
+        which one-shot sampling (the caller that reads this back) never takes."""
         return self._temperature
 
     def _inference_config(self, model_id: str, *, thinking: bool = False) -> dict[str, Any]:
         """Converse's ``inferenceConfig`` for a request to *model_id*: the output cap always, the
         sampling temperature when one was asked for — except with a reasoning effort sent
-        (*thinking*), which turns extended thinking on and rejects a custom one.
+        (*thinking*: one the model declares), which turns extended thinking on and rejects a
+        custom one.
 
         The cap is the one this provider was built with when one was set. Without one, a request
         that thinks (``_thinks``) gets ``_THINKING_MAX_TOKENS``, since its thinking is spent out of
@@ -1210,19 +1253,20 @@ class BedrockProvider(ModelProvider):
         if tools:
             request["toolConfig"] = _translate_tools(tools, tool_name_fwd)
 
-        # Extended thinking (Anthropic-on-Bedrock): map reasoning effort via
-        # additionalModelRequestFields. Newer Claude models (Opus 4.x on Bedrock)
-        # take adaptive thinking + an effort LEVEL (output_config.effort) directly —
-        # which fits the "no canonical scale" model: the effort token is forwarded
-        # as-is. Older models take a fixed budget_tokens; we send the level shape
-        # and fall back on the ValidationException path is avoided by using the
-        # documented adaptive form. "" = no thinking (model default).
-        _eff = (reasoning_effort or "").strip()
-        request["inferenceConfig"] = self._inference_config(model_id, thinking=bool(_eff))
-        if _eff:
+        # Extended thinking (Anthropic-on-Bedrock), through additionalModelRequestFields: adaptive
+        # thinking with the level as ``output_config.effort``, sent as it is, and only a level the
+        # model declares (``_efforts``). Any other level, and any level asked of a model that
+        # declares none (Nova, Mistral, an older Claude that takes a thinking budget instead), is
+        # sent nothing, so the turn runs at the model's default instead of being refused for
+        # fields the model does not take. "" = no thinking (model default).
+        effort = (reasoning_effort or "").strip()
+        if effort not in _efforts(model_id):
+            effort = ""
+        request["inferenceConfig"] = self._inference_config(model_id, thinking=bool(effort))
+        if effort:
             request["additionalModelRequestFields"] = {
                 "thinking": {"type": "adaptive"},
-                "output_config": {"effort": _eff},
+                "output_config": {"effort": effort},
             }
 
         loop = asyncio.get_running_loop()
@@ -1641,8 +1685,15 @@ class BedrockCatalog(ModelCatalog):
             if capabilities:
                 offered.append({**r, "capabilities": capabilities})
         names = _distinct_names(offered)
+        # Each model declares the levels this wire sends it (``_efforts``), [] declaring none:
+        # a profile's are the model it routes to, as its capabilities are.
         models = [
-            ModelInfo(id=r["id"], name=names[r["id"]], capabilities=r["capabilities"])
+            ModelInfo(
+                id=r["id"],
+                name=names[r["id"]],
+                capabilities=r["capabilities"],
+                efforts=list(_efforts(r.get("model") or r["id"])),
+            )
             for r in offered
         ]
         if models:

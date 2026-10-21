@@ -600,6 +600,7 @@ do without, ask `core_has` and say so when it is missing.
 | `message-instructions` | an inbox source hands PersonalClaw the owner's instruction beside a message's words (`IncomingMessage.instruction`), held by a setting declared `x-meta.instruction`, and a run on the message is handed it outside any fence, then the message fenced once | an inbox app whose source hands one over: `mail-inbox` |
 | `closing-streams` | a model's stream your app reads is closed the moment it stops reading: read inside `personalclaw.sdk.model.closing_stream`, it is closed by any way out of the block, and an agent CLI's turn left part way is told to stop and its session takes the next prompt at once | an app that reads a model's stream (`stream`, `stream_command`, `complete`): `slack-channel`, `code-review`, `issue-radar` |
 | `guarded-clients` | the HTTP clients `personalclaw.sdk.net` hands out with the egress guard inside them (`http_client`, `sync_http_client`, `http_session`), each asking the guard about every request it sends, each redirect hop included, under the owner's Network egress settings, and the guard itself (`RequestGuard`) for a client library's own hook; a refused request raises `EgressBlocked` before it is sent | an app that sends requests with a client of its own: `bedrock-models`, `google-models`, `alibaba-models`, `fal-image`, `openai-tools`, `skills-sh` |
+| `model-efforts` | a model app declares the reasoning-effort levels each of its models takes (`ModelInfo(efforts=[...])`, `register_branded_app(spec, efforts_of=...)` or a curated row's `efforts`, `[]` declaring none), and the composer offers a chat on that model exactly those; a model on PersonalClaw's own wire that its app says nothing about declares what that wire sends it (`personalclaw.sdk.model.wire_efforts`) | a model app that declares levels: `anthropic-models`, `bedrock-models`, `openrouter-models` |
 
 A PersonalClaw from before core features cannot read the field, so an app also checks what it
 relies on where it uses it: a channel app handed a brief with no answers says so on the prompt,
@@ -610,8 +611,9 @@ chat's Trust to declaring `chat-trust`, every app that links a chat on its own c
 declaring `links-name-their-channel`, every app that screens a call with the deny-list to
 declaring `tool-call-screen`, every app that reads a model's stream inside `closing_stream`
 to declaring `closing-streams`, every app that opens a guarded HTTP client or asks the guard
-itself to declaring `guarded-clients`, and every app whose source hands over a message's instruction to
-declaring `message-instructions`.
+itself to declaring `guarded-clients`, every app whose source hands over a message's instruction to
+declaring `message-instructions`, and every app that declares its models' reasoning-effort levels
+to declaring `model-efforts`.
 `.github/tests/test_model_streams_are_read_inside_closing_stream.py` holds every app to reading a
 model's stream that way: an `async for` over a provider's stream, or an `anext` of one, anywhere
 else fails it.

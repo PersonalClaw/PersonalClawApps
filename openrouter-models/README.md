@@ -15,8 +15,9 @@ as a self-contained directory:
 - `app.json` — the manifest (identity, provider declaration, permissions).
 - `provider.py` — the implementation, exposed via `create_provider`.
 - `test_catalog.py`, `test_provider.py` — the app's own tests.
-- `test_wire.py` — proves a call's per-call temperature and output budget reach the request, against
-  a recording endpoint.
+- `test_wire.py` — proves a call's per-call temperature and output budget reach the request, and
+  that each listed model is sent exactly the reasoning-effort levels it declares, against a
+  recording endpoint.
 
 It imports only the PersonalClaw **SDK** (never core internals), so core can evolve
 without breaking it:
@@ -56,6 +57,10 @@ capability uses the same account and key.
 Multi-instance: add one instance per OpenRouter account. Each media adapter is keyed
 by its config-entry name, so an `<instance>:<model>` binding always resolves to the
 account that backs that instance's chat.
+
+Each chat model is listed with the reasoning-effort levels core's `OpenAIProvider` sends it as
+themselves, so the composer offers a chat exactly those: low, medium and high for a reasoning model
+(`openai/o3`, `openai/gpt-5-mini`, …), and none for any other, which is sent no `reasoning_effort`.
 
 ## Notes on discovery
 

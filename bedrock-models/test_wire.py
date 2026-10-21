@@ -9,7 +9,8 @@ calls a bound model.
 
 The factory is this app's own. Converse takes both in ``inferenceConfig``, and a cap is always
 sent. So this drives the app's real ``boto3`` client against a fake endpoint that records the
-request.
+request. The reasoning-effort levels each listed model declares are held to the request the same
+way: what the catalog lists for a model is what its request carries.
 """
 
 from __future__ import annotations
@@ -195,6 +196,79 @@ async def test_after_a_tool_result_the_request_ends_on_that_turn_not_on_the_note
     assert not [m for m in sent if all(b.get("text") == note for b in m["content"])]
     assert "system" not in call["body"] or note not in str(call["body"]["system"])
 
+
+# ── Reasoning efforts: the levels a model is listed with are the levels its request carries ──
+
+#: Every level a native chat can hold, lowest first.
+LADDER = ("low", "medium", "high", "xhigh", "max")
+
+#: One model of each kind the control plane lists, and the levels each declares: a Claude model
+#: that thinks adaptively, with ``xhigh`` and without; an older Claude, which takes a thinking
+#: budget this wire never sends; and models of other vendors, which take no Anthropic thinking
+#: fields at all.
+DECLARED = {
+    "anthropic.claude-opus-4-7": ["low", "medium", "high", "xhigh", "max"],
+    "anthropic.claude-sonnet-4-6": ["low", "medium", "high", "max"],
+    "anthropic.claude-sonnet-4-5-20250929-v1:0": [],
+    "amazon.nova-pro-v1:0": [],
+    "mistral.mistral-large-2407-v1:0": [],
+}
+
+
+@pytest.fixture
+def thinkers(monkeypatch):
+    """A Bedrock whose control plane lists each model in :data:`DECLARED`. The catalog keeps a
+    region's listing for minutes, so none another test read is kept."""
+    provider._BEDROCK_CACHE.clear()
+    with RecordingModelServer(models=tuple(DECLARED)) as recording:
+        _boto3_reaches_only(monkeypatch, recording)
+        yield recording
+    provider._BEDROCK_CACHE.clear()
+
+
+def _reasoning_sent(call: dict) -> object:
+    """What one recorded Converse call asked of the model's reasoning: the request's
+    ``additionalModelRequestFields``, or ``None`` when it carries none."""
+    return call["body"].get("additionalModelRequestFields")
+
+
+@pytest.mark.asyncio
+async def test_each_listed_model_is_sent_exactly_the_levels_it_declares(thinkers):
+    """🔴 Red before: every row was listed with no levels, so the composer offered none, while a
+    turn's stored level reached Converse as adaptive thinking for every model, Nova, Mistral and the
+    older Claude models included, each of which refuses those fields. Each chat model the catalog
+    lists now declares the levels its request carries, and only those: every level of the ladder,
+    asked of each model through the catalog and the wire, goes out verbatim when the model declares
+    it, and a model that declares none is sent no thinking fields at any level."""
+    rows = await provider.create_catalog(form_options(APP_DIR, thinkers.url)).list_models()
+    chat = [row for row in rows if "chat" in row.capabilities]
+    assert {row.id: row.efforts for row in chat} == DECLARED
+
+    sent: dict[str, dict[str, object]] = {}
+    for row in chat:
+        for level in LADDER:
+            built = provider._factory(entry=_entry(thinkers.url), model=row.id)
+            await built.start()
+            try:
+                async for _event in built.complete(
+                    [{"role": "user", "content": "hi"}], reasoning_effort=level
+                ):
+                    pass
+            finally:
+                await built.shutdown()
+            sent.setdefault(row.id, {})[level] = _reasoning_sent(thinkers.calls()[-1])
+
+    assert sent == {
+        row.id: {
+            level: (
+                {"thinking": {"type": "adaptive"}, "output_config": {"effort": level}}
+                if level in row.efforts
+                else None
+            )
+            for level in LADDER
+        }
+        for row in chat
+    }
 
 
 # ── A metered agent turn caches its stable prefix ─────────────────────────────────────────

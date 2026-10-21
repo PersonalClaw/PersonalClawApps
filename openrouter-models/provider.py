@@ -54,6 +54,7 @@ from personalclaw.sdk.model import (
     get_default_registry,
     register_branded_app,
     require_model,
+    wire_efforts,
 )
 from personalclaw.sdk.net import (
     CONNECTOR,
@@ -270,6 +271,9 @@ class OpenRouterCatalog(ModelCatalog):
                 capabilities=_capabilities_from_architecture(m.get("architecture")),
                 description=_truncate(m.get("description", ""), 200),
                 extra={"context_length": m["context_length"]} if m.get("context_length") else {},
+                # The levels core's Chat Completions client sends this model as themselves: a
+                # model's listing is what the composer offers it, and a row with none offers none.
+                efforts=list(wire_efforts(SPEC.protocol, mid)),
             ))
         if rows and not out:
             raise _not_a_model_list(url, resp)
