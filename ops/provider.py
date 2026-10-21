@@ -130,6 +130,7 @@ class OpsProvider(ToolProvider):
                 parameters={"type": "object", "properties": {}},
                 requires_approval=False,
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
                 max_output=40_000,
             ),
             ToolDefinition(
@@ -161,6 +162,7 @@ class OpsProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
                 max_output=40_000,
             ),
             ToolDefinition(
@@ -178,6 +180,7 @@ class OpsProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
                 max_output=60_000,
             ),
             ToolDefinition(
@@ -208,6 +211,7 @@ class OpsProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
             ),
             ToolDefinition(
                 name="ops_investigate",
@@ -225,6 +229,7 @@ class OpsProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
                 max_output=40_000,
             ),
             ToolDefinition(
@@ -256,6 +261,7 @@ class OpsProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
             ),
             ToolDefinition(
                 name="ops_propose_fix",
@@ -296,6 +302,7 @@ class OpsProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
             ),
             ToolDefinition(
                 name="ops_apply_fix",
@@ -332,6 +339,9 @@ class OpsProvider(ToolProvider):
                 },
                 requires_approval=True,
                 risk_level=RiskLevel.DESTRUCTIVE,
+                # No `consequences`: the command is the operator's runbook's, and it may page a
+                # rota or scale up what bills. What it reaches is not this app's to say, so each
+                # call asks the owner a second time.
                 max_output=20_000,
             ),
             ToolDefinition(
@@ -360,6 +370,7 @@ class OpsProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
             ),
         ]
 

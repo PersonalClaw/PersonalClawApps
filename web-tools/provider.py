@@ -96,6 +96,7 @@ class WebToolProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
             ),
             ToolDefinition(
                 name="web_fetch",
@@ -129,6 +130,7 @@ class WebToolProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
             ),
             ToolDefinition(
                 name="web_extract",
@@ -153,6 +155,7 @@ class WebToolProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
             ),
         ]
 

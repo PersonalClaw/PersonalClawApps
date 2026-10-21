@@ -136,6 +136,11 @@ palette would be worse than no check.
 
 `network: true` (the page fetch), `storage: false`. That is the whole declaration.
 
+Each tool also declares what a call does past this machine (`consequences`): none sends
+anything to anyone but you or spends money, so none of its calls asks you a second time for
+either. PersonalClaw reads that declaration from 0.2.3, the oldest release this version
+installs on.
+
 ## Tests
 
 `test_provider.py` covers the provider contract, the manifest against core's own

@@ -143,6 +143,45 @@ async def test_the_read_only_tool_is_the_only_safe_one(provider) -> None:
     assert risk["document_from_brief"] == "caution"
 
 
+#: What a call to each tool may do past this machine (``ToolDefinition.consequences``): "sends"
+#: when it sends something to anyone but the owner, "spends" when it spends money, () for
+#: neither. A tool that declares nothing is taken to be able to do both, so every call to it that
+#: is not a read asks the owner a second time before it runs.
+CONSEQUENCES = {
+    "deck_from_brief": (),  # renders a file into the app's own data dir
+    "document_from_brief": (),  # the same
+    "docs_slides_formats": (),  # says what this build renders
+}
+
+
+@pytest.mark.asyncio
+async def test_each_tool_declares_what_a_call_does_past_this_machine(provider) -> None:
+    tools = {t.name: t.consequences for t in await provider.list_tools()}
+    assert tools == CONSEQUENCES
+
+
+@pytest.mark.asyncio
+async def test_every_tool_changes_only_the_apps_own_data_dir(provider, home) -> None:
+    """What earns each tool its (): the manifest grants no network, and every tool runs and leaves
+    nothing behind but its file in the app's own data dir. Nothing a tool makes leaves this
+    machine; attaching or sending a rendered file is another tool's call."""
+    data = json.loads((HERE / "app.json").read_text(encoding="utf-8"))
+    assert data["permissions"]["network"] is False
+    before = {p for p in home.rglob("*") if p.is_file()}
+    calls = [
+        ("deck_from_brief", {"brief": BRIEF, "filename": "deck"}),
+        ("document_from_brief", {"brief": BRIEF, "filename": "doc"}),
+        ("docs_slides_formats", {}),
+    ]
+    assert {name for name, _ in calls} == set(CONSEQUENCES)
+    for name, args in calls:
+        result = await provider.invoke(name, args)
+        assert result.success, (name, result.error)
+    made = {p for p in home.rglob("*") if p.is_file()} - before
+    assert {p.stem for p in made} == {"deck", "doc"}
+    assert all(p.parent == provider.out_dir for p in made), sorted(made)
+
+
 @pytest.mark.asyncio
 async def test_an_unknown_tool_is_refused_with_a_hint(provider) -> None:
     res = await provider.invoke("make_me_a_deck", {})

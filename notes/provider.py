@@ -122,6 +122,7 @@ class NotesProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
             ),
             ToolDefinition(
                 name="note_read",
@@ -143,6 +144,7 @@ class NotesProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
                 max_output=60_000,
             ),
             ToolDefinition(
@@ -155,6 +157,7 @@ class NotesProvider(ToolProvider):
                 parameters={"type": "object", "properties": {}},
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
                 max_output=60_000,
             ),
             ToolDefinition(
@@ -180,6 +183,7 @@ class NotesProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
                 max_output=60_000,
             ),
             ToolDefinition(
@@ -201,6 +205,7 @@ class NotesProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.SAFE,
+                consequences=(),
             ),
             ToolDefinition(
                 name="note_restore",
@@ -222,6 +227,7 @@ class NotesProvider(ToolProvider):
                 },
                 requires_approval=False,
                 risk_level=RiskLevel.CAUTION,
+                consequences=(),
             ),
             ToolDefinition(
                 name="note_delete",
@@ -237,6 +243,7 @@ class NotesProvider(ToolProvider):
                 },
                 requires_approval=True,
                 risk_level=RiskLevel.DESTRUCTIVE,
+                consequences=(),
             ),
         ]
 

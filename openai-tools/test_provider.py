@@ -68,6 +68,25 @@ async def test_list_tools_routes_through_chokepoint(fake_fetch):
 
 
 @pytest.mark.asyncio
+async def test_a_discovered_tool_declares_nothing_whatever_its_server_claims(fake_fetch):
+    """A discovered tool is the remote server's, and the app cannot know what a call to it does
+    past this machine, so it declares nothing for it (``ToolDefinition.consequences`` is
+    ``None``): every call that is not a read asks the owner a second time. A server's own claim
+    that its tool sends nothing is not passed on as the app's declaration."""
+    fake_fetch.payload = {"tools": [
+        {"name": "echo", "description": "Echo", "parameters": {"type": "object"}},
+        {
+            "name": "send_mail", "description": "Send an email", "parameters": {"type": "object"},
+            "consequences": [], "_meta": {"personalclaw/consequences": []},
+        },
+    ]}
+    p = provider.create_openai_tool_provider({"endpoint": "https://tools.example.com", "api_key": "k"})
+    assert {t.name: t.consequences for t in await p.list_tools()} == {
+        "echo": None, "send_mail": None,
+    }
+
+
+@pytest.mark.asyncio
 async def test_list_tools_falls_back_to_v1(monkeypatch):
     # /tools → 404 on the first hop makes the provider retry /v1/tools.
     seen: list[str] = []

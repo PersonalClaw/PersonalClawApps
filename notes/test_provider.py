@@ -525,6 +525,75 @@ async def test_tool_surface(provider: NotesProvider) -> None:
     assert by_name["note_delete"].requires_approval is True
 
 
+#: What a call to each tool may do past this machine (``ToolDefinition.consequences``): "sends"
+#: when it sends something to anyone but the owner, "spends" when it spends money, () for
+#: neither. A tool that declares nothing is taken to be able to do both, so every call to it that
+#: is not a read asks the owner a second time before it runs. Every tool here works in the local
+#: notebook: syncing it anywhere is another app's job.
+CONSEQUENCES = {
+    "note_write": (),
+    "note_read": (),
+    "note_list": (),
+    "note_search": (),
+    "note_history": (),
+    "note_restore": (),
+    "note_delete": (),
+}
+
+#: The git commands that stay inside the notebook's own repository.
+LOCAL_GIT = {"init", "checkout", "add", "commit", "status", "show", "log", "rev-parse",
+             "ls-files", "rm"}
+
+
+@pytest.mark.asyncio
+async def test_each_tool_declares_what_a_call_does_past_this_machine(provider) -> None:
+    tools = {t.name: t.consequences for t in await provider.list_tools()}
+    assert tools == CONSEQUENCES
+
+
+def _git_command(argv: list[str]) -> str:
+    """The git command *argv* runs: the first word after git's own options."""
+    rest = argv[1:]
+    while rest and rest[0].startswith("-"):
+        rest = rest[2:] if rest[0] in ("-c", "-C") else rest[1:]
+    return rest[0]
+
+
+@needs_git
+@pytest.mark.asyncio
+async def test_every_git_command_any_tool_runs_stays_in_the_notebook(
+    monkeypatch, provider
+) -> None:
+    """What earns every tool its (): every tool runs, and every git command any of them starts
+    works in the notebook's own repository. A tool that pushed, fetched or pulled would reach a
+    remote, and would have to say what it sends there."""
+    import notebook
+
+    ran: list[str] = []
+    real_run = notebook.subprocess.run
+
+    def _run(argv, *args, **kwargs):
+        ran.append(_git_command(argv))
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(notebook.subprocess, "run", _run)
+    first = await provider.invoke("note_write", {"ref": "tempo", "content": "one"})
+    calls = [
+        ("note_write", {"ref": "tempo", "content": "two"}),
+        ("note_read", {"ref": "tempo"}),
+        ("note_list", {}),
+        ("note_search", {"query": "two"}),
+        ("note_history", {"ref": "tempo"}),
+        ("note_restore", {"ref": "tempo", "revision": first.metadata["commit"]}),
+        ("note_delete", {"ref": "tempo"}),
+    ]
+    assert {name for name, _ in calls} == set(CONSEQUENCES)
+    for name, args in calls:
+        assert (await provider.invoke(name, args)).success, name
+    assert ran
+    assert set(ran) <= LOCAL_GIT, sorted(set(ran) - LOCAL_GIT)
+
+
 @pytest.mark.asyncio
 async def test_reading_the_tool_list_creates_no_notebook(tmp_path: Path) -> None:
     root = tmp_path / "notebook"

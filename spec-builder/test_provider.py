@@ -918,6 +918,80 @@ async def test_only_delete_is_approval_gated_and_destructive(
         assert tools[read_only].risk_level is RiskLevel.SAFE
 
 
+#: What a call to each tool may do past this machine (``ToolDefinition.consequences``): "sends"
+#: when it sends something to anyone but the owner, "spends" when it spends money, () for
+#: neither. A tool that declares nothing is taken to be able to do both, so every call to it that
+#: is not a read asks the owner a second time before it runs. Every tool here works in the local
+#: spec store; spec_seed reads a committed file of a local repository.
+CONSEQUENCES = {
+    "spec_open": (),
+    "spec_write": (),
+    "spec_read": (),
+    "spec_list": (),
+    "spec_seed": (),
+    "spec_review": (),
+    "spec_compile": (),  # returns a definition; saving and starting it are other tools' calls
+    "spec_delete": (),
+}
+
+#: The git commands that only read the source repository.
+READ_GIT = {"rev-parse", "show"}
+
+
+@pytest.mark.asyncio
+async def test_each_tool_declares_what_a_call_does_past_this_machine(
+    provider: SpecBuilderProvider,
+) -> None:
+    tools = {t.name: t.consequences for t in await provider.list_tools()}
+    assert tools == CONSEQUENCES
+
+
+def _git_command(argv: list[str]) -> str:
+    """The git command *argv* runs: the first word after git's own options."""
+    rest = argv[1:]
+    while rest and rest[0].startswith("-"):
+        rest = rest[2:] if rest[0] in ("-c", "-C") else rest[1:]
+    return rest[0]
+
+
+@needs_git
+@pytest.mark.asyncio
+async def test_every_git_command_any_tool_runs_only_reads_the_source(
+    tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What earns spec_seed its (): every tool runs, and every git command any of them starts reads
+    the source repository. A tool that pushed or fetched would reach a remote, and would have to
+    say what it sends there."""
+    import specs as specs_mod
+
+    ran: list[str] = []
+    real = subprocess.run
+
+    def spy(argv: Any, **kwargs: Any) -> Any:
+        ran.append(_git_command(list(argv)))
+        return real(argv, **kwargs)
+
+    monkeypatch.setattr(specs_mod.subprocess, "run", spy)
+    prov = create_provider({"source_repo": str(repo)})
+    prov._store_impl = SpecStore(tmp_path / "specs", source_repo=str(repo))
+    calls = [
+        ("spec_open", {"title": "One", "spec_id": "one"}),
+        ("spec_write", {"spec": "one", "section": "problem", "content": GOOD_PROBLEM}),
+        ("spec_read", {"spec": "one"}),
+        ("spec_list", {}),
+        ("spec_seed", {"spec": "one", "path": "src/router.py"}),
+        ("spec_review", {"spec": "one"}),
+        ("spec_compile", {"spec": "one", "force": True}),
+        ("spec_delete", {"spec": "one"}),
+    ]
+    assert {name for name, _ in calls} == set(CONSEQUENCES)
+    for name, args in calls:
+        result = await prov.invoke(name, args)
+        assert result.success, (name, result.error)
+    assert ran
+    assert set(ran) <= READ_GIT, sorted(set(ran) - READ_GIT)
+
+
 @pytest.mark.asyncio
 async def test_the_section_enum_on_the_wire_matches_the_vocabulary(
     provider: SpecBuilderProvider,

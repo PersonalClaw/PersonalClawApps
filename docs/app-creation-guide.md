@@ -783,6 +783,19 @@ cannot implement them without reaching around the lint-enforced boundary. Ask be
 starting one of those three; the fix is to promote the contract to `personalclaw.sdk.*`,
 not to import the core module.
 
+A `tool` app's `ToolDefinition` says what each call does. `risk_level` is `SAFE` only for a
+tool that only reads. `consequences` says what a call may do past this machine: `("sends",)`
+when it sends something to anyone but the owner, `("spends",)` when it spends money, `()` for
+neither. A tool that declares nothing is taken to be able to do both, so every call to it that
+isn't a read asks the owner a second time before it runs. The declaration is read strictly:
+anything but a list or tuple of those exact words counts as nothing declared. Declare `()`
+only where the handler's code shows it, with a test that runs each tool and checks what it
+reached (`code-review`, `ops`); a tool whose code cannot tell what it does (a remote server's
+tool in `openai-tools`, the runbook command `ops_apply_fix` runs) declares nothing. The field
+arrived in PersonalClaw 0.2.3 and no core feature names it, so an app that declares it sets
+`minPersonalClawVersion` to at least `0.2.3`
+(`.github/tests/test_tool_consequences_need_a_core_that_reads_them.py`).
+
 Thin branded model apps can use `personalclaw.sdk.provider_helpers`
 (`register_branded_app`) — a few lines wrapping a protocol client core already
 ships (Anthropic Messages, OpenAI-compatible Chat Completions).

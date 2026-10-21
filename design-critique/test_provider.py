@@ -113,6 +113,79 @@ def test_unknown_tool_is_refused_not_raised(app) -> None:
     assert "design_critique_everything" in result.error
 
 
+#: What a call to each tool may do past this machine (``ToolDefinition.consequences``): "sends"
+#: when it sends something to anyone but the owner, "spends" when it spends money, () for
+#: neither. A tool that declares nothing is taken to be able to do both, so every call to it that
+#: is not a read asks the owner a second time before it runs.
+CONSEQUENCES = {
+    "design_critique_page": (),  # reads the page: a plain GET, and a render of the same URL
+    "design_critique_image": (),  # reads a screenshot on disk
+    "design_critique_rubric": (),  # returns a checklist
+}
+
+
+def test_each_tool_declares_what_a_call_does_past_this_machine(app) -> None:
+    tools = {t.name: t.consequences for t in asyncio.run(app.list_tools())}
+    assert tools == CONSEQUENCES
+
+
+def test_every_request_any_tool_sends_only_reads_a_page(app, monkeypatch, tmp_path) -> None:
+    """What earns design_critique_page its (): every tool runs, and every request any of them sends
+    through the SDK's guarded egress reads a page, a GET with no body. A tool that posted a form
+    or uploaded what it found would be sending, and would declare "sends"."""
+    from types import SimpleNamespace
+
+    import personalclaw.sdk.net as net
+
+    fetched: list[dict] = []
+    rendered: list[str] = []
+
+    async def _fetch(url, **kwargs):
+        fetched.append({"url": url, **kwargs})
+        return SimpleNamespace(url=url, text=BROKEN_PAGE, status=200)
+
+    async def _web_fetch(url, **_kwargs):
+        rendered.append(url)
+        return SimpleNamespace(ok=True, content="x" * 900, extractor="playwright", error="")
+
+    monkeypatch.setattr(net, "fetch", _fetch)
+    monkeypatch.setattr(net, "web_fetch", _web_fetch)
+    shot = tmp_path / "shot.png"
+    _canvas((390, 400)).save(shot)
+    calls = [
+        ("design_critique_page", {"url": "https://example.test/checkout"}),
+        ("design_critique_image", {"path": str(shot)}),
+        ("design_critique_rubric", {}),
+    ]
+    assert {name for name, _ in calls} == set(CONSEQUENCES)
+    for name, args in calls:
+        result = asyncio.run(app.invoke(name, args))
+        assert result.success, (name, result.error)
+    assert [f["url"] for f in fetched] == rendered == ["https://example.test/checkout"]
+    for request in fetched:
+        assert request.get("method", "GET").upper() == "GET", request
+        assert not any(request.get(k) for k in ("data", "json", "body")), request
+
+
+def test_no_tool_has_a_way_out_the_run_does_not_watch() -> None:
+    """The run above watches the two ways out this module takes, the SDK's guarded fetch and its
+    headless render. A tool that sent by another way (an HTTP client, a socket, a process, another
+    function of the SDK's network module) would import it or reach it, which the run would not
+    see, so the module is held to the imports it makes and every name it reaches in the SDK's
+    network module, whatever it is imported as."""
+    from apps_testkit.ways_out import ways_out
+
+    imports, reached = ways_out([mod.__file__], ("personalclaw.sdk.net",))
+    assert imports == {
+        "PIL", "__future__", "colorsys", "dataclasses", "html.parser", "logging", "pathlib",
+        "personalclaw.sdk.net", "personalclaw.sdk.tool", "re", "typing",
+    }, imports
+    assert reached == {
+        "personalclaw.sdk.net.CONNECTOR", "personalclaw.sdk.net.egress_policy_for",
+        "personalclaw.sdk.net.fetch", "personalclaw.sdk.net.web_fetch",
+    }, reached
+
+
 # ── the manifest ─────────────────────────────────────────────────────────────
 
 

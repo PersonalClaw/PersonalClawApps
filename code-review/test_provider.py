@@ -10,6 +10,7 @@ Contract: personalclaw.sdk.tool:ToolProvider
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -138,6 +139,83 @@ async def test_declared_risk_matches_what_each_tool_actually_does(provider) -> N
     assert tools["record_finding"].risk_level is RiskLevel.CAUTION
     # Reads the local log and nothing else.
     assert tools["review_findings"].risk_level is RiskLevel.SAFE
+
+
+#: What a call to each tool may do past this machine (``ToolDefinition.consequences``): "sends"
+#: when it sends something to anyone but the owner, "spends" when it spends money, () for
+#: neither. A tool that declares nothing is taken to be able to do both, so every call to it that
+#: is not a read asks the owner a second time before it runs.
+CONSEQUENCES = {
+    "review_pr": (),  # reads the PR with `gh pr diff`; nothing is posted back to it
+    "record_finding": (),  # an append to the local findings log
+    "review_findings": (),  # a read of that log
+}
+
+
+@pytest.mark.asyncio
+async def test_each_tool_declares_what_a_call_does_past_this_machine(provider) -> None:
+    tools = {t.name: t.consequences for t in await provider.list_tools()}
+    assert tools == CONSEQUENCES
+
+
+class _Exited:
+    """A command that has already exited 0 with *out* on its stdout."""
+
+    returncode = 0
+
+    def __init__(self, out: bytes) -> None:
+        self._out = out
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        return self._out, b""
+
+
+@pytest.mark.asyncio
+async def test_the_one_command_any_tool_starts_reads_the_pr(monkeypatch, provider, diff) -> None:
+    """What earns review_pr its (): every tool runs, and the only command any of them starts is
+    ``gh pr diff``, which reads the PR. A tool that commented on a PR, reviewed or labelled it
+    would be sending to the PR's people, and would declare "sends"."""
+    started: list[list[str]] = []
+
+    async def _start(*argv, **_kwargs):
+        started.append(list(argv))
+        return _Exited(diff.encode())
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _start)
+    calls = {
+        "review_pr": {"pr": "acme/widget#42"},
+        "record_finding": {
+            "pr": "acme/widget#42", "file": "src/app.py", "severity": "low", "summary": "x",
+        },
+        "review_findings": {"pr": "acme/widget#42"},
+    }
+    assert set(calls) == set(CONSEQUENCES)
+    for name, args in calls.items():
+        assert (await provider.invoke(name, args)).success, name
+    assert started
+    assert all(argv[:3] == ["gh", "pr", "diff"] for argv in started), started
+
+
+def test_no_tool_has_a_way_out_the_run_does_not_watch() -> None:
+    """The run above watches the one way out these modules take, a command started through
+    ``asyncio``. A tool that sent by another way (an HTTP client, the SDK's fetch, a socket, a
+    shell) would import it or reach it, which the run would not see, so the modules are held to
+    the imports they make and every name they reach under ``asyncio`` and ``os``, whatever they
+    are imported as."""
+    import provider as app
+    import review
+    from apps_testkit.ways_out import ways_out
+
+    imports, reached = ways_out([app.__file__, review.__file__], ("asyncio", "os"))
+    assert imports == {
+        "__future__", "asyncio", "dataclasses", "json", "logging", "math", "os", "pathlib",
+        "personalclaw.sdk.model", "personalclaw.sdk.security", "personalclaw.sdk.tool",
+        "personalclaw.sdk.util", "re", "review", "shutil", "time", "typing",
+    }, imports
+    assert reached == {
+        "asyncio.Semaphore", "asyncio.create_subprocess_exec", "asyncio.gather",
+        "asyncio.subprocess.PIPE", "asyncio.wait_for", "os.fsync",
+    }, reached
 
 
 @pytest.mark.asyncio

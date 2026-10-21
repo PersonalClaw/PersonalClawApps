@@ -153,13 +153,18 @@ is posted anywhere: the app has no network permission with which to post it.
 | `agent` | `tools`: each cycle's agent writes the campaign and starts subagents, and the `read` tier refuses both |
 | `network` | declared **false** — the app opens no connection of its own |
 
+Each tool also declares what a call does past this machine (`consequences`): none sends
+anything to anyone but you or spends money, so none of its calls asks you a second time for
+either. PersonalClaw reads that declaration from 0.2.3, the oldest release this version
+installs on.
+
 ## Tests
 
 ```bash
 pytest research-lab
 ```
 
-30 tests, no network, no gateway, and no pytest plugins required — `asyncio.run` rather
+33 tests, no network, no gateway, and no pytest plugins required — `asyncio.run` rather
 than `pytest.mark.asyncio`, so a bare `pytest` runs them. The one to read first is
 `test_a_campaign_runs_multiple_unattended_cycles_and_synthesises_a_report`: it drives the
 loop the way the cron's prompt does, then asserts the report on disk.
@@ -191,7 +196,7 @@ Stated plainly, because the difference matters.
 
 **Validated:**
 
-- 30 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
+- 33 tests green under the repo's `tests` job posture (core installed, no vendor SDKs,
   `PERSONALCLAW_SKIP_APP_BACKENDS=1`).
 - `app.json` parses against core's own `AppManifest` and round-trips stably.
 - SDK-only imports (`personalclaw.sdk.{tool,util,cli}`) — clean under the repo's

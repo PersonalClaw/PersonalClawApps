@@ -130,6 +130,52 @@ def test_the_cycle_runs_at_the_least_agent_tier_its_work_needs() -> None:
     assert asks == [], f"the cycle would ask the owner on every tick for {asks}"
 
 
+#: What a call to each tool may do past this machine (``ToolDefinition.consequences``): "sends"
+#: when it sends something to anyone but the owner, "spends" when it spends money, () for
+#: neither. A tool that declares nothing is taken to be able to do both, so every call to it that
+#: is not a read asks the owner a second time before it runs. Each tool keeps the campaign
+#: ledger; the research itself is the host agent's own calls.
+CONSEQUENCES = {
+    "research_open": (),
+    "research_list": (),
+    "research_next": (),
+    "research_record": (),
+    "research_report": (),  # writes the report into the campaign's folder
+}
+
+
+def test_each_tool_declares_what_a_call_does_past_this_machine() -> None:
+    declared = {tool.name: tool.consequences for tool in tools(create_provider({}))}
+    assert declared == CONSEQUENCES
+
+
+def test_every_tool_changes_only_the_campaign_ledger(home) -> None:
+    """What earns each tool its (): the manifest grants no network, and every tool runs and leaves
+    nothing behind but the campaign's own folder."""
+    raw = json.loads((Path(__file__).parent / "app.json").read_text(encoding="utf-8"))
+    assert raw["permissions"]["network"] is False
+    provider = create_provider({"cycle_breadth": 1})
+    before = {p for p in home.rglob("*") if p.is_file()}
+    opened = call(provider, "research_open", question="Is a broker worth it?",
+                  sub_questions=["What does it cost?"], cycle_budget=2)
+    assert opened.success, opened.error
+    campaign = opened.metadata["campaign"]
+    advance = call(provider, "research_next", campaign=campaign)
+    node = advance.metadata["worklist"][0]["id"]
+    calls = [
+        ("research_list", {}),
+        ("research_record", {"campaign": campaign, "node": node, "finding": "It costs."}),
+        ("research_report", {"campaign": campaign}),
+    ]
+    assert {"research_open", "research_next"} | {name for name, _ in calls} == set(CONSEQUENCES)
+    for name, args in calls:
+        result = call(provider, name, **args)
+        assert result.success, (name, result.error)
+    made = {p for p in home.rglob("*") if p.is_file()} - before
+    assert made
+    assert all(p.is_relative_to(campaigns_dir(home) / campaign) for p in made), sorted(made)
+
+
 def test_an_unknown_tool_fails_legibly() -> None:
     result = call(create_provider({}), "research_teleport")
     assert not result.success

@@ -36,6 +36,11 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 - `web_fetch` — SSRF-guarded page fetch + extraction.
 - `web_extract` — structured extraction from a page.
 
+Each tool also declares what a call does past this machine (`consequences`): none sends
+anything to anyone but you or spends money, so none of its calls asks you a second time for
+either. PersonalClaw reads that declaration from 0.2.3, the oldest release this version
+installs on.
+
 ## Network
 
 Reaches the pages it is asked to fetch or read, on any public host, through PersonalClaw's egress guard (Settings → Security → Network egress).
