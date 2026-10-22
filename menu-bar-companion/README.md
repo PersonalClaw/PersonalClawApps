@@ -39,6 +39,16 @@ the doorbell and changes the badge to what **HTTP** said (3), with the sentinel 
 from everything rendered — and the same test file contains a payload-consuming reader
 that *does* surface the 99, so the assertion is discriminating rather than vacuous.
 
+**A burst of frames is one read.** The socket hears every frame the gateway sends, a
+streamed chat's every chunk among them, and it cannot tell one from another without reading
+it. So a ring only says a read is wanted (`coalesce.Coalescer.ring()`, which takes no
+argument either), and one refresher thread does every read: at once when a second
+(`coalesce.GAP_SECS`) has passed since the last read, otherwise when it has. A burst of any
+size is one read at its start and at most one at its end, a steady stream is one read a
+second, and the first change after a quiet spell, a new approval among them, shows at once.
+The floor poll and **Refresh now** ring the same way, so no read runs on the socket's thread. `test_coalesce.py` sends a burst of 50 frames through the real
+doorbell and counts 4 requests, where a read per frame would be 100.
+
 Control frames are not rings: the gateway's 30-second heartbeat `PING` is answered with a
 `PONG` and does **not** trigger a refetch, or the socket would just be a 30-second poll
 wearing a socket's clothes.
@@ -211,6 +221,7 @@ PersonalClaw desktop app; it is a small client of the same gateway.
 - `menubar_companion/brief.py` — what an approval shows before Approve, whole or not at all.
 - `menubar_companion/model.py` — the rendered state; every number derived.
 - `menubar_companion/doorbell.py` — the one socket, payload-blind, backoff-reconnecting.
+- `menubar_companion/coalesce.py` — the refresher: one read per burst of rings.
 - `menubar_companion/notify.py` — native notifications and the mute gate.
 - `menubar_companion/tray.py` — the menu as data, plus the status-item host seam.
 - `menubar_companion/app.py` — the wiring; the only `Doorbell(...)` in the package.
