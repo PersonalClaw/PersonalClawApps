@@ -95,7 +95,7 @@ def _run_status_item(host, companion, settings: Settings) -> int:
                 settings,
                 on_resolve=companion.resolve,
                 on_toggle_mute=companion.toggle_mute,
-                on_refresh=companion.refresh_and_notify,
+                on_refresh=companion.coalescer.ring,
                 open_url=_open_url,
             )
             self.menu.clear()

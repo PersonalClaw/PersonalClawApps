@@ -1,9 +1,14 @@
-"""Wiring: one client, one model, one notifier, ONE doorbell.
+"""Wiring: one client, one model, one notifier, ONE doorbell, one refresher.
 
 The object graph is built here and nowhere else, which is what makes "exactly one
 ``/api/ws`` connection" checkable rather than aspirational — there is a single
 :class:`~menubar_companion.doorbell.Doorbell` construction in the whole package, and
 opening the menu or refreshing goes nowhere near it.
+
+Every read goes one way: the doorbell, the floor poll and "Refresh now" each ring the
+:class:`~menubar_companion.coalesce.Coalescer`, and only its refresher thread calls
+:meth:`Companion.refresh_and_notify`. So a burst of frames is one read, and no HTTP runs on
+the socket's thread.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from menubar_companion.api import GatewayClient
+from menubar_companion.coalesce import Coalescer
 from menubar_companion.doorbell import Doorbell
 from menubar_companion.model import CompanionModel, RefreshResult
 from menubar_companion.notify import Notifier
@@ -34,14 +40,17 @@ class Companion:
     #: Bumped on every refresh, whatever triggered it. A host redraws on change.
     revision: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    #: Where every ring goes, and the one thread that reads (``build_companion`` sets it).
+    coalescer: Coalescer = field(init=False, repr=False)
 
     # ── the one thing the socket is allowed to do ──
 
     def refresh_and_notify(self) -> RefreshResult:
         """Re-read over HTTP, then notify about what is NEW.
 
-        This is the doorbell's ring callback. It takes no arguments — see
-        ``doorbell`` for why that signature is the guarantee and not a detail.
+        This is the refresher's read (``coalesce``), which the doorbell's ring asks for. It
+        takes no arguments — see ``doorbell`` for why that signature is the guarantee and not
+        a detail.
         """
         with self._lock:
             result = self.model.refresh()
@@ -83,6 +92,7 @@ def build_companion(
     sleep: Callable[[float], None] = time.sleep,
     opener=None,
     runner=None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> Companion:
     """Assemble the app. The ONLY ``Doorbell(...)`` call in the package."""
     cfg = settings or Settings.load()
@@ -107,10 +117,11 @@ def build_companion(
             sleep=sleep,
         ),
     )
-    # The ring callback needs the Companion, and the Companion needs the Doorbell, so one
-    # of the two is installed after construction. It is installed through the same
-    # zero-argument gate the constructor used, so the payload-blindness rail still holds.
-    companion.doorbell.set_ring(companion.refresh_and_notify)
+    # The read and the ring both need the Companion, so both are installed after it is built,
+    # through the same zero-argument gate the Doorbell's constructor used: the refresher's read
+    # and the ring that asks for it take nothing, so the payload-blindness rail still holds.
+    companion.coalescer = Coalescer(companion.refresh_and_notify, clock=clock)
+    companion.doorbell.set_ring(companion.coalescer.ring)
     companion.doorbell.set_state_callback(companion.note_link_state)
     return companion
 
@@ -119,7 +130,8 @@ def start_background(
     companion: Companion,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> list[threading.Thread]:
-    """Run the socket and the floor poll. Daemon threads: the host owns the main loop.
+    """Run the socket, the refresher and the floor poll. Daemon threads: the host owns the
+    main loop.
 
     The floor poll is NOT a second socket and not a fallback for reading payloads — it
     exists because a change that produces no frame at all (or a frame filtered before it
@@ -130,6 +142,12 @@ def start_background(
             target=companion.doorbell.run_forever,
             args=(should_stop,),
             name="companion-doorbell",
+            daemon=True,
+        ),
+        threading.Thread(
+            target=companion.coalescer.run_forever,
+            args=(should_stop,),
+            name="companion-refresher",
             daemon=True,
         ),
         threading.Thread(
@@ -147,7 +165,7 @@ def start_background(
 def _poll_floor(companion: Companion, should_stop: Callable[[], bool]) -> None:
     interval = max(5, int(companion.settings.poll_seconds))
     while not should_stop():
-        companion.refresh_and_notify()
+        companion.coalescer.ring()
         for _ in range(interval):
             if should_stop():
                 return
