@@ -1,7 +1,7 @@
 """The menu surface: what a click actually calls, and what the badge shows.
 
 These assert CALL SITES — that the Approve item fires ``on_resolve(id, "approve")`` and
-the needs-input item opens the deep link — rather than that a resolve function exists.
+every other waiting item opens where it is answered — rather than that a resolve function exists.
 
 And they assert what stands above Approve: the brief of the call, the same parts the
 dashboard's approval card shows, each whole. A row whose brief cannot be read or cannot fit
@@ -10,11 +10,19 @@ offers "Review in PersonalClaw" instead, never a blind Approve.
 
 from __future__ import annotations
 
-import json
 import urllib.parse
 
 import pytest
-from _rows import DENY_ENDS_THE_TURN, REACH, approval, radius
+from _rows import (
+    DENY_ENDS_THE_TURN,
+    REACH,
+    approval,
+    lists,
+    loop_question,
+    radius,
+    running,
+    waiting_approval,
+)
 from _ws_fakes import FakeOpener
 from menubar_companion.app import build_companion
 from menubar_companion.settings import Settings
@@ -24,31 +32,28 @@ BASE = "http://127.0.0.1:10000"
 TOKEN = "fake-owner-token"
 APPROVALS = [approval(id="a1")]
 QUESTION = "Should the release use the staging database or the production one?"
-LOOPS = {
-    "loops": [
-        {"id": "L1", "name": "ship it", "status": "running"},
-        {
-            "id": "L2",
-            "name": "which db?",
-            "status": "needs_input",
-            "pending_question": {"question": QUESTION, "ts": 1_700_000_000.0},
-        },
-    ]
-}
+#: A loop waiting on your answer, after the approvals in the list's order.
+ASKS = loop_question("L2", "which db?", QUESTION)
+RUNNING = [
+    running("loop:L1", "ship it", "Running"),
+    running("loop:L2", "which db?", "Needs your answer", phase="input"),
+]
+#: The loop's row: its kind and its question, cut to the row, the whole of it under the row.
+ASKS_ROW = "  Loop: Should the release use the staging database or the …"
 
 #: What a row the menu cannot read shows, and what it offers.
 UNREADABLE = "This menu can't read this approval's details."
 REVIEW = "Review in PersonalClaw"
 
 
+def _waiting(approvals: list | None = None) -> list:
+    """The waiting list: each approval registry row as its item, then the loop's question."""
+    rows = APPROVALS if approvals is None else approvals
+    return [*(waiting_approval(row) for row in rows), ASKS]
+
+
 def _companion(approvals: list | None = None, post: object = b'{"ok": true}'):
-    opener = FakeOpener(
-        {
-            "/api/approvals": json.dumps(APPROVALS if approvals is None else approvals).encode(),
-            "/api/loops": json.dumps(LOOPS).encode(),
-            "/api/approvals/": post,
-        }
-    )
+    opener = FakeOpener({**lists(_waiting(approvals), RUNNING), "/api/approvals/": post})
     companion = build_companion(
         Settings(url=BASE, token=TOKEN),
         opener=opener,
@@ -105,12 +110,14 @@ def _menu(companion, resolved=None, opened=None, muted_calls=None):
     )
 
 
-def test_the_menu_shows_approvals_needs_input_and_running():
+def test_the_menu_shows_what_waits_on_you_and_what_is_running():
     companion, _ = _companion()
     titles = _titles(_menu(companion))
-    assert "Approvals waiting (1)" in titles
-    assert "Needs your input (1)" in titles
-    assert "Running (1)" in titles, "the needs-input loop is not double-counted as running"
+    assert "Waiting on you (2)" in titles
+    assert "Running (2)" in titles
+    assert titles.index("Waiting on you (2)") < titles.index("Running (2)"), "what waits first"
+    assert "  ship it — Running" in titles
+    assert "  which db? — Needs your answer" in titles
 
 
 # ── the brief stands above Approve ──
@@ -133,8 +140,8 @@ def test_the_brief_is_shown_before_approve():
 
     # Nothing answers an approval from the top of the menu: only from under its brief.
     assert not [i for i in items if i.title.strip() in ("Approve", "Deny")], _titles(items)
-    (approval_row,) = [i for i in items if "bash" in i.title]
-    assert approval_row.title == "  bash — from loop “Fix the README”"
+    (approval_row,) = [i for i in items if i.children]
+    assert approval_row.title == "  Approval: Clear the stale build cache"
     titles = _titles(_approval_menu(items))
     assert titles[-3:] == ["Approve", "Deny", REVIEW], titles
     brief = titles[:-3]
@@ -279,14 +286,16 @@ def test_text_that_prints_nothing_is_shown_as_its_code_point():
 # ── what the menu opens ──
 
 
-def test_the_needs_input_item_opens_the_loop_deep_link():
+def test_a_waiting_item_opens_where_it_is_answered():
     companion, _ = _companion()
     opened: list[str] = []
     items = _menu(companion, opened=opened)
 
-    _find(items, "which db?").action()
+    (row,) = [i for i in items if i.title == ASKS_ROW]
+    row.action()
 
     assert opened == [f"{BASE}/#/loops/L2"]
+    assert row.url == f"{BASE}/#/loops/L2"
 
 
 def test_no_link_the_menu_opens_carries_the_token():
@@ -300,6 +309,8 @@ def test_no_link_the_menu_opens_carries_the_token():
 
     assert sorted(opened) == [
         f"{BASE}/#/companion?approval=dashboard%3Achat-1%3Acall-1",
+        f"{BASE}/#/loops/L1",
+        f"{BASE}/#/loops/L2",
         f"{BASE}/#/loops/L2",
     ], opened
     for url in opened:
@@ -310,10 +321,11 @@ def test_no_link_the_menu_opens_carries_the_token():
 def test_the_menu_shows_what_a_loop_asks_under_it():
     companion, _ = _companion()
     titles = _titles(_menu(companion))
-    at = titles.index("  which db?")
-    assert titles[at + 1 : at + 3] == [
+    at = titles.index(ASKS_ROW)
+    assert titles[at + 1 : at + 4] == [
         "    Should the release use the staging database or the production",
         "    one?",
+        "    From loop “which db?”",
     ], titles
 
 
@@ -337,7 +349,7 @@ def test_a_failed_write_is_visible_in_the_menu_it_was_clicked_in():
     titles = _titles(_menu(companion))
     warning = [t for t in titles if t.startswith("⚠")]
     assert warning and "503" in warning[0], titles
-    assert "Approvals waiting (1)" in titles, "the row did not optimistically vanish"
+    assert "Waiting on you (2)" in titles, "the row did not optimistically vanish"
 
     # Vacuity floor: no warning line exists when nothing failed.
     clean, _ = _companion()
@@ -356,12 +368,7 @@ def test_the_settings_item_toggles_mute_and_relabels():
 
 def test_muting_suppresses_notifications_for_new_items():
     posted: list[list[str]] = []
-    opener = FakeOpener(
-        {
-            "/api/approvals": json.dumps(APPROVALS).encode(),
-            "/api/loops": json.dumps(LOOPS).encode(),
-        }
-    )
+    opener = FakeOpener(lists(_waiting(), RUNNING))
     companion = build_companion(
         Settings(url=BASE, token=TOKEN),
         opener=opener,
@@ -370,7 +377,7 @@ def test_muting_suppresses_notifications_for_new_items():
     companion.notifier._osascript = "/usr/bin/osascript"  # pretend macOS
 
     companion.refresh_and_notify()
-    assert companion.notifier.posted == 2, "one new approval + one new needs-input loop"
+    assert companion.notifier.posted == 2, "one new approval + one new loop question"
 
     companion.toggle_mute()
     companion.model._seen.clear()  # make the same items look new again
@@ -384,7 +391,7 @@ def test_the_badge_on_the_status_item_is_the_derived_count():
     assert companion.model.badge_text == "2"
     text = headless_render(companion.model, companion.settings)
     assert text.splitlines()[0] == "PersonalClaw • badge 2"
-    assert "Approvals waiting: 1" in text and "Needs your input: 1" in text
+    assert "Waiting on you: 2" in text and "Running: 2" in text
 
 
 def test_the_headless_menu_prints_the_brief_and_the_question_and_never_the_token():
@@ -394,7 +401,7 @@ def test_the_headless_menu_prints_the_brief_and_the_question_and_never_the_token
     assert "      Permission needed to run bash" in text
     assert "      Can: writes files, runs a command · Risk: Destructive" in text
     assert f"[Approve] [Deny] [{REVIEW} → {BASE}/#/companion?approval=a1]" in text
-    assert f"  • which db? → {BASE}/#/loops/L2" in text
+    assert f"{ASKS_ROW.replace('  ', '  • ', 1)} → {BASE}/#/loops/L2" in text
     assert "      Should the release use the staging database or the production" in text
     assert TOKEN not in text
 

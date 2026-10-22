@@ -13,16 +13,16 @@ moment a wanted read falls due, it takes its turn, as a refresher thread that is
 
 from __future__ import annotations
 
-import json
 import threading
 
 import pytest
+from _rows import approval, lists, running, waiting_approval
 from _ws_fakes import HANDSHAKE_OK, FakeOpener, FakeSocket, server_frame
 from menubar_companion.coalesce import GAP_SECS, Coalescer
 from menubar_companion.doorbell import OP_CLOSE, OP_TEXT
 
-HTTP_APPROVALS = json.dumps([{"id": "http-a1", "tool": "bash"}])
-HTTP_LOOPS = json.dumps({"loops": [{"id": "L1", "name": "ship it", "status": "running"}]})
+HTTP_WAITING = [waiting_approval(approval(id="http-a1"))]
+HTTP_RUNNING = [running("loop:L1", "ship it", "Running")]
 
 
 class FakeClock:
@@ -195,9 +195,7 @@ def test_a_read_that_raises_is_kept_and_the_refresher_carries_on():
 
 
 def _opener() -> FakeOpener:
-    return FakeOpener(
-        {"/api/approvals": HTTP_APPROVALS.encode(), "/api/loops": HTTP_LOOPS.encode()}
-    )
+    return FakeOpener(lists(HTTP_WAITING, HTTP_RUNNING))
 
 
 class _StopAfter:

@@ -4,14 +4,19 @@ A macOS menu-bar presence for a PersonalClaw you already run. It sits in the sta
 on **your** Mac, shows what is happening and — more to the point — what is *waiting on
 you*:
 
-- **Live run rows** — every loop that has not ended, with its status.
-- **Pending approvals**, each opening the brief of the call — what it would run, where it
-  came from, what it can touch, what **Deny** does — above its **Approve** and **Deny**.
-- **Needs-input deep links** — what the loop asks, and one click to its page
-  (`#/loops/<id>`) in the dashboard.
-- **A badge** counting exactly what is blocked on you: pending approvals + runs needing
-  input. Nothing else.
-- **Mute notifications** from the Settings item.
+- **Everything waiting on you**, every kind, in the order PersonalClaw keeps everywhere (what
+  answering it lets happen, then how long it has waited), each row its kind and one line in
+  its source's words, as Home and the desktop menu bar say it: `Approval: …`, `Question: …`,
+  `Loop: …`, `Workflow: …`, `Automation: …`, `Browser: …`, `Plan: …`, `Control bridge: …`.
+- **A tool approval** opens the brief of the call — what it would run, where it came from,
+  what it can touch, what **Deny** does — above its **Approve** and **Deny**.
+- **Every other kind** opens where it is answered in the dashboard, one click away (a
+  loop's question its loop, a workflow's gate its run), with what it asks under its row.
+- **Everything running**, each saying what it is doing, a click from its page.
+- **A badge** counting everything waiting on you, every kind. Nothing else.
+- **Notifications** for each new thing waiting on you that PersonalClaw says may interrupt
+  you now (not muted, not in your quiet hours), and **Mute notifications** from the Settings
+  item.
 
 **Menu Bar Companion** is a **client app** (`platform.installMode: "client"`,
 `platform.os: ["darwin"]`). PersonalClaw does not install it on the server; the App
@@ -32,7 +37,7 @@ That is enforced structurally rather than by convention:
 |---|---|
 | `doorbell.read_frame(sock) -> int` | Returns the **opcode**. The payload is received and dropped before the function returns, so there is no return path a payload could travel on. |
 | `Doorbell(on_ring=…)` | Invoked as `on_ring()` with **zero arguments**, and a callback that *requires* an argument is refused at construction (`TypeError`). A payload-consuming design cannot be installed. |
-| `CompanionModel.refresh()` | Takes no server-supplied argument either. It re-reads `GET /api/loops` and `GET /api/approvals` and replaces state from the HTTP response. |
+| `CompanionModel.refresh()` | Takes no server-supplied argument either. It re-reads `GET /api/waiting` and `GET /api/running` and replaces state from the HTTP response. |
 
 `test_doorbell.py` proves it end to end: a frame carrying 99 fabricated approvals rings
 the doorbell and changes the badge to what **HTTP** said (3), with the sentinel absent
@@ -61,8 +66,16 @@ it is the guarantee that a change which produces no frame at all still lands.
 
 ## Everything shown is derived
 
-The badge is a `@property` over the same two lists the menu renders, computed on every
-read. There is no counter kept beside them — a count maintained next to a list is two
+What it shows is read from two lists and nothing else: `GET /api/waiting`, everything waiting
+on you, and `GET /api/running`, everything running. They are core's, and the core features the
+manifest requires (`requiresCoreFeatures: ["running-list", "waiting-list"]`), so a PersonalClaw
+built before them refuses to install this version rather than serving it an empty menu. The
+menu keeps the list's order and never sorts it again. A kind of item this version has no name
+for is still listed and counted, as `Waiting on you`, and a source the gateway could not read
+is said (`⚠ Could not read: …`), never shown as nothing waiting.
+
+The badge is a `@property` over the same waiting list the menu renders, computed on every
+read. There is no counter kept beside it — a count maintained next to a list is two
 facts that can disagree, and the one the user sees is the wrong one.
 `model.INSTANCE_ATTRS` pins the model's whole attribute set so that adding a cache later
 fails a test instead of drifting quietly.
@@ -71,7 +84,7 @@ fails a test instead of drifting quietly.
 
 Each pending approval is a row that opens a submenu, and **Approve** is only ever inside it,
 under the brief of the call. The brief is what the dashboard's approval card shows, from the
-same fields of `GET /api/approvals`, in the same words:
+same fields its waiting item carries (the approval registry's own), in the same words:
 
 ```
 Permission needed to run bash
@@ -117,21 +130,24 @@ If the POST fails:
 ```json
 "permissions": {
   "network": true,
-  "api": ["/api/loops", "/api/approvals", "/api/ws"],
-  "events": ["approval", "approval_resolved"]
-}
+  "api": ["/api/waiting", "/api/running", "/api/approvals", "/api/ws"],
+  "events": ["waiting_changed", "running_changed"]
+},
+"requiresCoreFeatures": ["running-list", "waiting-list"]
 ```
 
 That is the whole list, and each entry is used:
 
 - `network` — its one connection is your own gateway, at the URL you give it, which can be
   on another machine. It reaches nothing else.
-- `/api/loops` — the live run rows and the needs-input rows (read-only).
-- `/api/approvals` — the pending approvals, and the one write this app makes.
+- `/api/waiting` — everything waiting on you, the rows and the badge (read-only).
+- `/api/running` — everything running (read-only).
+- `/api/approvals` — the one write this app makes: Approve or Deny on a tool approval.
 - `/api/ws` — the single doorbell connection.
-- `events` — the two approval event families. The app rings on *any* frame and reads no
-  payload, so it deliberately does not claim a broader event set; the floor poll covers
-  anything a narrow grant would filter out.
+- `events` — the two lists' own frames, each saying only that its list moved. The app rings
+  on *any* frame and reads no payload, so it deliberately does not claim a broader event set;
+  the floor poll covers anything a narrow grant would filter out.
+- `requiresCoreFeatures` — the two lists, by the names core gives them.
 
 Nothing else is claimed. In particular:
 
@@ -243,8 +259,8 @@ core's own (`personalclaw.approval_brief`), so the menu cannot drift from the da
 Install consent names these before anything installs (the manifest's `launches`). Both run on
 your Mac, from the companion's own process:
 
-- `open` opens the PersonalClaw dashboard in your browser when you pick a loop that needs
-  your input, or **Review in PersonalClaw** on an approval, from the menu.
+- `open` opens the PersonalClaw dashboard in your browser when you pick something waiting on
+  you or something running, or **Review in PersonalClaw** on an approval, from the menu.
 - `osascript` shows a macOS notification, unless you mute notifications in its Settings
   menu.
 

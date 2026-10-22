@@ -41,8 +41,8 @@ class MenuItem:
 
     title: str
     action: Callable[[], None] | None = None
-    #: A URL to open (needs-input deep links, an approval's review). Kept as data so the
-    #: menu is assertable without a browser and without a toolkit.
+    #: A URL to open (where an item is answered, a piece of work's page, an approval's review).
+    #: Kept as data so the menu is assertable without a browser and without a toolkit.
     url: str = ""
     #: The submenu this item opens, in order (an approval's brief and its answers).
     children: tuple["MenuItem", ...] = ()
@@ -64,37 +64,42 @@ def build_menu(
     """
     items: list[MenuItem] = []
 
-    approvals = model.pending_approvals
-    items.append(MenuItem(title=f"Approvals waiting ({len(approvals)})"))
-    for approval in approvals:
-        # Each approval opens a submenu: its brief first, then what may answer it. There
-        # is no way to Approve except from under the brief.
+    rows = model.waiting_rows
+    items.append(MenuItem(title=f"Waiting on you ({len(rows)})"))
+    for row in rows:
+        if row.approval is not None:
+            # Each approval opens a submenu: its brief first, then what may answer it. There
+            # is no way to Approve except from under the brief.
+            items.append(
+                MenuItem(
+                    title=f"  {row.title}",
+                    children=_approval_menu(row.approval, on_resolve, open_url),
+                )
+            )
+            continue
+        # Every other kind is answered where the list says: one click lands on it.
+        items.append(
+            MenuItem(title=f"  {row.title}", action=_opener(open_url, row.link), url=row.link)
+        )
+        # What it asks, under it: the first lines when its row cuts them, and where it came from.
+        items.extend(MenuItem(title=f"    {line}") for line in row.text_lines)
+        if row.source:
+            items.append(MenuItem(title=f"    {row.source}"))
+
+    runs = model.runs
+    items.append(MenuItem(title=f"Running ({len(runs)})"))
+    for run in runs:
         items.append(
             MenuItem(
-                title=f"  {approval.title}",
-                children=_approval_menu(approval, on_resolve, open_url),
+                title=f"  {run.name} — {run.line}" if run.line else f"  {run.name}",
+                action=_opener(open_url, run.link),
+                url=run.link,
             )
         )
 
-    blocked = model.needs_input
-    items.append(MenuItem(title=f"Needs your input ({len(blocked)})"))
-    for run in blocked:
-        # The deep link is the point of this section: one click lands on the loop.
-        items.append(
-            MenuItem(
-                title=f"  {run.label}",
-                action=_opener(open_url, run.deep_link),
-                url=run.deep_link,
-            )
-        )
-        # What it asks, under it: the first lines, the whole of it a click away.
-        items.extend(MenuItem(title=f"    {line}") for line in run.question_lines)
-
-    running = [r for r in model.runs if not r.needs_input]
-    items.append(MenuItem(title=f"Running ({len(running)})"))
-    for run in running:
-        items.append(MenuItem(title=f"  {run.label} — {run.status}"))
-
+    if model.unreadable_line:
+        # A source the gateway could not read is said, never shown as nothing waiting.
+        items.append(MenuItem(title=f"⚠ {model.unreadable_line}"))
     if model.last_error:
         # A failed write or read is shown IN THE MENU the click happened in.
         items.append(MenuItem(title=f"⚠ {model.last_error}"))

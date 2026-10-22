@@ -299,7 +299,14 @@ def _title(row: Mapping[str, object]) -> str:
     tool = row.get("tool")
     tool = tool if isinstance(tool, str) and tool.strip() else "An approval"
     source = row.get("source_label")
-    text = f"{tool} — from {source}" if isinstance(source, str) and source.strip() else tool
+    return one_line(f"{tool} — from {source}" if isinstance(source, str) and source.strip() else tool)
+
+
+def one_line(text: str) -> str:
+    """*text* as one menu row: its whitespace folded, cut at a word to fit, ending ``…`` when cut.
+
+    Only a label: the whole of what it names is under it, or a click away.
+    """
     # Only the head that could fill the row is read: the rest is cut anyway.
     flat = " ".join(visible(text[: 4 * WIDTH]).split())
     if len(flat) <= WIDTH:

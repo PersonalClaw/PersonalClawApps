@@ -34,7 +34,7 @@ import urllib.error
 from pathlib import Path
 
 import pytest
-from _rows import approval
+from _rows import approval, lists, loop_question, waiting_approval
 from _ws_fakes import FakeOpener
 from menubar_companion.settings import Settings
 
@@ -42,22 +42,16 @@ APP_DIR = Path(__file__).resolve().parent
 RAW = json.loads((APP_DIR / "app.json").read_text(encoding="utf-8"))
 CLIENT_INSTALL = RAW["platform"]["clientInstall"]
 
-APPROVALS = [approval(id="a1")]
-LOOPS = {"loops": [{"id": "L2", "name": "which db?", "status": "needs_input"}]}
+WAITING = [waiting_approval(approval(id="a1")), loop_question("L2", "which db?", "prod or dev?")]
 
 
 def _healthy_opener() -> FakeOpener:
-    return FakeOpener(
-        {
-            "/api/approvals": json.dumps(APPROVALS).encode(),
-            "/api/loops": json.dumps(LOOPS).encode(),
-        }
-    )
+    return FakeOpener(lists(WAITING))
 
 
 def _unreachable_opener() -> FakeOpener:
     refused = urllib.error.URLError(OSError("Connection refused"))
-    return FakeOpener({"/api/loops": refused, "/api/approvals": refused})
+    return FakeOpener({"/api/waiting": refused, "/api/running": refused})
 
 
 def _inject_opener(monkeypatch, launcher, opener) -> None:
@@ -235,10 +229,9 @@ def test_check_exits_0_and_prints_the_menu_it_would_show(monkeypatch, capsys):
 
     assert launcher.main(["--check"]) == 0
     out = capsys.readouterr().out
-    # 1 pending approval + 1 needs-input loop — the same arithmetic the badge uses.
+    # 1 pending approval + 1 loop's question — the same arithmetic the badge uses.
     assert "PersonalClaw • badge 2" in out
-    assert "Approvals waiting: 1" in out
-    assert "Needs your input: 1" in out
+    assert "Waiting on you: 2" in out
     # It also reports whether this machine can draw the item, rather than assuming.
     assert "status-item host:" in out
 
@@ -246,7 +239,7 @@ def test_check_exits_0_and_prints_the_menu_it_would_show(monkeypatch, capsys):
 def test_check_prints_the_brief_it_would_show_and_never_the_token(monkeypatch, capsys):
     """What ``--check`` prints may be pasted anywhere: it never carries the owner token.
 
-    It used to print every needs-input link with the token in it.
+    It used to print every link to a loop that asked with the token in it.
     """
     import run as launcher
 
@@ -257,7 +250,7 @@ def test_check_prints_the_brief_it_would_show_and_never_the_token(monkeypatch, c
     assert launcher.main(["--check"]) == 0
     out = capsys.readouterr().out
     assert "Permission needed to run bash" in out
-    assert "• which db? → http://127.0.0.1:10000/#/loops/L2" in out
+    assert "• Loop: prod or dev? → http://127.0.0.1:10000/#/loops/L2" in out
     assert token not in out
 
 

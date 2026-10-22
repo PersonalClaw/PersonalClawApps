@@ -107,8 +107,8 @@ unlisted.
   on a synced timeline).
 - **Client-install companions** (`client-install`, 2) — `browser-connector`
   (attach your own everyday browser to a gateway you already run) and
-  `menu-bar-companion` (a macOS status-bar view of running loops and the
-  approvals waiting on you). Both declare `platform.installMode: "client"`: they
+  `menu-bar-companion` (a macOS status-bar view of everything waiting on you
+  and everything running). Both declare `platform.installMode: "client"`: they
   install on **your** machine, not the server, so the Store hands you a
   copy-paste command instead of installing them.
 

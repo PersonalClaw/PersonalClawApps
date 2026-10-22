@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from _rows import approval, lists, loop_question, running, waiting_approval
 from _ws_fakes import HANDSHAKE_OK, FakeOpener, FakeSocket, server_frame
 from menubar_companion.api import GatewayClient
 from menubar_companion.doorbell import (
@@ -25,17 +26,16 @@ from menubar_companion.doorbell import (
 )
 from menubar_companion.model import CompanionModel
 
-# What HTTP says: two approvals, one loop needing input → badge 3.
-HTTP_APPROVALS = json.dumps([{"id": "http-a1", "tool": "bash"}, {"id": "http-a2", "tool": "write"}])
-HTTP_LOOPS = json.dumps(
-    {
-        "loops": [
-            {"id": "L-live", "name": "ship it", "status": "running"},
-            {"id": "L-blocked", "name": "which env?", "status": "needs_input"},
-            {"id": "L-done", "name": "old", "status": "complete"},
-        ]
-    }
-)
+# What HTTP says: two approvals and a loop's question waiting on you → badge 3.
+HTTP_WAITING = [
+    waiting_approval(approval(id="http-a1", tool="bash")),
+    waiting_approval(approval(id="http-a2", tool="write")),
+    loop_question("L-blocked", "which env?", "staging or prod?"),
+]
+HTTP_RUNNING = [
+    running("loop:L-live", "ship it", "Running"),
+    running("loop:L-blocked", "which env?", "Needs your answer", phase="input"),
+]
 
 # What the SOCKET says: a lie, loudly. If any of this shows up in the menu, the socket is
 # being read as a data channel.
@@ -53,9 +53,7 @@ def _model(opener: FakeOpener) -> CompanionModel:
 
 
 def _opener() -> FakeOpener:
-    return FakeOpener(
-        {"/api/approvals": HTTP_APPROVALS.encode(), "/api/loops": HTTP_LOOPS.encode()}
-    )
+    return FakeOpener(lists(HTTP_WAITING, HTTP_RUNNING))
 
 
 # ── the headline rail ──
@@ -79,12 +77,16 @@ def test_ws_frame_payload_never_reaches_the_rendered_menu():
 
     # The frame DID ring — otherwise this test would pass by the socket doing nothing.
     assert bell.rings == 1
-    assert ("GET", "http://127.0.0.1:10000/api/approvals") in opener.calls
+    assert ("GET", "http://127.0.0.1:10000/api/waiting") in opener.calls
 
     # …and everything rendered came from HTTP.
-    assert model.badge == 3, "2 approvals + 1 needs_input, derived from the HTTP reads"
+    assert model.badge == 3, "2 approvals + 1 loop's question, derived from the HTTP reads"
     assert [r.id for r in model.pending_approvals] == ["http-a1", "http-a2"]
-    blob = json.dumps([vars(r) for r in model.pending_approvals] + [vars(r) for r in model.runs])
+    blob = json.dumps(
+        [vars(r) for r in model.pending_approvals]
+        + [{**vars(r), "approval": None} for r in model.waiting_rows]
+        + [vars(r) for r in model.runs]
+    )
     assert "WS-SENTINEL" not in blob, "socket payload leaked into the rendered model"
 
 
