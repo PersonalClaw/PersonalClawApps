@@ -12,19 +12,18 @@ PyObjC on a real Mac with a window server. See the README's "status-item host" s
 
 from __future__ import annotations
 
-import json
 import sys
 import types
 
 import pytest
-from _rows import approval
+from _rows import approval, lists, loop_question, waiting_approval
 from _ws_fakes import FakeOpener
 from menubar_companion.app import build_companion
 from menubar_companion.settings import Settings
 from menubar_companion.tray import resolve_host
 
 APPROVALS = [approval(id="a1")]
-LOOPS = {"loops": [{"id": "L2", "name": "which db?", "status": "needs_input"}]}
+ASKS = loop_question("L2", "which db?", "prod or dev?")
 
 
 class _FakeMenu:
@@ -113,13 +112,9 @@ def stub_rumps(monkeypatch):
 
 
 def _companion(approvals: list | None = None):
-    opener = FakeOpener(
-        {
-            "/api/approvals": json.dumps(APPROVALS if approvals is None else approvals).encode(),
-            "/api/loops": json.dumps(LOOPS).encode(),
-            "/api/approvals/": b'{"ok": true}',
-        }
-    )
+    rows = APPROVALS if approvals is None else approvals
+    waiting = [*(waiting_approval(row) for row in rows), ASKS]
+    opener = FakeOpener({**lists(waiting), "/api/approvals/": b'{"ok": true}'})
     companion = build_companion(
         Settings(url="http://127.0.0.1:10000", token="tok"),
         opener=opener,
@@ -178,18 +173,18 @@ def test_the_status_item_title_carries_the_derived_badge(stub_rumps, monkeypatch
     (timer,) = stub_rumps.Timer.instances
     assert timer.started and timer.interval == 1, "the redraw timer is armed"
     assert app.ran, "the host loop was entered"
-    # 1 approval + 1 needs-input loop = the same number the model derives.
+    # 1 approval + 1 loop's question = the same number the model derives.
     assert companion.model.badge == 2
     assert app.title == "PersonalClaw 2"
 
     top = app.menu.items()
     titles = [i.title for i in top]
-    assert "Approvals waiting (1)" in titles
+    assert "Waiting on you (2)" in titles
     assert "Settings: Mute notifications" in titles
     # The answers are drawn only inside the approval's submenu, under its brief.
     assert not [t for t in titles if t.strip() in ("Approve", "Deny")]
     (row,) = [i for i in top if i.items()]
-    assert row.title == "  bash — from chat “Release prep”"
+    assert row.title == "  Approval: Clear the stale build cache"
     sub = row.items()
     assert [i.title for i in sub][:2] == [
         "Permission needed to run bash",
@@ -219,7 +214,7 @@ def test_items_that_read_the_same_are_each_drawn(stub_rumps, monkeypatch):
     app = _run_host(stub_rumps, monkeypatch, companion)
 
     rows = [i for i in app.menu.items() if i.items()]
-    assert [r.title for r in rows] == ["  bash — from chat “Release prep”"] * 2
+    assert [r.title for r in rows] == ["  Approval: Clear the stale build cache"] * 2
     for row in rows:
         lines = [i.title for i in row.items()]
         assert lines.count("  echo done") == 2, lines

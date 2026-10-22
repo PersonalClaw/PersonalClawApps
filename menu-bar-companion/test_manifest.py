@@ -69,8 +69,8 @@ def test_permissions_are_exactly_the_minimum_this_app_uses():
     """The Store renders this block as the install-consent surface, so an unused grant
     is a real cost. Pinned exactly: adding one fails here."""
     perms = _parsed().permissions
-    assert perms.api == ["/api/loops", "/api/approvals", "/api/ws"]
-    assert perms.events == ["approval", "approval_resolved"]
+    assert perms.api == ["/api/waiting", "/api/running", "/api/approvals", "/api/ws"]
+    assert perms.events == ["waiting_changed", "running_changed"]
     # Everything else: not claimed.
     assert perms.storage is False, "client app: the platform never grants it a DATA_DIR"
     assert perms.network is True, "its one connection is your gateway, which may be another machine"
@@ -81,6 +81,14 @@ def test_permissions_are_exactly_the_minimum_this_app_uses():
     assert perms.appMessaging == []
     assert perms.storageShared is False
     assert perms.storageRead == []
+
+
+def test_it_requires_the_two_lists_it_reads():
+    """It reads only the waiting list and the running list for what it shows, so a PersonalClaw
+    built before them refuses to install it rather than serving it an empty menu."""
+    assert _parsed().requiresCoreFeatures == ["running-list", "waiting-list"]
+    features = pytest.importorskip("personalclaw.sdk.features")
+    assert {features.RUNNING_LIST, features.WAITING_LIST} == set(_parsed().requiresCoreFeatures)
 
 
 def test_vacuity_floor_the_permission_rail_notices_a_widened_grant():

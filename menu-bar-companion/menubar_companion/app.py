@@ -57,10 +57,8 @@ class Companion:
             self.revision += 1
         if not result.ok:
             return result
-        for approval_id in result.new_approvals:
-            self.notifier.post("Approval needed", f"A tool is waiting on you ({approval_id})")
-        for loop_id in result.new_needs_input:
-            self.notifier.post("A loop needs your input", loop_id)
+        for notice in result.notices:
+            self.notifier.post(notice.heading, notice.title)
         return result
 
     # ── menu actions ──

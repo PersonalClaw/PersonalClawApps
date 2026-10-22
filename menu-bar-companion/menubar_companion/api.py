@@ -2,9 +2,13 @@
 
 Three calls, and they are the whole contract:
 
-* ``GET  /api/loops``                     → ``{"loops": [...]}``
-* ``GET  /api/approvals``                 → ``[...]`` (a bare JSON array)
+* ``GET  /api/waiting``                   → ``{"waiting": [...], "unreadable": [...]}``
+* ``GET  /api/running``                   → ``{"running": [...], "finished": [...]}``
 * ``POST /api/approvals/{id}/{action}``   → ``{"ok": true}``
+
+The two lists are core's (``personalclaw.waiting``, ``personalclaw.running_now``): everything
+waiting on the owner, of every kind, and everything running, each with what it is doing. They are
+the core features ``waiting-list`` and ``running-list`` the manifest requires.
 
 The owner token rides the ``Authorization: Bearer`` header, on these three calls and on the
 ``/api/ws`` upgrade (``doorbell.handshake``). That is the gateway's carrier for a client that is
@@ -12,8 +16,8 @@ not a browser: it sets no cookie and binds no address, it is judged against the 
 the session (a ``?token=`` is a browser's sign-in link, refused once its link window has passed),
 and it keeps the token out of the URL, where every log that records a request line would keep it.
 
-No URL built here carries the token. The two the menu opens in a browser, a loop that needs your
-input and an approval to review, open the dashboard with no credential in them: the browser signs
+No URL built here carries the token. Every page the menu opens in a browser, where an item is
+answered and an approval to review, opens the dashboard with no credential in it: the browser signs
 in the way it always does there, with the session it already holds, else on the gateway's own
 sign-in page, which keeps the page it was opened at.
 
@@ -26,6 +30,7 @@ URL would send — not a widening.
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -36,6 +41,14 @@ from dataclasses import dataclass
 #: else), while the human word for the second one is "Deny". Keeping the mapping in one
 #: dict is what stops a "deny" from being POSTed at a route that only knows "reject".
 WIRE_ACTION = {"approve": "approve", "deny": "reject"}
+
+#: The dashboard route a list names for an item (``#/loops/<id>``, ``#/chat/<key>``): a hash route
+#: of URL-safe characters only, so a link built from one stays a page of this gateway's dashboard.
+DASHBOARD_ROUTE = re.compile(r"#/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]*")
+
+#: Where a link goes when the list names no route it can open: Home, whose Needs You lists
+#: everything waiting on you.
+HOME = "#/"
 
 
 class GatewayError(RuntimeError):
@@ -110,21 +123,22 @@ class GatewayClient:
     def origin(self) -> str:
         return _origin_of(self.base_url)
 
-    def deep_link(self, loop_id: str) -> str:
-        """The dashboard page of a loop that needs input: ``#/loops/<id>``.
+    def link(self, route: object) -> str:
+        """The dashboard page at *route*, the route a list names for an item or a piece of work.
 
-        A route core's ``web/src/app/App.tsx`` keeps routable precisely so a link like this
-        survives. It carries no credential: a browser without a session signs in on the
-        gateway's sign-in page, which lands it on this route afterwards.
+        Anything that is not a dashboard route (none, another site, a line break) opens Home
+        instead. It carries no credential: a browser without a session signs in on the gateway's
+        sign-in page, which lands it on this route afterwards.
         """
-        return f"{self.base_url}/#/loops/{urllib.parse.quote(loop_id, safe='')}"
+        shown = route if isinstance(route, str) and DASHBOARD_ROUTE.fullmatch(route) else HOME
+        return f"{self.base_url}/{shown}"
 
     def review_link(self, approval_id: str) -> str:
         """Where an approval is reviewed whole and answered: ``#/companion?approval=<id>``.
 
         The dashboard's approvals page shows every pending approval with all of its arguments,
         and ``?approval=`` brings this one into view (or says it was already answered). No
-        credential in it, for the same reason as :meth:`deep_link`.
+        credential in it, for the same reason as :meth:`link`.
         """
         if not approval_id:
             return f"{self.base_url}/#/companion"
@@ -169,18 +183,27 @@ class GatewayClient:
 
     # ── the three calls ──
 
-    def get_loops(self) -> list[dict]:
-        payload = self._request("/api/loops")
-        loops = (payload or {}).get("loops") if isinstance(payload, dict) else None
-        return [row for row in (loops or []) if isinstance(row, dict)]
+    def get_waiting(self) -> tuple[list[dict], list[str]]:
+        """Everything waiting on the owner, in the list's order, and the kinds it could not read.
 
-    def get_approvals(self) -> list[dict]:
-        payload = self._request("/api/approvals")
-        # This endpoint returns a BARE ARRAY, not an envelope. Tolerating both would
-        # hide the day it changes; assert the shape we were built against.
-        if not isinstance(payload, list):
-            raise GatewayError("GET /api/approvals did not return a JSON array")
-        return [row for row in payload if isinstance(row, dict)]
+        The shape is asserted, not tolerated: a body that is not the list is a failed read, so it
+        is said as one rather than shown as nothing waiting.
+        """
+        payload = self._request("/api/waiting")
+        if not isinstance(payload, dict) or not isinstance(payload.get("waiting"), list):
+            raise GatewayError("GET /api/waiting did not return the waiting list")
+        unreadable = payload.get("unreadable")
+        return (
+            [row for row in payload["waiting"] if isinstance(row, dict)],
+            [str(kind) for kind in unreadable] if isinstance(unreadable, list) else [],
+        )
+
+    def get_running(self) -> list[dict]:
+        """Everything running now, each row saying what its work is doing."""
+        payload = self._request("/api/running")
+        if not isinstance(payload, dict) or not isinstance(payload.get("running"), list):
+            raise GatewayError("GET /api/running did not return the running list")
+        return [row for row in payload["running"] if isinstance(row, dict)]
 
     def resolve_approval(self, approval_id: str, action: str) -> ResolveOutcome:
         """Approve or deny one pending approval.

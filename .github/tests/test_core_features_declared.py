@@ -68,6 +68,10 @@ The rails over every bundle, against the installed core:
 17. every app whose shipped code asks which models take adaptive thinking (``thinks_adaptively``
     from ``personalclaw.sdk.model``) declares ``adaptive-thinking``: on a PersonalClaw without it
     the app would not load at all.
+18. every app that reads the waiting list (``/api/waiting`` in its manifest's ``permissions.api``
+    or in its shipped code) declares ``waiting-list``, and every app that reads the running list
+    (``/api/running``) declares ``running-list``: on a PersonalClaw without them the route is not
+    there, and the app would read nothing where everything waiting on you or running should be.
 """
 
 from __future__ import annotations
@@ -149,6 +153,12 @@ _EFFORT_KEYWORDS = frozenset({"efforts", "efforts_of"})
 
 #: The apps that ask the SDK which models take adaptive thinking, for rail 17.
 KNOWN_ADAPTIVE_ASKERS = {"bedrock-models"}
+
+#: Each list's route, and the core feature that names it (rail 18).
+LIST_FEATURES = {"/api/waiting": "waiting-list", "/api/running": "running-list"}
+
+#: The apps that read the two lists, for rail 18.
+KNOWN_LIST_READERS = {"menu-bar-companion"}
 
 
 @pytest.fixture(autouse=True)
@@ -1005,3 +1015,64 @@ def test_the_scan_tells_an_app_that_asks_which_models_think_adaptively_from_one_
         (app / "provider.py").write_text(source, encoding="utf-8")
         seen[name] = _asks_which_models_think_adaptively(app)
     assert seen == {"asker-app": True, "other-app": False}
+
+
+def _lists_read(bundle: Path) -> set[str]:
+    """The list routes the bundle reads: declared in its manifest's ``permissions.api``, or named
+    in a string of its shipped code."""
+    manifest = json.loads((bundle / "app.json").read_text(encoding="utf-8"))
+    permissions = manifest.get("permissions")
+    api = permissions.get("api", []) if isinstance(permissions, dict) else []
+    read = {route for route in LIST_FEATURES if isinstance(api, list) and route in api}
+    for path in sdk_contract.shipped_sources(bundle):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                read |= {route for route in LIST_FEATURES if route in node.value}
+    return read
+
+
+def test_every_app_that_reads_the_two_lists_declares_them():
+    from personalclaw.sdk import features
+
+    assert set(LIST_FEATURES.values()) <= features.CORE_FEATURES
+    readers = {bundle.name: _lists_read(bundle) for bundle in BUNDLES}
+    readers = {name: routes for name, routes in readers.items() if routes}
+    assert KNOWN_LIST_READERS <= set(readers), (
+        f"the scan no longer sees these apps read the lists: "
+        f"{sorted(KNOWN_LIST_READERS - set(readers))}"
+    )
+    undeclared = {
+        name: sorted(LIST_FEATURES[route] for route in routes) for name, routes in readers.items()
+    }
+    undeclared = {
+        name: [f for f in needed if f not in _declared(ROOT / name)]
+        for name, needed in undeclared.items()
+    }
+    undeclared = {name: missing for name, missing in undeclared.items() if missing}
+    assert undeclared == {}, (
+        f"these apps read the waiting or running list without declaring the core feature in "
+        f"'requiresCoreFeatures' in app.json: {undeclared}"
+    )
+
+
+def test_the_scan_tells_an_app_that_reads_the_lists_from_one_that_does_not(tmp_path):
+    """Positive and negative control for rail 18."""
+    apps = {
+        "declares-app": ({"api": ["/api/waiting", "/api/ws"]}, ""),
+        "calls-app": ({"api": []}, 'ROUTE = "/api/running"\n'),
+        "other-app": ({"api": ["/api/approvals"]}, 'ROUTE = "/api/approvals"\n'),
+    }
+    seen = {}
+    for name, (permissions, source) in apps.items():
+        app = tmp_path / name
+        app.mkdir()
+        manifest = {"name": name, "version": "0.1.0", "permissions": permissions}
+        (app / "app.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (app / "client.py").write_text(source, encoding="utf-8")
+        seen[name] = _lists_read(app)
+    assert seen == {
+        "declares-app": {"/api/waiting"},
+        "calls-app": {"/api/running"},
+        "other-app": set(),
+    }
