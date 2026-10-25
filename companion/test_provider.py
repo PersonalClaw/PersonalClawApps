@@ -291,6 +291,92 @@ def test_at_with_no_zone_configured_is_utc() -> None:
     )
 
 
+# Berlin's clocks fall back at 03:00 CEST on 25 October 2026, to 02:00 CET: every local time from
+# 02:00 to 02:59 happens twice, first at 00:xx UTC and then at 01:xx UTC.
+_FALL_BACK = "2026-10-25T02:20"
+_FIRST_PASS = datetime(2026, 10, 25, 0, 20, tzinfo=timezone.utc).timestamp()
+_SECOND_PASS = datetime(2026, 10, 25, 1, 20, tzinfo=timezone.utc).timestamp()
+
+
+def test_at_in_a_repeated_hour_is_its_next_pass_before_the_hour() -> None:
+    """Asked before the hour repeats, 02:20 is the first time the clock shows it."""
+    now = datetime(2026, 10, 24, 22, 0, tzinfo=timezone.utc).timestamp()
+    assert validate_at(_FALL_BACK, zone="Europe/Berlin", now=now) == _FIRST_PASS
+
+
+def test_at_in_a_repeated_hour_is_its_second_pass_once_the_first_has_gone() -> None:
+    """🔴 Before: asked during the second pass (02:10 CET), 02:20 was read as its first pass,
+    an hour gone, and refused as in the past, though the clock had yet to show it again."""
+    now = datetime(2026, 10, 25, 1, 10, tzinfo=timezone.utc).timestamp()  # 02:10 CET
+    assert validate_at(_FALL_BACK, zone="Europe/Berlin", now=now) == _SECOND_PASS
+
+
+def test_at_in_a_repeated_hour_is_refused_once_both_passes_have_gone() -> None:
+    now = datetime(2026, 10, 25, 1, 30, tzinfo=timezone.utc).timestamp()  # 02:30 CET
+    with pytest.raises(InvalidInput, match="in the past"):
+        validate_at(_FALL_BACK, zone="Europe/Berlin", now=now)
+
+
+def test_at_in_a_repeated_hour_asked_on_its_first_pass_is_its_first_pass_until_it_goes() -> None:
+    """Inside the hour's first pass: 02:20 asked at 02:10 CEST is that pass; asked at 02:30 CEST,
+    once it has gone, it is the second. 🔴 Before: the second was refused as in the past."""
+    before = datetime(2026, 10, 25, 0, 10, tzinfo=timezone.utc).timestamp()  # 02:10 CEST
+    assert validate_at(_FALL_BACK, zone="Europe/Berlin", now=before) == _FIRST_PASS
+    gone = datetime(2026, 10, 25, 0, 30, tzinfo=timezone.utc).timestamp()  # 02:30 CEST
+    assert validate_at(_FALL_BACK, zone="Europe/Berlin", now=gone) == _SECOND_PASS
+
+
+def test_at_with_an_offset_in_a_repeated_hour_means_that_pass() -> None:
+    now = datetime(2026, 10, 24, 22, 0, tzinfo=timezone.utc).timestamp()
+    assert validate_at(_FALL_BACK + "+01:00", zone="Europe/Berlin", now=now) == _SECOND_PASS
+
+
+# Berlin's clocks spring forward at 02:00 CET on 28 March 2027, to 03:00 CEST: no local time from
+# 02:00 to 02:59 happens that day.
+_SPRING_GAP = "2027-03-28T02:30"
+
+
+@pytest.mark.parametrize(
+    "now",
+    [
+        datetime(2027, 3, 27, 12, 0, tzinfo=timezone.utc),  # the day before
+        datetime(2027, 3, 28, 0, 30, tzinfo=timezone.utc),  # 01:30 CET, half an hour before
+        datetime(2027, 3, 28, 0, 59, 59, tzinfo=timezone.utc),  # 01:59:59 CET, the last second
+    ],
+    ids=["the-day-before", "half-an-hour-before", "the-last-second-before"],
+)
+def test_at_in_a_skipped_hour_is_refused_naming_the_gap_and_asking_for_an_offset(now) -> None:
+    """🔴 Before: 02:30 was silently read as 03:30 CEST, a time the user never said."""
+    with pytest.raises(InvalidInput) as refused:
+        validate_at(_SPRING_GAP, zone="Europe/Berlin", now=now.timestamp())
+    message = str(refused.value)
+    assert "never happens in Europe/Berlin" in message
+    assert "skip from 02:00 to 03:00" in message
+    assert "'2027-03-28T02:30+01:00' is 03:30 there" in message
+    assert "'2027-03-28T02:30+02:00' is 01:30 there" in message
+
+
+@pytest.mark.parametrize("raw", ["2027-03-28T02:00", "2027-03-28T02:59"])
+def test_every_minute_of_a_skipped_hour_is_refused(raw: str) -> None:
+    now = datetime(2027, 3, 27, 12, 0, tzinfo=timezone.utc).timestamp()
+    with pytest.raises(InvalidInput, match="skip from 02:00 to 03:00"):
+        validate_at(raw, zone="Europe/Berlin", now=now)
+
+
+def test_the_minutes_either_side_of_a_skipped_hour_read_as_the_clock_shows_them() -> None:
+    now = datetime(2027, 3, 27, 12, 0, tzinfo=timezone.utc).timestamp()
+    last = datetime(2027, 3, 28, 0, 59, tzinfo=timezone.utc).timestamp()  # 01:59 CET
+    first = datetime(2027, 3, 28, 1, 0, tzinfo=timezone.utc).timestamp()  # 03:00 CEST
+    assert validate_at("2027-03-28T01:59", zone="Europe/Berlin", now=now) == last
+    assert validate_at("2027-03-28T03:00", zone="Europe/Berlin", now=now) == first
+
+
+def test_at_with_an_offset_in_a_skipped_hour_is_that_instant() -> None:
+    now = datetime(2027, 3, 27, 12, 0, tzinfo=timezone.utc).timestamp()
+    expected = datetime(2027, 3, 28, 1, 30, tzinfo=timezone.utc).timestamp()  # 03:30 CEST
+    assert validate_at(_SPRING_GAP + "+01:00", zone="Europe/Berlin", now=now) == expected
+
+
 @pytest.mark.parametrize(
     "raw,match",
     [
