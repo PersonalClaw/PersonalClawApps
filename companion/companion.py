@@ -368,7 +368,12 @@ def validate_at(raw: str, *, zone: str = "", now: float | None = None) -> float:
     A value with no offset is read in ``zone`` (the companion's configured zone, else UTC),
     because "remind me at 09:00" means nine in the morning where the user is. Core stores
     ``spec.at`` as an epoch, so the ambiguity is resolved here, once, rather than at fire
-    time when nobody is watching.
+    time when nobody is watching. A naive time the zone shows twice, in the hour its clocks
+    fall back, is its later pass once the earlier one has gone, and else the earlier. Read as
+    the earlier pass alone, "02:20" asked at 02:10 on the second pass was refused as an hour in
+    the past. A naive time the zone never shows, in the hour its clocks spring forward, is
+    refused, naming the skipped span and asking for an offset: shifting it silently would set
+    the reminder for a time the user never said.
     """
     text = one_line(raw, 40)
     if not text:
@@ -380,10 +385,27 @@ def validate_at(raw: str, *, zone: str = "", now: float | None = None) -> float:
             f"{text!r} is not an ISO-8601 date-time — try '2026-09-07T09:00' or "
             "'2026-09-07T09:00+02:00'"
         ) from exc
+    current = time.time() if now is None else now
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=ZoneInfo(zone) if zone else timezone.utc)
+        skipped = _skipped(parsed)
+        if skipped:
+            start, end = skipped
+            wall = parsed.replace(tzinfo=None).isoformat(timespec="minutes")
+            readings = [
+                f"'{wall}{_offset(reading)}' is "
+                f"{datetime.fromtimestamp(reading.timestamp(), reading.tzinfo):%H:%M} there"
+                for reading in (parsed.replace(fold=0), parsed.replace(fold=1))
+            ]
+            raise InvalidInput(
+                f"{text!r} never happens in {zone}: its clocks skip from {start} to {end} that "
+                f"day. Give the time with an offset: {readings[0]}, {readings[1]}"
+            )
+        if parsed.timestamp() <= current:
+            # Its earlier pass has gone; in a repeated hour its later one may not have. A time
+            # the clock shows once reads the same either way.
+            parsed = parsed.replace(fold=1)
     stamp = parsed.timestamp()
-    current = time.time() if now is None else now
     if stamp <= current:
         raise InvalidInput(
             f"{text!r} is in the past — a one-shot reminder set behind the clock never fires"
@@ -393,6 +415,35 @@ def validate_at(raw: str, *, zone: str = "", now: float | None = None) -> float:
             f"{text!r} is more than {MAX_AT_HORIZON_DAYS // 365} years out — check the year"
         )
     return stamp
+
+
+def _skipped(local: datetime) -> tuple[str, str] | None:
+    """When the naive wall time *local* (its zone attached) is one its zone's clocks skip, the
+    skipped span's first minute and the minute the clocks jump to, as the clock shows them."""
+    zone = local.tzinfo
+    if datetime.fromtimestamp(local.timestamp(), zone).replace(tzinfo=None) == local.replace(
+        tzinfo=None
+    ):
+        return None
+    # The two readings of a skipped time fall either side of the jump: find its second.
+    low, high = sorted(int(local.replace(fold=f).timestamp()) for f in (0, 1))
+    offset = datetime.fromtimestamp(low, zone).utcoffset()
+    while high - low > 1:
+        middle = (low + high) // 2
+        if datetime.fromtimestamp(middle, zone).utcoffset() == offset:
+            low = middle
+        else:
+            high = middle
+    before = datetime.fromtimestamp(low, zone).replace(tzinfo=None) + timedelta(seconds=1)
+    after = datetime.fromtimestamp(high, zone).replace(tzinfo=None)
+    return before.strftime("%H:%M"), after.strftime("%H:%M")
+
+
+def _offset(moment: datetime) -> str:
+    """*moment*'s UTC offset as ISO-8601 writes it, e.g. ``+02:00``."""
+    minutes = int((moment.utcoffset() or timedelta()).total_seconds() // 60)
+    sign = "-" if minutes < 0 else "+"
+    return f"{sign}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}"
 
 
 def validate_watch_path(raw: str) -> str:

@@ -140,10 +140,13 @@ async def test_a_reminder_set_while_personalclaw_runs_goes_off_at_its_time(
     start = float(int(time.time()))
     SVC.boot(TriggerStore(base_dir=home), now=start)
 
-    at = (_in_zone(start) + timedelta(minutes=10)).replace(second=0, microsecond=0)
+    # Ten minutes on, on the minute, counted in absolute time and asked for with its offset, so
+    # the test means one instant whatever the zone's clocks do around it: a naive time in the
+    # hour Berlin's clocks fall back is read by validate_at's rule, which test_provider.py pins.
+    at = _in_zone((int(start) // 60 + 10) * 60)
     tools = create_provider(settings)
     made = await tools.invoke(
-        "companion_remind", {"title": "Put the bins out", "at": at.strftime("%Y-%m-%dT%H:%M")}
+        "companion_remind", {"title": "Put the bins out", "at": at.isoformat(timespec="minutes")}
     )
     assert made.success, made.error
     row_id = made.metadata["trigger_id"]
