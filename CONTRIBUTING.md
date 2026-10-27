@@ -313,11 +313,13 @@ needs the record the merge controller will write.
 
 Every pull request runs rules 1, 3 and 5 in the `dco` workflow (`.github/workflows/dco.yml`),
 over its commits as the commits API lists them, and again whenever it is edited, so an edited
-title is checked too. A red run's annotations name each commit and the rule it breaks. One case
-it cannot judge: a marker in the head commit's message stops GitHub from starting that run at
-all, so the check has no result for that head. Once the check is a required status, a pull
-request that breaks a rule cannot merge, and neither can one whose head carries a marker, until
-a push without it runs the check.
+title is checked too. It runs on `pull_request_target`, so the copy that runs is `main`'s: a pull
+request that edits `dco.yml` or the check is still judged by the copy it would replace, and the
+merge verdict reads that run. A red run's annotations name each commit and the rule it breaks.
+GitHub's skip markers stop `push` and `pull_request` runs, not this one, so a marker in the head
+commit's message is caught here too. To bring a branch up to date with `main`, use **Update with
+rebase** or rebase locally: GitHub's plain **Update branch** adds a merge commit with no
+sign-off, which fails rule 1.
 
 Every push to `main` runs rules 1, 2, 3 and 5 over the commits it landed, in `provenance.yml`: a
 workflow of its own that nothing cancels, running the previous `main` commit's copy of the check

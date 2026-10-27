@@ -1,6 +1,6 @@
 """``.github/workflows/dependency-review.yml`` reviews a pull request's dependencies over the API.
 
-It runs on ``pull_request`` (no workflow here runs on ``pull_request_target``), holds
+It runs on ``pull_request_target``, so main's copy is what runs, holds
 ``contents: read`` and nothing else, references no secret, has no checkout at all, and its one
 step is the pinned dependency-review action, which reads the base and head from the event and
 compares them over the dependency-graph API. Each rule fails on a planted edit of the real
@@ -24,8 +24,8 @@ def problems(text: str) -> list[str]:
     data = yaml.safe_load(text)
     found: list[str] = []
     on = data.get("on", data.get(True))
-    if not isinstance(on, dict) or set(on) != {"pull_request"}:
-        found.append(f"runs on {on!r}, not only pull_request")
+    if not isinstance(on, dict) or set(on) != {"pull_request_target"}:
+        found.append(f"runs on {on!r}, not only pull_request_target")
     if data.get("permissions") != {"contents": "read"}:
         found.append(f"the workflow grants {data.get('permissions')!r}")
     jobs = data.get("jobs") or {}
@@ -53,11 +53,11 @@ def test_the_review_reads_only_and_checks_nothing_out() -> None:
 @pytest.mark.parametrize(
     "old, new, says",
     [
-        ("  pull_request:\n", "  pull_request_target:\n", "not only pull_request"),
+        ("  pull_request_target:\n", "  pull_request:\n", "not only pull_request_target"),
         (
             "    types: [opened, synchronize, reopened]\n",
             "    types: [opened, synchronize, reopened]\n  push:\n",
-            "not only pull_request",
+            "not only pull_request_target",
         ),
         (
             "    permissions:\n      contents: read\n",
