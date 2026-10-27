@@ -875,6 +875,15 @@ _PROVENANCE_RUN = (
     '--mode main --range "${BEFORE}..${GITHUB_SHA}"'
 )
 _TOKEN = re.compile(r"\$\{\{[^}]*\b(?:github\.token|secrets\.)")
+#: The workflows that run on ``pull_request_target``, main's copy: what counts for the merge
+#: verdict. Neither runs anything a pull request brings.
+_TARGET_WORKFLOWS = {"dco.yml", "dependency-review.yml"}
+#: What would put a pull request's code in a ``pull_request_target`` job: its head checked out or
+#: fetched, by ref or by repository.
+_HEAD_CODE = re.compile(
+    r"git\s+(?:fetch|checkout|switch|pull|worktree)\b|gh\s+pr\s+checkout|refs/pull/"
+    r"|pull_request\.head\.(?:ref|repo)|head_ref|head\.repo"
+)
 #: What lets a job be skipped, replaced or cancelled on its own, or fail without failing the run.
 _JOB_ESCAPES = {"concurrency", "if", "needs", "continue-on-error"}
 #: What lets a step be skipped, or fail without failing its job.
@@ -925,26 +934,35 @@ def dco_violations(texts: dict[str, str]) -> list[str]:
     time, read-only, one job with no job or step that can be skipped or fail green, one checkout
     of the check and MAINTAINERS alone, the job token named on the step that runs ``gh api`` and
     on no other, and the check run isolated in ``pr`` mode, handed the pull request's own count,
-    head and event file. No other workflow runs the pull request's check, and none runs on
+    head and event file. It runs on ``pull_request_target``, so main's copy is what runs, and it
+    checks out, fetches or names nothing of the pull request's head. No other workflow runs the
+    pull request's check, and only it and the dependency review run on
     ``pull_request_target``."""
     bad: list[str] = []
     for name, text in texts.items():
         triggers = _triggers(yaml.safe_load(text) or {})
         if isinstance(triggers, str):
             triggers = [triggers]
-        if isinstance(triggers, (dict, list)) and "pull_request_target" in triggers:
+        targeted = isinstance(triggers, (dict, list)) and "pull_request_target" in triggers
+        if targeted and name not in _TARGET_WORKFLOWS:
             bad.append(f"{name} runs on pull_request_target")
+        if name in _TARGET_WORKFLOWS:
+            code = "\n".join(
+                line.split("#", 1)[0] for line in text.splitlines() if not line.lstrip().startswith("#")
+            )
+            if _HEAD_CODE.search(code):
+                bad.append(f"{name} checks out, fetches or names the pull request's head")
         if name != "dco.yml" and "--mode pr" in text and "check_commit_provenance" in text:
             bad.append(f"{name} runs the pull request's check, which only dco.yml may")
     if "dco.yml" not in texts:
         return [f"{_DCO} is missing", *bad]
     workflow = yaml.safe_load(texts["dco.yml"])
     on = _triggers(workflow)
-    pr = on.get("pull_request") if isinstance(on, dict) else None
+    pr = on.get("pull_request_target") if isinstance(on, dict) else None
     types = pr.get("types") if isinstance(pr, dict) else None
     if not (
         isinstance(on, dict)
-        and set(on) == {"pull_request"}
+        and set(on) == {"pull_request_target"}
         and isinstance(pr, dict)
         and set(pr) == {"types"}
         and isinstance(types, list)
@@ -1076,7 +1094,7 @@ def test_the_committed_workflows_have_the_shape_the_check_needs() -> None:
 
 
 _TOKEN_LINE = "          GH_TOKEN: ${{ github.token }}\n"
-_DCO_TRIGGER = "on:\n  pull_request:\n"
+_DCO_TRIGGER = "on:\n  pull_request_target:\n"
 _DCO_TYPES_LINE = "    types: [opened, edited, synchronize, reopened]\n"
 _DCO_TIMEOUT = "    timeout-minutes: 5\n"
 _DCO_FETCH_STEP = f"      - name: {_DCO_FETCH}\n"
@@ -1092,9 +1110,41 @@ _DCO_PLANTS = [
     pytest.param(
         "dco.yml",
         _DCO_TRIGGER,
-        "on:\n  pull_request_target:\n",
+        "on:\n  pull_request:\n",
         "not on every pull request and every edit of one",
-        id="pull-request-target",
+        id="the-pull-requests-own-copy",
+    ),
+    pytest.param(
+        "dco.yml",
+        "          persist-credentials: false\n",
+        "          persist-credentials: false\n"
+        "          ref: ${{ github.event.pull_request.head.sha }}\n",
+        "checkout names a ref, a repository or a history",
+        id="a-checkout-of-the-head",
+    ),
+    pytest.param(
+        "dco.yml",
+        "          persist-credentials: false\n",
+        "          persist-credentials: false\n"
+        "          repository: ${{ github.event.pull_request.head.repo.full_name }}\n",
+        "checks out, fetches or names the pull request's head",
+        id="a-checkout-of-the-fork",
+    ),
+    pytest.param(
+        "dco.yml",
+        '          gh api --paginate "repos/$REPO/pulls/$PR/commits" > "$RUNNER_TEMP/commits.json"\n',
+        '          gh api --paginate "repos/$REPO/pulls/$PR/commits" > "$RUNNER_TEMP/commits.json"\n'
+        '          git fetch origin "refs/pull/$PR/head"\n',
+        "checks out, fetches or names the pull request's head",
+        id="a-fetch-of-the-head",
+    ),
+    pytest.param(
+        "dependency-review.yml",
+        "      - name: Review the dependency changes\n",
+        "      - run: gh pr checkout \"$PR\" && make gate\n"
+        "      - name: Review the dependency changes\n",
+        "checks out, fetches or names the pull request's head",
+        id="the-review-checking-out-the-head",
     ),
     pytest.param(
         "dco.yml",

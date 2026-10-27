@@ -10,26 +10,30 @@
 # when a pull request is edited. In ci.yml that would run every job again on each edit of a title
 # or a description, and cancel the run in progress.
 #
-# WHAT RULE 5 CANNOT CATCH HERE. GitHub starts no `pull_request` run for a pull request whose
-# head commit's message carries a marker, so that marker stops this workflow as it stops CI.
-# Rule 5 here catches a marker in the title and in every commit before the head. A marker in the
-# head commit leaves the dco check with no result at all: once the check is a required status,
-# the pull request cannot merge until a push without the marker runs it; until then nothing here
-# holds it back. On main the marker would start no provenance.yml run either, and that push's
-# commits would land unchecked for good.
+# WHAT RULE 5 MAY NOT SEE. GitHub documents its skip markers for `push` and `pull_request` runs,
+# so a marker in a head commit's message stops CI but not this `pull_request_target` run; rule 5
+# here catches it in the title and in every commit. On main the marker would start no
+# provenance.yml run, and that push's commits would land unchecked for good.
 #
-# WHOSE COPY OF THE CHECK RUNS. The pull request's own: under `pull_request` GitHub runs this
-# file and the check as the pull request has them, so a base-branch copy of the check would guard
-# nothing the pull request could not change in this file as well. Review of the pull request is
-# what guards an edit to either. On main, provenance.yml runs the previous main commit's copy of
-# the check and of MAINTAINERS.
+# WHOSE COPY RUNS: MAIN'S. Under `pull_request_target` GitHub runs this file as it is on main,
+# so a pull request cannot edit what checks it, and the merge verdict (core's #5516) counts this
+# run as the base branch's. The one checkout is main's copy of the check and MAINTAINERS (no
+# `ref:` and no `repository:`, so GitHub checks out the base branch, and a sparse list of those
+# two files). The pull request's commits arrive as metadata over the commits API: no file and no
+# git object of the pull request is ever on disk, so nothing of it can run. The job token is
+# read-only (`contents` and `pull-requests`, read) and reaches only the step that runs `gh api`.
 #
-# There is no remediation comment, as core posts: a `pull_request` token is read-only for a fork,
-# and each violation is already an annotation naming the commit and the rule.
+# SAFETY: `pull_request_target` runs in the base repository's context, so it must never run what
+# a pull request brings (the "pwn request"). Do NOT add a checkout of the pull request's head, a
+# fetch of its ref, or a step that runs code from the workspace beyond main's check. Any job here
+# that would run a pull request's code belongs in ci.yml, under `pull_request`.
+#
+# There is no remediation comment, as core posts: that needs `pull-requests: write`, and each
+# violation is already an annotation naming the commit and the rule.
 name: DCO
 
 on:
-  pull_request:
+  pull_request_target:
     # `edited`: rule 5 reads the title, so a title edited after the last push is checked again,
     # and removing a marker from it clears the red without a new push.
     types: [opened, edited, synchronize, reopened]
