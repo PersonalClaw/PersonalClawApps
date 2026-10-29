@@ -1,6 +1,6 @@
 {
   "name": "wikipedia-search",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "displayName": "Wikipedia Search",
   "description": "Keyless encyclopedic search over Wikipedia: ranked articles with intro-extract snippets. No API key \u2014 uses the public MediaWiki API. Links-only (web_fetch an article to read its full body). Best for factual/reference lookups.",
   "icon": "BookMarked",
@@ -14,6 +14,8 @@
     "network": true
   },
   "provider": {
+    "id": "search",
+    "label": "Search Wikipedia",
     "type": "search",
     "implementation": "provider:create_provider",
     "capabilities": [

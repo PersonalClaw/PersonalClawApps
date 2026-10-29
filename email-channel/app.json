@@ -1,6 +1,6 @@
 {
   "name": "email-channel",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "displayName": "Email Channel",
   "description": "Two-way email channel over stdlib IMAP/SMTP. Converse with your agent by email, replies thread back, and results arrive in the same conversation. No streaming; approvals answer by reply token.",
   "icon": "Mails",
@@ -24,6 +24,8 @@
     "network": true
   },
   "provider": {
+    "id": "channel",
+    "label": "Chat with your agent by email",
     "type": "channel",
     "implementation": "email_runtime.transport:create_provider",
     "capabilities": [
@@ -169,6 +171,8 @@
   },
   "providers": [
     {
+      "id": "triggers",
+      "label": "Run automations when mail arrives",
       "type": "trigger_source",
       "implementation": "email_runtime.trigger_source:create_provider",
       "capabilities": [

@@ -1,6 +1,6 @@
 {
   "name": "spec-builder",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "Spec Builder",
   "description": "Write a spec, then compile it into a workflow definition PersonalClaw's engine runs. The spec spells out the problem, done-when clauses, steps, and how done-ness is decided. It is the artifact you review and argue with; the compiled definition is what executes, and this app never runs one.",
   "icon": "ClipboardList",
@@ -31,6 +31,8 @@
     }
   ],
   "provider": {
+    "id": "tools",
+    "label": "Write a spec and compile it into a workflow",
     "type": "tool",
     "implementation": "provider:create_provider",
     "capabilities": [

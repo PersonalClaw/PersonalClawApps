@@ -1,6 +1,6 @@
 {
   "name": "fal-image",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "displayName": "FAL",
   "description": "Image and video generation via FAL's hosted models (FLUX, Kling, Veo and others). Generate images and videos from a prompt; bind a FAL model to the Image Generation or Video Generation use case in Models. Needs a FAL API key (fal.ai).",
   "icon": "Image",
@@ -19,6 +19,11 @@
     "network": true
   },
   "provider": {
+    "id": "images-and-video",
+    "label": "Generate images and video with FAL",
+    "renamedFrom": [
+      "model"
+    ],
     "type": "model",
     "implementation": "provider:create_provider",
     "capabilities": [

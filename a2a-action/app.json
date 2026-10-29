@@ -1,6 +1,6 @@
 {
   "name": "a2a-action",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "A2A Agent Call",
   "description": "Hand one task to an external A2A agent when a trigger fires. Reaches only hosts the operator has allow-listed under Settings › Security › Network egress.",
   "icon": "Share2",
@@ -13,6 +13,8 @@
     "network": true
   },
   "provider": {
+    "id": "action",
+    "label": "Hand a task to an A2A agent",
     "type": "action",
     "entity": "a2a",
     "implementation": "provider:create_provider",

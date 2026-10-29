@@ -1,6 +1,6 @@
 {
   "name": "vllm-models",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "displayName": "vLLM",
   "description": "A local vLLM server (OpenAI-compatible). Point it at your vLLM endpoint; capabilities are model-dependent.",
   "icon": "Cpu",
@@ -19,6 +19,11 @@
     "network": true
   },
   "provider": {
+    "id": "models",
+    "label": "Chat and embedding models from your vLLM server",
+    "renamedFrom": [
+      "model"
+    ],
     "type": "model",
     "implementation": "provider:create_provider",
     "multiInstance": true,

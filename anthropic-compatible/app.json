@@ -1,6 +1,6 @@
 {
   "name": "anthropic-compatible",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "displayName": "Anthropic-Compatible",
   "description": "Any Anthropic-compatible (Messages API) endpoint. Supply the base URL + API key.",
   "icon": "Sparkles",
@@ -20,6 +20,11 @@
     "network": true
   },
   "provider": {
+    "id": "chat",
+    "label": "Chat models from an Anthropic-compatible endpoint",
+    "renamedFrom": [
+      "model"
+    ],
     "type": "model",
     "providerType": "anthropic_compatible",
     "implementation": "provider:create_provider",

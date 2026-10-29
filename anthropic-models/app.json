@@ -1,6 +1,6 @@
 {
   "name": "anthropic-models",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "displayName": "Anthropic",
   "description": "Anthropic Claude chat models (Messages API). Bring your own Anthropic API key.",
   "icon": "Sparkles",
@@ -24,6 +24,11 @@
     "network": true
   },
   "provider": {
+    "id": "chat",
+    "label": "Claude chat models",
+    "renamedFrom": [
+      "model"
+    ],
     "type": "model",
     "providerType": "anthropic",
     "implementation": "provider:create_provider",

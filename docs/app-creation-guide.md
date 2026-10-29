@@ -168,6 +168,8 @@ An app that plugs a capability into core declares a `provider` (or several via
 
 ```json
 "provider": {
+  "id": "search",                            // stable, kebab-case, unique in the app: <app>/<id> keys it
+  "label": "Search the web with Example",    // what it does, in plain words: the name the owner reads
   "type": "search",                          // see capability types below
   "implementation": "provider:create_provider", // module.path:factory_fn, relative to the app dir
   "multiInstance": true,                     // user may add several instances (e.g. two endpoints)
@@ -180,6 +182,16 @@ An app that plugs a capability into core declares a `provider` (or several via
 
 The factory receives the app's current config dict and returns a provider
 instance implementing the relevant SDK contract.
+
+Every provider has an `id` and a `label`. Core keeps each provider as a capability under
+`<app>/<id>`, so its settings, secrets, switch and status follow the id: keep it the same across
+versions. A rename is declared on the new entry as `"renamedFrom": ["old-id"]`, and a removal as a
+top-level `"retiredCapabilities": ["old-id"]`, so the id is never used again. A model app maps the
+id core gives a manifest written before ids with `"renamedFrom": ["model"]`. The label says what the
+capability does, is unique in the app, and is never its id or a bare type name. An app with more
+than one provider keeps the first in `provider` and lists the others in `providers[]`. Every
+provider the app had at the latest release keeps its id, or maps onto a new one by `renamedFrom`,
+or is retired (`.github/scripts/check_provider_ids.py` holds all of this).
 
 `execution: "sidecar"` is for an engine heavy or crash-prone enough to keep out of
 the gateway (torch, a native library). Your provider still loads in-process, and it

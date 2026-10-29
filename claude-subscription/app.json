@@ -1,6 +1,6 @@
 {
   "name": "claude-subscription",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "displayName": "Claude (Subscription)",
   "description": "Claude models over your existing Claude Code sign-in — no API key. Reads the CLI's own credential store read-only.",
   "icon": "Sparkles",
@@ -20,6 +20,11 @@
     "network": true
   },
   "provider": {
+    "id": "chat",
+    "label": "Claude chat models over your Claude Code sign-in",
+    "renamedFrom": [
+      "model"
+    ],
     "type": "model",
     "providerType": "claude_subscription",
     "implementation": "provider:create_provider",

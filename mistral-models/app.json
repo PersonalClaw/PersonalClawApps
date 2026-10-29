@@ -1,6 +1,6 @@
 {
   "name": "mistral-models",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "displayName": "Mistral AI",
   "description": "Mistral AI models via its OpenAI-compatible endpoint. Bring your own Mistral API key.",
   "icon": "Wind",
@@ -19,6 +19,11 @@
     "network": true
   },
   "provider": {
+    "id": "chat",
+    "label": "Mistral chat models",
+    "renamedFrom": [
+      "model"
+    ],
     "type": "model",
     "implementation": "provider:create_provider",
     "multiInstance": true,

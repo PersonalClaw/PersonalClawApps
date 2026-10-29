@@ -1,6 +1,6 @@
 {
   "name": "companion",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "Companion",
   "description": "An opt-in day companion: three surfaces, all off out of the box. Reminders that actually go off, a watchlist that speaks up when a folder really changes, and a day plan you can ask for. Every automation it contributes only ever raises a notification, and turning a surface off, disabling the app or uninstalling it removes every trigger it contributed.",
   "icon": "Sunrise",
@@ -22,6 +22,8 @@
     "network": false
   },
   "provider": {
+    "id": "tools",
+    "label": "Reminders, a watchlist and a day plan",
     "type": "tool",
     "implementation": "provider:create_provider",
     "capabilities": [
@@ -67,6 +69,8 @@
   },
   "providers": [
     {
+      "id": "automations",
+      "label": "The automations its reminders and watchlist run",
       "type": "trigger",
       "implementation": "provider:create_trigger_store",
       "capabilities": [
