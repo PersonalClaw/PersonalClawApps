@@ -157,6 +157,29 @@ PINNED: dict[str, dict[str, Any]] = {
         ],
     },
 }
+#: The step PersonalClaw/PersonalClawApps#166 adds after the static job's checkout: its
+#: ``provider-ids`` row compares each app's providers with its manifest at the latest ``v*`` release,
+#: and the shallow checkout has no tags. It fetches exactly one tag, at depth 1, and fails when
+#: origin has none.
+_FETCH_TAG = {
+    "name": "Fetch the latest release tag",
+    "run": (
+        "tag=$(git ls-remote --tags --refs origin 'v*' | sed 's#.*refs/tags/##'"
+        " | grep -E '^v[0-9]+(\\.[0-9]+)*$' | sort -V | tail -n 1)\n"
+        'if [ -z "$tag" ]; then echo "::error::no v* release tag on origin"; exit 1; fi\n'
+        'git fetch --depth 1 --no-tags origin "refs/tags/$tag:refs/tags/$tag"\n'
+    ),
+}
+
+#: The other shapes a job may have while a change to it lands in two (the docstring): the rail
+#: first, taking both, then the change, which drops the old one. The static job with #166's tag
+#: fetch after its checkout.
+ALSO: dict[str, list[list[dict[str, Any]]]] = {
+    "static": [
+        [*PINNED["static"]["steps"][:2], _FETCH_TAG, *PINNED["static"]["steps"][2:]],
+    ],
+}
+
 WORKFLOW = {
     "on": {"pull_request": None, "push": {"branches": ["main"]}},
     "permissions": {"contents": "read"},
@@ -210,6 +233,8 @@ def violations(workflow: dict[str, Any]) -> list[str]:
             continue
         if got["job"] != want["job"]:
             found.append(f"{job_id} is set {got['job']!r}, not {want['job']!r}")
+        if got["steps"] in ALSO.get(job_id, []):
+            continue
         if len(got["steps"]) != len(want["steps"]):
             found.append(f"{job_id} has {len(got['steps'])} steps, not {len(want['steps'])}")
         for n, (step, pinned) in enumerate(zip(got["steps"], want["steps"]), start=1):
@@ -332,3 +357,29 @@ def test_a_version_bump_needs_no_edit_here(old: str, new: str) -> None:
     text = CI.read_text(encoding="utf-8")
     assert old in text, old
     assert violations(yaml.safe_load(text.replace(old, new))) == []
+
+
+def _with_the_tag_fetch(wf: dict[str, Any]) -> dict[str, Any]:
+    _job(wf, "static").insert(2, dict(_FETCH_TAG))
+    return wf
+
+
+def test_the_static_job_may_fetch_the_latest_release_tag() -> None:
+    """#166's shape is taken while it lands: the step after the checkout, exactly as pinned."""
+    assert violations(_with_the_tag_fetch(copy.deepcopy(_load()))) == []
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        lambda step: step.update(run=step["run"] + " || true"),
+        lambda step: step.update(run=step["run"].replace("--depth 1 ", "")),
+        lambda step: step.update({"if": "false"}),
+        lambda step: step.update({"continue-on-error": True}),
+    ],
+    ids=["forgiven", "whole-history", "skippable", "failure-forgiven"],
+)
+def test_the_tag_fetch_is_held_to_its_pinned_form(edit) -> None:
+    wf = _with_the_tag_fetch(copy.deepcopy(_load()))
+    edit(_named(wf, "static", "Fetch the latest release tag"))
+    assert violations(wf), "an edited tag fetch was taken"
