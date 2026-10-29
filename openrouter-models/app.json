@@ -1,6 +1,6 @@
 {
   "name": "openrouter-models",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "displayName": "OpenRouter",
   "description": "OpenRouter — one key for hundreds of models across providers. Chat (with image input), embedding, image generation, and video generation from a single instance. Bring your own OpenRouter API key.",
   "icon": "Route",
@@ -25,6 +25,11 @@
     "network": true
   },
   "provider": {
+    "id": "models",
+    "label": "OpenRouter chat, embedding, image and video models",
+    "renamedFrom": [
+      "model"
+    ],
     "type": "model",
     "providerType": "openrouter",
     "implementation": "provider:create_provider",

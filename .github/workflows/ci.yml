@@ -67,6 +67,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Fetch the latest release tag
+        # The provider-ids row compares each app's providers with its manifest at the latest v*
+        # release (#166), and the shallow checkout above has no tags: exactly that one, at depth 1.
+        run: |
+          tag=$(git ls-remote --tags --refs origin 'v*' | sed 's#.*refs/tags/##' | grep -E '^v[0-9]+(\.[0-9]+)*$' | sort -V | tail -n 1)
+          if [ -z "$tag" ]; then echo "::error::no v* release tag on origin"; exit 1; fi
+          git fetch --depth 1 --no-tags origin "refs/tags/$tag:refs/tags/$tag"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc

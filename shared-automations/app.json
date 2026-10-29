@@ -1,6 +1,6 @@
 {
   "name": "shared-automations",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Shared Automations",
   "description": "Serve trigger rows from a shared automations file. That can be a synced folder, an NFS share, or a checked-out team repo. Everyone pointed at the file sees the same automations on their Automations page, and each machine arms and fires ONLY the rows attributed to its own owner: everybody else's render read-only and structurally cannot arm. No server and no credentials; the file holds trigger definitions only, and your harness does all the firing under all of its own gates.",
   "icon": "CalendarSync",
@@ -16,6 +16,8 @@
     "storage": true
   },
   "provider": {
+    "id": "automations",
+    "label": "Automations from a shared file",
     "type": "trigger",
     "implementation": "provider:create_provider",
     "capabilities": [

@@ -1,6 +1,6 @@
 {
   "name": "slack-channel",
-  "version": "0.1.47",
+  "version": "0.1.48",
   "displayName": "Slack Channel",
   "description": "Slack workspace integration. Monitor channels, respond to mentions, and interact via Slack.",
   "icon": "Slack",
@@ -36,6 +36,8 @@
     "network": true
   },
   "provider": {
+    "id": "channel",
+    "label": "Chat with your agent in Slack",
     "type": "channel",
     "implementation": "slack_runtime.transport:create_provider",
     "capabilities": [
@@ -303,6 +305,8 @@
   },
   "providers": [
     {
+      "id": "inbox",
+      "label": "Slack messages as inbox items",
       "type": "inbox",
       "implementation": "slack_runtime.inbox_source:create_provider",
       "capabilities": [
@@ -313,6 +317,8 @@
       ]
     },
     {
+      "id": "triggers",
+      "label": "Run automations on Slack messages",
       "type": "trigger_source",
       "implementation": "slack_runtime.trigger_source:create_provider",
       "capabilities": [

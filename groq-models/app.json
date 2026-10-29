@@ -1,6 +1,6 @@
 {
   "name": "groq-models",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "displayName": "Groq",
   "description": "Groq LPU inference (OpenAI-compatible), very low latency. Bring your own Groq API key.",
   "icon": "Zap",
@@ -19,6 +19,11 @@
     "network": true
   },
   "provider": {
+    "id": "chat",
+    "label": "Groq chat models",
+    "renamedFrom": [
+      "model"
+    ],
     "type": "model",
     "implementation": "provider:create_provider",
     "multiInstance": true,

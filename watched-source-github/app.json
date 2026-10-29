@@ -1,6 +1,6 @@
 {
   "name": "watched-source-github",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "displayName": "GitHub Repo Watcher",
   "description": "Fires your automations when a GitHub repo you watch ships a release or opens an issue. A newly watched repository starts from what exists now, so its history never floods in, and every request goes through your network egress settings.",
   "icon": "Telescope",
@@ -18,6 +18,8 @@
     "doctor": "app_cli:doctor"
   },
   "provider": {
+    "id": "triggers",
+    "label": "Run automations on a GitHub repo you watch",
     "type": "trigger_source",
     "implementation": "provider:create_provider",
     "settingsSchema": {

@@ -1,6 +1,6 @@
 {
   "name": "faster-whisper",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "displayName": "Faster Whisper",
   "description": "Speech-to-text using CTranslate2-optimized Whisper models. Download and manage STT models for voice input.",
   "icon": "Mic",
@@ -20,6 +20,11 @@
     "network": true
   },
   "provider": {
+    "id": "speech-to-text",
+    "label": "Turn speech into text with Whisper",
+    "renamedFrom": [
+      "model"
+    ],
     "type": "model",
     "implementation": "provider:create_provider",
     "capabilities": [

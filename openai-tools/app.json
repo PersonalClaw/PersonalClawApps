@@ -1,6 +1,6 @@
 {
   "name": "openai-tools",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "displayName": "OpenAI Tool Servers",
   "description": "Connect OpenAI-compatible tool servers that expose tools via REST API.",
   "icon": "Wrench",
@@ -16,6 +16,8 @@
     "network": true
   },
   "provider": {
+    "id": "tools",
+    "label": "Tools from OpenAI-compatible tool servers",
     "type": "tool",
     "implementation": "provider:create_openai_tool_provider",
     "capabilities": [

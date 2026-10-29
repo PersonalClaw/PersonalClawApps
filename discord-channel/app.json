@@ -1,6 +1,6 @@
 {
   "name": "discord-channel",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "displayName": "Discord Channel",
   "description": "Discord bot integration over the raw Gateway WebSocket + REST API. Pair a DM, converse in servers, and receive results with approval buttons.",
   "icon": "MessagesSquare",
@@ -21,6 +21,8 @@
     "network": true
   },
   "provider": {
+    "id": "channel",
+    "label": "Chat with your agent on Discord",
     "type": "channel",
     "implementation": "discord_runtime.transport:create_provider",
     "capabilities": [
@@ -66,6 +68,8 @@
   },
   "providers": [
     {
+      "id": "triggers",
+      "label": "Run automations on Discord messages",
       "type": "trigger_source",
       "implementation": "discord_runtime.trigger_source:create_provider",
       "capabilities": [

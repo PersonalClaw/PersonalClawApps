@@ -1,6 +1,6 @@
 {
   "name": "ops",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "displayName": "Ops",
   "description": "An on-call first responder that walks the shift with you. It files each alarm your monitor writes as an incident, ranks the queue by what needs a human first, and works each one with you — claim, investigate against your own runbook, record findings, propose a fix. Proposing changes nothing, and running a fix is off by default, needs an explicit confirm, and can only ever be a command your own runbook already declared.",
   "icon": "Siren",
@@ -45,6 +45,8 @@
     }
   ],
   "provider": {
+    "id": "tools",
+    "label": "Work an on-call shift's incidents",
     "type": "tool",
     "implementation": "provider:create_provider",
     "capabilities": [

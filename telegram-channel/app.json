@@ -1,6 +1,6 @@
 {
   "name": "telegram-channel",
-  "version": "0.1.22",
+  "version": "0.1.23",
   "displayName": "Telegram Channel",
   "description": "Telegram bot integration over the raw Bot API. Pair a chat, converse in DMs, track groups, and receive results with inline approvals.",
   "icon": "Send",
@@ -21,6 +21,8 @@
     "network": true
   },
   "provider": {
+    "id": "channel",
+    "label": "Chat with your agent on Telegram",
     "type": "channel",
     "implementation": "telegram_runtime.transport:create_provider",
     "capabilities": [
@@ -57,6 +59,8 @@
   },
   "providers": [
     {
+      "id": "triggers",
+      "label": "Run automations on Telegram messages",
       "type": "trigger_source",
       "implementation": "telegram_runtime.trigger_source:create_provider",
       "capabilities": [

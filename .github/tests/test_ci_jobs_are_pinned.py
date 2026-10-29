@@ -59,6 +59,20 @@ _NODE = {"uses": "actions/setup-node", "with": {"node-version-file": ".nvmrc"}}
 _SKIP_BACKENDS = {"PERSONALCLAW_SKIP_APP_BACKENDS": "1"}
 _NOT_CANCELLED = "${{ !cancelled() }}"
 
+#: The step after the static job's checkout (#166): its
+#: ``provider-ids`` row compares each app's providers with its manifest at the latest ``v*`` release,
+#: and the shallow checkout has no tags. It fetches exactly one tag, at depth 1, and fails when
+#: origin has none.
+_FETCH_TAG = {
+    "name": "Fetch the latest release tag",
+    "run": (
+        "tag=$(git ls-remote --tags --refs origin 'v*' | sed 's#.*refs/tags/##'"
+        " | grep -E '^v[0-9]+(\\.[0-9]+)*$' | sort -V | tail -n 1)\n"
+        'if [ -z "$tag" ]; then echo "::error::no v* release tag on origin"; exit 1; fi\n'
+        'git fetch --depth 1 --no-tags origin "refs/tags/$tag:refs/tags/$tag"\n'
+    ),
+}
+
 #: What each job runs, read as :func:`shape` reads the file.
 PINNED: dict[str, dict[str, Any]] = {
     "static": {
@@ -66,6 +80,7 @@ PINNED: dict[str, dict[str, Any]] = {
         "steps": [
             {"name": "Runner identity", "run": _IDENTITY},
             {"uses": "actions/checkout", "with": {"persist-credentials": False}},
+            _FETCH_TAG,
             _NODE,
             {
                 "uses": "astral-sh/setup-uv",
@@ -157,28 +172,9 @@ PINNED: dict[str, dict[str, Any]] = {
         ],
     },
 }
-#: The step PersonalClaw/PersonalClawApps#166 adds after the static job's checkout: its
-#: ``provider-ids`` row compares each app's providers with its manifest at the latest ``v*`` release,
-#: and the shallow checkout has no tags. It fetches exactly one tag, at depth 1, and fails when
-#: origin has none.
-_FETCH_TAG = {
-    "name": "Fetch the latest release tag",
-    "run": (
-        "tag=$(git ls-remote --tags --refs origin 'v*' | sed 's#.*refs/tags/##'"
-        " | grep -E '^v[0-9]+(\\.[0-9]+)*$' | sort -V | tail -n 1)\n"
-        'if [ -z "$tag" ]; then echo "::error::no v* release tag on origin"; exit 1; fi\n'
-        'git fetch --depth 1 --no-tags origin "refs/tags/$tag:refs/tags/$tag"\n'
-    ),
-}
-
 #: The other shapes a job may have while a change to it lands in two (the docstring): the rail
-#: first, taking both, then the change, which drops the old one. The static job with #166's tag
-#: fetch after its checkout.
-ALSO: dict[str, list[list[dict[str, Any]]]] = {
-    "static": [
-        [*PINNED["static"]["steps"][:2], _FETCH_TAG, *PINNED["static"]["steps"][2:]],
-    ],
-}
+#: first, taking both, then the change, which drops the old one. None now.
+ALSO: dict[str, list[list[dict[str, Any]]]] = {}
 
 WORKFLOW = {
     "on": {"pull_request": None, "push": {"branches": ["main"]}},
@@ -266,7 +262,7 @@ _AUDIT = "Audit the locks the apps ship"
 _PLANTS = {
     "the static gate replaced by run: true": (
         lambda wf: _named(wf, "static", _STATIC).update(run="true"),
-        "static step 7",
+        "static step 8",
     ),
     "the bundles gate replaced by run: true": (
         lambda wf: _named(wf, "tests", _TESTS).update(run="true"),
@@ -284,7 +280,7 @@ _PLANTS = {
         lambda wf: _named(wf, "static", _STATIC).update(
             run=_named(wf, "static", _STATIC)["run"] + " || true"
         ),
-        "static step 7",
+        "static step 8",
     ),
     "a gate step a condition can skip": (
         lambda wf: _named(wf, "tests", _TESTS).update({"if": "false"}),
@@ -306,7 +302,7 @@ _PLANTS = {
         lambda wf: _job(wf, "static").insert(
             6, {"name": "prepare", "run": "echo 'raise SystemExit(0)' > scripts/gate.py"}
         ),
-        "static has 9 steps, not 8",
+        "static has 10 steps, not 9",
     ),
     "an install that no longer reads core.lock": (
         lambda wf: _named(wf, "tests", "Install core + pytest").update(
@@ -359,16 +355,6 @@ def test_a_version_bump_needs_no_edit_here(old: str, new: str) -> None:
     assert violations(yaml.safe_load(text.replace(old, new))) == []
 
 
-def _with_the_tag_fetch(wf: dict[str, Any]) -> dict[str, Any]:
-    _job(wf, "static").insert(2, dict(_FETCH_TAG))
-    return wf
-
-
-def test_the_static_job_may_fetch_the_latest_release_tag() -> None:
-    """#166's shape is taken while it lands: the step after the checkout, exactly as pinned."""
-    assert violations(_with_the_tag_fetch(copy.deepcopy(_load()))) == []
-
-
 @pytest.mark.parametrize(
     "edit",
     [
@@ -380,6 +366,6 @@ def test_the_static_job_may_fetch_the_latest_release_tag() -> None:
     ids=["forgiven", "whole-history", "skippable", "failure-forgiven"],
 )
 def test_the_tag_fetch_is_held_to_its_pinned_form(edit) -> None:
-    wf = _with_the_tag_fetch(copy.deepcopy(_load()))
+    wf = copy.deepcopy(_load())
     edit(_named(wf, "static", "Fetch the latest release tag"))
-    assert violations(wf), "an edited tag fetch was taken"
+    assert any("static step 3" in v for v in violations(wf)), "an edited tag fetch was taken"

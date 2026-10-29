@@ -1,6 +1,6 @@
 {
   "name": "exa-search",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "displayName": "Exa",
   "description": "Neural/semantic web search: embeddings-ranked results with relevant highlights. Also returns extracted content, plus single-URL content retrieval. Good for discovering non-obvious sources. API key from exa.ai.",
   "icon": "Search",
@@ -14,6 +14,8 @@
     "network": true
   },
   "provider": {
+    "id": "search",
+    "label": "Search the web by meaning with Exa",
     "type": "search",
     "implementation": "provider:create_provider",
     "capabilities": [
