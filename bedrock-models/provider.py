@@ -31,6 +31,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any, NamedTuple, NoReturn, TypeVar
 from urllib.parse import urlsplit
 
+from personalclaw.sdk.features import core_has
 from personalclaw.sdk.model import (
     EVENT_COMPLETE,
     EVENT_TEXT_CHUNK,
@@ -100,9 +101,39 @@ _DEFAULT_MAX_TOKENS = 8192
 # The default output cap for a request to a Claude model that thinks, when the instance sets
 # none. Thinking counts against ``maxTokens``, so at 8,192 a model that reasons at length spends
 # the whole cap before it writes a word or makes a call, and the turn ends with no answer.
-# 32,000 leaves room to think and still answer, and stays within the output ceiling of every
-# Claude model that can think (the lowest of them allows 32,000).
-_THINKING_MAX_TOKENS = 32_000
+# 64,000 leaves room to think at length and still answer, or write a long file in one call, and
+# is sent only to a model whose ceiling this app knows (``_OUTPUT_CEILINGS``), held to it. A model
+# that thinks with no ceiling listed (a later version than the table names) is sent 32,000, as
+# before: no Claude model that can think allows less.
+_THINKING_MAX_TOKENS = 64_000
+_THINKING_MAX_TOKENS_UNLISTED = 32_000
+
+# The most output tokens a request to each Claude model may ask for, by its name in any Bedrock
+# id form (``_CLAUDE_NAME_RE``): the synchronous limit Anthropic's model overview gives, and for
+# Opus 4.1 and Sonnet 4, which it no longer lists, Bedrock's own model card. Bedrock refuses a
+# request that asks for more. A model not listed has no ceiling this app knows, so it is
+# never sent a larger cap core asks for one call (``complete``'s ``max_tokens``), which it might
+# refuse: it is sent what it would be sent anyway.
+_OUTPUT_CEILINGS: dict[str, int] = {
+    **dict.fromkeys(
+        (
+            "fable-5", "fable-5-1",
+            "opus-5", "opus-5-5", "opus-4-8", "opus-4-7", "opus-4-6",
+            "sonnet-5", "sonnet-5-5", "sonnet-4-6",
+            "haiku-5-5",
+        ),
+        128_000,
+    ),
+    **dict.fromkeys(("opus-4-5", "sonnet-4-5", "haiku-4-5", "sonnet-4"), 64_000),
+    "opus-4-1": 32_000,
+}
+
+# A Claude model's name in its Bedrock id: its family and version, without the inference-profile
+# prefix or a dated or ``-v1:0`` suffix. A date is not a minor version (``opus-4-20250514`` is
+# ``opus-4``), and a later minor version is its own name (``opus-5-50`` is not ``opus-5``).
+_CLAUDE_NAME_RE = re.compile(
+    r"anthropic\.claude-((?:opus|sonnet|haiku|fable)-\d+(?:-\d{1,2})?)(?![0-9])"
+)
 
 # The Claude models that think on every request even when no reasoning effort is sent: Opus 5.5
 # always thinks (its thinking cannot be turned off), and Sonnet 5.5, Haiku 5.5 and Fable 5.1
@@ -117,6 +148,13 @@ _THINKS_BY_DEFAULT_RE = re.compile(
 def _is_claude(model_id: str) -> bool:
     """Whether *model_id* names an Anthropic Claude model, in any Bedrock id form."""
     return "anthropic.claude-" in model_id
+
+
+def _output_ceiling(model_id: str) -> int | None:
+    """The most output tokens a request to *model_id* may ask for, or ``None`` when this app does
+    not know it (``_OUTPUT_CEILINGS``)."""
+    name = _CLAUDE_NAME_RE.search(model_id)
+    return _OUTPUT_CEILINGS.get(name.group(1)) if name else None
 
 
 def _thinks(model_id: str, *, effort_sent: bool) -> bool:
@@ -950,6 +988,11 @@ class BedrockProvider(ModelProvider):
     # by translating the loop's OpenAI-shaped messages/tools into Converse.
     supports_tools: bool = True
 
+    # ``complete`` takes an output cap for one request (``max_tokens``): the room core asks for the
+    # try after a call cut at its output limit. Declared only to a PersonalClaw that sends one: on
+    # an older one there is nothing to take, and the declaration would claim what nothing uses.
+    takes_output_cap: bool = core_has("per-call-output-cap")
+
     # Converse needs a per-request cache CHECKPOINT — it does not cache a prefix on its
     # own — so this provider is EXPLICIT: core's native loop places the neutral marker
     # and :func:`_translate_messages` turns it into a ``cachePoint`` block. The attr the
@@ -976,8 +1019,9 @@ class BedrockProvider(ModelProvider):
         self._system_prompt = (system_prompt or "").strip()
         # Always send an output cap (see _DEFAULT_MAX_TOKENS): omitting it lets
         # Converse truncate large tool-call JSON mid-stream. A cap set here (the instance's Max
-        # Output Tokens, else the budget core asked for this call) is sent as it is; with none,
-        # a request that thinks gets _THINKING_MAX_TOKENS instead (``_inference_config``).
+        # Output Tokens, else the budget core built this provider with) wins; with none, a cap core
+        # asks for one call, else _THINKING_MAX_TOKENS to a request that thinks
+        # (``_inference_config``).
         self._cap_set = max_tokens is not None
         self._max_tokens = max_tokens if max_tokens is not None else _DEFAULT_MAX_TOKENS
         #: The sampling temperature every request carries, or ``None`` for the model default.
@@ -997,19 +1041,29 @@ class BedrockProvider(ModelProvider):
         which one-shot sampling (the caller that reads this back) never takes."""
         return self._temperature
 
-    def _inference_config(self, model_id: str, *, thinking: bool = False) -> dict[str, Any]:
+    def _inference_config(
+        self, model_id: str, *, thinking: bool = False, per_call: int | None = None
+    ) -> dict[str, Any]:
         """Converse's ``inferenceConfig`` for a request to *model_id*: the output cap always, the
         sampling temperature when one was asked for — except with a reasoning effort sent
         (*thinking*: one the model declares), which turns extended thinking on and rejects a
         custom one.
 
-        The cap is the one this provider was built with when one was set. Without one, a request
-        that thinks (``_thinks``) gets ``_THINKING_MAX_TOKENS``, since its thinking is spent out of
-        the same cap, and any other gets ``_DEFAULT_MAX_TOKENS``."""
-        cap = self._max_tokens
-        if not self._cap_set and _thinks(model_id, effort_sent=thinking):
-            cap = _THINKING_MAX_TOKENS
-        config: dict[str, Any] = {"maxTokens": cap}
+        The cap is the one this provider was built with when one was set: the instance's Max
+        Output Tokens, else the budget core built it with, which a cap asked for one call never
+        overrides. Without one, the cap core asks for this call (*per_call*), to a model whose
+        ceiling is known (``_output_ceiling``). Without either, a request that thinks
+        (``_thinks``) gets ``_THINKING_MAX_TOKENS``, since its thinking is spent out of the same
+        cap (``_THINKING_MAX_TOKENS_UNLISTED`` when the model's ceiling is not known), and any
+        other gets ``_DEFAULT_MAX_TOKENS``. None is sent above the model's ceiling."""
+        ceiling = _output_ceiling(model_id)
+        built = self._max_tokens if self._cap_set else None
+        if _thinks(model_id, effort_sent=thinking):
+            default = _THINKING_MAX_TOKENS if ceiling else _THINKING_MAX_TOKENS_UNLISTED
+        else:
+            default = _DEFAULT_MAX_TOKENS
+        cap = output_cap(built, per_call if ceiling else None) or default
+        config: dict[str, Any] = {"maxTokens": min(cap, ceiling) if ceiling else cap}
         if self._temperature is not None and not thinking:
             config["temperature"] = self._temperature
         return config
@@ -1193,6 +1247,7 @@ class BedrockProvider(ModelProvider):
         tools: list[dict] | None = None,
         model: str | None = None,
         reasoning_effort: str = "",
+        max_tokens: int | None = None,
     ) -> AsyncIterator[LLMEvent]:
         """Stream a stateless Converse turn for the full ``messages`` list.
 
@@ -1210,6 +1265,11 @@ class BedrockProvider(ModelProvider):
         (``until_terminal``) and emits none. The blocking boto stream is bridged
         onto an :class:`asyncio.Queue` so the event loop is never stalled (mirrors
         :meth:`stream`).
+
+        ``max_tokens`` is an output cap core asks for this one request, when this provider
+        declares ``takes_output_cap``: the room for the try after a call cut at its output limit.
+        A cap this provider was built with wins, and no cap is sent above the model's ceiling
+        (``_inference_config``).
         """
         model_id = require_model(_bare_model_id(model, self._model_id))
         if self._client is None:
@@ -1240,7 +1300,9 @@ class BedrockProvider(ModelProvider):
         effort = (reasoning_effort or "").strip()
         if effort not in _efforts(model_id):
             effort = ""
-        request["inferenceConfig"] = self._inference_config(model_id, thinking=bool(effort))
+        request["inferenceConfig"] = self._inference_config(
+            model_id, thinking=bool(effort), per_call=max_tokens
+        )
         if effort:
             request["additionalModelRequestFields"] = {
                 "thinking": {"type": "adaptive"},
