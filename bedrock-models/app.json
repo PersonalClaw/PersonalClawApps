@@ -1,6 +1,6 @@
 {
   "name": "bedrock-models",
-  "version": "0.1.22",
+  "version": "0.1.23",
   "displayName": "Amazon Bedrock",
   "description": "Amazon Bedrock models, authenticated with your own AWS credential chain. No key is stored by PersonalClaw. Chat (Converse API), embedding (Titan/Cohere/Nova), image generation (Nova Canvas, Stability AI) and video generation (Nova Reel) where your region serves them, and speech-to-text. One instance per AWS profile/region.",
   "icon": "Cloud",
@@ -95,7 +95,7 @@
           "minimum": 0,
           "x-meta": {
             "label": "Max Output Tokens",
-            "help": "The most tokens Bedrock may generate in one turn. 0 sends the budget PersonalClaw sets for that call, else 32000 to a Claude model that thinks (its thinking counts against the cap) and 8192 to any other. A cap is always sent, because Bedrock's own default can be low enough to cut long answers and tool calls short.",
+            "help": "The most tokens Bedrock may generate in one turn, never more than the model allows. 0 sends the budget PersonalClaw sets for that call, else up to 64000 to a Claude model that thinks (its thinking counts against the cap) and 8192 to any other. With 0, a tool call cut at that limit is tried once more with twice the room; a set cap is never raised. A cap is always sent, because Bedrock's own default can be low enough to cut long answers and tool calls short.",
             "tags": [
               "advanced"
             ]

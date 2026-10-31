@@ -1115,8 +1115,8 @@ def test_a_configured_max_tokens_wins_and_the_declared_zero_is_not_a_cap() -> No
 # Thinking counts against ``maxTokens``. At 8,192 a Claude model that reasons at length spent the
 # whole cap before it wrote a word, and the turn ended with "the model ran out of output room".
 
-#: The output ceiling every Claude model that can think allows at least.
-_LOWEST_THINKING_CEILING = 32_000
+#: The cap a Claude model that thinks is sent when the instance sets none.
+_THINKING_DEFAULT = 64_000
 
 #: Claude models that think on every request, with no reasoning effort sent, in the id forms a
 #: binding names them by: an inference profile, a bare foundation-model id, a versioned suffix.
@@ -1135,9 +1135,11 @@ async def _cap_sent(
     path: str = "complete",
     options: dict | None = None,
     effort: str = "",
+    per_call: int | None = None,
     **build_kwargs: Any,
 ) -> int:
-    """The ``maxTokens`` one call to *model* carries, built the way core builds a bound model."""
+    """The ``maxTokens`` one call to *model* carries, built the way core builds a bound model.
+    *per_call* is the cap core asks for that one request (``complete``'s ``max_tokens``)."""
     from personalclaw.llm.registry import ProviderEntry
     from provider import _factory
 
@@ -1148,7 +1150,11 @@ async def _cap_sent(
     events = (
         built.stream("hi")
         if path == "stream"
-        else built.complete([{"role": "user", "content": "hi"}], reasoning_effort=effort)
+        else built.complete(
+            [{"role": "user", "content": "hi"}],
+            reasoning_effort=effort,
+            **({} if per_call is None else {"max_tokens": per_call}),
+        )
     )
     _ = [ev async for ev in events]
     return client.last_request["inferenceConfig"]["maxTokens"]
@@ -1161,9 +1167,8 @@ async def test_a_claude_model_that_thinks_by_default_gets_room_to_think_and_answ
     monkeypatch: pytest.MonkeyPatch, model: str, path: str
 ) -> None:
     """🔴 Red before: with Max Output Tokens 0 these were sent 8,192, which their thinking alone
-    could spend. They get more, within the ceiling of every Claude model that thinks."""
-    cap = await _cap_sent(monkeypatch, model, path=path)
-    assert 8_192 < cap <= _LOWEST_THINKING_CEILING
+    could spend. They get 64,000, half the ceiling of every Claude model that thinks here."""
+    assert await _cap_sent(monkeypatch, model, path=path) == _THINKING_DEFAULT
 
 
 @pytest.mark.asyncio
@@ -1175,8 +1180,7 @@ async def test_a_claude_model_asked_for_a_reasoning_effort_gets_room_to_think(
 ) -> None:
     """🔴 Red before: an effort turns adaptive thinking on for a Claude model that takes it, and
     the request still carried 8,192."""
-    cap = await _cap_sent(monkeypatch, model, effort="high")
-    assert 8_192 < cap <= _LOWEST_THINKING_CEILING
+    assert await _cap_sent(monkeypatch, model, effort="high") == _THINKING_DEFAULT
 
 
 @pytest.mark.asyncio
@@ -1206,7 +1210,7 @@ async def test_a_request_that_does_not_think_keeps_8192(
 async def test_an_instances_max_output_tokens_wins_over_the_thinking_default(
     monkeypatch: pytest.MonkeyPatch, effort: str
 ) -> None:
-    """The setting is sent as it is, above or below 32,000, and also when core asks a budget of
+    """The setting is sent as it is, above or below 64,000, and also when core asks a budget of
     its own for the call. This held before as well: it keeps the thinking default from ever
     overriding what the owner set."""
     model = "global.anthropic.claude-opus-5-5"
@@ -1216,6 +1220,180 @@ async def test_an_instances_max_output_tokens_wins_over_the_thinking_default(
         await _cap_sent(monkeypatch, model, options={"max_tokens": 4000}, effort=effort, max_tokens=2048)
         == 4000
     )
+
+
+# ── The room core asks for one call, and each model's ceiling ──
+#
+# After a tool call cut at its output limit, core asks the next request of the turn for twice the
+# room, on a provider that declares ``takes_output_cap``. Bedrock refuses a request above its
+# model's ceiling, so the cap is held to it, and a model whose ceiling is not known is sent what it
+# would be sent anyway.
+
+
+def test_it_declares_the_per_call_cap_exactly_when_core_sends_one() -> None:
+    """On a PersonalClaw that sends no per-call cap, the declaration would claim what nothing
+    uses. ``requiresCoreFeatures`` does not list the feature: the app works without it."""
+    import json
+    from pathlib import Path
+
+    from personalclaw.sdk.features import core_has
+    from provider import BedrockProvider
+
+    assert BedrockProvider.takes_output_cap is core_has("per-call-output-cap")
+    manifest = json.loads((Path(__file__).parent / "app.json").read_text())
+    assert "per-call-output-cap" not in manifest["requiresCoreFeatures"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "per_call"),
+    [
+        ("global.anthropic.claude-opus-5-5", 128_000),  # twice a cut at the thinking default
+        ("global.anthropic.claude-opus-5-5", 100_000),
+        ("us.anthropic.claude-sonnet-4-6", 16_384),  # twice a cut at 8,192, no thinking asked
+        ("anthropic.claude-sonnet-4-5-20250929-v1:0", 16_384),
+        ("us.anthropic.claude-haiku-4-5-20251001-v1:0", 64_000),
+        ("us.anthropic.claude-opus-4-1-20250805-v1:0", 16_384),
+        ("us.anthropic.claude-sonnet-4-20250514-v1:0", 16_384),  # a date is not a minor version
+    ],
+)
+async def test_a_cap_core_asks_for_one_call_is_sent(
+    monkeypatch: pytest.MonkeyPatch, model: str, per_call: int
+) -> None:
+    """🔴 Red before: ``complete`` took no cap for one request, so a call cut at its output limit
+    was tried again with the same room and tended to be cut again."""
+    assert await _cap_sent(monkeypatch, model, per_call=per_call) == per_call
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "options", "per_call", "ceiling"),
+    [
+        ("global.anthropic.claude-opus-5-5", {}, 256_000, 128_000),
+        ("global.anthropic.claude-fable-5-1", {}, 256_000, 128_000),
+        ("anthropic.claude-opus-4-5-20251101-v1:0", {}, 128_000, 64_000),
+        ("us.anthropic.claude-haiku-4-5-20251001-v1:0", {}, 128_000, 64_000),
+        ("us.anthropic.claude-opus-4-1-20250805-v1:0", {}, 64_000, 32_000),
+        # A set cap above the ceiling would be refused outright: it is held to the ceiling too.
+        ("global.anthropic.claude-opus-5-5", {"max_tokens": 200_000}, None, 128_000),
+        ("anthropic.claude-sonnet-4-5-20250929-v1:0", {"max_tokens": 100_000}, None, 64_000),
+    ],
+)
+async def test_no_cap_is_sent_above_the_models_ceiling(
+    monkeypatch: pytest.MonkeyPatch, model: str, options: dict, per_call: int | None, ceiling: int
+) -> None:
+    assert await _cap_sent(monkeypatch, model, options=options, per_call=per_call) == ceiling
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "anyway"),
+    [
+        ("amazon.nova-pro-v1:0", 8_192),
+        ("us.anthropic.claude-opus-4-20250514-v1:0", 8_192),  # Opus 4: no page gives its ceiling
+        ("global.anthropic.claude-opus-5-50", 8_192),  # a later minor version is not its major
+    ],
+)
+async def test_a_model_whose_ceiling_is_not_known_is_sent_what_it_would_be_anyway(
+    monkeypatch: pytest.MonkeyPatch, model: str, anyway: int
+) -> None:
+    """A larger cap could be one the model refuses, which would end the turn on an error instead
+    of on the note that the call was cut."""
+    assert await _cap_sent(monkeypatch, model, per_call=16_384) == anyway
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    [
+        "global.anthropic.claude-opus-5-50",  # a later minor version than the table names
+        "global.anthropic.claude-opus-6",
+        "global.anthropic.claude-sonnet-5-7",
+    ],
+)
+async def test_a_model_that_thinks_with_no_ceiling_listed_keeps_32000(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    """PersonalClaw's rule says these think adaptively, so a reasoning effort is sent to them, but
+    this app does not know their ceiling. 64,000 could be more than one allows; 32,000, sent to
+    every model that thought before, is not."""
+    assert await _cap_sent(monkeypatch, model, effort="high") == 32_000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model", ["us.anthropic.claude-opus-4-1-20250805-v1:0", "us.anthropic.claude-opus-4-20250514-v1:0"]
+)
+async def test_an_older_claude_asked_to_think_is_never_sent_more_than_it_allows(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    """Opus 4 and 4.1 allow 32,000. They take a thinking budget, not adaptive thinking, so a
+    reasoning effort asked of them is sent no thinking, and the request keeps 8,192."""
+    client = _install_fake_boto3(monkeypatch, [_text_event("ok"), _stop_event(), _usage_event(10, 2)])
+    provider = _bedrock_built({}, model=model)
+    await provider.start()
+
+    _ = [ev async for ev in provider.complete([{"role": "user", "content": "hi"}], reasoning_effort="high")]
+
+    assert client.last_request["inferenceConfig"]["maxTokens"] == 8_192 <= 32_000
+    assert "additionalModelRequestFields" not in client.last_request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("options", "build_kwargs", "kept"),
+    [
+        ({"max_tokens": 4000}, {}, 4000),  # the instance's Max Output Tokens
+        ({}, {"max_tokens": 2048}, 2048),  # the budget core built the provider with
+    ],
+)
+async def test_a_cap_the_provider_was_built_with_wins_over_one_asked_for_one_call(
+    monkeypatch: pytest.MonkeyPatch, options: dict, build_kwargs: dict, kept: int
+) -> None:
+    model = "global.anthropic.claude-opus-5-5"
+    sent = await _cap_sent(monkeypatch, model, options=options, per_call=100_000, **build_kwargs)
+    assert sent == kept
+
+
+@pytest.mark.asyncio
+async def test_the_room_rides_only_the_request_it_was_asked_for(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _install_fake_boto3(monkeypatch, [_text_event("ok"), _stop_event(), _usage_event(10, 2)])
+    provider = _bedrock_built({}, model="global.anthropic.claude-opus-5-5")
+    await provider.start()
+    messages = [{"role": "user", "content": "hi"}]
+
+    sent = []
+    for per_call in (128_000, None):
+        _ = [ev async for ev in provider.complete(messages, max_tokens=per_call)]
+        sent.append(client.last_request["inferenceConfig"]["maxTokens"])
+
+    assert sent == [128_000, _THINKING_DEFAULT]
+
+
+@pytest.mark.asyncio
+async def test_behind_cores_spend_guard_the_room_reaches_the_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Core wraps every model it hands the native loop in its spend guard, which passes a per-call
+    cap on only to a provider that declares it takes one."""
+    from personalclaw.sdk.features import core_has
+
+    if not core_has("per-call-output-cap"):
+        pytest.skip("this PersonalClaw sends no per-call cap")
+    from personalclaw.guardrails.model_call import ModelCallGuard
+
+    client = _install_fake_boto3(monkeypatch, [_text_event("ok"), _stop_event(), _usage_event(10, 2)])
+    provider = _bedrock_built({}, model="global.anthropic.claude-opus-5-5")
+    await provider.start()
+    guard = ModelCallGuard(provider, use_case="loops", provider_name="bedrock", model="m")
+    assert guard.takes_output_cap is True
+
+    messages = [{"role": "user", "content": "hi"}]
+    _ = [ev async for ev in guard.complete(messages, max_tokens=128_000)]
+
+    assert client.last_request["inferenceConfig"]["maxTokens"] == 128_000
 
 
 @pytest.mark.asyncio
@@ -1299,7 +1477,7 @@ def test_the_max_tokens_help_names_the_cap_a_zero_sends() -> None:
     props = json.loads((Path(__file__).parent / "app.json").read_text())["provider"][
         "settingsSchema"]["properties"]
     assert (
-        f"else {_THINKING_MAX_TOKENS} to a Claude model that thinks (its thinking counts against "
+        f"else up to {_THINKING_MAX_TOKENS} to a Claude model that thinks (its thinking counts against "
         f"the cap) and {_DEFAULT_MAX_TOKENS} to any other."
     ) in props["max_tokens"]["x-meta"]["help"]
     assert _bedrock_built({"max_tokens": 0})._max_tokens == _DEFAULT_MAX_TOKENS
