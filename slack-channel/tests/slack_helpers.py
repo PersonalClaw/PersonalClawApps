@@ -2,8 +2,9 @@
 without colliding with the app bundle's own conftest during combined test runs)."""
 
 import os
+from unittest.mock import MagicMock
 
-from personalclaw.sdk.channel import owner_id_credential
+from personalclaw.sdk.channel import CapturedSession, owner_id_credential
 
 from slack_runtime.client import SlackClientOps
 
@@ -17,6 +18,15 @@ def set_owner(owner_id: str) -> None:
         os.environ[key] = owner_id
     else:
         os.environ.pop(key, None)
+
+
+def linked_chat(key: str = "session1", *, running: bool = False) -> CapturedSession:
+    """The dashboard chat a Slack thread is linked to: core's channel-kit chat, so a message
+    enters it at core's own door, with its ``append`` a mock to assert on."""
+    session = CapturedSession(key)
+    session.running = running
+    session.append = MagicMock()
+    return session
 
 
 class MockSlackClient(SlackClientOps):

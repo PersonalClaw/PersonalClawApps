@@ -15,19 +15,16 @@ import pytest
 
 from discord_runtime import inbound_tap
 from discord_runtime.transport import DiscordTransport
-from personalclaw.sdk.channel import allow_sender
+from personalclaw.sdk.channel import CapturedSession, allow_sender
 
 OWNER = "42"
 
 
-class _Session:
-    def __init__(self) -> None:
-        self.key = "discord-1"
-        self.running = False
-        self.task = None
+class _Session(CapturedSession):
+    """Core's channel-kit chat, so a message enters it at core's own door."""
 
-    def append(self, *a, **k) -> None:
-        return None
+    def __init__(self) -> None:
+        super().__init__("discord-1")
 
 
 class _State:

@@ -14,21 +14,18 @@ import asyncio
 
 import pytest
 
-from personalclaw.sdk.channel import allow_sender, track
+from personalclaw.sdk.channel import CapturedSession, allow_sender, track
 from telegram_runtime import inbound_tap
 from telegram_runtime.transport import TelegramTransport
 
 OWNER = "42"
 
 
-class _Session:
-    def __init__(self) -> None:
-        self.key = "telegram-1"
-        self.running = False
-        self.task = None
+class _Session(CapturedSession):
+    """Core's channel-kit chat, so a message enters it at core's own door."""
 
-    def append(self, *a, **k) -> None:
-        return None
+    def __init__(self) -> None:
+        super().__init__("telegram-1")
 
 
 class _State:

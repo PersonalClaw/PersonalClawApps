@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from personalclaw.sdk.channel import allow_sender, track
+from personalclaw.sdk.channel import CapturedSession, allow_sender, track
 from discord_runtime import inbound_tap
 from discord_runtime.trigger_source import (
     APP_NAME,
@@ -114,17 +114,11 @@ class _FakeDelivery:
         self.guilds[channel_id] = guild_id
 
 
-class _FakeSession:
+class _FakeSession(CapturedSession):
+    """Core's channel-kit chat, so a message enters it at core's own door."""
+
     def __init__(self) -> None:
-        self.key = "discord-1"
-        self.running = False
-        self.task = None
-
-    def append(self, *a, **k):
-        return None
-
-    def queue_append(self, text):
-        return None
+        super().__init__("discord-1")
 
 
 class _FakeState:

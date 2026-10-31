@@ -17,7 +17,7 @@ import asyncio
 
 import pytest
 
-from personalclaw.sdk.channel import allow_sender, track
+from personalclaw.sdk.channel import CapturedSession, allow_sender, track
 from discord_runtime.transport import DiscordTransport, create_provider
 
 
@@ -38,19 +38,16 @@ class FakeDelivery:
         self.interactions.append(interaction)
 
 
-class FakeSession:
+class FakeSession(CapturedSession):
+    """Core's channel-kit chat, so a message enters it at core's own door; each append also keeps
+    its class."""
+
     def __init__(self, key="discord-1"):
-        self.key = key
-        self.running = False
-        self.task = None
+        super().__init__(key)
         self.appended: list[tuple] = []
-        self.queued: list[str] = []
 
     def append(self, role, text, cls, *, source=None):
         self.appended.append((role, text, cls))
-
-    def queue_append(self, text, *, channel="", source=None):
-        self.queued.append(text)
 
 
 class FakeState:

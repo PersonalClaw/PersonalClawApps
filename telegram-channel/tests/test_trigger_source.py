@@ -34,7 +34,7 @@ from pathlib import Path
 
 import pytest
 
-from personalclaw.sdk.channel import allow_sender, track
+from personalclaw.sdk.channel import CapturedSession, allow_sender, track
 from telegram_runtime import inbound_tap
 from telegram_runtime.trigger_source import (
     APP_NAME,
@@ -116,14 +116,11 @@ class _FakeDelivery:
         return "1"
 
 
-class _FakeSession:
-    def __init__(self) -> None:
-        self.key = "telegram-1"
-        self.running = False
-        self.task = None
+class _FakeSession(CapturedSession):
+    """Core's channel-kit chat, so a message enters it at core's own door."""
 
-    def append(self, *a, **k):
-        return None
+    def __init__(self) -> None:
+        super().__init__("telegram-1")
 
 
 class _FakeState:
