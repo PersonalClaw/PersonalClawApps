@@ -13,10 +13,10 @@ dashboard chat crosses PersonalClaw's guarded door, which takes it from the clai
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from slack_helpers import set_owner
+from slack_helpers import linked_chat, set_owner
 
 from slack_runtime.events import _route_message
 from slack_runtime.settings import ACTIVATION_ALWAYS, SlackSettings
@@ -130,9 +130,7 @@ async def test_a_linked_threads_message_crosses_the_door_once():
 
     from slack_runtime import handler
 
-    session = MagicMock()
-    type(session).running = PropertyMock(return_value=False)
-    session.key = "session1"
+    session = linked_chat()
     state = MagicMock()
     state.get_linked_session = MagicMock(return_value=session)
     state._background_tasks = set()

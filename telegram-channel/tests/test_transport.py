@@ -12,7 +12,7 @@ import asyncio
 
 import pytest
 
-from personalclaw.sdk.channel import allow_sender, track
+from personalclaw.sdk.channel import CapturedSession, allow_sender, track
 from telegram_runtime.transport import TelegramTransport, create_provider
 
 
@@ -25,11 +25,12 @@ class FakeDelivery:
         return "1"
 
 
-class FakeSession:
+class FakeSession(CapturedSession):
+    """Core's channel-kit chat, so a message enters it at core's own door; each append also keeps
+    its class."""
+
     def __init__(self, key="telegram-1"):
-        self.key = key
-        self.running = False
-        self.task = None
+        super().__init__(key)
         self.appended: list[tuple] = []
 
     def append(self, role, text, cls, *, source=None):

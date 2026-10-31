@@ -2,7 +2,7 @@
 
 Named ``_fakes`` (leading underscore, not ``test_*``) so pytest doesn't collect it. The
 apps boundary lint does NOT skip this file (only ``__pycache__`` and ``test_*.py`` are
-skipped), so it imports **stdlib only** — no ``personalclaw`` import of any depth.
+skipped), so it imports core only through ``personalclaw.sdk``, as an app does.
 
 Both fakes are injected, never monkeypatched onto the stdlib: the transport takes a
 ``_client_factory`` and a ``_sender_factory``, and the delivery takes a sender. Nothing
@@ -12,6 +12,8 @@ here opens a socket, sleeps on wall-clock, or writes outside a tmp dir.
 from __future__ import annotations
 
 from email.message import EmailMessage
+
+from personalclaw.sdk.channel import CapturedSession
 
 
 class FakeImapServer:
@@ -186,13 +188,13 @@ def raw_message(headers: str, body: str = "body") -> bytes:
 # ── dashboard-state / services stand-ins (mirroring telegram + discord) ──
 
 
-class FakeSession:
+class FakeSession(CapturedSession):
+    """Core's channel-kit chat, so a mail enters it at core's own door; each append also keeps
+    its class and the files it carried."""
+
     def __init__(self, key: str = "email-1") -> None:
-        self.key = key
-        self.running = False
-        self.task = None
+        super().__init__(key)
         self.appended: list[tuple] = []
-        self.queued: list[str] = []
         #: The ``meta`` of each append that carried one (a turn's attached files).
         self.metas: list[dict] = []
 
@@ -200,9 +202,6 @@ class FakeSession:
         self.appended.append((role, text, cls))
         if meta is not None:
             self.metas.append(meta)
-
-    def queue_append(self, text, *, channel: str = "", files=None, source=None) -> None:
-        self.queued.append(text)
 
 
 class FakeState:

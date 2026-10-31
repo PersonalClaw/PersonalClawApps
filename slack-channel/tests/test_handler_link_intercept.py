@@ -3,7 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
-from slack_helpers import set_owner
+from slack_helpers import linked_chat, set_owner
 
 
 def _make_slack():
@@ -190,9 +190,7 @@ class TestLinkedThreadIntercept:
         from slack_runtime import handler
 
         slack = _make_slack()
-        session = MagicMock()
-        type(session).running = PropertyMock(return_value=False)
-        session.key = "session1"
+        session = linked_chat()
         ds = MagicMock()
         ds.get_linked_session = MagicMock(return_value=session)
         ds._background_tasks = set()
@@ -224,9 +222,7 @@ class TestLinkedThreadIntercept:
         from slack_runtime import handler
 
         slack = _make_slack()
-        session = MagicMock()
-        type(session).running = PropertyMock(return_value=False)
-        session.key = "session1"
+        session = linked_chat()
         ds = MagicMock()
         ds.get_linked_session = MagicMock(return_value=session)
         ds._background_tasks = set()
@@ -263,11 +259,7 @@ class TestLinkedThreadIntercept:
         from slack_runtime import handler
 
         slack = _make_slack()
-        session = MagicMock()
-        type(session).running = PropertyMock(return_value=True)
-        session.key = "session1"
-        session._queue = []
-        session.queue_append = lambda content, *, channel="", source=None: (session._queue.append({"id": "test", "content": content}) or "test")
+        session = linked_chat(running=True)
         ds = MagicMock()
         ds.get_linked_session = MagicMock(return_value=session)
         ds.broadcast_ws = MagicMock()
@@ -283,7 +275,7 @@ class TestLinkedThreadIntercept:
             await handler.handle_message(
                 slack, MagicMock(), "C1", "hello", "t1", "msg1", "U1",
             )
-            assert len(session._queue) == 1
+            assert session.queued == ["hello"]
             assert services.turns == []
 
     @pytest.mark.asyncio
