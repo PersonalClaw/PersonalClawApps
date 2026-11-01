@@ -2644,13 +2644,17 @@ def test_without_access_token_the_owners_own_sign_in_is_what_git_uses(
 
 def test_access_token_is_never_handed_to_an_ssh_remote(remote, tmp_path, monkeypatch, c_locale):
     """A control: ssh signs in with the owner's key, so neither the token nor its helper reaches
-    a git that talks to an ssh remote."""
+    a git that talks to an ssh remote. A token beside one is refused before git runs, and the same
+    remote takes the push once Access token is cleared."""
     runs = _recorded(monkeypatch)
+    settings = {"repo_url": remote, "local_clone": str(tmp_path / "clone"), "token": ACCESS}
 
-    r = create_provider(
-        {"repo_url": remote, "local_clone": str(tmp_path / "clone"), "token": ACCESS}
-    ).push([SyncObject("k", b"v")])
+    refused = create_provider(settings).push([SyncObject("k", b"v")])
+    assert refused.outcome == "permanent", refused.detail
+    assert refused.detail.startswith("Git Sync doesn't use Access token with an ssh remote")
+    assert runs == []
 
+    r = create_provider({**settings, "token": ""}).push([SyncObject("k", b"v")])
     assert r.outcome == "delivered", r.detail
     assert runs
     assert not [env for _argv, env in runs if ACCESS in env.values()]
@@ -3267,3 +3271,188 @@ def test_the_refusal_says_which_key_why_and_what_to_do(remote, outside, c_locale
         "from the git remote's branch: git checks it out as a link, and Git Sync follows none "
         "out of the clone."
     )
+
+
+# ── a credential saved in Git remote URL ────────────────────────────────────────────────
+#
+# Saving the settings took a Git remote URL with a credential written into it, and the settings file
+# isn't the credential store: it held the token in plain text, and a snapshot or a sync of the home
+# carried it. Git Sync refused the URL only when git ran. It now takes the credential out of the
+# saved settings the first time it runs with them, and the next Test says what it did.
+
+TOOK = (
+    "Git Sync took what was written into Git remote URL out of its settings, since the settings "
+    "file isn't the credential store: it {did}. "
+)
+
+
+def _saved(url: str, tmp_path, **settings) -> GitSyncProvider:
+    """The transport built from settings saved with ``url``, as core builds it."""
+    from personalclaw.sdk.settings import ProviderSettings
+
+    ProviderSettings.update(
+        "git-sync", {"repo_url": url, "local_clone": str(tmp_path / "clone"), **settings}
+    )
+    return create_provider(ProviderSettings.load("git-sync"))
+
+
+def _saved_settings() -> dict:
+    from personalclaw.sdk.settings import ProviderSettings
+
+    return ProviderSettings.load("git-sync")
+
+
+def _settings_files_holding(secret: str) -> list[str]:
+    from personalclaw.sdk.settings import ProviderSettings
+
+    return _files_holding(ProviderSettings.config_path("git-sync").parent, secret)
+
+
+@pytest.mark.parametrize(
+    ("url", "user", "did"),
+    [
+        (f"https://sync-user:{TOKEN}@git.example.com/owner/state.git", "sync-user",
+         "moved the token to Access token and moved the user name to User name"),
+        (f"https://{TOKEN}@git.example.com/owner/state.git", "",
+         "moved the token to Access token"),
+    ],
+    ids=["user-and-token", "token-only"],
+)
+def test_a_token_saved_in_git_remote_url_moves_to_access_token(
+    tmp_path, monkeypatch, url, user, did
+):
+    """🔴 Red before: the settings file kept it in plain text, and the URL was only refused."""
+    started = _no_git(monkeypatch)
+    p = _saved(url, tmp_path)
+    assert _settings_files_holding(TOKEN), "saved in plain text, as the form saves it"
+
+    probe = p.test()
+
+    assert probe.detail.startswith(TOOK.format(did=did)), probe.detail
+    saved = _saved_settings()
+    assert saved["repo_url"] == "https://git.example.com/owner/state.git"
+    assert saved["token"] == TOKEN
+    assert str(saved.get("username") or "") == user
+    assert _settings_files_holding(TOKEN) == []
+    assert started, "Git Sync went on, with the address without it"
+    assert not [argv for argv in started if any(TOKEN in arg for arg in argv)]
+
+
+def test_a_token_in_the_url_beside_a_saved_access_token_is_dropped(tmp_path, monkeypatch):
+    _no_git(monkeypatch)
+    url = f"https://{TOKEN}@git.example.com/owner/state.git"
+    p = _saved(url, tmp_path, token=ACCESS)
+
+    assert p.test().detail.startswith(
+        TOOK.format(did="dropped the token, since Access token is set")
+    )
+    saved = _saved_settings()
+    assert (saved["repo_url"], saved["token"]) == ("https://git.example.com/owner/state.git", ACCESS)
+    assert _settings_files_holding(TOKEN) == []
+
+
+@pytest.mark.parametrize(
+    ("url", "kept"),
+    [
+        (f"ssh://sync-user:{TOKEN}@git.example.com/owner/state.git",
+         "ssh://sync-user@git.example.com/owner/state.git"),
+        (f"sync-user:{TOKEN}@git.example.com:owner/state.git",
+         "sync-user@git.example.com:owner/state.git"),
+    ],
+    ids=["url", "scp-like"],
+)
+def test_a_password_saved_in_an_ssh_git_remote_url_is_dropped(tmp_path, monkeypatch, url, kept):
+    """🔴 Red before: the settings file kept it in plain text. ssh signs in with your key, so the
+    password goes nowhere."""
+    _no_git(monkeypatch)
+    p = _saved(url, tmp_path)
+
+    assert p.test().detail.startswith(
+        TOOK.format(did="dropped the password, since ssh signs in with your key")
+    )
+    saved = _saved_settings()
+    assert saved["repo_url"] == kept
+    assert not str(saved.get("token") or "")
+    assert _settings_files_holding(TOKEN) == []
+
+
+def test_a_user_name_alone_in_the_url_moves_to_user_name_not_access_token(tmp_path, monkeypatch):
+    """A host's own clone URL can carry the user name alone (Bitbucket's does). Taken for a token,
+    git would send it as the password and the sync would fail behind a masked field."""
+    _no_git(monkeypatch)
+    p = _saved("https://sync-user@git.example.com/owner/state.git", tmp_path)
+
+    assert p.test().detail.startswith(TOOK.format(did="moved the user name to User name"))
+    saved = _saved_settings()
+    assert saved["repo_url"] == "https://git.example.com/owner/state.git"
+    assert saved["username"] == "sync-user"
+    assert not str(saved.get("token") or "")
+
+
+#: The hosts' token prefixes, written in parts so no test value carries one whole.
+HOST_PREFIXES = ("gh" + "p_", "gh" + "o_", "github" + "_pat_", "gl" + "pat-")
+
+
+def test_the_token_prefixes_are_the_hosts_own():
+    assert git_sync._TOKEN_PREFIXES == HOST_PREFIXES
+
+
+@pytest.mark.parametrize(
+    "lone", [*(f"{prefix}fixture" for prefix in HOST_PREFIXES), "A" * 20 + "_-9"]
+)
+def test_a_lone_value_that_reads_as_a_token_is_one(lone):
+    assert git_sync._web_sign_in(f"https://{lone}@git.example.com/o/s.git") == ("", lone)
+
+
+@pytest.mark.parametrize("lone", ["sync-user", "a" * 19, "first.last"])
+def test_a_lone_value_that_doesnt_is_a_user_name(lone):
+    assert git_sync._web_sign_in(f"https://{lone}@git.example.com/o/s.git") == (lone, "")
+
+
+def test_the_next_test_connection_says_what_was_done_whichever_transport_asks(
+    tmp_path, monkeypatch
+):
+    """Core builds the transport again when its settings change, and the settle changes them: the
+    sentence waits for the next Test, on whichever instance runs it, and is said once."""
+    _no_git(monkeypatch)
+    url = f"https://{TOKEN}@git.example.com/owner/state.git"
+    _saved(url, tmp_path).push([SyncObject("k", b"v")])  # settles, says nothing
+
+    rebuilt = create_provider(_saved_settings())
+    assert rebuilt.test().detail.startswith(TOOK.format(did="moved the token to Access token"))
+    assert not rebuilt.test().detail.startswith("Git Sync took")
+
+
+def test_a_url_the_settings_dont_hold_is_refused_and_nothing_is_saved(tmp_path, monkeypatch):
+    """A transport built with a URL that isn't the saved one changes no settings."""
+    started = _no_git(monkeypatch)
+    url = f"https://{TOKEN}@git.example.com/owner/state.git"
+    p = _web_provider(url, tmp_path)
+
+    assert p.test().detail.startswith("Git Sync won't use a user name or token written into")
+    assert _saved_settings() == {}
+    assert started == []
+
+
+# ── Access token beside an ssh remote ───────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["ssh://git@git.example.com/owner/state.git", "git@git.example.com:owner/state.git"],
+    ids=["url", "scp-like"],
+)
+def test_access_token_beside_an_ssh_remote_is_refused_before_git_runs(tmp_path, monkeypatch, url):
+    """🔴 Red before: the token was dropped without a word, and git signed in with the ssh key,
+    so a user who pasted a token expecting it to be used had no reason to look at ssh."""
+    started = _no_git(monkeypatch)
+    p = _web_provider(url, tmp_path, token=ACCESS)
+
+    _refused_everywhere(
+        p,
+        "Git Sync doesn't use Access token with an ssh remote: ssh signs in with your ssh key, so "
+        f"the token would never be used. Clear Access token {ON_CARD} to sign in with your key, "
+        "or set Git remote URL to the remote's https address to sign in with the token.",
+    )
+
+    assert started == []

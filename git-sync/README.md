@@ -44,7 +44,7 @@ other app. (Or [install it from a shell](../docs/third-party-install.md#installi
 | `repo_url` | Git remote URL | The ssh or https URL of a git remote you own (both machines point at the same one). A remote at a local path is refused, and so is an https URL with a user name or token written into it (put the token in Access token), or an ssh one — written as a URL or scp-like — with a password (ssh signs in with your key). Leave empty to configure later — the transport stays idle until set. |
 | `local_clone` | Local working clone | Where the working clone lives on this machine. Left empty, it is `sync/git-sync` in PersonalClaw's home: the one `PERSONALCLAW_HOME` names, else `~/.personalclaw`. Supports `~` and `$VARS`. Cloned on first use, reused after. |
 | `branch` | Branch | The branch to sync on (default `main`). Both machines must use the same branch. A branch the remote doesn't have yet starts empty. |
-| `token` | Access token | For an https remote that needs a token to sign in (sensitive: kept in PersonalClaw's credential store). Handed to git by its own credential helper, never written into the working clone or onto a command line; only an https remote is given it, or an http one on this machine. Leave empty for ssh. |
+| `token` | Access token | For an https remote that needs a token to sign in (sensitive: kept in PersonalClaw's credential store). Handed to git by its own credential helper, never written into the working clone or onto a command line; only an https remote is given it, or an http one on this machine. Leave empty for ssh: a token beside an ssh remote is refused, since ssh signs in with your key. |
 | `username` | User name | The user name to sign in with alongside Access token, if your host wants one. Empty signs in as `x-access-token`, which a host that checks only the token accepts. Leave empty for ssh. |
 
 ## Configuring two machines
@@ -146,9 +146,22 @@ clone of an empty repo succeeds and the first push publishes the branch.
   helper of its own, which reads it from that git command's environment: it is on no command line
   and in no file, and none of your own credential helpers is asked for this remote or told to
   keep the token. Only an https remote is given it — or an http one on this machine; plain http
-  to anywhere else would carry it unencrypted, so that is refused — and an ssh remote never is.
+  to anywhere else would carry it unencrypted, so that is refused. An ssh remote never is, so a
+  token beside one is refused too, before git runs: clear Access token to sign in with your ssh
+  key, or use the remote's https address to sign in with the token.
   A working clone made earlier from a URL with a token in it has its origin rewritten without
   it, and every copy of the token taken out of its `.git`.
+- **A credential saved in Git remote URL is taken out of the settings.** The settings file is not
+  the credential store: it holds Git remote URL in plain text, and travels in a snapshot or a
+  sync of the home. So the first time Git Sync runs with a saved URL that has a credential
+  written into it, it saves the URL without it. An https URL's token moves to Access token and
+  its user name to User name, each when that field is empty, and is dropped when it's set. A
+  value written alone before the `@` counts as a token only when it reads as one (a host's
+  token prefix, such as `ghp_` or `glpat-`, or 20 or more letters, digits, `_` and `-`);
+  anything else is a user name, as in Bitbucket's own clone URLs. A password in an ssh URL is
+  dropped, since ssh signs in with your key. The next **Test connection** says what was done.
+  A copy a snapshot or a sync took before then still holds it: change that token on your git
+  host.
 - **A password in an ssh Git remote URL is refused too.** git would keep
   `ssh://user:password@host/…` in `.git/config` and hand the password to ssh on its command line
   as part of the login name, where anyone on this machine can read it, and ssh never signs in

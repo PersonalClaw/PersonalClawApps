@@ -45,7 +45,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from personalclaw.sdk.git import (
     GitTooOld,
@@ -56,6 +56,8 @@ from personalclaw.sdk.git import (
     transport_refusal,
 )
 from personalclaw.sdk.net import sentence_with_detail
+from personalclaw.sdk.settings import ProviderSettings
+from personalclaw.sdk.util import app_data_dir, atomic_write
 from personalclaw.sdk.sync import (
     ConnectionResult,
     KeysRefused,
@@ -406,6 +408,35 @@ def _credential(url: str) -> tuple[str, str]:
     return "", ""
 
 
+#: How a host's own tokens start, read as a token wherever they're written.
+_TOKEN_PREFIXES = ("ghp_", "gho_", "github_pat_", "glpat-")
+
+
+def _reads_as_token(value: str) -> bool:
+    """Whether a lone value written into a URL reads as a token rather than a user name: a host's
+    own token prefix, or 20 or more letters, digits, ``_`` and ``-``."""
+    return value.startswith(_TOKEN_PREFIXES) or bool(re.fullmatch(r"[A-Za-z0-9_-]{20,}", value))
+
+
+def _web_sign_in(url: str) -> tuple[str, str]:
+    """``(user name, token)`` written into an http(s) ``url``, decoded, or ``("", "")`` for any
+    other URL. A lone value is the token only when it reads as one (:func:`_reads_as_token`):
+    a host's own clone URL can carry the user name there, as Bitbucket's does."""
+    found = _USERINFO.search(url) if _web(url) else None
+    if not found:
+        return "", ""
+    user, colon, token = found.group(0)[3:-1].partition(":")
+    if colon:
+        return unquote(user), unquote(token)
+    lone = unquote(user)
+    return ("", lone) if _reads_as_token(lone) else (lone, "")
+
+
+#: Where what :meth:`GitSyncProvider._settle` did waits for the next Test connection, which may
+#: be another instance's: core builds the transport again when its settings change.
+_SETTLED_NOTE = "settled-git-remote-url.txt"
+
+
 def _without_credential(url: str) -> str:
     """``url`` with the credential written into it taken out (:func:`_credential`)."""
     copy, clean = _credential(url)
@@ -525,6 +556,8 @@ class GitSyncProvider(SyncTransportProvider):
         # name it signs in with. Pasted text can end in a newline; a token never does.
         self._token = (token or "").strip()
         self._username = (username or "").strip()
+        #: What :meth:`_settle` did to the saved settings, said by the next Test; asked once.
+        self._settled: str | None = None
 
     # ── internal helpers ─────────────────────────────────────────────────────────────
 
@@ -532,6 +565,68 @@ class GitSyncProvider(SyncTransportProvider):
     def _idle(self) -> bool:
         """No remote → the transport is idle, not broken."""
         return not self._repo_url
+
+    def _settle(self) -> str:
+        """Take a credential written into Git remote URL out of the saved settings, once, and say
+        what was done (``""`` for nothing). The settings file isn't the credential store: it
+        holds the URL in plain text, and travels in a snapshot or a sync of the home. An http(s)
+        URL's token moves to Access token and its user name to User name, each when that field
+        is empty, and is dropped when it's set; a lone value is the token only when it reads as
+        one (:func:`_web_sign_in`). A password in an ssh URL is dropped, since ssh signs in with
+        your key. Only a URL the settings hold is changed, one that can't be saved is left to be
+        refused (:attr:`_refused`), and what was done waits for the next Test connection."""
+        if self._settled is not None:
+            return self._settled
+        self._settled = ""
+        clean = _without_credential(self._repo_url)
+        if clean == self._repo_url:
+            return ""
+        user, token = _web_sign_in(self._repo_url)
+        changed, did = {"repo_url": clean}, []
+        if token:
+            if self._token:
+                did.append("dropped the token, since Access token is set")
+            else:
+                changed["token"] = token
+                did.append("moved the token to Access token")
+        if user:
+            if self._username:
+                did.append("dropped the user name, since User name is set")
+            else:
+                changed["username"] = user
+                did.append("moved the user name to User name")
+        if not did:  # a password in an ssh URL, which keeps its user name
+            did.append("dropped the password, since ssh signs in with your key")
+        note = (
+            "Git Sync took what was written into Git remote URL out of its settings, since the "
+            f"settings file isn't the credential store: it {' and '.join(did)}. "
+        )
+        try:
+            if str(ProviderSettings.load("git-sync").get("repo_url") or "") != self._repo_url:
+                return ""
+            ProviderSettings.update("git-sync", changed)
+        except (OSError, ValueError):
+            return ""
+        try:
+            atomic_write(app_data_dir("git-sync") / _SETTLED_NOTE, note)
+        except OSError:
+            pass  # the settings are settled; only the next Test's sentence is lost
+        self._repo_url = clean
+        self._token = changed.get("token", self._token)
+        self._username = changed.get("username", self._username)
+        self._settled = note
+        return note
+
+    @staticmethod
+    def _settled_note() -> str:
+        """What a settle said, once, for the Test connection after it; ``""`` once said."""
+        path = app_data_dir("git-sync") / _SETTLED_NOTE
+        try:
+            note = path.read_text(encoding="utf-8")
+            path.unlink()
+        except OSError:
+            return ""
+        return note
 
     @property
     def _refused(self) -> str:
@@ -594,9 +689,17 @@ class GitSyncProvider(SyncTransportProvider):
         )
 
     def _token_refused(self) -> str:
-        """Why Access token can't be handed to git for Git remote URL, or ``""``: a plain http
-        remote on another machine would get it unencrypted, and a line break or a NUL would be
-        read by git as more than one answer. Only an http(s) remote is ever given the token."""
+        """Why Access token can't be handed to git for Git remote URL, or ``""``: an ssh remote
+        never takes it, a plain http remote on another machine would get it unencrypted, and a
+        line break or a NUL would be read by git as more than one answer. Only an http(s) remote
+        is ever given the token."""
+        if self._token and (_ssh_url(self._repo_url) or _scp_like(self._repo_url)):
+            return (
+                "Git Sync doesn't use Access token with an ssh remote: ssh signs in with your ssh "
+                f"key, so the token would never be used. Clear Access token {_ON_CARD} to sign "
+                "in with your key, or set Git remote URL to the remote's https address to sign "
+                "in with the token."
+            )
         if not self._token or not _web(self._repo_url):
             return ""
         if not _takes_token(self._repo_url):
@@ -1507,6 +1610,7 @@ class GitSyncProvider(SyncTransportProvider):
     def push(self, objects: list[SyncObject]) -> PushResult:
         if self._idle:
             return PushResult(outcome="transient", detail="no git remote configured")
+        self._settle()
         if self._refused:
             return PushResult(outcome="permanent", detail=self._refused)
         pushed = skipped = 0
@@ -1591,6 +1695,7 @@ class GitSyncProvider(SyncTransportProvider):
         # taken for the remote's.
         if self._idle:
             return []
+        self._settle()
         if self._refused:
             raise GitSyncFailed(self._refused)
         try:
@@ -1643,6 +1748,7 @@ class GitSyncProvider(SyncTransportProvider):
     def pull(self, refs: list[RemoteRef]) -> list[SyncObject]:
         if self._idle:
             return []
+        self._settle()
         if self._refused:
             raise GitSyncFailed(self._refused)
         # list_remote makes the clone; a read never does, and there's nothing to read without one.
@@ -1689,6 +1795,7 @@ class GitSyncProvider(SyncTransportProvider):
         again until it gave up, as "registry CAS lost"."""
         if self._idle:
             return False
+        self._settle()
         if self._refused:
             raise GitSyncFailed(self._refused)
         before: str | None = None
@@ -1749,6 +1856,15 @@ class GitSyncProvider(SyncTransportProvider):
     def test(self) -> ConnectionResult:
         if not self._repo_url:
             return ConnectionResult(ok=False, detail="no git remote configured")
+        self._settle()
+        settled = self._settled_note()
+        if settled:
+            probed = self._probe()
+            return ConnectionResult(ok=probed.ok, detail=f"{settled}{probed.detail}")
+        return self._probe()
+
+    def _probe(self) -> ConnectionResult:
+        """:meth:`test` once the settings are settled."""
         if self._refused:
             return ConnectionResult(ok=False, detail=self._refused)
         try:
