@@ -239,9 +239,10 @@ regenerated; save the new one in Configure).
 
 An allowlisted (non-owner) user is authorized for conversation *and* for the commands in
 the "any allowed user" tier — `!stop`, `!title`, `!compact` and `sessions`. Everything else
-stays owner-only. Add people deliberately. `!dashboard` and `/personalclaw dashboard` DM a
-dashboard link to the owner alone: the link signs in as the owner, so anyone else who asks is
-told *Only this channel's owner can get a dashboard link…* and is sent nothing.
+stays owner-only, `spawn`, `bg` and `cron` included: anyone else is told it's the owner's. Add
+people deliberately. `!dashboard` and `/personalclaw dashboard` DM a dashboard link to the owner
+alone: the link signs in as the owner, so anyone else who asks is told *Only this channel's owner
+can get a dashboard link…* and is sent nothing.
 
 Approvals are the owner's alone. Only the owner's press on one of a prompt's buttons answers a
 tool approval, whether it is asked in a DM or in a linked channel thread

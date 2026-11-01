@@ -2085,6 +2085,21 @@ async def handle_message(
             if reply is not None:
                 return
 
+    # ── spawn, bg and cron: the owner's alone, as every command but !stop, !title, !compact
+    # and sessions is. A subagent anyone else started would run before the turn names who asked,
+    # and so as her own work, and an automation is hers to change.
+    if not relayed and not is_owner(user_id) and _is_owner_keyword(text):
+        sel().log_api_access(
+            caller=user_id,
+            operation="slack.owner_command",
+            outcome="denied",
+            source="slack",
+            resources=text.strip().split()[0].lower(),
+            error="unauthorized sender",
+        )
+        await slack.post_message(channel, "⛔ Owner-only command.", reply_ts)
+        return
+
     # ── Subagent spawn: "spawn <task>" (before cron to avoid NL overlap) ──
     if subagent_manager and not relayed:
         spawn_reply = _handle_spawn_command(text, subagent_manager, session_key)
@@ -3366,12 +3381,26 @@ def _remove_all_jobs(store: TriggerStore) -> str:
     return f"✅ Removed {len(lines)} automation(s):\n" + "\n".join(lines)
 
 
+#: What starts a subagent from a thread: ``spawn <task>`` or ``bg <task>``.
+_SPAWN_PREFIXES = ("spawn ", "bg ")
+
+
+def _is_owner_keyword(text: str) -> bool:
+    """Whether *text* is a ``spawn``/``bg`` or a ``cron`` command (:func:`_handle_spawn_command`,
+    :func:`_handle_cron_command`), each the owner's alone."""
+    t = text.strip().lower()
+    if t.startswith(_SPAWN_PREFIXES):
+        return True
+    parts = t.split()
+    return len(parts) >= 2 and parts[0] == "cron"
+
+
 def _handle_spawn_command(text: str, manager: SubagentManager, session_key: str = "") -> str | None:
     """Intercept spawn/bg keyword commands. Returns reply or None."""
     t = text.strip()
     low = t.lower()
 
-    for prefix in ("spawn ", "bg "):
+    for prefix in _SPAWN_PREFIXES:
         if low.startswith(prefix):
             return _do_spawn(t[len(prefix) :].strip(), manager, session_key)
     return None
