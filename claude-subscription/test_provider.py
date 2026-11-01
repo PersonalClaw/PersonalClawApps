@@ -231,7 +231,7 @@ def test_config_path_uses_the_cli_token(tmp_path, _isolated):
     built = prov.create_provider({})
     assert _client_key(_isolated) == TOKEN
     assert built._model == ""  # no Default Model: the spec's curated pick is not served instead
-    assert built._max_tokens == 4096
+    assert built._max_tokens is None  # none set: core sends each request its model's default
 
 
 def test_relocated_store_via_claude_config_dir(monkeypatch, tmp_path, _isolated):

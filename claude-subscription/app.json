@@ -1,6 +1,6 @@
 {
   "name": "claude-subscription",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "displayName": "Claude (Subscription)",
   "description": "Claude models over your existing Claude Code sign-in — no API key. Reads the CLI's own credential store read-only.",
   "icon": "Sparkles",
@@ -63,7 +63,7 @@
           "minimum": 0,
           "x-meta": {
             "label": "Max Output Tokens",
-            "help": "Ceiling on tokens Claude may generate per turn. 0 leaves it to the model's own default.",
+            "help": "Ceiling on tokens Claude may generate per turn. 0 sends the budget PersonalClaw sets for that call, else 32000 to a model that thinks (its thinking counts against the cap) and 4096 to any other.",
             "tags": [
               "advanced"
             ]

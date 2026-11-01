@@ -45,7 +45,7 @@ def test_spec_is_anthropic_protocol():
     assert prov.SPEC.type == "anthropic_compatible"
     assert prov.SPEC.protocol == "anthropic"
     assert prov.SPEC.default_base_url == ""
-    assert prov.SPEC.max_tokens == 4096  # the Anthropic wire requires a max_tokens
+    assert prov.SPEC.max_tokens is None  # none set: core sends each request its model's default
 
 
 def test_create_provider_builds_anthropic(monkeypatch):

@@ -25,7 +25,7 @@ SPEC = BrandedProviderSpec(
     default_base_url="",           # user MUST supply the endpoint (no default host)
     api_key_env="ANTHROPIC_API_KEY",
     default_model="",
-    max_tokens=4096,               # the Anthropic wire requires a max_tokens
+    max_tokens=None,               # none set: core sends each request its model's default
     capabilities=frozenset({
         Capability.CHAT, Capability.CODE_TOOLS, Capability.STREAMING, Capability.VISION,
     }),
