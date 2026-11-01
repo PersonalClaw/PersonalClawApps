@@ -2453,18 +2453,27 @@ async def handle_message(
 
                 elif event.kind == EVENT_TOOL_CALL:
                     _tool_gap = True
-                    # Check tool hooks
+                    # Check tool hooks. A card is a notice, not a request: an agent CLI runs some
+                    # calls under its own policy without asking first, so hiding the card of a
+                    # call the deny-list names can't stop it, and this app can't tell from the
+                    # card whether the call ran. Only its permission request, below, refuses a
+                    # call. Here the thread and the log say no more than the app knows.
                     if context_builder:
                         tool_result = context_builder.hooks.on_tool_call(event.title)
                         if tool_result.action == TOOL_DENY:
-                            accumulated += f"\n🚫 _Tool `{event.title}` blocked by hooks._"
+                            accumulated += (
+                                f"\n⚠️ _`{event.title}` is on the deny list. This agent runs some "
+                                "calls without asking first, so whether it ran isn't known "
+                                "here._"
+                            )
                             sel().log_tool_invocation(
                                 session_key=session_key,
                                 source="slack",
                                 tool_name=event.title,
                                 tool_kind=event.tool_kind,
-                                outcome="denied",
+                                outcome="deny_listed",
                                 error="hook_deny",
+                                metadata={"seen_on": "card", "ran": "unknown"},
                             )
                             continue
 
