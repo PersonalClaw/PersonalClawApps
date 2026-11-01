@@ -29,7 +29,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 | Key | Label | Notes |
 |---|---|---|
-| `url` | Webhook URL | The HTTPS endpoint the event is POSTed to when this trigger fires. |
+| `url` | Webhook URL | The https endpoint the event is POSTed to when this trigger fires. A plain http URL is refused unless it is on this machine (localhost, 127.0.0.1 or ::1), since the event and its headers would travel unencrypted. |
 | `method` | Method | HTTP method (default POST). |
 | `headers` | Headers (JSON) | Optional JSON object of extra request headers, e.g. {"Authorization": "Bearer …"}. Content-Type defaults to application/json. |
 | `body_template` | Body template | Optional. Template with $EVENT, $CONTEXT, $now, $job_name, etc. Leave blank to send the full event JSON as-is. |
@@ -42,8 +42,11 @@ own:
 
 1. In Home Assistant, create an automation with a **webhook trigger** and note its webhook id.
 2. Attach **HTTP Webhook Hooks** to the trigger that should reach the house, with the URL
-   `http://homeassistant.local:8123/api/webhook/<your webhook id>` and, if the automation reads
-   the event, a body template such as `{"event": "$EVENT"}`.
+   `https://homeassistant.local:8123/api/webhook/<your webhook id>` and, if the automation reads
+   the event, a body template such as `{"event": "$EVENT"}`. The URL must be https: Home
+   Assistant serves it once its `http` integration has a certificate this machine trusts
+   (`ssl_certificate` and `ssl_key`). A plain http URL to another machine is refused, because the webhook id in it
+   would travel unencrypted.
 3. Your Home Assistant is on your own network, and the egress guard sends webhooks to public
    hosts only. Allow its host (`homeassistant.local` in the example) under
    **Settings → Security → Network egress** first, or the call is refused.

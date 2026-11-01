@@ -14,11 +14,13 @@ template, ``$EVENT`` and ``$CONTEXT`` placeholders (and any keys from
 """
 
 import asyncio
+import ipaddress
 import json
 import logging
 import time
 from string import Template
 from typing import Any
+from urllib.parse import urlsplit
 
 from personalclaw.sdk.action import (
     ActionContext,
@@ -27,6 +29,34 @@ from personalclaw.sdk.action import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: Why a plain http Webhook URL is refused: the event and every header set on the action
+#: (an Authorization header, say) would cross the network unencrypted.
+PLAIN_HTTP_REFUSED = (
+    "Webhook URL is plain http, so the event and the headers set here would travel "
+    "unencrypted. Use an https URL. Plain http is sent only to this machine "
+    "(localhost, 127.0.0.1 or ::1)."
+)
+
+
+def _scheme_and_host(url: str) -> tuple[str, str]:
+    """``url``'s scheme and host, lowercased; empty for an address that doesn't parse, which
+    the egress guard refuses anyway."""
+    try:
+        parts = urlsplit(url)
+        return parts.scheme.lower(), (parts.hostname or "").lower()
+    except ValueError:
+        return "", ""
+
+
+def _on_this_machine(host: str) -> bool:
+    """Whether ``host`` names this machine: ``localhost`` or a loopback address."""
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 class WebhookActionProvider(ActionProvider):
@@ -49,6 +79,10 @@ class WebhookActionProvider(ActionProvider):
             return ActionResult(
                 success=False, error="Webhook hook is missing 'url' field"
             )
+        scheme, host = _scheme_and_host(url)
+        plain_http = scheme == "http"
+        if plain_http and not _on_this_machine(host):
+            return ActionResult(success=False, error=PLAIN_HTTP_REFUSED)
         method = (action_config.get("method") or "POST").upper()
         # headers may arrive as a dict (programmatic caller) or a JSON string (the
         # trigger config form renders it as a text field). Accept both; a blank or
@@ -93,7 +127,14 @@ class WebhookActionProvider(ActionProvider):
         from personalclaw.sdk.net import WEBHOOK, EgressBlocked, egress_policy_for
         from personalclaw.sdk.net import fetch as net_fetch
 
-        policy = egress_policy_for(WEBHOOK).with_overrides(timeout_s=float(timeout))
+        # No hop carries the event and its headers over plain http to another machine: a target
+        # that isn't plain http to this machine is held to https on every hop, and one that is
+        # isn't redirected at all, since a webhook to this machine has nowhere else to go.
+        policy = egress_policy_for(WEBHOOK).with_overrides(
+            timeout_s=float(timeout),
+            allow_schemes=("http", "https") if plain_http else ("https",),
+            max_redirects=0 if plain_http else WEBHOOK.max_redirects,
+        )
         start = time.monotonic()
         try:
             resp = await net_fetch(url, policy=policy, method=method,
