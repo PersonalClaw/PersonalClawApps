@@ -65,7 +65,7 @@ from personalclaw.sdk.channel import is_sensitive_path, redact_credentials, reda
 from personalclaw.sdk.channel import owner_id_for
 from personalclaw.sdk.channel import sel
 from personalclaw.sdk.channel import SessionManager
-from personalclaw.sdk.model import closing_stream
+from personalclaw.sdk.model import ProviderResolutionError, closing_stream
 from slack_runtime.blocks import deprecation_warning_block
 from slack_runtime.client import SlackClientOps
 from slack_runtime.format import (
@@ -1777,6 +1777,33 @@ async def _handle_compact_command(
         pass
 
 
+#: What the dashboard's chat says when no model is set up (its calm setup state), said here too.
+NO_MODEL_CONNECTED = (
+    "No model is connected yet. Connect a model to start chatting: you can set one up in "
+    "Settings → Models."
+)
+
+
+def no_model_sentence(failure: BaseException) -> str:
+    """What the thread is told when no model can run its turn, or ``""`` for any other failure.
+
+    Core's resolver says it with a coded refusal (``ERR_MODEL_UNRESOLVED``), and the registry
+    with its own class, whose words are written for the person reading them. A provider that is
+    connected with no model chosen for it is named, as the dashboard names it."""
+    coded = getattr(failure, "agent_error", None)
+    if getattr(coded, "code", "") == "ERR_MODEL_UNRESOLVED":
+        chosen = re.search(r"no model is chosen for “([^”]+)”", str(getattr(coded, "why", "")))
+        if chosen:
+            return (
+                f"No model is chosen for {chosen.group(1)} yet. Choose which of its models to "
+                "chat with in Settings → Models."
+            )
+        return NO_MODEL_CONNECTED
+    if isinstance(failure, ProviderResolutionError):
+        return str(failure)
+    return ""
+
+
 async def handle_message(
     slack: SlackClientOps,
     sessions: SessionManager,
@@ -1799,11 +1826,11 @@ async def handle_message(
 ) -> None:
     """Route a Slack message through ACP with streaming and tool approval.
 
-    NOTE: ``from_trusted_bot`` is consumed only in the error path (echo-loop
-    suppression). Early-reply paths (hook auto-reply, !status, !sessions) still
-    post to Slack unconditionally — safe today because trusted bots send
-    structured commands (``[TASK:id]``, ``[ACK:id]``) that don't match those
-    patterns. Extend if that assumption changes.
+    A bot in Trusted Bot IDs (``from_trusted_bot``), which this app doesn't let in as a sender
+    (``is_allowed_user``), relays what anyone wrote: its message runs one turn, fenced as outside
+    content, and none of the keywords and commands before the turn acts on its text. Only the
+    hook's auto-reply, which posts canned text, still answers it. In the error path,
+    ``from_trusted_bot`` also holds back error replies to such a bot (echo-loop suppression).
 
     *channel_agent* overrides the default agent for this channel (set via
     per-channel config in ``slack.channels``).
@@ -1886,11 +1913,15 @@ async def handle_message(
         channel,
     )
 
+    # A bot in Trusted Bot IDs, which this app doesn't let in as a sender, relays what anyone wrote,
+    # so its message runs one fenced turn and nothing else: no keyword or command below acts on it.
+    relayed = from_trusted_bot and not is_allowed_user(user_id)
+
     # ── A reply to the Morning triage digest this DM received (`3 yes`) ──
     # PersonalClaw's to answer, as it is on every channel whose messages cross its door: it takes
     # the owner's answer, answers it as the digest's card does and says here what it did, and this
     # conversation runs no turn for it. Anything else stays this conversation's.
-    if channel.startswith("D") and _gateway_services is not None:
+    if channel.startswith("D") and _gateway_services is not None and not relayed:
         from personalclaw.sdk.channel import ChannelMessage
 
         _reply = ChannelMessage(
@@ -1922,12 +1953,12 @@ async def handle_message(
             return
 
     # ── Status keyword: reply with stats summary ──
-    if text.strip().lower() == "status":
+    if not relayed and text.strip().lower() == "status":
         await slack.post_message(channel, Stats().summary(), reply_ts)
         return
 
     # ── Sessions keyword: list recent sessions ──
-    if text.strip().lower() == "sessions":
+    if not relayed and text.strip().lower() == "sessions":
         if is_owner(user_id) or is_allowed_user(user_id):
             sel().log_api_access(
                 caller=user_id,
@@ -1947,7 +1978,7 @@ async def handle_message(
 
     # ── !temporary modifier: strip token and mark session before dispatch ──
     _cmd_text_stripped, _had_temporary = _strip_temporary_token(_cmd_text)
-    if _had_temporary:
+    if _had_temporary and not relayed:
         await _apply_temporary_modifier(
             session_key, user_id, channel, slack, sessions, reply_ts,
         )
@@ -1960,7 +1991,7 @@ async def handle_message(
 
     # ── !incognito modifier: strip token and mark session before dispatch ──
     _cmd_text_stripped, _had_incognito = _strip_incognito_token(_cmd_text)
-    if _had_incognito:
+    if _had_incognito and not relayed:
         await _apply_incognito_modifier(
             session_key, user_id, channel, slack, sessions, reply_ts,
         )
@@ -1970,7 +2001,7 @@ async def handle_message(
         if not _cmd_text:
             return
 
-    if _cmd_text.strip().lower() == "!compact":
+    if not relayed and _cmd_text.strip().lower() == "!compact":
         if is_owner(user_id) or is_allowed_user(user_id):
             sel().log_api_access(
                 caller=user_id,
@@ -1997,7 +2028,7 @@ async def handle_message(
     # Strip leading bot mention from app_mention events so the ! prefix is exposed.
     # DM:       "!agent foo"                    → "!agent foo"       (no-op)
     # @mention: "<@UBOT|personalclaw> !agent foo"   → "!agent foo"      (strip prefix)
-    if _cmd_text.startswith("!"):
+    if not relayed and _cmd_text.startswith("!"):
         # !stop and !title are any allowed user's. !dashboard reaches them too, and sends its
         # link to the owner alone (send_dashboard_link): anyone else is told why not.
         _cmd_word = _cmd_text.split()[0]
@@ -2054,8 +2085,23 @@ async def handle_message(
             if reply is not None:
                 return
 
+    # ── spawn, bg and cron: the owner's alone, as every command but !stop, !title, !compact
+    # and sessions is. A subagent anyone else started would run before the turn names who asked,
+    # and so as her own work, and an automation is hers to change.
+    if not relayed and not is_owner(user_id) and _is_owner_keyword(text):
+        sel().log_api_access(
+            caller=user_id,
+            operation="slack.owner_command",
+            outcome="denied",
+            source="slack",
+            resources=text.strip().split()[0].lower(),
+            error="unauthorized sender",
+        )
+        await slack.post_message(channel, "⛔ Owner-only command.", reply_ts)
+        return
+
     # ── Subagent spawn: "spawn <task>" (before cron to avoid NL overlap) ──
-    if subagent_manager:
+    if subagent_manager and not relayed:
         spawn_reply = _handle_spawn_command(text, subagent_manager, session_key)
         if spawn_reply:
             await slack.post_message(channel, spawn_reply, reply_ts)
@@ -2075,7 +2121,9 @@ async def handle_message(
     # The store is built from the ACTIVE HOME rather than injected: a `cron_service`
     # parameter let the caller decide which scheduler this surface read, and six call sites passed
     # `orch.cron_svc` — the legacy service core has deleted. One home, one store, one answer.
-    cron_reply = _handle_cron_command(text, TriggerStore(base_dir=config_dir()), channel, reply_ts)
+    cron_reply = None if relayed else _handle_cron_command(
+        text, TriggerStore(base_dir=config_dir()), channel, reply_ts
+    )
     if cron_reply:
         await slack.post_message(channel, cron_reply, reply_ts)
         if conversation_log and not _is_slack_restricted(session_key):
@@ -2186,6 +2234,11 @@ async def handle_message(
 
     task = Task(id=msg_ts)
     _acquired = False
+    # Read by the footer whichever way the turn ends, one that never got a runtime included.
+    client: ModelProvider | None = None
+    # Whether the runtime was told it is new, and whether this turn sent it its message: one told
+    # it is new that sends nothing gives the session's opening back (the finally).
+    is_new = _sent_a_message = False
 
     # ── Bidirectional sync: check if this Slack thread is linked to a dashboard session ──
     linked_session_key = sessions.get_session_for_thread(session_key)
@@ -2294,14 +2347,14 @@ async def handle_message(
         # A non-owner's chat text is untrusted DATA, never
         # instructions; wrap it in the platform's untrusted-content fence — the SAME fence
         # core's guarded door hands the sibling channels as ``verdict.fenced_text`` — before
-        # it reaches the model. Trusted senders (owner, an allowlisted user, a trusted bot)
-        # pass through unfenced, exactly as core exempts ``is_allowed_sender``. Only the model
-        # input is fenced: display, history and the dashboard mirror below keep the raw text.
+        # it reaches the model. Trusted senders (the owner, an allowlisted user) pass through
+        # unfenced, exactly as core exempts ``is_allowed_sender``. A bot in Trusted Bot IDs is
+        # only let past the bot filter: what it relays can come from anyone, so its text is
+        # fenced too. Only the model input is fenced: display, history and the dashboard mirror
+        # below keep the raw text.
         from slack_runtime.transport import fence_untrusted_inbound
 
-        agent_text = fence_untrusted_inbound(
-            text, user_id, trusted=(from_trusted_bot or is_allowed_user(user_id))
-        )
+        agent_text = fence_untrusted_inbound(text, user_id, trusted=is_allowed_user(user_id))
 
         if context_builder:
             # Thread-scoped temporary mode: blocks memory reads.
@@ -2337,6 +2390,7 @@ async def handle_message(
         # That tells an agent CLI to stop the turn nobody reads any more, and gives the thread's
         # session back for its next message; a stream left open held it until the interpreter
         # collected the stream, which can be never.
+        _sent_a_message = True
         async with closing_stream(client.stream(full_message)) as events:
             async for event in events:
                 if event.kind == EVENT_TEXT_CHUNK:
@@ -2399,18 +2453,27 @@ async def handle_message(
 
                 elif event.kind == EVENT_TOOL_CALL:
                     _tool_gap = True
-                    # Check tool hooks
+                    # Check tool hooks. A card is a notice, not a request: an agent CLI runs some
+                    # calls under its own policy without asking first, so hiding the card of a
+                    # call the deny-list names can't stop it, and this app can't tell from the
+                    # card whether the call ran. Only its permission request, below, refuses a
+                    # call. Here the thread and the log say no more than the app knows.
                     if context_builder:
                         tool_result = context_builder.hooks.on_tool_call(event.title)
                         if tool_result.action == TOOL_DENY:
-                            accumulated += f"\n🚫 _Tool `{event.title}` blocked by hooks._"
+                            accumulated += (
+                                f"\n⚠️ _`{event.title}` is on the deny list. This agent runs some "
+                                "calls without asking first, so whether it ran isn't known "
+                                "here._"
+                            )
                             sel().log_tool_invocation(
                                 session_key=session_key,
                                 source="slack",
                                 tool_name=event.title,
                                 tool_kind=event.tool_kind,
-                                outcome="denied",
+                                outcome="deny_listed",
                                 error="hook_deny",
+                                metadata={"seen_on": "card", "ran": "unknown"},
                             )
                             continue
 
@@ -2627,15 +2690,30 @@ async def handle_message(
         accumulated = f"❌ {e}"
         task.fail(str(e))
         await sessions.record_failure(session_key)
-    except Exception:
+    except Exception as e:
         _had_error = True
-        logger.exception("Unexpected error handling message")
-        accumulated = accumulated or "🔧 Something went wrong. Please try again."
-        task.fail("unexpected")
-        await sessions.record_failure(session_key)
+        setup = no_model_sentence(e)
+        if setup:
+            # Not a defect, and trying again can't help: the thread is told what to set up.
+            logger.warning("No model can run the turn for %s: %s", session_key, e)
+            accumulated = f"⚙️ {setup}"
+            task.fail("no_model")
+        else:
+            logger.exception("Unexpected error handling message")
+            accumulated = accumulated or "🔧 Something went wrong. Please try again."
+            task.fail("unexpected")
+            await sessions.record_failure(session_key)
     finally:
         _turn.close()
         if _acquired:
+            if is_new and not _sent_a_message:
+                # The opening (the session's instructions and safety rules) goes with the first
+                # message its runtime is sent. A turn that sent none (its message was deleted
+                # before it went, or the turn stopped before its prompt) hands it back, so the
+                # thread's next message carries it. Core's hand-back, there since v0.3.0.
+                hand_back = getattr(sessions, "hand_back_opening", None)
+                if hand_back is not None:
+                    hand_back(session_key, client)
             sessions.release(session_key)
         status_ctrl.finalize(error=_had_error)
         await asyncio.sleep(0)  # let finalize fire
@@ -3324,12 +3402,26 @@ def _remove_all_jobs(store: TriggerStore) -> str:
     return f"✅ Removed {len(lines)} automation(s):\n" + "\n".join(lines)
 
 
+#: What starts a subagent from a thread: ``spawn <task>`` or ``bg <task>``.
+_SPAWN_PREFIXES = ("spawn ", "bg ")
+
+
+def _is_owner_keyword(text: str) -> bool:
+    """Whether *text* is a ``spawn``/``bg`` or a ``cron`` command (:func:`_handle_spawn_command`,
+    :func:`_handle_cron_command`), each the owner's alone."""
+    t = text.strip().lower()
+    if t.startswith(_SPAWN_PREFIXES):
+        return True
+    parts = t.split()
+    return len(parts) >= 2 and parts[0] == "cron"
+
+
 def _handle_spawn_command(text: str, manager: SubagentManager, session_key: str = "") -> str | None:
     """Intercept spawn/bg keyword commands. Returns reply or None."""
     t = text.strip()
     low = t.lower()
 
-    for prefix in ("spawn ", "bg "):
+    for prefix in _SPAWN_PREFIXES:
         if low.startswith(prefix):
             return _do_spawn(t[len(prefix) :].strip(), manager, session_key)
     return None

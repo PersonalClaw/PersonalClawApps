@@ -223,6 +223,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 | `bot_token` | Bot Token | Slack Bot User OAuth Token (xoxb-...). Outbound only needs this one. |
 | `app_token` | App Token | Slack App-Level Token for Socket Mode (xapp-...). **Inbound needs both.** |
 | `allowed_users` | Allowed Users | Who may talk to the bot, besides the owner: one row per person, with their Slack member ID and a name to know them by. Empty means owner-only. Until an owner is paired, nobody is authorized, whoever is listed. |
+| `trusted_bot_ids` | Trusted Bot IDs | Bot IDs whose messages get past the bot filter and start turns, for a multi-node mesh. A listed bot's text reaches the agent fenced as outside content, as a stranger's does, no command or keyword in it is run, and the chat's Trust and YOLO don't approve its calls. Error replies to it aren't posted, so two bots don't trade error messages. |
 
 Both tokens are **write-only**: once saved, the form shows `••••••••` and the value never
 leaves the gateway. Saving other fields keeps the stored tokens; typing a new value
@@ -238,9 +239,10 @@ regenerated; save the new one in Configure).
 
 An allowlisted (non-owner) user is authorized for conversation *and* for the commands in
 the "any allowed user" tier — `!stop`, `!title`, `!compact` and `sessions`. Everything else
-stays owner-only. Add people deliberately. `!dashboard` and `/personalclaw dashboard` DM a
-dashboard link to the owner alone: the link signs in as the owner, so anyone else who asks is
-told *Only this channel's owner can get a dashboard link…* and is sent nothing.
+stays owner-only, `spawn`, `bg` and `cron` included: anyone else is told it's the owner's. Add
+people deliberately. `!dashboard` and `/personalclaw dashboard` DM a dashboard link to the owner
+alone: the link signs in as the owner, so anyone else who asks is told *Only this channel's owner
+can get a dashboard link…* and is sent nothing.
 
 Approvals are the owner's alone. Only the owner's press on one of a prompt's buttons answers a
 tool approval, whether it is asked in a DM or in a linked channel thread
@@ -264,9 +266,12 @@ refused before it runs, whatever pattern or Trust would have approved it.
 
 The form offers no other access rule. Who may talk to the bot is its owner and Allowed Users,
 and the workspace it answers is the one its bot token belongs to: a message from any other
-workspace is refused. An earlier release's form also offered **Open Channels** and **Allowed
-Enterprise IDs**, which never let anyone in or kept anyone out; they are gone, and a value an
-earlier release saved for either is ignored.
+workspace is refused. Trusted Bot IDs lets a listed bot's messages start turns and grants it
+nothing more: what such a bot relays can come from anyone, so each of its messages runs one turn,
+where it reaches the agent as outside content, never as a request from someone you let in, and
+no command or keyword in it is run. An earlier release's form also offered **Open Channels** and
+**Allowed Enterprise IDs**, which never let anyone in or kept anyone out; they are gone, and a
+value an earlier release saved for either is ignored.
 
 ## The live-writes kill switch
 

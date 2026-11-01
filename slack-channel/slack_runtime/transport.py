@@ -88,9 +88,10 @@ def fence_untrusted_inbound(text: str, sender_id: str, *, trusted: bool) -> str:
     transport that owns Slack's inbound path, so the handler cannot forget it — and so
     the fence a channel produces has a consumer this bundle can point to.
 
-    A *trusted* sender passes through unfenced — the owner, an explicitly-allowlisted
-    user, or a trusted bot — exactly as core exempts ``is_allowed_sender``: fencing the
-    owner's own request would make the agent read it as inert data it must not act on.
+    A *trusted* sender passes through unfenced — the owner or an explicitly-allowlisted
+    user — exactly as core exempts ``is_allowed_sender``: fencing the owner's own request
+    would make the agent read it as inert data it must not act on. A bot in Trusted Bot IDs
+    is not one: it is only let past the bot filter, and what it relays is fenced.
     Mirrors core's ``verdict.fenced_text or msg.text``: the fenced form for an untrusted
     sender, the raw text otherwise (an empty message is returned unchanged — nothing to
     fence). The caller decides trust; keeping that decision out of here leaves this a
