@@ -29,6 +29,7 @@ was looked at leads nowhere.
 import errno
 import hashlib
 import os
+import stat
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -64,9 +65,13 @@ _REGISTRY_KEY = "registry.json"
 _NOT_A_PATH = "is not a path a sync may use in the sync folder"
 _LEADS_OUT = "leads out of the sync folder through a link"
 _A_LINK = "is a link in the sync folder, which Folder Sync doesn't follow"
+_NOT_A_FILE = "is not a regular file in the sync folder, which Folder Sync doesn't read"
 
 #: Opens a file without following a link there: one put there since the key was looked at.
 _NO_FOLLOW = getattr(os, "O_NOFOLLOW", 0)
+#: Opens without waiting: opening a named pipe to read otherwise waits for a writer, forever.
+_NO_WAIT = getattr(os, "O_NONBLOCK", 0)
+
 #: Opens a folder, and only a folder.
 _A_FOLDER = getattr(os, "O_DIRECTORY", 0)
 
@@ -76,6 +81,11 @@ _A_FOLDER = getattr(os, "O_DIRECTORY", 0)
 _REMOVES_SAFELY = bool(_NO_FOLLOW and _A_FOLDER) and all(
     call in os.supports_dir_fd for call in (os.open, os.unlink, os.rmdir)
 )
+
+
+class _NotAFile(OSError):
+    """What :meth:`DirSyncProvider._read` raises for anything but a regular file at a key: a
+    named pipe, a socket or a device, which something other than PersonalClaw put there."""
 
 
 class DirSyncProvider(SyncTransportProvider):
@@ -165,8 +175,10 @@ class DirSyncProvider(SyncTransportProvider):
         more = f"; and {len(refused) - 3} more" if len(refused) > 3 else ""
         what = "a key" if len(refused) == 1 else f"{len(refused)} keys"
         step = ""
-        if any(why != _NOT_A_PATH for why in refused.values()):
+        if any(why in (_LEADS_OUT, _A_LINK) for why in refused.values()):
             step = " Take the link out of the sync folder: Folder Sync follows none out of it."
+        if _NOT_A_FILE in refused.values():
+            step += " Take it out of the sync folder: Folder Sync reads only regular files."
         return KeysRefused(
             f"Folder Sync won't {doing} {what} in {self._root}: {named}{more}.{step}", refused
         )
@@ -174,8 +186,17 @@ class DirSyncProvider(SyncTransportProvider):
     @staticmethod
     def _read(path: str) -> bytes:
         """The bytes of the file at *path*, opened without following a link there: a link put
-        there since its key was looked at raises ``OSError`` (``ELOOP``)."""
-        with os.fdopen(os.open(path, os.O_RDONLY | _NO_FOLLOW), "rb") as fh:
+        there since its key was looked at raises ``OSError`` (``ELOOP``). Opened without waiting,
+        and read only if it is a regular file (:class:`_NotAFile` otherwise): a named pipe there
+        held every sync run after it, and the durability jobs behind them, until a restart."""
+        fd = os.open(path, os.O_RDONLY | _NO_FOLLOW | _NO_WAIT)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise _NotAFile(f"{path} is not a regular file")
+        except BaseException:
+            os.close(fd)
+            raise
+        with os.fdopen(fd, "rb") as fh:
             return fh.read()
 
     def _atomic_write(self, target: str, data: bytes) -> None:
@@ -230,7 +251,7 @@ class DirSyncProvider(SyncTransportProvider):
         if not self._root or not os.path.isdir(self._root):
             return []
         refs: list[RemoteRef] = []
-        links: dict[str, str] = {}
+        refused: dict[str, str] = {}
         # os.walk follows no link to a folder; one to anything is named here, and never listed.
         for dirpath, dirnames, filenames in os.walk(self._root):
             for name in [*dirnames, *filenames]:
@@ -240,25 +261,29 @@ class DirSyncProvider(SyncTransportProvider):
                 key = os.path.relpath(full, self._root).replace(os.sep, "/")
                 # One under the prefix, or one on the way to it, which hides what is under it.
                 if key.startswith(prefix) or prefix.startswith(f"{key}/"):
-                    links[key] = _A_LINK
+                    refused[key] = _A_LINK
             for fn in filenames:
                 if fn.startswith(_TMP_PREFIX):
                     continue  # our own half-written object — not a real remote entry
                 full = os.path.join(dirpath, fn)
                 # Key is the path relative to the root, always in posix form.
                 key = os.path.relpath(full, self._root).replace(os.sep, "/")
-                if not key.startswith(prefix) or key in links:
+                if not key.startswith(prefix) or key in refused:
                     continue
                 try:
                     st = os.lstat(full)
                 except OSError:
                     continue  # vanished between walk and stat — skip it
+                if not stat.S_ISREG(st.st_mode):
+                    # A named pipe, a socket or a device: never an object, and never read.
+                    refused[key] = _NOT_A_FILE
+                    continue
                 # mtime is a cheap change fingerprint; the cycle compares it, never parses.
                 refs.append(
                     RemoteRef(key=key, size=st.st_size, fingerprint=str(int(st.st_mtime)))
                 )
-        if links:
-            raise self._refusal(links, "list")
+        if refused:
+            raise self._refusal(refused, "list")
         return refs
 
     def pull(self, refs: list[RemoteRef]) -> list[SyncObject]:
@@ -266,18 +291,20 @@ class DirSyncProvider(SyncTransportProvider):
             return []
         paths = self._paths([ref.key for ref in refs], "read")
         out: list[SyncObject] = []
-        links: dict[str, str] = {}
+        refused: dict[str, str] = {}
         for ref in refs:
             try:
                 out.append(SyncObject(key=ref.key, data=self._read(paths[ref.key])))
             except OSError as e:
-                if e.errno == errno.ELOOP:
-                    links[ref.key] = _A_LINK  # made a link since it was looked at
+                if isinstance(e, _NotAFile):
+                    refused[ref.key] = _NOT_A_FILE  # put there since it was looked at
+                elif e.errno == errno.ELOOP:
+                    refused[ref.key] = _A_LINK  # made a link since it was looked at
                 # A ref the folder no longer has (or can't read) is dropped, not raised —
                 # the caller reconciles against what it asked for.
                 continue
-        if links:
-            raise self._refusal(links, "read")
+        if refused:
+            raise self._refusal(refused, "read")
         return out
 
     def cas_registry(self, expected_sha: str | None, data: bytes) -> bool:
@@ -303,6 +330,8 @@ class DirSyncProvider(SyncTransportProvider):
                 try:
                     current = self._read(target)
                 except OSError as e:
+                    if isinstance(e, _NotAFile):  # a named pipe, a socket, a device
+                        raise self._refusal({_REGISTRY_KEY: _NOT_A_FILE}, "swap") from None
                     if e.errno == errno.ELOOP:  # made a link since it was looked at
                         raise self._refusal({_REGISTRY_KEY: _A_LINK}, "swap") from None
                     return False

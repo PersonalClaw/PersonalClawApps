@@ -12,6 +12,7 @@ import errno
 import hashlib
 import json
 import os
+import signal
 
 import pytest
 
@@ -502,6 +503,70 @@ def test_the_refusal_says_which_key_why_and_what_to_do(folder, tmp_path):
         f"Folder Sync won't read a key in {folder}: {key} {LEADS_OUT}. Take the link out of the "
         "sync folder: Folder Sync follows none out of it."
     )
+
+
+# ── only a regular file is an object ─────────────────────────────────────────────────
+#
+# Something other than PersonalClaw can put a named pipe in the folder, at a key a sync reads.
+# Opened to read, a pipe waits for a writer, forever: the sync run never returned, and neither did
+# the durability jobs queued behind it, until a restart.
+
+NOT_A_FILE = "is not a regular file in the sync folder, which Folder Sync doesn't read"
+needs_fifo = pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="named pipes are POSIX")
+
+
+@pytest.fixture
+def returns_soon():
+    """Fails the test, rather than hanging it, when a call waits on a pipe for 5 seconds."""
+
+    def waited(_signum, _frame):
+        raise TimeoutError("the call waited on a named pipe")
+
+    before = signal.signal(signal.SIGALRM, waited)
+    signal.alarm(5)
+    yield
+    signal.alarm(0)
+    signal.signal(signal.SIGALRM, before)
+
+
+def _pipe(root, key: str) -> None:
+    path = root.joinpath(*key.split("/"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.mkfifo(path)
+
+
+@needs_fifo
+def test_a_named_pipe_at_a_key_is_named_not_listed(folder, returns_soon):
+    """🔴 Red before: the pipe was listed as an object, to be read next."""
+    key = f"{PEERS}tasks/entities.jsonl"
+    _pipe(folder, key)
+
+    assert _refused(lambda: DirSyncProvider(str(folder)).list_remote(PEERS)) == {key: NOT_A_FILE}
+
+
+@needs_fifo
+def test_a_key_swapped_for_a_named_pipe_is_not_read_and_does_not_wait(folder, returns_soon):
+    """🔴 Red before: the read waited for a writer, and the sync with it."""
+    key = f"{PEERS}tasks/entities.jsonl"
+    _pipe(folder, key)
+
+    with pytest.raises(KeysRefused) as refusal:
+        DirSyncProvider(str(folder)).pull([RemoteRef(key)])
+
+    assert refusal.value.refused == {key: NOT_A_FILE}
+    assert str(refusal.value).endswith(
+        "Take it out of the sync folder: Folder Sync reads only regular files."
+    )
+
+
+@needs_fifo
+def test_a_named_pipe_at_the_registry_is_not_swapped_and_frees_the_lock(folder, returns_soon):
+    """🔴 Red before: the swap waited on the pipe while it held the registry lock."""
+    _pipe(folder, "registry.json")
+    p = DirSyncProvider(str(folder))
+
+    assert _refused(lambda: p.cas_registry(None, b"{}")) == {"registry.json": NOT_A_FILE}
+    assert not (folder / ".registry.lock").exists()
 
 
 # ── remove ───────────────────────────────────────────────────────────────────────────
