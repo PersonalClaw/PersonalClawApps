@@ -63,6 +63,23 @@ def _clip(value: Any, limit: int) -> str:
     return str(value or "").strip()[:limit]
 
 
+def _text_list(args: dict[str, Any], key: str, what: str) -> list[str]:
+    """*key*'s list of strings: a list as given, or the JSON text of one, which some models send
+    for an array argument on an ordinary call. Anything else raises :class:`ValueError` with a
+    sentence, and is never read one character at a time."""
+    value = args.get(key)
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            pass
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f'{key} must be a list of {what}, each one a string: ["…", "…"]')
+    return value
+
+
 def _slug(question: str, *, words: int = 6) -> str:
     parts = [p for p in _SLUG_STRIP_RE.sub("-", question.lower()).split("-") if p]
     return "-".join(parts[:words])[:48].strip("-") or "campaign"
@@ -284,6 +301,10 @@ class ResearchLabProvider(ToolProvider):
         if not question:
             return ToolResult(success=False, error="question is required")
         budget = max(1, int(args.get("cycle_budget") or self._budget))
+        try:
+            asked = _text_list(args, "sub_questions", "questions")
+        except ValueError as refused:
+            return ToolResult(success=False, error=str(refused))
 
         base = _slug(question)
         campaign_id, suffix = base, 2
@@ -291,9 +312,7 @@ class ResearchLabProvider(ToolProvider):
             campaign_id = f"{base}-{suffix}"[:64]
             suffix += 1
 
-        seeds = [
-            _clip(s, MAX_QUESTION_CHARS) for s in list(args.get("sub_questions") or [])[:MAX_NODES]
-        ]
+        seeds = [_clip(s, MAX_QUESTION_CHARS) for s in asked[:MAX_NODES]]
         nodes = [
             {
                 "id": f"q{i}",
@@ -426,6 +445,11 @@ class ResearchLabProvider(ToolProvider):
         finding = _clip(args.get("finding"), MAX_FINDING_CHARS)
         if not finding:
             return ToolResult(success=False, error="finding is required")
+        try:
+            sources = _text_list(args, "sources", "sources")
+            follow_ups = _text_list(args, "follow_ups", "questions")
+        except ValueError as refused:
+            return ToolResult(success=False, error=str(refused))
         node = next((n for n in campaign["nodes"] if n["id"] == node_id), None)
         if node is None:
             return ToolResult(
@@ -435,12 +459,10 @@ class ResearchLabProvider(ToolProvider):
             )
 
         node["finding"] = finding
-        node["sources"] = [
-            _clip(s, MAX_SOURCE_CHARS) for s in list(args.get("sources") or [])[:MAX_SOURCES]
-        ]
+        node["sources"] = [_clip(s, MAX_SOURCE_CHARS) for s in sources[:MAX_SOURCES]]
         node["answered_in_cycle"] = campaign["cycles"][-1]["n"] if campaign["cycles"] else 0
 
-        grafted = self._graft(campaign, node, list(args.get("follow_ups") or []))
+        grafted = self._graft(campaign, node, follow_ups)
         self._save(campaign)
         still_open = len(self._open_nodes(campaign))
         return ToolResult(
