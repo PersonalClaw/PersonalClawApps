@@ -1,6 +1,6 @@
 {
   "name": "webhook-action",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "displayName": "HTTP Webhook Hooks",
   "description": "POST agent lifecycle events to an HTTP endpoint. Supports method/headers overrides and a templated body.",
   "icon": "Webhook",
@@ -31,7 +31,8 @@
           "type": "string",
           "x-meta": {
             "label": "Webhook URL",
-            "help": "The https endpoint the event is POSTed to when this trigger fires. A plain http URL is refused unless it is on this machine (localhost, 127.0.0.1 or ::1), since the event and its headers would travel unencrypted."
+            "help": "The https endpoint the event is POSTed to when this trigger fires. A plain http URL is refused unless it is on this machine (localhost, 127.0.0.1 or ::1), since the event and its headers would travel unencrypted. A webhook URL is a credential: whoever has it can post to it. In a scheduled or event automation, enter it as {{secret:NAME}}, a secret saved in Settings \u2192 Secrets, so it is filled in only when the event is sent and is never kept in the automation. A lifecycle hook fills it from PersonalClaw 0.3.5.",
+            "sensitive": true
           }
         },
         "method": {
@@ -52,7 +53,8 @@
           "default": "",
           "x-meta": {
             "label": "Headers (JSON)",
-            "help": "Optional JSON object of extra request headers, e.g. {\"Authorization\": \"Bearer \u2026\"}. Content-Type defaults to application/json."
+            "help": "Optional JSON object of extra request headers. In a scheduled or event automation, enter a credential in one as {{secret:NAME}}, a secret saved in Settings \u2192 Secrets, e.g. {\"Authorization\": \"Bearer {{secret:MY_TOKEN}}\"}: it is filled in only when the event is sent. Content-Type defaults to application/json. A lifecycle hook fills it from PersonalClaw 0.3.5.",
+            "sensitive": true
           }
         },
         "body_template": {
