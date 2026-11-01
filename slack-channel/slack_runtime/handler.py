@@ -2236,6 +2236,9 @@ async def handle_message(
     _acquired = False
     # Read by the footer whichever way the turn ends, one that never got a runtime included.
     client: ModelProvider | None = None
+    # Whether the runtime was told it is new, and whether this turn sent it its message: one told
+    # it is new that sends nothing gives the session's opening back (the finally).
+    is_new = _sent_a_message = False
 
     # ── Bidirectional sync: check if this Slack thread is linked to a dashboard session ──
     linked_session_key = sessions.get_session_for_thread(session_key)
@@ -2387,6 +2390,7 @@ async def handle_message(
         # That tells an agent CLI to stop the turn nobody reads any more, and gives the thread's
         # session back for its next message; a stream left open held it until the interpreter
         # collected the stream, which can be never.
+        _sent_a_message = True
         async with closing_stream(client.stream(full_message)) as events:
             async for event in events:
                 if event.kind == EVENT_TEXT_CHUNK:
@@ -2693,6 +2697,14 @@ async def handle_message(
     finally:
         _turn.close()
         if _acquired:
+            if is_new and not _sent_a_message:
+                # The opening (the session's instructions and safety rules) goes with the first
+                # message its runtime is sent. A turn that sent none (its message was deleted
+                # before it went, or the turn stopped before its prompt) hands it back, so the
+                # thread's next message carries it. Core's hand-back, there since v0.3.0.
+                hand_back = getattr(sessions, "hand_back_opening", None)
+                if hand_back is not None:
+                    hand_back(session_key, client)
             sessions.release(session_key)
         status_ctrl.finalize(error=_had_error)
         await asyncio.sleep(0)  # let finalize fire
