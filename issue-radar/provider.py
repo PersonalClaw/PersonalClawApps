@@ -88,6 +88,23 @@ _MISSING = {
 }
 
 
+def _text_list(args: dict[str, Any], key: str, what: str) -> list[str]:
+    """*key*'s list of strings: a list as given, or the JSON text of one, which some models send
+    for an array argument on an ordinary call. Anything else raises :class:`ValueError` with a
+    sentence, and is never read one character at a time."""
+    value = args.get(key)
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            pass
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f'{key} must be a list of {what}, each one a string: ["…", "…"]')
+    return value
+
+
 class TrackerError(RuntimeError):
     """The CLI was reachable but refused the request (not signed in, no such repo, …)."""
 
@@ -663,7 +680,10 @@ class IssueRadarProvider(ToolProvider):
                 error="note is required",
                 recovery_hints=["Say what the investigation found, even if it is 'cannot repro'."],
             )
-        labels = [str(name) for name in list(args.get("labels") or []) if str(name).strip()]
+        try:
+            labels = [name for name in _text_list(args, "labels", "labels") if name.strip()]
+        except ValueError as exc:
+            return ToolResult(success=False, error=str(exc))
         note = Note(note=body, next_step=str(args.get("next_step") or ""), labels=labels)
         self._notes.append(ref, [note])
         path = self._notes.path_for(ref)
