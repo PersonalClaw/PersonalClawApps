@@ -1384,3 +1384,53 @@ def test_constructing_a_provider_creates_no_directory(monkeypatch, tmp_path) -> 
     monkeypatch.setenv("PERSONALCLAW_HOME", str(tmp_path / "pclaw"))
     create_provider({})
     assert not (tmp_path / "pclaw").exists()
+
+
+# ── array arguments ──────────────────────────────────────────────────────────
+#
+# Some models send an array argument as the JSON text of a list ('["bug", "regression"]'). The app
+# read labels with list(...), which split that text into one label per character. Every array
+# argument the tools declare is read here as its list, and a value that isn't a list of strings is
+# refused. The cases come from the declared schemas, so a new array argument is covered as soon as
+# it is declared.
+
+LABELS = ["bug", "regression"]
+
+
+def _array_arguments() -> list[tuple[str, str]]:
+    return [
+        (tool.name, key)
+        for tool in run(create_provider({}).list_tools())
+        for key, spec in tool.parameters["properties"].items()
+        if spec.get("type") == "array"
+    ]
+
+
+def _call_with(provider, tool: str, key: str, value):
+    """*tool* called with *key* set to *value*, and every other argument it needs."""
+    if tool == "record_investigation":
+        args = {"issue": "acme/widget#101", "note": "Reproduced on main.", key: value}
+        return run(provider.invoke(tool, args))
+    raise AssertionError(f"{tool} declares an array argument, {key}; add how it is called")
+
+
+def test_the_tools_declare_the_array_arguments_this_covers() -> None:
+    assert _array_arguments() == [("record_investigation", "labels")]
+
+
+@pytest.mark.parametrize(("tool", "key"), _array_arguments())
+def test_an_array_argument_sent_as_json_text_is_read_as_its_list(provider, tool, key) -> None:
+    """🔴 Red before: one label per character."""
+    result = _call_with(provider, tool, key, json.dumps(LABELS))
+    assert result.success, result.error
+    assert result.metadata[key] == LABELS
+
+
+@pytest.mark.parametrize(("tool", "key"), _array_arguments())
+def test_an_array_argument_that_isnt_a_list_is_refused(provider, tool, key) -> None:
+    """🔴 Red before: plain text was split into characters and saved."""
+    result = _call_with(provider, tool, key, "bug")
+    assert result.success is False
+    assert result.error.startswith(f"{key} must be a list of "), result.error
+    notes = run(provider.invoke("issue_notes", {"issue": "acme/widget#101"}))
+    assert not notes.metadata.get("notes"), "nothing is recorded"
