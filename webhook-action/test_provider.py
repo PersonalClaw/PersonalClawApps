@@ -38,7 +38,7 @@ def test_webhook_blocks_loopback(monkeypatch):
     """A webhook pointed at a loopback-resolving host is blocked by the egress guard."""
     import socket
     monkeypatch.setattr(socket, "getaddrinfo", _fake_dns({"internal.local": ["127.0.0.1"]}))
-    r = _run(WebhookActionProvider().execute({"url": "http://internal.local/hook"}, _ctx()))
+    r = _run(WebhookActionProvider().execute({"url": "https://internal.local/hook"}, _ctx()))
     assert r.success is False
     assert "non-public" in (r.error or "").lower()
 
@@ -47,7 +47,7 @@ def test_webhook_blocks_imds(monkeypatch):
     """A webhook pointed at the AWS IMDS link-local address is blocked."""
     import socket
     monkeypatch.setattr(socket, "getaddrinfo", _fake_dns({"metadata.example": ["169.254.169.254"]}))
-    r = _run(WebhookActionProvider().execute({"url": "http://metadata.example/latest"}, _ctx()))
+    r = _run(WebhookActionProvider().execute({"url": "https://metadata.example/latest"}, _ctx()))
     assert r.success is False
     # Core >= the metadata-rebind fix refuses link-local/metadata resolutions on a
     # dedicated path with a specific message, before the generic non-public deny.
@@ -118,3 +118,82 @@ def test_settings_schema_exposes_url_field():
     assert "url" in props and "url" in schema.get("required", [])
     for f in ("method", "headers", "body_template"):
         assert f in props, f"execute() reads {f} but the form schema omits it"
+
+
+def _record_fetches(monkeypatch, mapping):
+    """Resolve *mapping*'s hosts and stub the SDK's fetch; return the list each call lands in."""
+    import socket
+    import personalclaw.net.client as client
+    import personalclaw.sdk.net as sdk_net
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_dns(mapping))
+    calls = []
+
+    async def fake_fetch(url, **kw):
+        calls.append((url, kw))
+        return client.FetchResponse(url=url, status=200, headers={}, body=b"ok")
+    monkeypatch.setattr(sdk_net, "fetch", fake_fetch)
+    return calls
+
+
+def test_a_plain_http_url_to_another_machine_is_refused_before_anything_is_sent(monkeypatch):
+    """The help says the endpoint is https. A plain http URL to another machine would carry the
+    event and every header set on the action (an Authorization header, say) unencrypted, so it
+    is refused with a sentence that says why, and nothing is sent."""
+    calls = _record_fetches(monkeypatch, {"example.com": ["93.184.216.34"]})
+    r = _run(WebhookActionProvider().execute(
+        {"url": "http://example.com/hook", "headers": '{"Authorization": "Bearer T"}'}, _ctx()))
+    assert r.success is False
+    assert "plain http" in (r.error or "") and "unencrypted" in (r.error or "")
+    assert calls == []
+
+
+@pytest.mark.parametrize("url", [
+    "http://localhost:8123/hook",
+    "http://127.0.0.1:9000/hook",
+    "http://[::1]:9000/hook",
+])
+def test_plain_http_to_this_machine_is_still_sent(monkeypatch, url):
+    """Plain http to this machine never crosses the network, so it is sent as before (the
+    egress guard still asks the owner to allow the host)."""
+    calls = _record_fetches(monkeypatch, {})
+    r = _run(WebhookActionProvider().execute({"url": url}, _ctx()))
+    assert r.success is True
+    assert [u for u, _ in calls] == [url]
+
+
+@pytest.mark.parametrize("url", ["http://localhost:8123/hook", "http://127.0.0.1:9000/hook"])
+def test_plain_http_to_this_machine_is_never_redirected(monkeypatch, url):
+    """🔴 Red before: the target on this machine could redirect the event and its headers to
+    plain http on another machine, which the first hop's rule refuses."""
+    calls = _record_fetches(monkeypatch, {})
+    _run(WebhookActionProvider().execute({"url": url}, _ctx()))
+    (_, kw), = calls
+    assert kw["policy"].max_redirects == 0
+
+
+def test_an_https_url_is_held_to_https_on_every_hop(monkeypatch):
+    """An https target's policy refuses plain http, so a redirect can't carry the event and its
+    headers on over plain http. The guard asks it of every hop."""
+    from personalclaw.sdk.net import evaluate
+
+    calls = _record_fetches(monkeypatch, {"example.com": ["93.184.216.34"]})
+    r = _run(WebhookActionProvider().execute({"url": "https://example.com/hook"}, _ctx()))
+    assert r.success is True
+    (_, kw), = calls
+    policy = kw["policy"]
+    assert policy.allow_schemes == ("https",)
+    from personalclaw.sdk.net import WEBHOOK
+
+    assert policy.max_redirects == WEBHOOK.max_redirects, "an https target still follows them"
+    assert evaluate("http://example.com/next", policy).allow is False
+
+
+def test_the_url_help_and_readme_say_what_the_action_refuses():
+    """The setting's help and the README row say the rule the action keeps."""
+    import json
+    import pathlib
+    here = pathlib.Path(__file__).parent
+    help_ = json.loads((here / "app.json").read_text())[
+        "provider"]["settingsSchema"]["properties"]["url"]["x-meta"]["help"]
+    assert "plain http URL is refused unless it is on this machine" in help_
+    assert help_ in (here / "README.md").read_text()
