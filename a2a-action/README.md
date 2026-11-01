@@ -54,11 +54,13 @@ trusts the other end.
 
 | Key | Label | Notes |
 |---|---|---|
-| `url` | Agent URL | The external agent's A2A tasks endpoint. The host must be allow-listed; egress is deny-by-default. |
+| `url` | Agent URL | The external agent's A2A tasks endpoint. The host must be allow-listed; egress is deny-by-default. Never write a password into the address: it goes in Agent password. A task that signs in is sent over https only (plain http only to this machine) and never follows a redirect. |
 | `skill` | Skill | The skill id to invoke, as it appears on the remote agent's card. Blank lets the remote agent choose. |
 | `text` | Message | The text sent to the agent. Supports `$EVENT`, `$CONTEXT` and any trigger payload key. |
 | `inputs` | Inputs (JSON) | Optional JSON object of structured inputs for the skill, e.g. `{"since": "7d"}`. |
-| `headers` | Headers (JSON) | Optional extra request headers, e.g. `{"Authorization": "Bearer …"}`. |
+| `headers` | Headers (JSON) | Optional JSON object of extra request headers. In a scheduled or event automation, enter a credential in one as `{{secret:NAME}}`, a secret saved in Settings → Secrets, e.g. `{"Authorization": "Bearer {{secret:MY_TOKEN}}"}`: it is filled in only when the task is sent (a lifecycle hook fills it from PersonalClaw 0.3.5). Kept as a secret and shown masked. |
+| `username` | Agent user name | For an agent that signs in with a user name and password: the user name. |
+| `password` | Agent password | That sign-in's password, sent as HTTP basic sign-in. In a scheduled or event automation, enter it as `{{secret:NAME}}`; a lifecycle hook fills it from PersonalClaw 0.3.5. Kept as a secret and shown masked. |
 
 ## Autonomy
 

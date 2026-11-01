@@ -446,7 +446,7 @@ def test_the_settings_schema_exposes_every_field_execute_reads():
     schema = manifest["provider"]["settingsSchema"]
     props = schema.get("properties", {})
     assert "url" in props and "url" in schema.get("required", [])
-    for field in ("skill", "text", "inputs", "headers"):
+    for field in ("skill", "text", "inputs", "headers", "username", "password"):
         assert field in props, f"execute() reads {field} but the form schema omits it"
 
 

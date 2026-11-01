@@ -1,6 +1,6 @@
 {
   "name": "a2a-action",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "displayName": "A2A Agent Call",
   "description": "Hand one task to an external A2A agent when a trigger fires. Reaches only hosts the operator has allow-listed under Settings › Security › Network egress.",
   "icon": "Share2",
@@ -35,7 +35,7 @@
           "type": "string",
           "x-meta": {
             "label": "Agent URL",
-            "help": "The external agent's A2A tasks endpoint. The host must be listed in Settings › Security › Network egress — egress is deny-by-default, so an unlisted host is refused before any connection is made."
+            "help": "The external agent's A2A tasks endpoint. The host must be listed in Settings › Security › Network egress — egress is deny-by-default, so an unlisted host is refused before any connection is made. Never write a password into the address: an agent that signs in with one takes it in Agent password. A task that signs in is sent over https only (plain http only to this machine) and never follows a redirect."
           }
         },
         "skill": {
@@ -67,7 +67,25 @@
           "default": "",
           "x-meta": {
             "label": "Headers (JSON)",
-            "help": "Optional JSON object of extra request headers, e.g. {\"Authorization\": \"Bearer …\"} if the remote agent requires a bearer token."
+            "help": "Optional JSON object of extra request headers. In a scheduled or event automation, enter a credential in one as {{secret:NAME}}, a secret saved in Settings → Secrets, e.g. {\"Authorization\": \"Bearer {{secret:MY_TOKEN}}\"} for an agent that takes a bearer token: it is filled in only when the task is sent. A lifecycle hook fills it from PersonalClaw 0.3.5.",
+            "sensitive": true
+          }
+        },
+        "username": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Agent user name",
+            "help": "For an agent that signs in with a user name and password: the user name. Leave empty for one that takes a bearer token, or nothing."
+          }
+        },
+        "password": {
+          "type": "string",
+          "default": "",
+          "x-meta": {
+            "label": "Agent password",
+            "help": "For an agent that signs in with a user name and password: the password, sent as HTTP basic sign-in with Agent user name. In a scheduled or event automation, enter it as {{secret:NAME}}, a secret saved in Settings → Secrets, so it is filled in only when the task is sent. A lifecycle hook fills it from PersonalClaw 0.3.5.",
+            "sensitive": true
           }
         }
       }
