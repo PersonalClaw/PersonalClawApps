@@ -1,6 +1,6 @@
 {
   "name": "menu-bar-companion",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "displayName": "Menu Bar Companion",
   "description": "A macOS menu-bar companion for a PersonalClaw you already run. It lives in the status bar on YOUR Mac (not on the server). It lists everything waiting on you, every kind, each linking to where it is answered: a tool approval opens with what it would run, where it came from and what it can touch before you Approve or Deny it, and a loop's question, a workflow's gate or anything else opens in the PersonalClaw dashboard. It also lists everything running, each saying what it is doing. A badge counts everything waiting on you. It holds ONE /api/ws connection and treats every frame as nothing but a doorbell — it re-reads the two lists over HTTP, once per burst of frames, and never renders anything out of a socket payload. Native notifications can be muted from its Settings menu. Your gateway URL and token are stored locally in a 0600 file on your own machine, or supplied by environment variable and never persisted, and the token travels only in a request header, never in a link it opens.",
   "icon": "PanelTop",
@@ -49,8 +49,8 @@
     ],
     "installMode": "client",
     "clientInstall": {
-      "shell": "set -e; DEST=\"$HOME/Library/Application Support/PersonalClaw Companion/src\"; git clone --depth 1 --filter=blob:none --sparse https://github.com/PersonalClaw/PersonalClawApps \"$DEST\"; git -C \"$DEST\" sparse-checkout set menu-bar-companion; python3 -m pip install --user rumps",
-      "postInstall": "python3 \"$HOME/Library/Application Support/PersonalClaw Companion/src/menu-bar-companion/run.py\" --check"
+      "shell": "set -e; DEST=\"$HOME/Library/Application Support/PersonalClaw Companion/src\"; if [ ! -d \"$DEST/.git\" ]; then git clone --depth 1 --filter=blob:none --sparse https://github.com/PersonalClaw/PersonalClawApps \"$DEST\"; else git -C \"$DEST\" pull --ff-only; fi; git -C \"$DEST\" sparse-checkout set menu-bar-companion; python3 -m venv --clear \"$HOME/Library/Application Support/PersonalClaw Companion/venv\"; \"$HOME/Library/Application Support/PersonalClaw Companion/venv/bin/python\" -m pip install --upgrade pip; \"$HOME/Library/Application Support/PersonalClaw Companion/venv/bin/python\" -m pip install --only-binary=pyobjc-core,pyobjc-framework-Cocoa rumps || { echo \"If pip found no ready-made PyObjC for this Mac's python3, install Python 3.12 or newer from python.org, then run the install again.\"; exit 1; }",
+      "postInstall": "\"$HOME/Library/Application Support/PersonalClaw Companion/venv/bin/python\" \"$HOME/Library/Application Support/PersonalClaw Companion/src/menu-bar-companion/run.py\" --check"
     }
   }
 }

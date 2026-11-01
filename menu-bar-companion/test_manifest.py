@@ -65,6 +65,35 @@ def test_the_client_install_one_liner_is_present_and_inspectable():
     assert "--check" in ci.postInstall, "the first run should verify the token works"
 
 
+def test_the_install_puts_the_host_in_the_companions_own_environment_and_runs_it_there():
+    """🔴 Red before: it ran `python3 -m pip install --user rumps` on whichever python3 came first,
+    and pip built PyObjC from source on a Mac whose only python3 is its own, which the Mac's
+    compiler refused. The first run used that same bare python3."""
+    from menubar_companion.tray import COMPANION_PYTHON, COMPILED, INSTALL_HOST, NO_WHEEL
+
+    ci = _parsed().platform.clientInstall
+    assert INSTALL_HOST in ci.shell
+    assert f"--only-binary={COMPILED} rumps" in INSTALL_HOST, "PyObjC never from source"
+    assert COMPILED == "pyobjc-core,pyobjc-framework-Cocoa", "rumps itself has no wheel"
+    assert "--user" not in ci.shell
+    assert ci.shell.endswith(f'{INSTALL_HOST} || {{ echo "{NO_WHEEL}"; exit 1; }}')
+    assert ci.postInstall.startswith(f"{COMPANION_PYTHON} "), "the check runs where rumps is"
+
+
+def test_the_install_can_be_run_again():
+    """NO_WHEEL says to run the install again once a newer Python is in, and the Store updates
+    the app by running it again. A second run brings the clone it made up to date (under
+    ``set -e`` a clone into it would stop the run, and keeping it as it was would land no update)
+    and makes the environment afresh, so the newer Python is the one it uses."""
+    from menubar_companion.tray import CLONE, COMPANION_HOME
+
+    shell = _parsed().platform.clientInstall.shell
+    assert f'DEST="{CLONE}";' in shell
+    assert 'if [ ! -d "$DEST/.git" ]; then git clone ' in shell
+    assert '"$DEST"; else git -C "$DEST" pull --ff-only; fi;' in shell
+    assert f'python3 -m venv --clear "{COMPANION_HOME}/venv"' in shell
+
+
 def test_permissions_are_exactly_the_minimum_this_app_uses():
     """The Store renders this block as the install-consent surface, so an unused grant
     is a real cost. Pinned exactly: adding one fails here."""
