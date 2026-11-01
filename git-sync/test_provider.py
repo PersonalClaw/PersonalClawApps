@@ -2644,12 +2644,17 @@ def test_without_access_token_the_owners_own_sign_in_is_what_git_uses(
 
 def test_access_token_is_never_handed_to_an_ssh_remote(remote, tmp_path, monkeypatch, c_locale):
     """A control: ssh signs in with the owner's key, so neither the token nor its helper reaches
-    a git that talks to an ssh remote."""
+    a git that talks to an ssh remote. A token beside one is refused before git runs, and the same
+    remote takes the push once Access token is cleared."""
     runs = _recorded(monkeypatch)
+    settings = {"repo_url": remote, "local_clone": str(tmp_path / "clone"), "token": ACCESS}
 
-    r = create_provider(
-        {"repo_url": remote, "local_clone": str(tmp_path / "clone"), "token": ACCESS}
-    ).push([SyncObject("k", b"v")])
+    refused = create_provider(settings).push([SyncObject("k", b"v")])
+    assert refused.outcome == "permanent", refused.detail
+    assert refused.detail.startswith("Git Sync doesn't use Access token with an ssh remote")
+    assert runs == []
+
+    r = create_provider({**settings, "token": ""}).push([SyncObject("k", b"v")])
     assert r.outcome == "delivered", r.detail
     assert runs
     assert not [env for _argv, env in runs if ACCESS in env.values()]
@@ -3428,3 +3433,26 @@ def test_a_url_the_settings_dont_hold_is_refused_and_nothing_is_saved(tmp_path, 
     assert _saved_settings() == {}
     assert started == []
 
+
+# ── Access token beside an ssh remote ───────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["ssh://git@git.example.com/owner/state.git", "git@git.example.com:owner/state.git"],
+    ids=["url", "scp-like"],
+)
+def test_access_token_beside_an_ssh_remote_is_refused_before_git_runs(tmp_path, monkeypatch, url):
+    """🔴 Red before: the token was dropped without a word, and git signed in with the ssh key,
+    so a user who pasted a token expecting it to be used had no reason to look at ssh."""
+    started = _no_git(monkeypatch)
+    p = _web_provider(url, tmp_path, token=ACCESS)
+
+    _refused_everywhere(
+        p,
+        "Git Sync doesn't use Access token with an ssh remote: ssh signs in with your ssh key, so "
+        f"the token would never be used. Clear Access token {ON_CARD} to sign in with your key, "
+        "or set Git remote URL to the remote's https address to sign in with the token.",
+    )
+
+    assert started == []

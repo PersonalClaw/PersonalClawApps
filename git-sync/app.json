@@ -64,7 +64,7 @@
           "default": "",
           "x-meta": {
             "label": "Access token",
-            "help": "For an https remote that needs a token to sign in: an access token from your git host. It is kept in PersonalClaw's credential store and handed to git by its own credential helper, never written into the working clone or onto a command line. Only an https remote is given it (or an http one on this machine). Leave empty for ssh, which signs in with your ssh key.",
+            "help": "For an https remote that needs a token to sign in: an access token from your git host. It is kept in PersonalClaw's credential store and handed to git by its own credential helper, never written into the working clone or onto a command line. Only an https remote is given it (or an http one on this machine). Leave empty for ssh, which signs in with your ssh key: a token beside an ssh remote is refused.",
             "sensitive": true
           }
         },

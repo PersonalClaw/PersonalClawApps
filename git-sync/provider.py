@@ -689,9 +689,17 @@ class GitSyncProvider(SyncTransportProvider):
         )
 
     def _token_refused(self) -> str:
-        """Why Access token can't be handed to git for Git remote URL, or ``""``: a plain http
-        remote on another machine would get it unencrypted, and a line break or a NUL would be
-        read by git as more than one answer. Only an http(s) remote is ever given the token."""
+        """Why Access token can't be handed to git for Git remote URL, or ``""``: an ssh remote
+        never takes it, a plain http remote on another machine would get it unencrypted, and a
+        line break or a NUL would be read by git as more than one answer. Only an http(s) remote
+        is ever given the token."""
+        if self._token and (_ssh_url(self._repo_url) or _scp_like(self._repo_url)):
+            return (
+                "Git Sync doesn't use Access token with an ssh remote: ssh signs in with your ssh "
+                f"key, so the token would never be used. Clear Access token {_ON_CARD} to sign "
+                "in with your key, or set Git remote URL to the remote's https address to sign "
+                "in with the token."
+            )
         if not self._token or not _web(self._repo_url):
             return ""
         if not _takes_token(self._repo_url):
