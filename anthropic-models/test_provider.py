@@ -503,4 +503,4 @@ def test_a_configured_max_tokens_wins_over_the_per_call_budget(
 def test_no_per_call_temperature_sends_none(fake_anthropic: types.ModuleType) -> None:
     provider = _registry_with({"api_key": "fake-anthropic-test"}).build("anthropic-x")
     assert provider.sampling_temperature is None
-    assert provider._max_tokens == 4096  # the adapter's long-standing default
+    assert provider._max_tokens is None  # none set: core sends each request its model's default

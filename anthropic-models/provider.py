@@ -92,9 +92,10 @@ def _factory(
     base_url = str(options.pop("endpoint", None) or "") or None
     options.pop("default_model", None)  # read as the entry's own model, below
     # The operator's configured cap, else the budget core derived for this call (the
-    # ``max_tokens`` build kwarg), else the adapter's long-standing 4096: the Messages API
-    # requires one.
-    max_tokens = output_cap(options.pop("max_tokens", None), kwargs.get("max_tokens"), 4096)
+    # ``max_tokens`` build kwarg). With neither, none is passed, and core sends each request its
+    # model's default: room to think and answer for a model that thinks, 4,096 for any other
+    # (core's ``thinking-output-cap``). A core older than that sends 4,096 to every model.
+    max_tokens = output_cap(options.pop("max_tokens", None), kwargs.get("max_tokens"))
     # A per-call sampling temperature (best-of-N's ladder, the ``temperature`` build kwarg) wins
     # over the entry's own: the caller asking for THIS temperature is more specific. It rides
     # ``extra_options``, which the client forwards into the request and reports back as
@@ -114,8 +115,8 @@ def _factory(
         model=model,
         credential=cred,
         base_url=base_url,
-        max_tokens=max_tokens,
         extra_options=options,
+        **({"max_tokens": max_tokens} if max_tokens else {}),
     )
 
 

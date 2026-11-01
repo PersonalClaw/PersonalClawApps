@@ -34,7 +34,7 @@ from apps_testkit.model_wire import (  # noqa: E402
     one_call,
     sampling_sent,
 )
-from personalclaw.sdk.model import ProviderEntry  # noqa: E402
+from personalclaw.sdk.model import ProviderEntry, default_output_cap  # noqa: E402
 
 import provider  # noqa: E402 — app-local
 
@@ -60,7 +60,7 @@ def _entry(url: str) -> ProviderEntry:
     ("asked", "sent"),
     [
         ({"temperature": 0.7, "max_tokens": 1234}, (0.7, 1234)),
-        ({}, (None, 4096)),
+        ({}, (None, default_output_cap(MODEL))),
     ],
     ids=["asked", "nothing-asked"],
 )
@@ -159,3 +159,17 @@ async def test_each_listed_model_declares_exactly_the_levels_the_wire_sends_it(s
     # Core's Messages client reasons with every Claude model, adaptively or with a budget, so no
     # row this app lists declares none.
     assert [model for model, (declared, _) in report.items() if not declared] == []
+
+
+#: A model that thinks adaptively: its thinking is spent out of the request's cap.
+THINKER = "claude-opus-5-5"
+
+
+@pytest.mark.asyncio
+async def test_a_model_that_thinks_is_sent_room_to_answer_when_nothing_was_asked(server):
+    """Nothing asked: the request carries core's default for its model, which leaves a model that
+    thinks room to think and still answer, where a fixed 4,096 ran out before it answered."""
+    built = provider._factory(entry=_entry(server.url), model=THINKER)
+    assert await one_call(built) == REPLY
+    assert [sampling_sent(call)[1] for call in server.calls()] == [default_output_cap(THINKER)]
+    assert default_output_cap(THINKER) == 32_000

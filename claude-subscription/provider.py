@@ -112,7 +112,7 @@ SPEC = BrandedProviderSpec(
     default_base_url="",  # empty → the anthropic SDK's own official base
     api_key_env="",  # deliberately EMPTY: this provider has no API key to fall back to
     default_model=_pick_default_model(),
-    max_tokens=4096,  # the Anthropic wire requires a max_tokens
+    max_tokens=None,  # none set: core sends each request its model's default (thinking-output-cap)
     capabilities=frozenset(
         {Capability.CHAT, Capability.CODE_TOOLS, Capability.STREAMING, Capability.VISION}
     ),
