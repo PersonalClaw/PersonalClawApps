@@ -15,16 +15,18 @@ activity) as PersonalClaw inbox items, via ``MessageSourceProvider`` from
   Network egress settings: public hosts only, the resolved address pinned, every redirect
   re-checked, and each request recorded in the security event log. This app opens no socket of
   its own.
-- **Degrade to empty.** No token, network down, an API error or an egress refusal: ``poll``
-  logs a warning and returns no rows with the checkpoints unchanged. An inbox source must never
-  take the inbox service down with it.
+- **A failed poll says why.** A token GitHub refuses, a rate limit, another status, the network
+  or an egress refusal: ``poll`` raises with a sentence that says what to do, and the checkpoint
+  stays where it was. Core's inbox keeps a raising source from taking the inbox down, and shows
+  it as the source that can't be read, with the sentence. Only a token not set yet reads as no
+  rows, which the app's doctor reports.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
 
@@ -36,8 +38,41 @@ _CHECKPOINT_KEY = "github"
 DEFAULT_API_BASE = "https://api.github.com"
 
 
+#: Where the token is changed, as each sentence about it says.
+_TOKEN_SETTING = "GitHub Token in Settings → Providers → GitHub Notifications Inbox"
+
+
 class GithubApiError(Exception):
-    """GitHub answered with a status this source cannot use."""
+    """GitHub couldn't be read: the sentence the Inbox shows for this source."""
+
+
+def _until(seen: dict[str, str]) -> str:
+    """`` until HH:MM UTC`` from a limited answer's retry-after, else its reset time, in GitHub's
+    own order (every answer carries a reset time, the primary window's, which can be an hour
+    past a secondary limit's end); ``""`` when it gives neither."""
+    try:
+        reset = datetime.now(timezone.utc) + timedelta(seconds=int(seen["retry-after"]))
+    except (KeyError, TypeError, ValueError, OverflowError):
+        try:
+            reset = datetime.fromtimestamp(int(seen["x-ratelimit-reset"]), timezone.utc)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return ""
+    return f" until {reset.strftime('%H:%M')} UTC"
+
+
+def _status_sentence(status: int, headers: dict[str, str]) -> str:
+    """What a status other than 200 means, and what to do about it."""
+    seen = {str(k).lower(): str(v) for k, v in (headers or {}).items()}
+    # A 403 is a limit, not a refusal, when none are left or GitHub says when to try again (its
+    # secondary limit answers 403 with retry-after, and may leave some of the primary one).
+    limited = status == 429 or (
+        status == 403 and (seen.get("x-ratelimit-remaining") == "0" or "retry-after" in seen)
+    )
+    if limited:
+        return f"GitHub is limiting how often this token reads (HTTP {status}){_until(seen)}."
+    if status in (401, 403):
+        return f"GitHub refused the token (HTTP {status}). Check {_TOKEN_SETTING}."
+    return f"GitHub couldn't be read (HTTP {status})."
 
 
 def _iso_to_epoch(iso: str) -> float:
@@ -104,7 +139,7 @@ class InboxGithubNotificationsProvider(MessageSourceProvider):
             },
         )
         if response.status != 200:
-            raise GithubApiError(f"GitHub answered HTTP {response.status}")
+            raise GithubApiError(_status_sentence(response.status, response.headers))
         payload = json.loads(response.text)
         return payload if isinstance(payload, list) else []
 
@@ -139,7 +174,8 @@ class InboxGithubNotificationsProvider(MessageSourceProvider):
     async def poll(
         self, watched_channels: list[str], checkpoints: dict[str, str], user_id: str
     ) -> tuple[list[IncomingMessage], dict[str, str]]:
-        """Fetch notifications newer than the checkpoint; never raise.
+        """Fetch notifications newer than the checkpoint, or raise :class:`GithubApiError` with
+        why they couldn't be, the checkpoint left where it was.
 
         ``watched_channels``, when non-empty, is a repo allow-list (``owner/name``); anything
         else is dropped client-side.
@@ -155,13 +191,10 @@ class InboxGithubNotificationsProvider(MessageSourceProvider):
         since = str(checkpoints.get(_CHECKPOINT_KEY, "") or "")
         try:
             threads = await self._fetch_notifications(since)
-        except (
-            Exception
-        ) as exc:  # noqa: BLE001 — the degrade boundary: never take the inbox down
-            logger.warning(
-                "github notifications: poll failed (%s) — returning empty", exc
-            )
-            return [], dict(checkpoints)
+        except GithubApiError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — the network, the egress guard, a bad body
+            raise GithubApiError(f"GitHub couldn't be reached ({exc}).") from exc
 
         rows: list[IncomingMessage] = []
         newest = since

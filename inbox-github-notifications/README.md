@@ -40,9 +40,12 @@ your own network is reachable only once you allow its host there. The token trav
 - **Checkpoint = high-water mark.** Each poll remembers the newest `updated_at` it saw and
   passes it as `?since=` next time, so GitHub does the filtering. The first successful poll
   plants the mark even when it finds nothing.
-- **Degrade to empty.** With no token, the network down, an API error or an egress refusal, a
-  poll logs a warning and returns nothing, with its checkpoint unchanged. An inbox source never
-  takes the inbox service down with it.
+- **A failed poll says why.** When GitHub refuses the token, limits how often it reads, answers
+  with another error, or can't be reached, the Inbox shows this source as one that can't be
+  read, with the reason (for a refused token: "GitHub refused the token (HTTP 401). Check GitHub
+  Token in Settings → Providers → GitHub Notifications Inbox."), and tries again at the next
+  poll. The checkpoint stays where it was, so nothing is missed. With no token set, a poll reads
+  nothing, and `personalclaw doctor` says so.
 
 ## Install
 
