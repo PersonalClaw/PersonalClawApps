@@ -3,7 +3,7 @@
 Contract: personalclaw.sdk.inbox:MessageSourceProvider
 
 No network: behaviour tests stub ``_fetch_notifications`` and assert the mapping,
-checkpointing, filtering and degrade-to-empty rules, and the egress tests replace the SDK's
+checkpointing, filtering and failure rules, and the egress tests replace the SDK's
 guarded ``fetch`` so no socket opens.
 """
 
@@ -229,16 +229,19 @@ def test_empty_first_poll_plants_a_high_water_mark() -> None:
     assert cps["github"]  # planted, so history never floods later
 
 
-def test_api_failure_degrades_to_empty() -> None:
+def test_a_poll_that_cant_reach_github_says_so_and_keeps_the_checkpoint() -> None:
+    """🔴 Red before: it returned no rows, and the Inbox read "last checked just now"."""
     p = create_provider({"token": "t"})
 
     async def boom(since):
         raise OSError("down")
 
     p._fetch_notifications = boom
-    rows, cps = _poll(p, checkpoints={"github": "keep-me"})
-    assert rows == []
-    assert cps == {"github": "keep-me"}
+    checkpoints = {"github": "keep-me"}
+    with pytest.raises(GithubApiError) as refused:
+        _poll(p, checkpoints=checkpoints)
+    assert str(refused.value) == "GitHub couldn't be reached (down)."
+    assert checkpoints == {"github": "keep-me"}
 
 
 def test_read_only_surface_says_so() -> None:
@@ -255,16 +258,19 @@ def test_read_only_surface_says_so() -> None:
 class _FetchRecorder:
     """Stands in for ``personalclaw.sdk.net.fetch`` and records what it was asked to do."""
 
-    def __init__(self, status: int = 200, body: object = None) -> None:
+    def __init__(self, status: int = 200, body: object = None, headers=None) -> None:
         self.calls: list[dict] = []
         self._status = status
+        self._headers = dict(headers or {})
         self._body = json.dumps(body if body is not None else []).encode("utf-8")
 
     async def __call__(self, url, *, policy, method="GET", headers=None, data=None):
         self.calls.append(
             {"url": url, "policy": policy, "method": method, "headers": headers}
         )
-        return FetchResponse(url=url, status=self._status, body=self._body)
+        return FetchResponse(
+            url=url, status=self._status, headers=self._headers, body=self._body
+        )
 
 
 def test_a_poll_goes_through_the_guard_with_the_connector_policy(monkeypatch) -> None:
@@ -288,13 +294,79 @@ def test_a_poll_goes_through_the_guard_with_the_connector_policy(monkeypatch) ->
     assert "tok" not in call["url"]
 
 
-def test_a_status_that_is_not_200_degrades_to_empty(monkeypatch) -> None:
-    monkeypatch.setattr("personalclaw.sdk.net.fetch", _FetchRecorder(status=401))
+@pytest.mark.parametrize("status", [401, 403])
+def test_a_refused_token_names_the_token_and_where_to_change_it(monkeypatch, status) -> None:
+    """🔴 Red before: the poll returned no rows, so the Inbox read "last checked just now" while
+    nothing arrived."""
+    monkeypatch.setattr("personalclaw.sdk.net.fetch", _FetchRecorder(status=status))
     p = create_provider({"token": "bad"})
-    with pytest.raises(GithubApiError, match="401"):
-        asyncio.run(p._fetch_notifications(""))
-    rows, cps = _poll(p, checkpoints={"github": "keep-me"})
-    assert rows == [] and cps == {"github": "keep-me"}
+    checkpoints = {"github": "keep-me"}
+    with pytest.raises(GithubApiError) as refused:
+        _poll(p, checkpoints=checkpoints)
+    assert str(refused.value) == (
+        f"GitHub refused the token (HTTP {status}). Check GitHub Token in Settings → Providers "
+        "→ GitHub Notifications Inbox."
+    )
+    assert checkpoints == {"github": "keep-me"}
+
+
+class _Frozen(__import__("datetime").datetime):
+    """The clock at 2026-11-03 10:00 UTC, for an answer that says when in seconds from now."""
+
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2026, 11, 3, 10, 0, tzinfo=tz)
+
+
+@pytest.mark.parametrize("status", [403, 429])
+def test_a_rate_limit_says_so_and_until_when(monkeypatch, status) -> None:
+    headers = {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1793700000"}
+    monkeypatch.setattr(
+        "personalclaw.sdk.net.fetch", _FetchRecorder(status=status, headers=headers)
+    )
+    with pytest.raises(GithubApiError) as limited:
+        _poll(create_provider({"token": "t"}))
+    assert str(limited.value) == (
+        f"GitHub is limiting how often this token reads (HTTP {status}) until 10:00 UTC."
+    )
+
+
+def test_a_secondary_rate_limit_is_a_limit_not_a_refused_token(monkeypatch) -> None:
+    """GitHub's secondary limit answers 403 with retry-after, and may leave some of the primary
+    one: it is said as a limit, until when from retry-after, never as a token to enter again."""
+    import provider as ghn
+
+    monkeypatch.setattr(ghn, "datetime", _Frozen)
+    # Every answer carries the primary window's reset time; retry-after comes first.
+    headers = {
+        "Retry-After": "120",
+        "X-RateLimit-Remaining": "4321",
+        "X-RateLimit-Reset": "1793703600",  # 11:00 UTC, the primary window's end
+    }
+    monkeypatch.setattr(
+        "personalclaw.sdk.net.fetch", _FetchRecorder(status=403, headers=headers)
+    )
+    with pytest.raises(GithubApiError) as limited:
+        _poll(create_provider({"token": "t"}))
+    assert str(limited.value) == (
+        "GitHub is limiting how often this token reads (HTTP 403) until 10:02 UTC."
+    )
+
+
+def test_another_status_says_github_couldnt_be_read(monkeypatch) -> None:
+    monkeypatch.setattr("personalclaw.sdk.net.fetch", _FetchRecorder(status=502))
+    with pytest.raises(GithubApiError) as failed:
+        _poll(create_provider({"token": "t"}))
+    assert str(failed.value) == "GitHub couldn't be read (HTTP 502)."
+
+
+def test_doctor_doesnt_call_a_saved_token_one_github_takes() -> None:
+    """🔴 Red before: "set — your notifications are read with it", for a token GitHub refused."""
+    from app_cli import _token_line
+
+    line = _token_line({"token": "saved"})
+    assert "read with it" not in line.detail
+    assert "the Inbox says so if GitHub refuses it" in line.detail
 
 
 def test_the_app_opens_no_socket_of_its_own() -> None:

@@ -14,7 +14,12 @@ APP_NAME = "inbox-github-notifications"
 
 def _token_line(saved: dict) -> DoctorLine:
     if str(saved.get("token", "") or "").strip():
-        return DoctorLine("token", "ok", "set — your notifications are read with it")
+        return DoctorLine(
+            "token",
+            "ok",
+            "set. Doctor doesn't ask GitHub whether it takes it: the Inbox says so if GitHub "
+            "refuses it",
+        )
     return DoctorLine(
         "token",
         "warn",
