@@ -189,13 +189,21 @@ silently persists an env-supplied token.
 
 ## Install and run
 
-The App Store shows the `platform.clientInstall` one-liner (clone this app + install the
-GUI dependency). Then, on the Mac:
+The App Store shows the `platform.clientInstall` one-liner. It clones this app into
+`~/Library/Application Support/PersonalClaw Companion/src`, makes the companion its own Python
+environment beside it (`venv`), brings that environment's pip up to date and installs the GUI
+dependency there. PyObjC, the compiled part, comes from ready-made wheels only; `rumps` itself is
+plain Python. The Mac's own `python3` is left as it is. If no ready-made PyObjC fits that
+`python3`, the install stops before building anything and says to install Python 3.12 or newer
+from python.org, then run it again. A second run, which is also how the Store updates the app,
+brings the clone up to date and makes the environment afresh with whichever `python3` comes
+first. Then, on the Mac, in the `menu-bar-companion` folder:
 
 ```sh
-python3 run.py --configure http://localhost:10000 <token>   # both from `personalclaw token`
-python3 run.py --check                                      # one read; prints the menu
-python3 run.py                                              # live in the menu bar
+PY="$HOME/Library/Application Support/PersonalClaw Companion/venv/bin/python"
+"$PY" run.py --configure http://localhost:10000 <token>   # both from `personalclaw token`
+"$PY" run.py --check                                      # one read; prints the menu
+"$PY" run.py                                              # live in the menu bar
 ```
 
 `--check` is the honest smoke test: it proves the token works, prints exactly what the

@@ -30,6 +30,34 @@ from menubar_companion.model import (
 )
 from menubar_companion.settings import Settings
 
+#: Where the companion keeps itself on the Mac that shows the menu bar item.
+COMPANION_HOME = "$HOME/Library/Application Support/PersonalClaw Companion"
+#: The companion's own Python: an environment it owns, so the install never depends on what the
+#: Mac's own ``python3`` has, or lets it add to it.
+COMPANION_PYTHON = f'"{COMPANION_HOME}/venv/bin/python"'
+#: The compiled packages the status-item host stands on: taken from ready-made wheels only.
+COMPILED = "pyobjc-core,pyobjc-framework-Cocoa"
+#: The step that puts the status-item host in that environment, as ``platform.clientInstall`` in
+#: app.json runs it (the manifest test holds the two to one string). The environment is made
+#: afresh (``--clear``), so a run after a newer Python is installed uses it. pip is brought up
+#: to date first, and PyObjC comes from wheels only: an old pip on the Mac's own Python 3.9 built
+#: it from source, which the Mac's compiler refuses. rumps itself is plain Python, built from its
+#: source with no compiler.
+INSTALL_HOST = (
+    f'python3 -m venv --clear "{COMPANION_HOME}/venv"; '
+    f"{COMPANION_PYTHON} -m pip install --upgrade pip; "
+    f"{COMPANION_PYTHON} -m pip install --only-binary={COMPILED} rumps"
+)
+#: What the install says when pip couldn't install the host, which is most often no ready-made
+#: PyObjC for the Mac's ``python3`` (pip's own words are just above it).
+NO_WHEEL = (
+    "If pip found no ready-made PyObjC for this Mac's python3, install Python 3.12 or newer "
+    "from python.org, then run the install again."
+)
+#: Where the install clones this app. A second run of the install, which is also how the Store
+#: updates it, brings that clone up to date rather than cloning again.
+CLONE = f"{COMPANION_HOME}/src"
+
 
 class HostUnavailable(RuntimeError):
     """No macOS status-item backend is importable here."""
@@ -148,9 +176,9 @@ def resolve_host() -> tuple[object | None, str]:
     except Exception as exc:  # noqa: BLE001 - any import failure is "no host here"
         return None, (
             "no macOS status-item backend: "
-            f"{type(exc).__name__}: {exc}. Install it with "
-            "`python3 -m pip install --user rumps` on the Mac that should show the "
-            "menu bar item (see platform.clientInstall in app.json)."
+            f"{type(exc).__name__}: {exc}. Install it in the companion's own environment, as "
+            f"platform.clientInstall in app.json does, on the Mac that should show the menu bar "
+            f"item: `{INSTALL_HOST}`. Then run run.py with {COMPANION_PYTHON}. {NO_WHEEL}"
         )
     return rumps, ""
 

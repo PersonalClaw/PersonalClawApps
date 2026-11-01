@@ -411,6 +411,27 @@ def test_the_status_item_host_is_reported_rather_than_assumed():
     host, reason = resolve_host()
     if host is None:
         assert "no macOS status-item backend" in reason
-        assert "pip install --user rumps" in reason
     else:
         assert reason == ""
+
+
+def test_with_no_host_the_advice_is_the_installs_own_step(monkeypatch):
+    """🔴 Red before: the advice was `python3 -m pip install --user rumps`, the very command that
+    had just failed on a Mac whose only python3 is its own. It is now the install's own step,
+    into the companion's environment, as app.json runs it, and what to do when no wheel fits."""
+    import json
+    import sys
+    from pathlib import Path
+
+    from menubar_companion.tray import COMPANION_PYTHON, INSTALL_HOST, NO_WHEEL
+
+    monkeypatch.setitem(sys.modules, "rumps", None)  # import rumps raises ImportError
+    host, reason = resolve_host()
+
+    assert host is None
+    assert f"`{INSTALL_HOST}`" in reason
+    assert f"Then run run.py with {COMPANION_PYTHON}." in reason
+    assert NO_WHEEL in reason
+    assert "--user" not in reason
+    manifest = json.loads((Path(__file__).parent / "app.json").read_text(encoding="utf-8"))
+    assert INSTALL_HOST in manifest["platform"]["clientInstall"]["shell"]
