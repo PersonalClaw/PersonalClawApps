@@ -716,6 +716,11 @@ def check_workspace(orch: "GatewayServices") -> WorkspaceCheck:
     return validate_enterprise(orch._bot_token)
 
 
+#: The Socket Mode requests run even when their acknowledgement couldn't be sent: Slack never
+#: sends a slash command or a button press again, and their answers don't need the socket.
+UNACKED_STILL_RUN = frozenset({"slash_commands", "interactive"})
+
+
 def bind_workspace(orch: "GatewayServices", check: WorkspaceCheck) -> WorkspaceCheck:
     """Act on one workspace check, and return it.
 
@@ -742,8 +747,20 @@ def bind_workspace(orch: "GatewayServices", check: WorkspaceCheck) -> WorkspaceC
         try:
             await client.send_socket_mode_response(SocketModeResponse(envelope_id=req.envelope_id))
         except Exception:
-            logger.debug("Failed to ack event (WebSocket not ready), skipping")
-            return
+            # Slack sends an Events API envelope again until one is acknowledged, so that one is
+            # left for the redelivery. A slash command or a button press is never sent again: it
+            # is run anyway, and answered through its response_url or the Web API, which don't
+            # need the socket.
+            if req.type not in UNACKED_STILL_RUN:
+                logger.warning(
+                    "Couldn't acknowledge a Slack %s (Socket Mode not ready); Slack sends it again",
+                    req.type,
+                )
+                return
+            logger.warning(
+                "Couldn't acknowledge a Slack %s (Socket Mode not ready); running it anyway",
+                req.type,
+            )
 
         if req.type == "interactive":
             t = asyncio.create_task(dispatch_interactive(req.payload or {}))
