@@ -65,7 +65,7 @@ from personalclaw.sdk.channel import is_sensitive_path, redact_credentials, reda
 from personalclaw.sdk.channel import owner_id_for
 from personalclaw.sdk.channel import sel
 from personalclaw.sdk.channel import SessionManager
-from personalclaw.sdk.model import closing_stream
+from personalclaw.sdk.model import ProviderResolutionError, closing_stream
 from slack_runtime.blocks import deprecation_warning_block
 from slack_runtime.client import SlackClientOps
 from slack_runtime.format import (
@@ -1777,6 +1777,33 @@ async def _handle_compact_command(
         pass
 
 
+#: What the dashboard's chat says when no model is set up (its calm setup state), said here too.
+NO_MODEL_CONNECTED = (
+    "No model is connected yet. Connect a model to start chatting: you can set one up in "
+    "Settings → Models."
+)
+
+
+def no_model_sentence(failure: BaseException) -> str:
+    """What the thread is told when no model can run its turn, or ``""`` for any other failure.
+
+    Core's resolver says it with a coded refusal (``ERR_MODEL_UNRESOLVED``), and the registry
+    with its own class, whose words are written for the person reading them. A provider that is
+    connected with no model chosen for it is named, as the dashboard names it."""
+    coded = getattr(failure, "agent_error", None)
+    if getattr(coded, "code", "") == "ERR_MODEL_UNRESOLVED":
+        chosen = re.search(r"no model is chosen for “([^”]+)”", str(getattr(coded, "why", "")))
+        if chosen:
+            return (
+                f"No model is chosen for {chosen.group(1)} yet. Choose which of its models to "
+                "chat with in Settings → Models."
+            )
+        return NO_MODEL_CONNECTED
+    if isinstance(failure, ProviderResolutionError):
+        return str(failure)
+    return ""
+
+
 async def handle_message(
     slack: SlackClientOps,
     sessions: SessionManager,
@@ -2192,6 +2219,8 @@ async def handle_message(
 
     task = Task(id=msg_ts)
     _acquired = False
+    # Read by the footer whichever way the turn ends, one that never got a runtime included.
+    client: ModelProvider | None = None
 
     # ── Bidirectional sync: check if this Slack thread is linked to a dashboard session ──
     linked_session_key = sessions.get_session_for_thread(session_key)
@@ -2633,12 +2662,19 @@ async def handle_message(
         accumulated = f"❌ {e}"
         task.fail(str(e))
         await sessions.record_failure(session_key)
-    except Exception:
+    except Exception as e:
         _had_error = True
-        logger.exception("Unexpected error handling message")
-        accumulated = accumulated or "🔧 Something went wrong. Please try again."
-        task.fail("unexpected")
-        await sessions.record_failure(session_key)
+        setup = no_model_sentence(e)
+        if setup:
+            # Not a defect, and trying again can't help: the thread is told what to set up.
+            logger.warning("No model can run the turn for %s: %s", session_key, e)
+            accumulated = f"⚙️ {setup}"
+            task.fail("no_model")
+        else:
+            logger.exception("Unexpected error handling message")
+            accumulated = accumulated or "🔧 Something went wrong. Please try again."
+            task.fail("unexpected")
+            await sessions.record_failure(session_key)
     finally:
         _turn.close()
         if _acquired:
