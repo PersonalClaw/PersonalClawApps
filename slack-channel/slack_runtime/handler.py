@@ -1799,11 +1799,11 @@ async def handle_message(
 ) -> None:
     """Route a Slack message through ACP with streaming and tool approval.
 
-    NOTE: ``from_trusted_bot`` is consumed only in the error path (echo-loop
-    suppression). Early-reply paths (hook auto-reply, !status, !sessions) still
-    post to Slack unconditionally — safe today because trusted bots send
-    structured commands (``[TASK:id]``, ``[ACK:id]``) that don't match those
-    patterns. Extend if that assumption changes.
+    A bot in Trusted Bot IDs (``from_trusted_bot``), which this app doesn't let in as a sender
+    (``is_allowed_user``), relays what anyone wrote: its message runs one turn, fenced as outside
+    content, and none of the keywords and commands before the turn acts on its text. Only the
+    hook's auto-reply, which posts canned text, still answers it. In the error path,
+    ``from_trusted_bot`` also holds back error replies to such a bot (echo-loop suppression).
 
     *channel_agent* overrides the default agent for this channel (set via
     per-channel config in ``slack.channels``).
@@ -1886,11 +1886,15 @@ async def handle_message(
         channel,
     )
 
+    # A bot in Trusted Bot IDs, which this app doesn't let in as a sender, relays what anyone wrote,
+    # so its message runs one fenced turn and nothing else: no keyword or command below acts on it.
+    relayed = from_trusted_bot and not is_allowed_user(user_id)
+
     # ── A reply to the Morning triage digest this DM received (`3 yes`) ──
     # PersonalClaw's to answer, as it is on every channel whose messages cross its door: it takes
     # the owner's answer, answers it as the digest's card does and says here what it did, and this
     # conversation runs no turn for it. Anything else stays this conversation's.
-    if channel.startswith("D") and _gateway_services is not None:
+    if channel.startswith("D") and _gateway_services is not None and not relayed:
         from personalclaw.sdk.channel import ChannelMessage
 
         _reply = ChannelMessage(
@@ -1922,12 +1926,12 @@ async def handle_message(
             return
 
     # ── Status keyword: reply with stats summary ──
-    if text.strip().lower() == "status":
+    if not relayed and text.strip().lower() == "status":
         await slack.post_message(channel, Stats().summary(), reply_ts)
         return
 
     # ── Sessions keyword: list recent sessions ──
-    if text.strip().lower() == "sessions":
+    if not relayed and text.strip().lower() == "sessions":
         if is_owner(user_id) or is_allowed_user(user_id):
             sel().log_api_access(
                 caller=user_id,
@@ -1947,7 +1951,7 @@ async def handle_message(
 
     # ── !temporary modifier: strip token and mark session before dispatch ──
     _cmd_text_stripped, _had_temporary = _strip_temporary_token(_cmd_text)
-    if _had_temporary:
+    if _had_temporary and not relayed:
         await _apply_temporary_modifier(
             session_key, user_id, channel, slack, sessions, reply_ts,
         )
@@ -1960,7 +1964,7 @@ async def handle_message(
 
     # ── !incognito modifier: strip token and mark session before dispatch ──
     _cmd_text_stripped, _had_incognito = _strip_incognito_token(_cmd_text)
-    if _had_incognito:
+    if _had_incognito and not relayed:
         await _apply_incognito_modifier(
             session_key, user_id, channel, slack, sessions, reply_ts,
         )
@@ -1970,7 +1974,7 @@ async def handle_message(
         if not _cmd_text:
             return
 
-    if _cmd_text.strip().lower() == "!compact":
+    if not relayed and _cmd_text.strip().lower() == "!compact":
         if is_owner(user_id) or is_allowed_user(user_id):
             sel().log_api_access(
                 caller=user_id,
@@ -1997,7 +2001,7 @@ async def handle_message(
     # Strip leading bot mention from app_mention events so the ! prefix is exposed.
     # DM:       "!agent foo"                    → "!agent foo"       (no-op)
     # @mention: "<@UBOT|personalclaw> !agent foo"   → "!agent foo"      (strip prefix)
-    if _cmd_text.startswith("!"):
+    if not relayed and _cmd_text.startswith("!"):
         # !stop and !title are any allowed user's. !dashboard reaches them too, and sends its
         # link to the owner alone (send_dashboard_link): anyone else is told why not.
         _cmd_word = _cmd_text.split()[0]
@@ -2055,7 +2059,7 @@ async def handle_message(
                 return
 
     # ── Subagent spawn: "spawn <task>" (before cron to avoid NL overlap) ──
-    if subagent_manager:
+    if subagent_manager and not relayed:
         spawn_reply = _handle_spawn_command(text, subagent_manager, session_key)
         if spawn_reply:
             await slack.post_message(channel, spawn_reply, reply_ts)
@@ -2075,7 +2079,9 @@ async def handle_message(
     # The store is built from the ACTIVE HOME rather than injected: a `cron_service`
     # parameter let the caller decide which scheduler this surface read, and six call sites passed
     # `orch.cron_svc` — the legacy service core has deleted. One home, one store, one answer.
-    cron_reply = _handle_cron_command(text, TriggerStore(base_dir=config_dir()), channel, reply_ts)
+    cron_reply = None if relayed else _handle_cron_command(
+        text, TriggerStore(base_dir=config_dir()), channel, reply_ts
+    )
     if cron_reply:
         await slack.post_message(channel, cron_reply, reply_ts)
         if conversation_log and not _is_slack_restricted(session_key):
@@ -2294,14 +2300,14 @@ async def handle_message(
         # A non-owner's chat text is untrusted DATA, never
         # instructions; wrap it in the platform's untrusted-content fence — the SAME fence
         # core's guarded door hands the sibling channels as ``verdict.fenced_text`` — before
-        # it reaches the model. Trusted senders (owner, an allowlisted user, a trusted bot)
-        # pass through unfenced, exactly as core exempts ``is_allowed_sender``. Only the model
-        # input is fenced: display, history and the dashboard mirror below keep the raw text.
+        # it reaches the model. Trusted senders (the owner, an allowlisted user) pass through
+        # unfenced, exactly as core exempts ``is_allowed_sender``. A bot in Trusted Bot IDs is
+        # only let past the bot filter: what it relays can come from anyone, so its text is
+        # fenced too. Only the model input is fenced: display, history and the dashboard mirror
+        # below keep the raw text.
         from slack_runtime.transport import fence_untrusted_inbound
 
-        agent_text = fence_untrusted_inbound(
-            text, user_id, trusted=(from_trusted_bot or is_allowed_user(user_id))
-        )
+        agent_text = fence_untrusted_inbound(text, user_id, trusted=is_allowed_user(user_id))
 
         if context_builder:
             # Thread-scoped temporary mode: blocks memory reads.

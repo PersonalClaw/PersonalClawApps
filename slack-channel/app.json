@@ -1,6 +1,6 @@
 {
   "name": "slack-channel",
-  "version": "0.1.48",
+  "version": "0.1.49",
   "displayName": "Slack Channel",
   "description": "Slack workspace integration. Monitor channels, respond to mentions, and interact via Slack.",
   "icon": "Slack",
@@ -149,7 +149,7 @@
           },
           "x-meta": {
             "label": "Trusted Bot IDs",
-            "help": "Bot IDs allowed to bypass the bot filter for multi-node mesh."
+            "help": "Bot IDs whose messages get past the bot filter and start turns, for a multi-node mesh. A listed bot's text reaches the agent fenced as outside content, as a stranger's does, no command or keyword in it is run, and the chat's Trust and YOLO don't approve its calls. Error replies to it aren't posted, so two bots don't trade error messages."
           }
         },
         "reactions": {
