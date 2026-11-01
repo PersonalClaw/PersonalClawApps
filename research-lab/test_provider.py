@@ -418,3 +418,81 @@ def test_no_campaigns_lists_cleanly(home) -> None:
     assert result.success
     assert result.metadata["campaigns"] == []
     assert result.recovery_hints
+
+
+# ── array arguments ─────────────────────────────────────────────────────────────
+#
+# Some models send an array argument as the JSON text of a list ('["a", "b"]'), on an ordinary
+# first call. The app read each one with list(...), which split that text into characters: a
+# campaign opened with three sub-questions held 121 of them, named "[", a quote and "W", and its
+# report was nonsense. Every array argument the tools declare is read here as its list, and a value
+# that isn't a list of strings is refused. The cases come from the declared schemas, so a new array
+# argument is covered as soon as it is declared.
+
+LISTED = ["What changed in the release?", "Who is affected by it?"]
+
+
+def _array_arguments() -> list[tuple[str, str]]:
+    return [
+        (tool.name, key)
+        for tool in tools(create_provider({}))
+        for key, spec in tool.parameters["properties"].items()
+        if spec.get("type") == "array"
+    ]
+
+
+def _call_with(provider, tool: str, key: str, value):
+    """*tool* called with *key* set to *value*, and every other argument it needs."""
+    if tool == "research_open":
+        return call(provider, tool, question="Root", **{key: value})
+    if tool == "research_record":
+        opened = call(provider, "research_open", question="Root", sub_questions=["first"])
+        campaign = opened.metadata["campaign"]
+        call(provider, "research_next", campaign=campaign)
+        return call(
+            provider, tool, campaign=campaign, node="q1", finding="answered", **{key: value}
+        )
+    raise AssertionError(f"{tool} declares an array argument, {key}; add how it is called")
+
+
+def _stored_strings(home) -> list[str]:
+    """Every question and source the saved campaigns hold."""
+    found: list[str] = []
+    for path in campaigns_dir(home).glob("*/campaign.json"):
+        for node in json.loads(path.read_text(encoding="utf-8"))["nodes"]:
+            found += [node["question"], *node["sources"]]
+    return found
+
+
+def test_the_tools_declare_the_array_arguments_this_covers() -> None:
+    assert _array_arguments() == [
+        ("research_open", "sub_questions"),
+        ("research_record", "sources"),
+        ("research_record", "follow_ups"),
+    ]
+
+
+@pytest.mark.parametrize(("tool", "key"), _array_arguments())
+def test_an_array_argument_sent_as_json_text_is_read_as_its_list(home, tool, key) -> None:
+    """🔴 Red before: one item per character."""
+    result = _call_with(create_provider({}), tool, key, json.dumps(LISTED))
+
+    assert result.success, result.error
+    stored = _stored_strings(home)
+    assert set(LISTED) <= set(stored), stored
+    assert not [s for s in stored if len(s) == 1], "split into characters"
+
+
+@pytest.mark.parametrize(("tool", "key"), _array_arguments())
+def test_an_array_argument_that_isnt_a_list_is_refused(home, tool, key) -> None:
+    """🔴 Red before: plain text was split into characters and saved."""
+    result = _call_with(create_provider({}), tool, key, "just one question")
+
+    assert result.success is False
+    assert result.error.startswith(f"{key} must be a list of "), result.error
+    assert not [s for s in _stored_strings(home) if len(s) == 1], "split into characters"
+
+
+def test_a_list_of_strings_is_still_read_as_given(home) -> None:
+    opened = call(create_provider({}), "research_open", question="Root", sub_questions=LISTED)
+    assert [n["question"] for n in opened.metadata["sub_questions"]] == LISTED
