@@ -149,6 +149,17 @@ clone of an empty repo succeeds and the first push publishes the branch.
   to anywhere else would carry it unencrypted, so that is refused — and an ssh remote never is.
   A working clone made earlier from a URL with a token in it has its origin rewritten without
   it, and every copy of the token taken out of its `.git`.
+- **A credential saved in Git remote URL is taken out of the settings.** The settings file is not
+  the credential store: it holds Git remote URL in plain text, and travels in a snapshot or a
+  sync of the home. So the first time Git Sync runs with a saved URL that has a credential
+  written into it, it saves the URL without it. An https URL's token moves to Access token and
+  its user name to User name, each when that field is empty, and is dropped when it's set. A
+  value written alone before the `@` counts as a token only when it reads as one (a host's
+  token prefix, such as `ghp_` or `glpat-`, or 20 or more letters, digits, `_` and `-`);
+  anything else is a user name, as in Bitbucket's own clone URLs. A password in an ssh URL is
+  dropped, since ssh signs in with your key. The next **Test connection** says what was done.
+  A copy a snapshot or a sync took before then still holds it: change that token on your git
+  host.
 - **A password in an ssh Git remote URL is refused too.** git would keep
   `ssh://user:password@host/…` in `.git/config` and hand the password to ssh on its command line
   as part of the login name, where anyone on this machine can read it, and ssh never signs in
