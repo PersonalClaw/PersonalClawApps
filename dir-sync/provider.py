@@ -103,6 +103,16 @@ class DirSyncProvider(SyncTransportProvider):
 
     # ── internal helpers ─────────────────────────────────────────────────────────────
 
+    def _no_root(self) -> str:
+        """What a sync folder that isn't there says. Folder Sync never creates it: it may be a
+        drive or share that isn't mounted, or a mistyped path, and a folder made in its place
+        would quietly take the sync onto this machine's own disk."""
+        return (
+            f"The sync folder at {self._root} isn't there. If it lives on a drive or a share "
+            "that isn't mounted, mount it; if it's the folder you meant, create it; otherwise "
+            f"set Sync folder {_ON_CARD} to the right folder."
+        )
+
     def _folder_trouble(self, failure: OSError) -> str:
         """What an ``OSError`` from the sync folder means, and what to do about it — the OS's
         own words ("[Errno 13] Permission denied: '…'") say neither.
@@ -123,11 +133,7 @@ class DirSyncProvider(SyncTransportProvider):
                 f"{_ON_CARD} to a folder."
             )
         if not os.path.isdir(self._root):
-            return (
-                f"The sync folder at {self._root} isn't there, and Folder Sync couldn't create "
-                "it. If it lives on a drive or a sync mount, reconnect that; otherwise set Sync "
-                f"folder {_ON_CARD} to a folder that is there."
-            )
+            return self._no_root()
         if isinstance(failure, PermissionError):
             return (
                 f"Folder Sync isn't allowed to write to the sync folder at {self._root}. Fix that "
@@ -199,10 +205,25 @@ class DirSyncProvider(SyncTransportProvider):
         with os.fdopen(fd, "rb") as fh:
             return fh.read()
 
+    def _make_folders(self, folder: str) -> None:
+        """Make ``folder`` and the folders between it and the sync folder, never the sync folder
+        itself (:meth:`_no_root`). One gone since it was looked at fails the first ``mkdir``, and
+        a folder outside it is refused (``_paths`` already keeps every key inside)."""
+        here = self._root
+        rel = os.path.relpath(folder, self._root)
+        if rel == os.pardir or rel.startswith(os.pardir + os.sep):
+            raise OSError(errno.EINVAL, "not a folder in the sync folder", folder)
+        for name in [] if rel == os.curdir else rel.split(os.sep):
+            here = os.path.join(here, name)
+            try:
+                os.mkdir(here)
+            except FileExistsError:
+                pass
+
     def _atomic_write(self, target: str, data: bytes) -> None:
         """Write ``data`` to ``target`` atomically via a temp file in the same dir."""
         parent = os.path.dirname(target)
-        os.makedirs(parent, exist_ok=True)
+        self._make_folders(parent)
         # Temp file in the SAME directory so os.replace is a rename, not a cross-device
         # copy; the _TMP_PREFIX keeps it recognizable so list_remote can exclude it.
         fd, tmp = tempfile.mkstemp(prefix=_TMP_PREFIX, dir=parent)
@@ -223,6 +244,8 @@ class DirSyncProvider(SyncTransportProvider):
     def push(self, objects: list[SyncObject]) -> PushResult:
         if not self._root:
             return PushResult(outcome="transient", detail="no sync folder configured")
+        if not os.path.lexists(self._root):
+            return PushResult(outcome="transient", detail=f"{self._no_root()} {_RETRIES}")
         paths = self._paths([obj.key for obj in objects], "write")
         pushed = skipped = 0
         try:
@@ -311,10 +334,8 @@ class DirSyncProvider(SyncTransportProvider):
         if not self._root:
             return False
         target = self._paths([_REGISTRY_KEY], "swap")[_REGISTRY_KEY]
-        try:
-            os.makedirs(self._root, exist_ok=True)
-        except OSError:
-            return False
+        if not os.path.isdir(self._root):
+            return False  # never made here (_no_root): the push says why
         lock = os.path.join(self._root, _LOCK_DIR)
         try:
             # os.mkdir is atomic and fails if the directory already exists, giving us a
@@ -416,10 +437,8 @@ class DirSyncProvider(SyncTransportProvider):
                 return ConnectionResult(
                     ok=False, detail=f"sync path is not a directory: {self._root}"
                 )
-            # Not there yet — the transport creates parents on push, so a creatable path
-            # is reachable. Create it now so the probe reflects real writability.
-            os.makedirs(self._root, exist_ok=True)
-            return ConnectionResult(ok=True, detail=f"sync folder created at {self._root}")
+            # Never created here: it may be a drive or share that isn't mounted (_no_root).
+            return ConnectionResult(ok=False, detail=self._no_root())
         except OSError as e:
             return ConnectionResult(
                 ok=False, detail=sentence_with_detail(self._folder_trouble(e), e)

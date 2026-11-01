@@ -12,11 +12,11 @@ import errno
 import hashlib
 import json
 import os
+import shutil
 import signal
 
 import pytest
 
-import provider as dir_sync
 from provider import DirSyncProvider, create_provider
 from personalclaw.sdk.sync import KeysRefused, RemoteRef, SyncObject
 
@@ -218,11 +218,14 @@ def test_probe_ok_on_writable_dir(tmp_path):
     assert str(tmp_path) in res.detail
 
 
-def test_probe_creates_missing_dir(tmp_path):
-    target = tmp_path / "fresh" / "sync"
+def test_a_probe_of_a_folder_that_isnt_there_fails_and_creates_nothing(tmp_path):
+    """🔴 Red before: the Test made the folder and answered "sync folder created". A drive or
+    share that isn't mounted, or a mistyped path, then took the sync onto the local disk."""
+    target = tmp_path / "unmounted" / "sync"
     res = DirSyncProvider(str(target)).test()
-    assert res.ok is True
-    assert target.is_dir()
+    assert res.ok is False
+    assert res.detail == NOT_THERE.format(root=target)
+    assert not (tmp_path / "unmounted").exists()
 
 
 def test_probe_not_ok_on_empty_config():
@@ -270,9 +273,9 @@ def test_create_provider_empty_config_constructs():
 ON_CARD = "on the Folder Sync card in Settings → Providers"
 RETRIES = "Sync tries again on its next run."
 NOT_THERE = (
-    "The sync folder at {root} isn't there, and Folder Sync couldn't create it. If it lives on a "
-    f"drive or a sync mount, reconnect that; otherwise set Sync folder {ON_CARD} to a folder "
-    "that is there."
+    "The sync folder at {root} isn't there. If it lives on a drive or a share that isn't "
+    "mounted, mount it; if it's the folder you meant, create it; otherwise set Sync folder "
+    f"{ON_CARD} to the right folder."
 )
 
 
@@ -317,17 +320,37 @@ def test_a_push_the_folder_refuses_says_why_and_that_it_retries(tmp_path, monkey
     assert r.detail == f"{says.format(root=tmp_path)} {RETRIES} Details: {error}"
 
 
-def test_a_push_to_a_folder_that_is_gone_says_to_reconnect_it(tmp_path, monkeypatch):
-    """An unplugged drive: recreating its mount point is refused, so the error reads
-    "Permission denied" — and that line used to be the whole message."""
+def test_a_push_to_a_folder_that_isnt_there_creates_nothing_and_says_so(tmp_path):
+    """🔴 Red before: the push made the folder, and the sync went to the local disk."""
     root = tmp_path / "unplugged" / "sync"
-    error = PermissionError(13, "Permission denied", "/unplugged")
-    monkeypatch.setattr(DirSyncProvider, "_atomic_write", _failing_write(error))
 
-    r = DirSyncProvider(str(root)).push([SyncObject("k", b"v")])
+    r = DirSyncProvider(str(root)).push([SyncObject("machines/abc/seq-0001/k", b"v")])
 
-    assert r.outcome == "transient"
-    assert r.detail == f"{NOT_THERE.format(root=root)} {RETRIES} Details: {error}"
+    assert r.outcome == "transient" and r.pushed == 0
+    assert r.detail == f"{NOT_THERE.format(root=root)} {RETRIES}"
+    assert not (tmp_path / "unplugged").exists()
+
+
+def test_a_folder_gone_during_a_push_is_not_made_again(tmp_path, monkeypatch):
+    """🔴 Red before: the next object's write made the folder again, and its folders under it.
+    The folders under the sync folder are still made while it is there."""
+    root = tmp_path / "sync"
+    root.mkdir()
+    write = DirSyncProvider._atomic_write
+
+    def _unmounted_after_the_first(self, target, data):
+        write(self, target, data)
+        shutil.rmtree(root)
+
+    monkeypatch.setattr(DirSyncProvider, "_atomic_write", _unmounted_after_the_first)
+    r = DirSyncProvider(str(root)).push([
+        SyncObject("machines/abc/seq-0001/a", b"1"),
+        SyncObject("machines/abc/seq-0001/tasks/b", b"2"),
+    ])
+
+    assert r.outcome == "transient" and r.pushed == 1
+    assert r.detail.startswith(f"{NOT_THERE.format(root=root)} {RETRIES} Details: "), r.detail
+    assert not root.exists()
 
 
 def test_a_push_to_a_path_that_is_a_file_says_so(tmp_path):
@@ -344,20 +367,20 @@ def test_a_push_to_a_path_that_is_a_file_says_so(tmp_path):
     ), r.detail
 
 
-def test_a_probe_that_cannot_create_the_folder_says_why(tmp_path, monkeypatch):
-    """"sync folder unreachable: [Errno 13] Permission denied: '…'" used to be the message."""
-    root = tmp_path / "new" / "sync"
-    error = PermissionError(13, "Permission denied", "/new")
+def test_no_folder_is_made_outside_the_sync_folder(tmp_path):
+    root = tmp_path / "sync"
+    root.mkdir()
+    with pytest.raises(OSError):
+        DirSyncProvider(str(root))._make_folders(str(tmp_path / "elsewhere" / "x"))
+    assert not (tmp_path / "elsewhere").exists()
 
-    def _denied(path, *args, **kwargs):
-        raise error
 
-    monkeypatch.setattr(dir_sync.os, "makedirs", _denied)
+def test_a_registry_swap_on_a_folder_that_isnt_there_creates_nothing(tmp_path):
+    """🔴 Red before: the swap made the folder before taking its lock."""
+    root = tmp_path / "unplugged" / "sync"
 
-    res = DirSyncProvider(str(root)).test()
-
-    assert res.ok is False
-    assert res.detail == f"{NOT_THERE.format(root=root)} Details: {error}"
+    assert DirSyncProvider(str(root)).cas_registry(None, b'{"v":1}') is False
+    assert not (tmp_path / "unplugged").exists()
 
 
 # ── a key that leaves the sync folder ────────────────────────────────────────────────────
@@ -612,6 +635,7 @@ def test_remove_is_idempotent_and_counts_what_was_there(tmp_path):
 
 def test_remove_never_removes_the_sync_folder(tmp_path):
     root = tmp_path / "sync"
+    root.mkdir()
     p = DirSyncProvider(str(root))
     p.push([SyncObject("only.json", b"x")])
     assert p.remove(["only.json"]) == 1
@@ -678,6 +702,7 @@ def test_the_folder_keeps_this_machines_newest_copy_through_a_sync(tmp_path, mon
     monkeypatch.setattr(crypto_mod, "load_passphrase", lambda: "a passphrase for this test")
     home, root = tmp_path / "home", tmp_path / "sync"
     (home / "tasks").mkdir(parents=True)
+    root.mkdir()
     p = DirSyncProvider(str(root))
     start = datetime(2026, 10, 2, 12, 0, tzinfo=timezone.utc)
 

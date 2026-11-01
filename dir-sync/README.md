@@ -73,6 +73,11 @@ convergence criterion (two machines sharing one folder reach the same merged sta
   people sync through), compares the current registry hash under the lock, writes only on a
   match, and always releases the lock. A held lock is reported as a lost race, and the
   caller re-pulls and retries.
+- **The sync folder is never created.** A folder that isn't there may be a drive or share
+  that isn't mounted, or a mistyped path, and a folder made in its place would quietly take
+  the sync onto this machine's own disk. So Folder Sync's Test fails, and a sync stops, with a
+  sentence naming the path: mount it, create it if it's the folder you meant, or correct Sync
+  folder. Folders under the sync folder are made as they're needed.
 - **A refused write is retried, and says why.** When the folder refuses a push, the next
   sync run tries again, and the failure says what to do — the folder isn't there (a drive
   unplugged, a sync mount that dropped), it's read-only, its disk is full, or PersonalClaw
