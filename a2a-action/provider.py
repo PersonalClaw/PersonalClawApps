@@ -33,12 +33,15 @@ out of `POST /a2a/tasks` — neither direction trusts the other end.
 """
 
 import asyncio
+import base64
+import ipaddress
 import json
 import logging
 import time
 import uuid
 from string import Template
 from typing import Any
+from urllib.parse import urlsplit
 
 from personalclaw.sdk.action import (
     ActionContext,
@@ -53,6 +56,48 @@ logger = logging.getLogger(__name__)
 #: is what we are willing to RECEIVE, this is what we are willing to paste into a model's
 #: context, and they are not the same number.
 _MAX_STDOUT = 4096
+
+#: Why a task that signs in is not sent to a plain http Agent URL on another machine: the password
+#: or the Authorization header would cross the network unencrypted.
+PLAIN_HTTP_REFUSED = (
+    "Agent URL is plain http, so the password or the Authorization header set here would travel "
+    "unencrypted. Use an https URL. Plain http is sent only to this machine "
+    "(localhost, 127.0.0.1 or ::1)."
+)
+
+#: Why a task that signs in is not followed to where the agent redirected it.
+REDIRECT_REFUSED = (
+    "The agent answered with a redirect, and a task that signs in is never sent on to another "
+    "address, since its password or Authorization header would go with it. Use the agent's final "
+    "URL as Agent URL."
+)
+
+
+def _scheme_and_host(url: str) -> tuple[str, str]:
+    """``url``'s scheme and host, lowercased; empty for an address that doesn't parse, which the
+    egress guard refuses anyway."""
+    try:
+        parts = urlsplit(url)
+        return parts.scheme.lower(), (parts.hostname or "").lower()
+    except ValueError:
+        return "", ""
+
+
+def _on_this_machine(host: str) -> bool:
+    """Whether ``host`` names this machine: ``localhost`` or a loopback address."""
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+#: Why a task that sets Agent password and an Authorization header is not sent.
+SIGNED_IN_TWICE = (
+    "Agent password and an Authorization header are both set, so the agent would be signed in "
+    "to twice. Keep one: the password with Agent user name, or the header."
+)
 
 
 def _as_dict(raw: Any, label: str) -> tuple[dict[str, Any] | None, str]:
@@ -185,6 +230,23 @@ class A2AActionProvider(ActionProvider):
         assert inputs is not None and raw_headers is not None  # both errors returned above
 
         headers = {str(k): str(v) for k, v in raw_headers.items()}
+        password = str(action_config.get("password") or "")
+        if password:
+            # HTTP basic sign-in from the two settings meant for it, so no password has to sit
+            # in the Agent URL. One sign-in a request: a header that signs in too is refused.
+            if any(k.lower() == "authorization" for k in headers):
+                return ActionResult(success=False, error=SIGNED_IN_TWICE)
+            user = str(action_config.get("username") or "")
+            pair = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
+            headers["Authorization"] = f"Basic {pair}"
+        # A task that signs in is held to https to another machine, and is never redirected: the
+        # guarded client sends every header again on each hop it follows, so a redirect would carry
+        # the password or the token to wherever the agent pointed (another host, or plain http).
+        signs_in = any(k.lower() == "authorization" for k in headers)
+        scheme, host = _scheme_and_host(url)
+        local_http = scheme == "http" and _on_this_machine(host)
+        if signs_in and scheme == "http" and not local_http:
+            return ActionResult(success=False, error=PLAIN_HTTP_REFUSED)
         headers.setdefault("Content-Type", "application/json")
         headers.setdefault("Accept", "application/json")
 
@@ -194,14 +256,20 @@ class A2AActionProvider(ActionProvider):
         )
 
         # The ONE egress chokepoint. `a2a_outbound_policy` is core's — see the module
-        # docstring for why this app does not build its own. `with_overrides` narrows the
-        # timeout to the caller's and touches nothing else; it cannot widen the host reach,
-        # because `allow_only` and `allow_hosts` are not among the fields set here.
+        # docstring for why this app does not build its own. `with_overrides` only narrows it:
+        # the timeout to the caller's, and for a task that signs in no redirect and https alone
+        # (plain http only to this machine). It cannot widen the host reach, because
+        # `allow_only` and `allow_hosts` are not among the fields set here.
         from personalclaw.sdk.net import EgressBlocked, a2a_outbound_policy, egress_refusal
         from personalclaw.sdk.net import fetch as net_fetch
         from personalclaw.sdk.security import fence_untrusted
 
         policy = a2a_outbound_policy().with_overrides(timeout_s=float(timeout))
+        if signs_in:
+            policy = policy.with_overrides(
+                max_redirects=0,
+                allow_schemes=("http", "https") if local_http else ("https",),
+            )
         start = time.monotonic()
         try:
             resp = await net_fetch(
@@ -217,6 +285,12 @@ class A2AActionProvider(ActionProvider):
             # whose egress tier is off is refused every host, an allowed one included, and no
             # host setting lifts that: the guard's own sentence says so and names none.
             off = getattr(exc.decision, "category", "") == "egress_off"
+            if signs_in and "too many redirects" in str(getattr(exc.decision, "reason", "")):
+                return ActionResult(
+                    success=False,
+                    error=REDIRECT_REFUSED,
+                    duration_ms=int((time.monotonic() - start) * 1000),
+                )
             return ActionResult(
                 success=False,
                 error=(
