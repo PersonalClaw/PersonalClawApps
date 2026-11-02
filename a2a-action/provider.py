@@ -60,16 +60,14 @@ _MAX_STDOUT = 4096
 #: Why a task that signs in is not sent to a plain http Agent URL on another machine: the password
 #: or the Authorization header would cross the network unencrypted.
 PLAIN_HTTP_REFUSED = (
-    "Agent URL is plain http, so the password or the Authorization header set here would travel "
-    "unencrypted. Use an https URL. Plain http is sent only to this machine "
-    "(localhost, 127.0.0.1 or ::1)."
+    "Agent URL is plain http, so the password or the headers set here would travel unencrypted. "
+    "Use an https URL. Plain http is sent only to this machine (localhost, 127.0.0.1 or ::1)."
 )
 
 #: Why a task that signs in is not followed to where the agent redirected it.
 REDIRECT_REFUSED = (
-    "The agent answered with a redirect, and a task that signs in is never sent on to another "
-    "address, since its password or Authorization header would go with it. Use the agent's final "
-    "URL as Agent URL."
+    "The agent answered with a redirect, and a task with a password or headers is never sent on to "
+    "another address, since they would go with it. Use the agent's final URL as Agent URL."
 )
 
 
@@ -242,7 +240,9 @@ class A2AActionProvider(ActionProvider):
         # A task that signs in is held to https to another machine, and is never redirected: the
         # guarded client sends every header again on each hop it follows, so a redirect would carry
         # the password or the token to wherever the agent pointed (another host, or plain http).
-        signs_in = any(k.lower() == "authorization" for k in headers)
+        # Every header set here counts: Headers is kept as a secret, so an API key under any name is
+        # a credential, and the password adds Authorization.
+        signs_in = bool(headers)
         scheme, host = _scheme_and_host(url)
         local_http = scheme == "http" and _on_this_machine(host)
         if signs_in and scheme == "http" and not local_http:
