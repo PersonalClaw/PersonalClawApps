@@ -54,7 +54,7 @@ trusts the other end.
 
 | Key | Label | Notes |
 |---|---|---|
-| `url` | Agent URL | The external agent's A2A tasks endpoint. The host must be allow-listed; egress is deny-by-default. Never write a password into the address: it goes in Agent password. A task that signs in is sent over https only (plain http only to this machine) and never follows a redirect. |
+| `url` | Agent URL | The external agent's A2A tasks endpoint. The host must be allow-listed; egress is deny-by-default. Never write a password into the address: it goes in Agent password. A task with a password or headers is sent over https only (plain http only to this machine) and never follows a redirect. |
 | `skill` | Skill | The skill id to invoke, as it appears on the remote agent's card. Blank lets the remote agent choose. |
 | `text` | Message | The text sent to the agent. Supports `$EVENT`, `$CONTEXT` and any trigger payload key. |
 | `inputs` | Inputs (JSON) | Optional JSON object of structured inputs for the skill, e.g. `{"since": "7d"}`. |

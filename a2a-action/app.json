@@ -1,6 +1,6 @@
 {
   "name": "a2a-action",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "A2A Agent Call",
   "description": "Hand one task to an external A2A agent when a trigger fires. Reaches only hosts the operator has allow-listed under Settings › Security › Network egress.",
   "icon": "Share2",
@@ -35,7 +35,7 @@
           "type": "string",
           "x-meta": {
             "label": "Agent URL",
-            "help": "The external agent's A2A tasks endpoint. The host must be listed in Settings › Security › Network egress — egress is deny-by-default, so an unlisted host is refused before any connection is made. Never write a password into the address: an agent that signs in with one takes it in Agent password. A task that signs in is sent over https only (plain http only to this machine) and never follows a redirect."
+            "help": "The external agent's A2A tasks endpoint. The host must be listed in Settings › Security › Network egress — egress is deny-by-default, so an unlisted host is refused before any connection is made. Never write a password into the address: an agent that signs in with one takes it in Agent password. A task with a password or headers is sent over https only (plain http only to this machine) and never follows a redirect."
           }
         },
         "skill": {

@@ -32,6 +32,7 @@ URL = "https://agent.example.com/a2a/tasks"
 TOKEN = "fixture-token-5e4d3c2b"
 PASSWORD = "fixture-pass-7c1d9e"
 HEADERS = json.dumps({"Authorization": f"Bearer {TOKEN}"})
+API_KEY_HEADER = json.dumps({"X-API-Key": TOKEN})
 
 
 @pytest.fixture
@@ -170,13 +171,14 @@ def test_a_password_and_an_authorization_header_together_are_refused(monkeypatch
 
 @pytest.mark.parametrize(
     "signs_in",
-    [{"password": PASSWORD}, {"headers": HEADERS}],
-    ids=["password", "authorization-header"],
+    [{"password": PASSWORD}, {"headers": HEADERS}, {"headers": API_KEY_HEADER}],
+    ids=["password", "authorization-header", "a-header-under-another-name"],
 )
 def test_a_task_that_signs_in_is_never_sent_over_plain_http_to_another_machine(
     monkeypatch, signs_in
 ):
-    """🔴 Red before: the password or the header went to a plain http Agent URL unencrypted."""
+    """🔴 Red before: the password or a header went to a plain http Agent URL unencrypted. Every
+    header counts: Headers is kept as a secret, so a key under any name is a credential."""
     sent = _sent(monkeypatch)
     result = asyncio.run(
         A2AActionProvider().execute({"url": "http://agent.example.com/a2a", **signs_in}, _ctx())
@@ -201,6 +203,16 @@ def test_a_task_that_signs_in_is_held_to_https_and_never_redirected(monkeypatch)
     password or token went with it to wherever the agent pointed, plain http included."""
     sent = _sent(monkeypatch)
     asyncio.run(A2AActionProvider().execute({"url": URL, "headers": HEADERS}, _ctx()))
+    assert sent["policy"].max_redirects == 0
+    assert sent["policy"].allow_schemes == ("https",)
+
+
+def test_a_header_under_another_name_holds_a_task_to_https_and_no_redirect(monkeypatch):
+    """🔴 Red before: only an Authorization header counted, so an API key under another name went
+    on through a redirect, to another host or plain http."""
+    sent = _sent(monkeypatch)
+    asyncio.run(A2AActionProvider().execute({"url": URL, "headers": API_KEY_HEADER}, _ctx()))
+    assert sent["headers"]["X-API-Key"] == TOKEN
     assert sent["policy"].max_redirects == 0
     assert sent["policy"].allow_schemes == ("https",)
 
