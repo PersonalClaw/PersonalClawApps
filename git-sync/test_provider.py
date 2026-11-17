@@ -3287,12 +3287,18 @@ TOOK = (
 
 
 def _saved(url: str, tmp_path, **settings) -> GitSyncProvider:
-    """The transport built from settings saved with ``url``, as core builds it."""
+    """The transport built from settings saved with ``url`` in Git remote URL, as core builds it.
+
+    From core v0.3.9 a save that writes a credential into a plain-text address is refused, so a
+    Git remote URL like this one is in the settings file only from a save before that. The other
+    settings are saved through core as ever, an Access token kept in its store; ``url`` is then
+    written into the file as that earlier save left it."""
     from personalclaw.sdk.settings import ProviderSettings
 
-    ProviderSettings.update(
-        "git-sync", {"repo_url": url, "local_clone": str(tmp_path / "clone"), **settings}
-    )
+    ProviderSettings.update("git-sync", {"local_clone": str(tmp_path / "clone"), **settings})
+    path = Path(ProviderSettings.config_path("git-sync"))
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps({**saved, "repo_url": url}), encoding="utf-8")
     return create_provider(ProviderSettings.load("git-sync"))
 
 
