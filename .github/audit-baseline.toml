@@ -16,7 +16,7 @@
 # `npm update <package>` in the bundle's ui/ folder, then rebuild its bundle); waive only what no
 # in-range update fixes, and say in `reason` what ends the waiver.
 #
-# None is in force today. The shape of one:
+# The shape of one:
 #
 # [[waiver]]
 # file = ".github/bundle-lock/linux-x86_64/uv.lock"
@@ -25,3 +25,19 @@
 # owner = "maintainers"
 # reason = "Why no in-range update fixes it, and what ends the waiver."
 # expires = 2026-11-15
+
+[[waiver]]
+file = "growth/ui/package-lock.json"
+scope = "npm-audit"
+reference = "picomatch GHSA-fc5q-39xc-vjpf"
+owner = "maintainers"
+reason = "High: a ReDoS in picomatch <= 4.0.7, and 4.0.7 is its newest release, so no in-range update fixes it yet. In this bundle's ui/ it is reached only through vite, a devDependency, and the built bundle holds none of it: it matches only globs from the bundle's own build config, never a pattern a PersonalClaw user supplies. Retire this waiver when a fixed release lands through Dependabot's npm updates."
+expires = 2026-12-01
+
+[[waiver]]
+file = "minutes/ui/package-lock.json"
+scope = "npm-audit"
+reference = "picomatch GHSA-fc5q-39xc-vjpf"
+owner = "maintainers"
+reason = "High: a ReDoS in picomatch <= 4.0.7, and 4.0.7 is its newest release, so no in-range update fixes it yet. In this bundle's ui/ it is reached only through vite, a devDependency, and the built bundle holds none of it: it matches only globs from the bundle's own build config, never a pattern a PersonalClaw user supplies. Retire this waiver when a fixed release lands through Dependabot's npm updates."
+expires = 2026-12-01
