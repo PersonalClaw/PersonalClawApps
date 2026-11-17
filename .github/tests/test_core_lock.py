@@ -146,6 +146,22 @@ def test_resolve_turns_a_branch_into_one_commit_and_refuses_what_it_cannot_resol
         assert ref in refused.stderr
 
 
+def test_resolve_turns_a_tag_into_the_commit_it_points_at(tmp_path):
+    """🔴 Red before: an annotated tag resolved to the tag's own object, so the canary on core=v0.3.9
+    asked for a git revision no install could check out, and never tested a core."""
+    repo, head = _core_repo(tmp_path)
+    tag = lambda *a: subprocess.run(["git", "-c", "user.name=Core Test", "-c",  # noqa: E731
+                                     "user.email=core@example.com", "tag", *a], cwd=repo, check=True)
+    tag("-a", "v0.1.0", "-m", "v0.1.0")
+    tag("light")
+    tag_object = subprocess.run(["git", "rev-parse", "v0.1.0"], cwd=repo, check=True,
+                                capture_output=True, text=True).stdout.strip()
+    assert tag_object != head
+    for ref in ("v0.1.0", "light"):
+        run = _cli("resolve", ref, "--repo", str(repo))
+        assert (run.returncode, run.stdout) == (0, head + "\n"), ref
+
+
 def test_resolve_exports_what_it_resolved(tmp_path):
     repo, head = _core_repo(tmp_path)
     env_file = tmp_path / "env"

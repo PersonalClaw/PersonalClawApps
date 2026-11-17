@@ -103,7 +103,10 @@ def resolve(ref: str, repo: str = CORE_URL) -> str:
         return ref.lower()
     candidates = (f"refs/heads/{ref}", f"refs/tags/{ref}^{{}}", f"refs/tags/{ref}")
     try:
-        proc = subprocess.run(["git", "ls-remote", repo, f"refs/heads/{ref}", f"refs/tags/{ref}"],
+        # The peeled name is asked for by name: `refs/tags/<ref>` alone lists an annotated tag's own
+        # object, never the commit it points at, which no install can check out.
+        proc = subprocess.run(["git", "ls-remote", repo, f"refs/heads/{ref}", f"refs/tags/{ref}",
+                               f"refs/tags/{ref}^{{}}"],
                               capture_output=True, text=True, check=False)
     except OSError as exc:
         raise ValueError(f"cannot run git to resolve {ref!r}: {exc}") from exc
