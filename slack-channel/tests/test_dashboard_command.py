@@ -16,7 +16,7 @@ def _owner_is(monkeypatch, user_id: str) -> None:
     monkeypatch.setenv(owner_id_credential("slack"), user_id)
 
 
-# -- URL uses hostname for remote access, localhost for local-only --
+# -- URL uses the configured host, else the one core's own links name --
 
 
 @pytest.mark.asyncio
@@ -24,11 +24,15 @@ def _owner_is(monkeypatch, user_id: str) -> None:
     "dashboard_url, expected_host",
     [
         ("http://myhostname:8080", "myhostname"),
-        ("", "localhost"),  # no URL → localhost-only default
+        # No URL: the host core's own sign-in links name for a gateway on this machine. From
+        # core v0.3.9 that is the address the gateway listens on (127.0.0.1), never a name such
+        # as localhost that could resolve elsewhere; it was localhost before. The app takes
+        # core's answer, so the test asks core for it rather than naming either.
+        ("", None),
     ],
 )
 async def test_dashboard_url_host_selection(
-    dashboard_url: str, expected_host: str, monkeypatch
+    dashboard_url: str, expected_host: str | None, monkeypatch
 ) -> None:
     """!dashboard sends presigned link via DM, never in channel."""
     from slack_runtime.handler import _handle_slash_command
@@ -58,6 +62,14 @@ async def test_dashboard_url_host_selection(
         patch("slack_runtime.allowlist.sel") as mock_sel,
     ):
         mock_sel.return_value.log_api_access = MagicMock()
+        if expected_host is None:
+            from personalclaw.sdk.channel import (
+                is_local_bind,
+                resolve_bind_host,
+                resolve_dashboard_host,
+            )
+
+            expected_host = resolve_dashboard_host(is_local_bind(resolve_bind_host()), "")
         await _handle_slash_command(
             "!dashboard", slack, sessions, "C123", "ts1", "ts2", "sess1", "U001"
         )
