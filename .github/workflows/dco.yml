@@ -11,29 +11,30 @@
 # or a description, and cancel the run in progress.
 #
 # WHAT RULE 5 MAY NOT SEE. GitHub documents its skip markers for `push` and `pull_request` runs,
-# so a marker in a head commit's message stops CI but not this `pull_request_target` run; rule 5
-# here catches it in the title and in every commit. On main the marker would start no
-# provenance.yml run, and that push's commits would land unchecked for good.
+# so a marker in the head commit's message stops this run as well, and the pull request then
+# shows no check at all: a maintainer merges none that shows none. Rule 5 here catches a marker in
+# the title and in every other commit. On main a marker in the landing commit's message would
+# start no provenance.yml run, and that push's commits would land unchecked.
 #
-# WHOSE COPY RUNS: MAIN'S. Under `pull_request_target` GitHub runs this file as it is on main,
-# so a pull request cannot edit what checks it, and the merge verdict (core's #5516) counts this
-# run as the base branch's. The one checkout is main's copy of the check and MAINTAINERS (no
-# `ref:` and no `repository:`, so GitHub checks out the base branch, and a sparse list of those
-# two files). The pull request's commits arrive as metadata over the commits API: no file and no
-# git object of the pull request is ever on disk, so nothing of it can run. The job token is
-# read-only (`contents` and `pull-requests`, read) and reaches only the step that runs `gh api`.
+# WHOSE COPY RUNS: THE HEAD'S. It runs on `pull_request`, as feedback that gates nothing: GitHub's
+# default policy stops `pull_request_target` runs in public repositories from 2026-12-02, and no
+# workflow here runs on that event. It is not a required check, as no check here is: a merge here
+# is a maintainer's, after review, and provenance.yml checks every commit that lands with main's
+# copy. A merge verdict for this repository (core's #5516) would run main's copy of this check
+# itself, as core's does, rather than read this run. The one checkout is the check and
+# MAINTAINERS alone, and the pull request's commits arrive as metadata over the commits API. The
+# job token is read-only (`contents` and `pull-requests`, read) and reaches only the step that
+# runs `gh api`.
 #
-# SAFETY: `pull_request_target` runs in the base repository's context, so it must never run what
-# a pull request brings (the "pwn request"). Do NOT add a checkout of the pull request's head, a
-# fetch of its ref, or a step that runs code from the workspace beyond main's check. Any job here
-# that would run a pull request's code belongs in ci.yml, under `pull_request`.
+# A pull request that changes dco.yml, the check or MAINTAINERS runs its own changed copy, so its
+# DCO check proves nothing: read those diffs. provenance.yml on main is the check that counts.
 #
 # There is no remediation comment, as core posts: that needs `pull-requests: write`, and each
 # violation is already an annotation naming the commit and the rule.
 name: DCO
 
 on:
-  pull_request_target:
+  pull_request:
     # `edited`: rule 5 reads the title, so a title edited after the last push is checked again,
     # and removing a marker from it clears the red without a new push.
     types: [opened, edited, synchronize, reopened]

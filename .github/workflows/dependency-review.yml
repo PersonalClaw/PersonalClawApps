@@ -7,15 +7,15 @@
 # commits from the event and asks the dependency-graph API to compare them, with a read-only
 # token. There is no checkout here at all; do not add one.
 #
-# WHOSE COPY RUNS: MAIN'S. Under `pull_request_target` GitHub runs this file as it is on main, so
-# a pull request cannot edit what reviews it, and the merge verdict (core's #5516) counts this run
-# as the base branch's. It is the one workflow besides dco.yml that runs on `pull_request_target`
-# (test_check_commit_provenance.py holds that), and with no checkout it has nothing of the pull
-# request to run. Not a required check: the one required verdict reads it.
+# WHOSE COPY RUNS: THE HEAD'S. It runs on `pull_request`, as feedback that gates nothing: GitHub's
+# default policy stops `pull_request_target` runs in public repositories from 2026-12-02, and no
+# workflow here runs on that event (test_check_commit_provenance.py holds that). It is not a
+# required check, as no check here is. A merge verdict for this repository (core's #5516) would
+# read the dependency graph itself, as core's does, rather than this run.
 name: Dependency review
 
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened]
 
 # One review per pull request: a new head cancels the review of the old one.

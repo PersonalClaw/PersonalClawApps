@@ -313,13 +313,16 @@ needs the record the merge controller will write.
 
 Every pull request runs rules 1, 3 and 5 in the `dco` workflow (`.github/workflows/dco.yml`),
 over its commits as the commits API lists them, and again whenever it is edited, so an edited
-title is checked too. It runs on `pull_request_target`, so the copy that runs is `main`'s: a pull
-request that edits `dco.yml` or the check is still judged by the copy it would replace, and the
-merge verdict reads that run. A red run's annotations name each commit and the rule it breaks.
-GitHub's skip markers stop `push` and `pull_request` runs, not this one, so a marker in the head
-commit's message is caught here too. To bring a branch up to date with `main`, use **Update with
-rebase** or rebase locally: GitHub's plain **Update branch** adds a merge commit with no
-sign-off, which fails rule 1.
+title is checked too. It runs on `pull_request`, as feedback: it is the pull request's own copy,
+and no check here is required, so what gates a merge is review and `provenance.yml` on `main`. A
+pull request that changes `dco.yml`, the check or `MAINTAINERS` runs its own changed copy, so its
+DCO check proves nothing: read those diffs. `provenance.yml` on `main` is the check that counts. A
+red run's annotations name each commit and the rule it breaks. GitHub's skip markers stop
+`pull_request` runs too, so a pull request whose head commit's message carries one shows no check
+at all; it is not merged. Sign off before you open the pull request: on your first contribution
+GitHub runs no check until a maintainer approves the run. To bring a branch up to date with
+`main`, use **Update with rebase** or rebase locally: GitHub's plain **Update branch** adds a merge
+commit with no sign-off, which fails rule 1.
 
 Every push to `main` runs rules 1, 2, 3 and 5 over the commits it landed, in `provenance.yml`: a
 workflow of its own that nothing cancels, running the previous `main` commit's copy of the check

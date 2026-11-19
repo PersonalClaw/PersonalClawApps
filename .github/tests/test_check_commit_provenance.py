@@ -875,11 +875,12 @@ _PROVENANCE_RUN = (
     '--mode main --range "${BEFORE}..${GITHUB_SHA}"'
 )
 _TOKEN = re.compile(r"\$\{\{[^}]*\b(?:github\.token|secrets\.)")
-#: The workflows that run on ``pull_request_target``, main's copy: what counts for the merge
-#: verdict. Neither runs anything a pull request brings.
-_TARGET_WORKFLOWS = {"dco.yml", "dependency-review.yml"}
-#: What would put a pull request's code in a ``pull_request_target`` job: its head checked out or
-#: fetched, by ref or by repository.
+#: The workflows that read a pull request through the API alone: neither checks out, fetches or
+#: names its head. No workflow runs on ``pull_request_target``: GitHub's default policy stops such
+#: runs in public repositories from 2026-12-02, and both run on ``pull_request`` as feedback.
+_API_ONLY_WORKFLOWS = {"dco.yml", "dependency-review.yml"}
+#: What would put a pull request's code in one of them: its head checked out or fetched, by ref or
+#: by repository.
 _HEAD_CODE = re.compile(
     r"git\s+(?:fetch|checkout|switch|pull|worktree)\b|gh\s+pr\s+checkout|refs/pull/"
     r"|pull_request\.head\.(?:ref|repo)|head_ref|head\.repo"
@@ -934,19 +935,18 @@ def dco_violations(texts: dict[str, str]) -> list[str]:
     time, read-only, one job with no job or step that can be skipped or fail green, one checkout
     of the check and MAINTAINERS alone, the job token named on the step that runs ``gh api`` and
     on no other, and the check run isolated in ``pr`` mode, handed the pull request's own count,
-    head and event file. It runs on ``pull_request_target``, so main's copy is what runs, and it
-    checks out, fetches or names nothing of the pull request's head. No other workflow runs the
-    pull request's check, and only it and the dependency review run on
-    ``pull_request_target``."""
+    head and event file. It runs on ``pull_request``, the head's own copy, as feedback that gates
+    nothing, and it checks out, fetches or names nothing of the pull request's head. No other
+    workflow runs the pull request's check, and no workflow runs on ``pull_request_target``."""
     bad: list[str] = []
     for name, text in texts.items():
         triggers = _triggers(yaml.safe_load(text) or {})
         if isinstance(triggers, str):
             triggers = [triggers]
         targeted = isinstance(triggers, (dict, list)) and "pull_request_target" in triggers
-        if targeted and name not in _TARGET_WORKFLOWS:
+        if targeted:
             bad.append(f"{name} runs on pull_request_target")
-        if name in _TARGET_WORKFLOWS:
+        if name in _API_ONLY_WORKFLOWS:
             code = "\n".join(
                 line.split("#", 1)[0] for line in text.splitlines() if not line.lstrip().startswith("#")
             )
@@ -958,11 +958,11 @@ def dco_violations(texts: dict[str, str]) -> list[str]:
         return [f"{_DCO} is missing", *bad]
     workflow = yaml.safe_load(texts["dco.yml"])
     on = _triggers(workflow)
-    pr = on.get("pull_request_target") if isinstance(on, dict) else None
+    pr = on.get("pull_request") if isinstance(on, dict) else None
     types = pr.get("types") if isinstance(pr, dict) else None
     if not (
         isinstance(on, dict)
-        and set(on) == {"pull_request_target"}
+        and set(on) == {"pull_request"}
         and isinstance(pr, dict)
         and set(pr) == {"types"}
         and isinstance(types, list)
@@ -1094,7 +1094,7 @@ def test_the_committed_workflows_have_the_shape_the_check_needs() -> None:
 
 
 _TOKEN_LINE = "          GH_TOKEN: ${{ github.token }}\n"
-_DCO_TRIGGER = "on:\n  pull_request_target:\n"
+_DCO_TRIGGER = "on:\n  pull_request:\n"
 _DCO_TYPES_LINE = "    types: [opened, edited, synchronize, reopened]\n"
 _DCO_TIMEOUT = "    timeout-minutes: 5\n"
 _DCO_FETCH_STEP = f"      - name: {_DCO_FETCH}\n"
@@ -1110,9 +1110,9 @@ _DCO_PLANTS = [
     pytest.param(
         "dco.yml",
         _DCO_TRIGGER,
-        "on:\n  pull_request:\n",
-        "not on every pull request and every edit of one",
-        id="the-pull-requests-own-copy",
+        "on:\n  pull_request_target:\n",
+        "dco.yml runs on pull_request_target",
+        id="back-on-pull-request-target",
     ),
     pytest.param(
         "dco.yml",
