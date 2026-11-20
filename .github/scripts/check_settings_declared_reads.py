@@ -117,7 +117,6 @@ ALIAS_EXEMPT: dict[tuple[str, str], str] = {
     ("anthropic-models", "model"): "default_model",
     ("bedrock-models", "model"): "default_model",
     ("claude-subscription", "model"): "default_model",
-    ("meta-muse-spark", "model"): "default_model",
     ("openai-models", "model"): "default_model",
     ("vllm-models", "model"): "default_model",
 }
@@ -125,12 +124,13 @@ ALIAS_EXEMPT: dict[tuple[str, str], str] = {
 # ── Entrypoints built by a shared helper rather than `def`-ined ──────────────────────
 # `_factory, create_provider, create_catalog = register_branded_app(SPEC)` — the branded
 # model-app shape. There is no function body to taint, so the read set cannot be derived.
-# Named explicitly rather than skipped: a seventh adopter must be a deliberate decision.
+# Named explicitly rather than skipped: an eighth adopter must be a deliberate decision.
 HELPER_BUILT_FACTORIES = frozenset(
     {
         "anthropic-compatible",
         "deepseek-models",
         "groq-models",
+        "meta-muse-spark",
         "mistral-models",
         "openai-compatible",
         "together-models",
@@ -138,8 +138,8 @@ HELPER_BUILT_FACTORIES = frozenset(
 )
 
 MIN_FACTORIES = 40
-# Measured 116 tainted setting reads across 55 audited factories (61 bundles declare a schema;
-# 6 build their factory through a helper and are unauditable). Floored well below that so
+# Measured 111 tainted setting reads across 54 audited factories (61 bundles declare a schema;
+# 7 build their factory through a helper and are unauditable). Floored well below that so
 # ordinary catalogue churn does not trip it, while a broken taint — or a moved
 # `implementation` key — drops it to zero and reds.
 MIN_READS = 30

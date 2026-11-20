@@ -34,9 +34,14 @@ like any other app. (Or [install it from a shell](../docs/third-party-install.md
 2. In **Settings → Models**, add a **Meta Muse Spark** instance.
 3. Enter your API key — or leave the field empty and set `META_MODEL_API_KEY` in your
    environment instead.
-4. Bind `muse-spark-1.1` to the Chat use case in **Settings → Models**.
+4. Bind one of its models to the Chat use case in **Settings → Models**.
+5. **Test connection** checks the instance's own Base URL, and a failure says why: the address
+   can't be reached, it's on Denied hosts, or the key was rejected.
 
 ## Models
+
+**Settings → Models** offers the models the Meta AI API lists for your key, or the one model
+below when the list can't be read.
 
 | Model | Context | Capabilities |
 |-------|---------|-------------|

@@ -18,7 +18,7 @@ import pytest
 
 import provider as prov  # app-local; registers type + catalog on import
 
-from personalclaw.llm.registry import CredentialMissing
+from personalclaw.llm.registry import get_default_registry
 
 
 # ── Fake openai SDK (constructor recorder) ───────────────────────────────────
@@ -57,21 +57,26 @@ def no_env_key(monkeypatch: pytest.MonkeyPatch) -> None:
 # ── Capability descriptor + registration ─────────────────────────────────────
 
 
+def _registered() -> Any:
+    return get_default_registry().capability_of("meta_muse_spark")
+
+
 def test_capability_descriptor() -> None:
-    cap = prov.META_CAPABILITY
+    cap = _registered()
     assert cap.type == "meta_muse_spark"
     assert cap.supports_vision is True
     assert cap.supports_embeddings is False
-    assert cap.max_context_tokens == 1_048_576
+    assert cap.default_endpoint == prov.META_BASE_URL
 
 
 def test_capability_matches_what_the_provider_implements() -> None:
     """The manifest, the ProviderCapability and the ModelInfo rows must tell the
     same story: chat + streaming + vision, and NO tools support — none is
     implemented or declared anywhere in this bundle."""
-    cap = prov.META_CAPABILITY
+    cap = _registered()
     assert {c.value for c in cap.capabilities} == {"chat", "streaming", "vision"}
     assert cap.supports_tools is False
+    assert {c.value for c in prov.SPEC.capabilities} == {"chat", "streaming", "vision"}
 
 
 # ── create_provider: config → provider plumbing ──────────────────────────────
@@ -99,14 +104,6 @@ def test_create_provider_env_fallback(
     monkeypatch.setenv("META_MODEL_API_KEY", "mk-env")
     prov.create_provider({})
     assert _FakeAsyncOpenAI.constructed[-1]["api_key"] == "mk-env"
-
-
-def test_create_provider_without_any_key_raises(
-    fake_openai: types.ModuleType, no_env_key: None
-) -> None:
-    """No config key + no env key is a configuration error, not a silent client."""
-    with pytest.raises(CredentialMissing):
-        prov.create_provider({})
 
 
 # ── Per-call sampling settings (best-of-N) ───────────────────────────────────
