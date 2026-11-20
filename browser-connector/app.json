@@ -1,6 +1,6 @@
 {
   "name": "browser-connector",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "displayName": "Browser Connector",
   "description": "Attach your own everyday browser to a PersonalClaw you already run. A browse task with target 'user_browser' can then act inside a session you are already logged into, and only in a tab it opens for itself: when you allow a task, the extension opens a new background tab in a tab group named after the task (or a window of its own, in a browser without tab groups), and the run never touches a tab you already have open. Close the group to stop the run; bring its tab to the front to take over, which pauses it. If the extension cannot open a tab of the run's own, the task is refused. The extension pairs with the gateway the way your phone does and talks to it over loopback only: its host permissions are loopback-only, and it opens no listening surface of its own. In your browser it asks for tabs (to open the run's tab and act on it), tab groups (to name the run's group and notice when you close it) and storage (its settings, and which tab belongs to which run). It speaks a narrow, closed contract: navigate, read-outline, click, type, close. It never reads, stores, or types into a password field.",
   "icon": "AppWindow",
@@ -31,7 +31,7 @@
     "installMode": "client",
     "clientInstall": {
       "shell": "set -e; DEST=\"${PERSONALCLAW_HOME:-$HOME/.personalclaw}/apps/browser-connector\"; git clone --depth 1 --filter=blob:none --sparse https://github.com/PersonalClaw/PersonalClawApps \"$DEST\"; git -C \"$DEST\" sparse-checkout set browser-connector; echo \"Unpacked extension: $DEST/browser-connector/extension\"",
-      "postInstall": "echo \"Load the unpacked extension at ${PERSONALCLAW_HOME:-$HOME/.personalclaw}/apps/browser-connector/browser-connector/extension in your browser (developer mode), start the browser with a loopback --remote-debugging-port, then pair it from Settings -> Devices.\""
+      "postInstall": "echo \"Load the unpacked extension at ${PERSONALCLAW_HOME:-$HOME/.personalclaw}/apps/browser-connector/browser-connector/extension in your browser (developer mode), start the browser with a loopback --remote-debugging-port, then open the extension's popup and enter a pairing code from Settings -> Devices & Access -> Devices.\""
     }
   }
 }

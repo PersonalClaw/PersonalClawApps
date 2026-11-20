@@ -19,7 +19,9 @@ import {
   announcePayload,
   announceUrl,
   buildRequest,
+  isLoopbackHttpUrl,
   isRunId,
+  pairCompleteUrl,
   runTabsUrl,
   runTabUrl,
 } from "./contract.js";
@@ -51,6 +53,17 @@ function debuggerListUrl(debugPort) {
 }
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
+
+// The header a paired device's session presents its pair in, beside the session itself.
+export const PAIR_HEADER = "X-PersonalClaw-Pair";
+
+// What this browser is called in the gateway's device list.
+export const DEVICE_NAME = "Browser connector";
+
+// Where the owner makes the code this browser pairs with.
+export const WHERE_CODES_ARE = "Settings → Devices & Access → Devices";
+
+export const NOT_PAIRED = `this browser is not paired yet: make a code in ${WHERE_CODES_ARE}`;
 
 export function createConnector({ api, fetch, sleep }) {
   // run id -> { tabId, groupId, windowId, cdpUrl, announced }. Mirrored into session storage, so
@@ -92,13 +105,103 @@ export function createConnector({ api, fetch, sleep }) {
     return { ...DEFAULTS, ...stored };
   }
 
-  async function postJson(url, body) {
+  // The connector's own session from its pairing, or empties before it has paired.
+  async function session() {
+    return api.storage.local.get({ token: "", pair: "", deviceId: "" });
+  }
+
+  async function forget() {
+    await api.storage.local.set({ token: "", pair: "", deviceId: "", attached: false });
+  }
+
+  // Every call to the gateway carries the connector's own session, as a Bearer with its pair, and
+  // never the browser's cookies: this browser's cookie for the gateway is the owner's own dashboard
+  // sign-in, which is not the connector's to send.
+  async function gatewayFetch(url, init = {}) {
+    const { token, pair } = await session();
+    if (!token) throw new Error(NOT_PAIRED);
     return fetch(url, {
+      ...init,
+      headers: { ...(init.headers || {}), Authorization: `Bearer ${token}`, [PAIR_HEADER]: pair },
+      credentials: "omit",
+    });
+  }
+
+  async function postJson(url, body) {
+    return gatewayFetch(url, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(body) });
+  }
+
+  async function readJson(resp) {
+    try {
+      return (await resp.json()) || {};
+    } catch (_e) {
+      return {};
+    }
+  }
+
+  // Redeem a pairing code. The gateway takes it from this extension's own origin and hands back a
+  // session that reaches the connector's routes and nothing else, which is kept in the
+  // extension's storage. Pairing sends no cookie and leaves the owner's own sign-in as it was.
+  async function pairWith(code) {
+    const value = String(code || "").trim();
+    if (!value) throw new Error(`enter the code from ${WHERE_CODES_ARE}`);
+    const { gatewayBaseUrl } = await config();
+    const resp = await fetch(pairCompleteUrl(gatewayBaseUrl), {
       method: "POST",
       headers: JSON_HEADERS,
-      credentials: "include", // the paired device session cookie rides here
-      body: JSON.stringify(body),
+      credentials: "omit",
+      body: JSON.stringify({ code: value, device_name: DEVICE_NAME }),
     });
+    const body = await readJson(resp);
+    if (!resp.ok || !body.token || !body.pair) {
+      const said = body.error && body.error.message;
+      throw new Error(said || `the gateway did not pair this browser: HTTP ${resp.status}`);
+    }
+    await api.storage.local.set({
+      token: body.token,
+      pair: body.pair,
+      deviceId: String(body.device_id || ""),
+    });
+    return { deviceId: String(body.device_id || "") };
+  }
+
+  // Point the connector at another loopback gateway. A pairing belongs to the gateway that made
+  // it, so changing the address forgets it.
+  async function setGateway(url) {
+    const value = String(url || "").trim().replace(/\/+$/, "");
+    if (!isLoopbackHttpUrl(value)) {
+      throw new Error("the gateway address must be on this computer (127.0.0.1 or localhost)");
+    }
+    const { gatewayBaseUrl } = await config();
+    if (value === gatewayBaseUrl) return { gatewayBaseUrl };
+    await detach().catch(() => {});
+    await forget();
+    await api.storage.local.set({ gatewayBaseUrl: value });
+    return { gatewayBaseUrl: value };
+  }
+
+  // What the popup shows: the gateway's address, whether this browser is paired, and whether the
+  // gateway has it attached, with the gateway's own sentence when it can't run a task.
+  async function status() {
+    const { gatewayBaseUrl } = await config();
+    const { token, deviceId } = await session();
+    if (!token) return { gatewayBaseUrl, paired: false, attached: false };
+    const resp = await gatewayFetch(announceUrl(gatewayBaseUrl));
+    if (resp.status === 401) {
+      await forget();
+      return { gatewayBaseUrl, paired: false, attached: false };
+    }
+    if (!resp.ok) throw new Error(`the gateway did not answer: HTTP ${resp.status}`);
+    const body = await readJson(resp);
+    const connected = Boolean(body.connected);
+    return {
+      gatewayBaseUrl,
+      paired: true,
+      attached: connected && body.device_id === deviceId,
+      another: connected && body.device_id !== deviceId,
+      reason: String(body.reason || ""),
+      fix: String(body.fix || ""),
+    };
   }
 
   async function report(runId, body) {
@@ -132,8 +235,10 @@ export function createConnector({ api, fetch, sleep }) {
     await api.storage.local.set({ attached: false });
     runs.clear();
     await persist();
+    const { token } = await session();
+    if (!token) return;
     const { gatewayBaseUrl } = await config();
-    await fetch(announceUrl(gatewayBaseUrl), { method: "DELETE", credentials: "include" });
+    await gatewayFetch(announceUrl(gatewayBaseUrl), { method: "DELETE" });
   }
 
   // The run's own container: a background tab in a group named after the task, or, with no tab
@@ -229,7 +334,13 @@ export function createConnector({ api, fetch, sleep }) {
   async function pollOnce() {
     await restore();
     const { gatewayBaseUrl } = await config();
-    const resp = await fetch(runTabsUrl(gatewayBaseUrl), { credentials: "include" });
+    const resp = await gatewayFetch(runTabsUrl(gatewayBaseUrl));
+    if (resp.status === 401) {
+      // The gateway no longer takes this session: it expired, or the device was signed out.
+      await forget();
+      await stopAsking();
+      return;
+    }
     if (resp.status === 409) {
       if ((await errorCode(resp)) === "browse_connector_not_attached") await attach();
       else await stopAsking();
@@ -333,6 +444,9 @@ export function createConnector({ api, fetch, sleep }) {
   }
 
   return {
+    pairWith,
+    setGateway,
+    status,
     attach,
     detach,
     pollOnce,

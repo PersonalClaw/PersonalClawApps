@@ -96,6 +96,11 @@ function gatewayBase(gatewayBaseUrl) {
   return base;
 }
 
+// The route the connector redeems its pairing code on — refuses a non-loopback gateway.
+export function pairCompleteUrl(gatewayBaseUrl) {
+  return `${gatewayBase(gatewayBaseUrl)}/api/devices/pair/complete`;
+}
+
 // The route that attaches this browser as the connector — refuses a non-loopback gateway.
 export function announceUrl(gatewayBaseUrl) {
   return `${gatewayBase(gatewayBaseUrl)}/api/browse/connector`;

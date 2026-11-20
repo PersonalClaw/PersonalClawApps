@@ -25,6 +25,7 @@ from connector import (
     build_request,
     is_loopback_host,
     is_run_id,
+    pair_complete_url,
     parse_request,
     run_tab_url,
     run_tabs_url,
@@ -108,6 +109,15 @@ def test_announce_url_targets_a_loopback_gateway_only() -> None:
     for bad in ("https://example.com", "http://192.168.1.9:10000", "ftp://127.0.0.1", ""):
         with pytest.raises(ContractError):
             announce_url(bad)
+
+
+def test_the_pairing_route_is_on_a_loopback_gateway_only() -> None:
+    base = "http://127.0.0.1:10000"
+    assert pair_complete_url(base) == f"{base}/api/devices/pair/complete"
+    assert pair_complete_url("http://localhost:10000/").endswith("/api/devices/pair/complete")
+    for bad in ("https://example.com", "http://192.168.1.9:10000", "ftp://127.0.0.1", ""):
+        with pytest.raises(ContractError):
+            pair_complete_url(bad)
 
 
 def test_the_run_tab_routes_stay_on_a_loopback_gateway() -> None:

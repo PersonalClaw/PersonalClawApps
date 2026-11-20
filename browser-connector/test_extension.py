@@ -38,6 +38,14 @@ CASES = (
     "after the gateway restarts, the worker attaches again",
     "a worker another browser replaced stops asking, and attaches nothing over it",
     "a worker whose pairing was revoked stops asking",
+    "pairing redeems the owner's code and keeps the session the gateway hands back",
+    "every call to the gateway carries the connector's own session and none of the browser's cookies",
+    "a browser that never paired attaches nothing and says to pair",
+    "a code the gateway refuses keeps nothing and says why",
+    "a session the gateway no longer takes is forgotten, and the worker stops asking",
+    "the gateway's address stays on this computer, and changing it forgets the pairing",
+    "the popup pairs and attaches this browser, then offers Detach",
+    "the popup shows a refusal in the gateway's own words",
 )
 
 _RESULT = re.compile(r"^(ok|not ok) \d+ - (.+?)(?: # (SKIP|TODO).*)?$", re.M)

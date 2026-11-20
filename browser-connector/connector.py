@@ -165,6 +165,24 @@ def announce_payload(cdp_url: str) -> dict[str, str]:
     return {"cdp_url": value}
 
 
+def _gateway_base(gateway_base_url: str) -> str:
+    base = (gateway_base_url or "").rstrip("/")
+    if not is_loopback_http_url(base):
+        raise ContractError(
+            f"the connector announces to a loopback gateway only, got {gateway_base_url!r}"
+        )
+    return base
+
+
+def pair_complete_url(gateway_base_url: str) -> str:
+    """The route the connector redeems its pairing code on, refusing a non-loopback gateway.
+
+    The code is redeemed from the extension's own origin, and the gateway hands back a session
+    that reaches the connector's routes and nothing else.
+    """
+    return f"{_gateway_base(gateway_base_url)}/api/devices/pair/complete"
+
+
 def announce_url(gateway_base_url: str) -> str:
     """The route that attaches the browser as the connector, refusing a non-loopback gateway.
 
@@ -172,12 +190,7 @@ def announce_url(gateway_base_url: str) -> str:
     would ship an endpoint reference off-box, which this refuses outright. Attaching names no
     page: a page target is announced only for a tab a granted run asked for.
     """
-    base = (gateway_base_url or "").rstrip("/")
-    if not is_loopback_http_url(base):
-        raise ContractError(
-            f"the connector announces to a loopback gateway only, got {gateway_base_url!r}"
-        )
-    return f"{base}/api/browse/connector"
+    return f"{_gateway_base(gateway_base_url)}/api/browse/connector"
 
 
 def run_tabs_url(gateway_base_url: str) -> str:
