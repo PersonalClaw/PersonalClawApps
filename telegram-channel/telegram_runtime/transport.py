@@ -25,6 +25,7 @@ the whole inbound story here.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import re
@@ -56,6 +57,8 @@ from personalclaw.sdk.channel import (
 from telegram_runtime.api import DEFAULT_POLL_TIMEOUT, HTTPTelegramAPI, TelegramAPI, TelegramAPIError
 from telegram_runtime.delivery import TelegramDelivery, send_parts
 from telegram_runtime.inbound_tap import publish as publish_inbound
+from telegram_runtime.media import gather as gather_media
+from telegram_runtime.media import media_of
 from telegram_runtime.settings import (
     ACTIVATION_OFF,
     PROVIDER,
@@ -320,14 +323,20 @@ class TelegramTransport(ChannelTransportProvider):
 
     async def _on_message(self, message: dict[str, Any]) -> None:
         cm = self._to_channel_message(message)
-        if not cm.text.strip():
-            return  # nothing to act on (sticker, media without caption, etc.)
+        found, said = media_of(message)
+        if not cm.text.strip() and not found and not said:
+            return  # nothing in it at all
 
         chat_type = cm.metadata.get("chat_type", "")
         is_dm = chat_type == "private"
         settings = get_settings()
         if is_dm and settings.dm_activation == ACTIVATION_OFF:
             return
+
+        # What the message holds besides its words: its files for a sender core already lets
+        # in, and a line naming each one for everyone else (`telegram_runtime.media`).
+        text, files = await gather_media(self._api, PROVIDER, cm.sender, message, cm.text)
+        cm = dataclasses.replace(cm, text=text, files=files)
 
         # The guarded door. Core applies the trust gate, pairing-code
         # redemption, the non-owner-content fence, redaction, session linking and
