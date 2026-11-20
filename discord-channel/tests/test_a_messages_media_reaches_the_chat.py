@@ -272,6 +272,42 @@ async def test_a_download_that_trickles_stops_at_its_deadline(cdn, monkeypatch):
     _, state = cdn
     state["handler"] = lambda request: httpx.Response(200, content=_trickle())
     monkeypatch.setattr(media_mod, "DOWNLOAD_SECONDS", 0.3)
-    with pytest.raises(media_mod.FetchRefused, match="took longer than") as raised:
+    with pytest.raises(media_mod.FetchRefused, match="ran past the 0.3 s") as raised:
         await asyncio.wait_for(media_mod.fetch(f"{CDN}/slow.png", max_bytes=10**9), 5)
     assert raised.value.__cause__ is None and raised.value.__context__ is None
+
+
+@pytest.mark.asyncio
+async def test_a_messages_downloads_share_one_deadline(cdn, monkeypatch):
+    """🔴 Red before: each attachment had a deadline of its own, so a message of ten could hold its
+    handling for ten deadlines. Now the first takes its time, the second gets what is left of the
+    message's and is stopped there, and the third is named past it."""
+    seen, state = cdn
+
+    async def _slow():
+        for _ in range(2):
+            await asyncio.sleep(0.05)
+            yield b"x"
+
+    state["handler"] = lambda request: httpx.Response(
+        200, content=_slow() if request.url.path.endswith("/a.png") else _trickle())
+    monkeypatch.setattr(media_mod, "DOWNLOAD_SECONDS", 0.3)
+    given: list[float | None] = []
+    fetch = media_mod.fetch
+
+    async def _fetch(url, *, max_bytes, seconds=None):
+        given.append(seconds)
+        return await fetch(url, max_bytes=max_bytes, seconds=seconds)
+
+    monkeypatch.setattr(media_mod, "fetch", _fetch)
+    t, door = _transport()
+    files = [_attachment(f"{n}.png", url=f"{CDN}/{n}.png") for n in "abc"]
+    await asyncio.wait_for(t._on_message_create(_message(attachments=files)), 5)
+    (msg,) = door.messages
+    assert seen == [f"{CDN}/a.png", f"{CDN}/b.png"]
+    assert given[0] == 0.3 and given[1] is not None and given[1] < 0.25
+    assert [f.name for f in msg.files] == ["a.png"]
+    assert msg.text == "\n\n".join([
+        "[image: b.png, which could not be fetched]",
+        "[image: c.png, past the 0.3 s one message's files may take]",
+    ])

@@ -49,9 +49,9 @@ MAX_FILES = 20
 #: The most one message's files take in all, so a message costs the gateway one file's worth
 #: (core's ``attachments.MAX_BYTES``) however many it carries: Discord allows ten a message.
 MAX_MESSAGE_BYTES = 25 * 1024 * 1024
-#: The longest one attachment's download may take, start to end. The read timeout ends a download
-#: that stalls; this ends one that trickles, since a message waits on its files before it is
-#: handed on.
+#: The longest one message's downloads may take in all, start to end. The read timeout ends a
+#: download that stalls; this ends one that trickles, since a message waits on its files before it
+#: is handed on.
 DOWNLOAD_SECONDS = 120.0
 #: The hosts Discord serves attachments from. A message names its attachments' addresses, so
 #: an address anywhere else is never fetched.
@@ -131,8 +131,9 @@ def lets_in(provider: str, sender: str) -> bool:
         return False
 
 
-async def fetch(url: str, *, max_bytes: int) -> bytes:
-    """One attachment from Discord's CDN through the egress guard, refused past *max_bytes*."""
+async def fetch(url: str, *, max_bytes: int, seconds: float | None = None) -> bytes:
+    """One attachment from Discord's CDN through the egress guard, refused past *max_bytes* or
+    *seconds* (all of :data:`DOWNLOAD_SECONDS` when not given)."""
     parts = urlsplit(url)
     if parts.scheme != "https" or (parts.hostname or "").lower() not in CDN_HOSTS:
         raise FetchRefused("its address is not on Discord's CDN")
@@ -141,7 +142,7 @@ async def fetch(url: str, *, max_bytes: int) -> bytes:
     data = bytearray()
     failed = ""
     try:
-        async with asyncio.timeout(DOWNLOAD_SECONDS):
+        async with asyncio.timeout(DOWNLOAD_SECONDS if seconds is None else seconds):
             async with http_client(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
                 async with client.stream("GET", url) as resp:
                     if resp.status_code != 200:
@@ -153,7 +154,7 @@ async def fetch(url: str, *, max_bytes: int) -> bytes:
     except FetchRefused:
         raise
     except TimeoutError:
-        failed = f"it took longer than {DOWNLOAD_SECONDS:g} s to download"
+        failed = f"it ran past the {DOWNLOAD_SECONDS:g} s a message's files may take"
     except Exception as exc:  # noqa: BLE001 — told in its own words; the address is signed
         failed = f"it could not be downloaded ({type(exc).__name__})"
     if failed:
@@ -172,6 +173,10 @@ async def gather(provider: str, sender: str, message: dict[str, Any],
     attachments: list[Attachment] = []
     spoken: list[str] = []
     left = MAX_MESSAGE_BYTES
+    # A message's downloads share one deadline, as they share one byte budget.
+    budget = DOWNLOAD_SECONDS
+    clock = asyncio.get_running_loop().time
+    spent = 0.0
     for media in found:
         if not trusted:
             lines.append(media.line())
@@ -186,12 +191,19 @@ async def gather(provider: str, sender: str, message: dict[str, Any],
             lines.append(media.line(f"past the {MAX_MESSAGE_BYTES // (1024 * 1024)} MB one "
                                     "message's files may take", with_size=True))
             continue
+        if spent >= budget:
+            lines.append(media.line(f"past the {budget:g} s one message's files may take"))
+            continue
+        started = clock()
         try:
-            data = await fetch(media.url, max_bytes=min(MAX_FILE_BYTES, left))
+            data = await fetch(media.url, max_bytes=min(MAX_FILE_BYTES, left),
+                               seconds=budget - spent)
         except FetchRefused as exc:
             logger.warning("discord: an attachment was not fetched: %s", exc)
             lines.append(media.line("which could not be fetched"))
             continue
+        finally:
+            spent += clock() - started
         left -= len(data)
         attachments.append(Attachment(name=media.name, mimetype=media.mimetype, data=data))
         if media.voice or media.kind == "audio":

@@ -17,6 +17,7 @@ The door still judges every message, exactly as before: this decides only what i
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -24,6 +25,7 @@ import tempfile
 from dataclasses import dataclass
 from typing import Any
 
+from telegram_runtime import api as _bot
 from personalclaw.sdk.channel import (
     Attachment,
     is_allowed_sender,
@@ -145,6 +147,10 @@ async def gather(api: Any, provider: str, sender: str, message: dict[str, Any],
     trusted = lets_in(provider, sender)
     attachments: list[Attachment] = []
     spoken: list[str] = []
+    # A message's downloads share one deadline, as its files share one count.
+    budget = _bot.DOWNLOAD_SECONDS
+    clock = asyncio.get_running_loop().time
+    spent = 0.0
     for media in found:
         if not trusted:
             lines.append(media.line())
@@ -155,13 +161,20 @@ async def gather(api: Any, provider: str, sender: str, message: dict[str, Any],
         if media.size > MAX_FILE_BYTES:
             lines.append(media.line("too large to read", with_size=True))
             continue
+        if spent >= budget:
+            lines.append(media.line(f"past the {budget:g} s one message's files may take"))
+            continue
+        started = clock()
         try:
-            data = await api.fetch_file(media.file_id, max_bytes=MAX_FILE_BYTES)
+            data = await api.fetch_file(media.file_id, max_bytes=MAX_FILE_BYTES,
+                                        seconds=budget - spent)
         except Exception as exc:  # noqa: BLE001 — one file that won't come never costs the message
             # The error is the client's own sentence, which never holds the file's URL.
             logger.warning("telegram: a %s could not be fetched: %s", media.kind, exc)
             lines.append(media.line("which could not be fetched"))
             continue
+        finally:
+            spent += clock() - started
         attachments.append(Attachment(name=media.name, mimetype=media.mimetype, data=data))
         if media.spoken:
             words = await _transcribed(media, data)

@@ -105,8 +105,10 @@ class TelegramAPI(ABC):
     ) -> bool:
         """``answerCallbackQuery`` — acknowledge an inline-keyboard button press."""
 
-    async def fetch_file(self, file_id: str, *, max_bytes: int) -> bytes:
-        """``getFile`` and its download: a file a message carries, at most *max_bytes* of it.
+    async def fetch_file(self, file_id: str, *, max_bytes: int,
+                         seconds: float | None = None) -> bytes:
+        """``getFile`` and its download: a file a message carries, at most *max_bytes* of it,
+        within *seconds* (what is left of :data:`DOWNLOAD_SECONDS` for its message).
 
         A client that can't fetch files refuses (default), so a message's file is named, never
         silently lost."""
@@ -117,9 +119,9 @@ class TelegramAPI(ABC):
         return None
 
 
-#: The longest one file's download may take, start to end. The read timeout ends a download that
-#: stalls; this ends one that trickles, since the channel reads its messages one at a time and a
-#: file that never finished would hold every message behind it.
+#: The longest one message's downloads may take in all, start to end. The read timeout ends a
+#: download that stalls; this ends one that trickles, since the channel reads its messages one at a
+#: time and a file that never finished would hold every message behind it.
 DOWNLOAD_SECONDS = 120.0
 
 #: A ``file_path`` as ``getFile`` names one (``photos/file_0.jpg``): it rides in the download's
@@ -252,9 +254,11 @@ class HTTPTelegramAPI(TelegramAPI):
 
     # ── typed wrappers ──
 
-    async def fetch_file(self, file_id: str, *, max_bytes: int) -> bytes:
+    async def fetch_file(self, file_id: str, *, max_bytes: int,
+                         seconds: float | None = None) -> bytes:
         """``getFile``, then the file itself through the egress guard
-        (``personalclaw.sdk.net.http_client``), refused past *max_bytes*.
+        (``personalclaw.sdk.net.http_client``), refused past *max_bytes* or *seconds* (all of
+        :data:`DOWNLOAD_SECONDS` when not given).
 
         The download's URL carries the bot token, so no error, log line or exception chain of
         this method holds it: every failure is told in words of its own."""
@@ -269,7 +273,7 @@ class HTTPTelegramAPI(TelegramAPI):
         data = bytearray()
         failed = ""
         try:
-            async with asyncio.timeout(DOWNLOAD_SECONDS):
+            async with asyncio.timeout(DOWNLOAD_SECONDS if seconds is None else seconds):
                 async with http_client(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
                     url = f"{API_BASE}/file/bot{self._token}/{path}"
                     async with client.stream("GET", url) as resp:
@@ -288,7 +292,7 @@ class HTTPTelegramAPI(TelegramAPI):
         except TelegramAPIError:
             raise
         except TimeoutError:
-            failed = f"the file took longer than {DOWNLOAD_SECONDS:g} s to download"
+            failed = f"the file ran past the {DOWNLOAD_SECONDS:g} s a message's files may take"
         except Exception as exc:  # noqa: BLE001 — told in its own words, never the URL
             failed = f"the file could not be downloaded ({type(exc).__name__})"
         if failed:

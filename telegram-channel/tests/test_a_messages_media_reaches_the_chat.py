@@ -28,12 +28,16 @@ STRANGER = "77"
 class _API(TelegramAPI):
     """The Bot API as far as a message's files: each fetch recorded, each answered with bytes."""
 
-    def __init__(self, fail: bool = False) -> None:
+    def __init__(self, fail: bool = False, takes: float = 0.0) -> None:
         self.fetched: list[str] = []
+        self.given: list[float] = []
         self._fail = fail
+        self._takes = takes
 
-    async def fetch_file(self, file_id, *, max_bytes):
+    async def fetch_file(self, file_id, *, max_bytes, seconds=None):
         self.fetched.append(file_id)
+        self.given.append(seconds)
+        await asyncio.sleep(self._takes)
         if self._fail:
             raise TelegramAPIError("the file could not be downloaded (ConnectError)", method="getFile")
         return f"bytes of {file_id}".encode()
@@ -323,10 +327,28 @@ async def test_a_download_that_trickles_stops_at_its_deadline(downloads, monkeyp
     _, state = downloads
     state["handler"] = lambda request: httpx.Response(200, content=_trickle())
     monkeypatch.setattr("telegram_runtime.api.DOWNLOAD_SECONDS", 0.3)
-    with pytest.raises(TelegramAPIError, match="took longer than") as raised:
+    with pytest.raises(TelegramAPIError, match="ran past the 0.3 s") as raised:
         await asyncio.wait_for(_api_with(None).fetch_file("f", max_bytes=10**9), 5)
     assert TOKEN not in str(raised.value)
     assert raised.value.__cause__ is None and raised.value.__context__ is None
+
+
+@pytest.mark.asyncio
+async def test_a_messages_downloads_share_one_deadline(monkeypatch):
+    """🔴 Red before: each download had a deadline of its own, so a message's files together could
+    hold the channel for as many deadlines as it had files."""
+    monkeypatch.setattr("telegram_runtime.api.DOWNLOAD_SECONDS", 0.3)
+    api = _API(takes=0.2)
+    t, door = _transport(api)
+    await t._on_message(_message(
+        photo=PHOTO,
+        document={"file_id": "d1", "file_name": "deck.pdf", "file_size": 10},
+        video={"file_id": "v1", "file_size": 10},
+    ))
+    (msg,) = door.messages
+    assert api.fetched == ["large", "d1"]
+    assert api.given[0] == 0.3 and api.given[1] < 0.15
+    assert msg.text.endswith("[video, past the 0.3 s one message's files may take]")
 
 
 @pytest.mark.parametrize("path", ["../secret", "photos/../../x", "", "photos/a b.jpg"])
