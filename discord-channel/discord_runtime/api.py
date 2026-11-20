@@ -86,21 +86,24 @@ BUTTON_STYLE_SUCCESS = 3
 BUTTON_STYLE_DANGER = 4
 
 
-#: A request path that holds a credential: an interaction's token, which can post and edit that
-#: interaction's follow-ups as the bot for about fifteen minutes. Its route (what an error says,
-#: and the rate-limit bucket's key) names neither the token nor the one-off interaction id, so no
-#: error holds the token and the buckets keep one entry for every callback, not one apiece.
+#: The starts of request paths that hold a credential: an interaction's token, which can post and
+#: edit that interaction's follow-ups as the bot for about fifteen minutes, and a webhook's. A
+#: route (what an error says, and the rate-limit bucket's key) names the id and the token rather
+#: than quoting them, whatever follows, so no error holds the token and the buckets keep one entry
+#: for every callback, not one apiece.
 _CREDENTIAL_PATHS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"/interactions/[^/]+/[^/]+/callback"), "/interactions/{id}/{token}/callback"),
+    (re.compile(r"/interactions/[^/?#]+/[^/?#]+"), "/interactions/{id}/{token}"),
+    (re.compile(r"/webhooks/[^/?#]+/[^/?#]+"), "/webhooks/{id}/{token}"),
 )
 
 
 def _route(method: str, path: str) -> str:
-    """The route a request is known by: its method and path, with any credential it holds
-    named rather than quoted (:data:`_CREDENTIAL_PATHS`)."""
+    """The route a request is known by: its method and path, with any credential at its start
+    named rather than quoted (:data:`_CREDENTIAL_PATHS`), and what follows kept."""
     for pattern, label in _CREDENTIAL_PATHS:
-        if pattern.fullmatch(path):
-            return f"{method} {label}"
+        found = pattern.match(path)
+        if found:
+            return f"{method} {label}{path[found.end():]}"
     return f"{method} {path}"
 
 

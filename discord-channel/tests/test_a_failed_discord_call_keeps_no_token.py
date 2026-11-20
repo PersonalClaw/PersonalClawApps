@@ -111,3 +111,23 @@ async def test_a_failed_interaction_callback_keeps_no_interaction_token(answer):
     assert raised.value.route == "POST /interactions/{id}/{token}/callback"
     kept = " ".join([*api._routes, *api._routes.values(), *api._buckets])
     assert INTERACTION_TOKEN not in kept
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        f"/interactions/123/{INTERACTION_TOKEN}/callback",
+        f"/interactions/123/{INTERACTION_TOKEN}/callback?with_response=true",
+        f"/interactions/123/{INTERACTION_TOKEN}/callback/",
+        f"/interactions/123/{INTERACTION_TOKEN}",
+    ],
+    ids=["as-called", "with-a-query", "trailing-slash", "no-callback"],
+)
+def test_a_route_never_quotes_an_interaction_token_whatever_follows_it(path):
+    """🔴 Red before for all but the first: the route named the token only for the path exactly as
+    called today, so a query Discord takes, or a trailing slash, quoted it again."""
+    from discord_runtime.api import _route
+
+    route = _route("POST", path)
+    assert INTERACTION_TOKEN not in route
+    assert route.startswith("POST /interactions/{id}/{token}")
