@@ -311,3 +311,11 @@ async def test_a_messages_downloads_share_one_deadline(cdn, monkeypatch):
         "[image: b.png, which could not be fetched]",
         "[image: c.png, past the 0.3 s one message's files may take]",
     ])
+
+
+def test_a_messages_downloads_end_inside_one_heartbeat():
+    """🔴 Red before: the budget was 120 s. The gateway's receive loop waits on a message's files
+    before it reads the next frame, a heartbeat's ACK included, and a beat still unacknowledged
+    when the next is due closes the connection (``gateway._beat_once``). Discord's interval is
+    about 41 s (41250 ms, the gateway's default before HELLO says)."""
+    assert media_mod.DOWNLOAD_SECONDS < 41.25

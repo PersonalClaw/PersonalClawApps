@@ -50,9 +50,11 @@ MAX_FILES = 20
 #: (core's ``attachments.MAX_BYTES``) however many it carries: Discord allows ten a message.
 MAX_MESSAGE_BYTES = 25 * 1024 * 1024
 #: The longest one message's downloads may take in all, start to end. The read timeout ends a
-#: download that stalls; this ends one that trickles, since a message waits on its files before it
-#: is handed on.
-DOWNLOAD_SECONDS = 120.0
+#: download that stalls; this ends one that trickles. Under one heartbeat interval (about 41 s):
+#: the gateway's receive loop waits on a message's files before it reads the next frame, a
+#: heartbeat's ACK included, and a beat still unacknowledged when the next is due closes the
+#: connection as a zombie (``gateway._beat_once``).
+DOWNLOAD_SECONDS = 30.0
 #: The hosts Discord serves attachments from. A message names its attachments' addresses, so
 #: an address anywhere else is never fetched.
 CDN_HOSTS = frozenset({"cdn.discordapp.com", "media.discordapp.net"})

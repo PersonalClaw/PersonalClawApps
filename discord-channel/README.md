@@ -36,8 +36,9 @@ ships as a self-contained directory:
     outbound `send`.
   - `media.py` — what a message holds besides its words. For you, and for a sender you or a
     pairing code approved, an image, file, audio or voice message reaches the chat as the turn's
-    attached files (up to 20 MB each), fetched from Discord's CDN only, and a voice message is
-    transcribed when speech-to-text is set up, its words leading the message. For anyone else
+    attached files (up to 20 MB each and 25 MB a message, in 30 s a message), fetched from
+    Discord's CDN only, and a voice message is transcribed when speech-to-text is set up, its
+    words leading the message. A file past either limit is named instead. For anyone else
     nothing is downloaded: the message reaches PersonalClaw with a line naming each attachment
     ("[image: cat.png]"), so someone new's image still shows up in the Inbox. A sticker is said as
     a line too.
