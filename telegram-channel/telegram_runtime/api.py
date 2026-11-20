@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from abc import ABC, abstractmethod
 from typing import Any, Awaitable, Callable
 
@@ -104,9 +105,21 @@ class TelegramAPI(ABC):
     ) -> bool:
         """``answerCallbackQuery`` — acknowledge an inline-keyboard button press."""
 
+    async def fetch_file(self, file_id: str, *, max_bytes: int) -> bytes:
+        """``getFile`` and its download: a file a message carries, at most *max_bytes* of it.
+
+        A client that can't fetch files refuses (default), so a message's file is named, never
+        silently lost."""
+        raise TelegramAPIError("this client does not fetch files", method="getFile")
+
     async def close(self) -> None:
         """Release any held resources (default: nothing)."""
         return None
+
+
+#: A ``file_path`` as ``getFile`` names one (``photos/file_0.jpg``): it rides in the download's
+#: path, so nothing else is taken.
+_FILE_PATH = re.compile(r"[A-Za-z0-9_-]+(?:/[A-Za-z0-9_.-]+)*")
 
 
 class HTTPTelegramAPI(TelegramAPI):
@@ -233,6 +246,43 @@ class HTTPTelegramAPI(TelegramAPI):
         return body
 
     # ── typed wrappers ──
+
+    async def fetch_file(self, file_id: str, *, max_bytes: int) -> bytes:
+        """``getFile``, then the file itself through the egress guard
+        (``personalclaw.sdk.net.http_client``), refused past *max_bytes*.
+
+        The download's URL carries the bot token, so no error, log line or exception chain of
+        this method holds it: every failure is told in words of its own."""
+        info = await self._call("getFile", data={"file_id": file_id}) or {}
+        path = str(info.get("file_path") or "")
+        if not _FILE_PATH.fullmatch(path) or ".." in path.split("/"):
+            raise TelegramAPIError("Telegram named no file to download", method="getFile")
+        if int(info.get("file_size") or 0) > max_bytes:
+            raise TelegramAPIError("the file is larger than a message may carry", method="getFile")
+        from personalclaw.sdk.net import http_client
+
+        data = bytearray()
+        try:
+            async with http_client(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+                async with client.stream("GET", f"{API_BASE}/file/bot{self._token}/{path}") as resp:
+                    if resp.status_code != 200:
+                        raise TelegramAPIError(
+                            f"Telegram answered {resp.status_code} for the file",
+                            error_code=resp.status_code, method="getFile",
+                        )
+                    async for chunk in resp.aiter_bytes():
+                        data += chunk
+                        if len(data) > max_bytes:
+                            raise TelegramAPIError(
+                                "the file is larger than a message may carry", method="getFile"
+                            )
+        except TelegramAPIError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — told in its own words, never the URL
+            raise TelegramAPIError(
+                f"the file could not be downloaded ({type(exc).__name__})", method="getFile"
+            ) from None
+        return bytes(data)
 
     async def get_me(self) -> dict[str, Any]:
         return await self._call("getMe") or {}

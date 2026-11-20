@@ -34,6 +34,7 @@ Two Discord-specific inbound facts shape this file:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import re
 import sys as _sys
@@ -65,6 +66,8 @@ from discord_runtime.api import DISCORD_MAX_TEXT, DiscordAPI, DiscordAPIError, H
 from discord_runtime.delivery import DiscordDelivery, split_message
 from discord_runtime.gateway import DEFAULT_GATEWAY_URL, DiscordGateway
 from discord_runtime.inbound_tap import publish as publish_inbound
+from discord_runtime.media import gather as gather_media
+from discord_runtime.media import media_of
 from discord_runtime.settings import (
     ACTIVATION_OFF,
     PROVIDER,
@@ -323,8 +326,9 @@ class DiscordTransport(ChannelTransportProvider):
         if self._is_self_authored(message):
             return
         cm = self._to_channel_message(message)
-        if not cm.text.strip():
-            return  # nothing to act on (embed-only, sticker, attachment without text)
+        found, said = media_of(message)
+        if not cm.text.strip() and not found and not said:
+            return  # nothing in it at all (an embed alone)
 
         guild_id = cm.metadata.get("guild_id", "")
         is_dm = not guild_id
@@ -335,6 +339,11 @@ class DiscordTransport(ChannelTransportProvider):
         settings = get_settings()
         if is_dm and settings.dm_activation == ACTIVATION_OFF:
             return
+
+        # What the message holds besides its words: its files for a sender core already lets
+        # in, and a line naming each one for everyone else (`discord_runtime.media`).
+        text, files = await gather_media(PROVIDER, cm.sender, message, cm.text)
+        cm = dataclasses.replace(cm, text=text, files=files)
 
         # The guarded door. Core applies the trust gate, the pairing-code
         # redemption, the fence for non-owner guild content, redaction, session

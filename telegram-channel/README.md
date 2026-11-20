@@ -19,6 +19,13 @@ ships as a self-contained directory:
     piece of real logic Telegram forces on every caller: `429 retry_after` backoff.
     A `TelegramAPI` ABC lets tests swap a fake in.
   - `transport.py` — the `getUpdates` long-poll inbound loop + outbound `send`.
+  - `media.py` — what a message holds besides its words. For you, and for a sender you or a
+    pairing code approved, a photo, file, voice note, audio, video or video message reaches the
+    chat as the turn's attached files (up to 20 MB each, Telegram's own limit for a bot), and a
+    voice note is transcribed when speech-to-text is set up, its words leading the message. For
+    anyone else nothing is downloaded: the message reaches PersonalClaw with a line naming each
+    attachment ("[photo]", "[voice note, 0:12]"), so someone new's photo still shows up in the
+    Inbox. A sticker, a location, a contact or a poll is said as a line too.
   - `delivery.py` — the `ChannelDelivery` the gateway delivers results through
     (MarkdownV2 rendering, throttled edit-streaming, inline-keyboard approvals).
     A turn's progress message keeps only its task lines when the turn ends, each
@@ -178,7 +185,8 @@ Telegram's answer, until a poll gets through.
 
 ## Network
 
-Reaches `api.telegram.org` only.
+Reaches `api.telegram.org` only. A message's files are downloaded from it through PersonalClaw's
+egress guard, and the download's address, which holds the bot token, is never logged.
 
 ## License
 

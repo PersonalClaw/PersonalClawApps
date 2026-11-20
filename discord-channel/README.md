@@ -34,6 +34,13 @@ ships as a self-contained directory:
     a global 429 tracked separately from a per-route one.
   - `transport.py` — the inbound event path (trust seam, self-message filter) +
     outbound `send`.
+  - `media.py` — what a message holds besides its words. For you, and for a sender you or a
+    pairing code approved, an image, file, audio or voice message reaches the chat as the turn's
+    attached files (up to 20 MB each), fetched from Discord's CDN only, and a voice message is
+    transcribed when speech-to-text is set up, its words leading the message. For anyone else
+    nothing is downloaded: the message reaches PersonalClaw with a line naming each attachment
+    ("[image: cat.png]"), so someone new's image still shows up in the Inbox. A sticker is said as
+    a line too.
   - `delivery.py` — the `ChannelDelivery` the gateway delivers results through
     (message splitting, throttled edit-streaming, button approvals, reactions).
     A turn's progress message keeps only its task lines when the turn ends, each
@@ -243,7 +250,9 @@ Discord → **Test** action for the live gateway-hello probe once configured.
 
 ## Network
 
-Reaches Discord only: its API at `discord.com`, and the gateway WebSocket that API names.
+Reaches Discord only: its API at `discord.com`, the gateway WebSocket that API names, and a
+message's attachments on its CDN (`cdn.discordapp.com`, `media.discordapp.net`), fetched through
+PersonalClaw's egress guard.
 
 ## License
 
