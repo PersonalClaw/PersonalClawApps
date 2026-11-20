@@ -18,6 +18,7 @@ exactly as before: this decides only what is fetched.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -48,6 +49,10 @@ MAX_FILES = 20
 #: The most one message's files take in all, so a message costs the gateway one file's worth
 #: (core's ``attachments.MAX_BYTES``) however many it carries: Discord allows ten a message.
 MAX_MESSAGE_BYTES = 25 * 1024 * 1024
+#: The longest one attachment's download may take, start to end. The read timeout ends a download
+#: that stalls; this ends one that trickles, since a message waits on its files before it is
+#: handed on.
+DOWNLOAD_SECONDS = 120.0
 #: The hosts Discord serves attachments from. A message names its attachments' addresses, so
 #: an address anywhere else is never fetched.
 CDN_HOSTS = frozenset({"cdn.discordapp.com", "media.discordapp.net"})
@@ -136,22 +141,25 @@ async def fetch(url: str, *, max_bytes: int) -> bytes:
     data = bytearray()
     failed = ""
     try:
-        async with http_client(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
-            async with client.stream("GET", url) as resp:
-                if resp.status_code != 200:
-                    raise FetchRefused(f"Discord answered {resp.status_code}")
-                async for chunk in resp.aiter_bytes():
-                    data += chunk
-                    if len(data) > max_bytes:
-                        raise FetchRefused("it is larger than a message may carry")
+        async with asyncio.timeout(DOWNLOAD_SECONDS):
+            async with http_client(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+                async with client.stream("GET", url) as resp:
+                    if resp.status_code != 200:
+                        raise FetchRefused(f"Discord answered {resp.status_code}")
+                    async for chunk in resp.aiter_bytes():
+                        data += chunk
+                        if len(data) > max_bytes:
+                            raise FetchRefused("it is larger than a message may carry")
     except FetchRefused:
         raise
+    except TimeoutError:
+        failed = f"it took longer than {DOWNLOAD_SECONDS:g} s to download"
     except Exception as exc:  # noqa: BLE001 — told in its own words; the address is signed
-        failed = type(exc).__name__
+        failed = f"it could not be downloaded ({type(exc).__name__})"
     if failed:
         # Raised past the except block, so no exception it keeps holds the client's error, whose
         # request names the signed address: ``from None`` hides that, yet keeps it as context.
-        raise FetchRefused(f"it could not be downloaded ({failed})")
+        raise FetchRefused(failed)
     return bytes(data)
 
 

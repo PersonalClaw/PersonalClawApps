@@ -9,6 +9,8 @@ else's message reaches the door with a line naming each attachment and nothing f
 
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -254,3 +256,22 @@ async def test_a_failed_download_keeps_no_exception_that_names_its_address(cdn):
         await media_mod.fetch(f"{CDN}/signed.png?ex=1&hm=SIGNATURE", max_bytes=1024)
     assert raised.value.__cause__ is None and raised.value.__context__ is None
     assert "SIGNATURE" not in str(raised.value)
+
+
+async def _trickle():
+    """A download that never ends: a byte at a time, with a pause before each."""
+    while True:
+        await asyncio.sleep(0.05)
+        yield b"x"
+
+
+@pytest.mark.asyncio
+async def test_a_download_that_trickles_stops_at_its_deadline(cdn, monkeypatch):
+    """🔴 Red before: the read timeout bounds a stall, not a trickle, and the channel waits on a
+    message's files before it hands the message on."""
+    _, state = cdn
+    state["handler"] = lambda request: httpx.Response(200, content=_trickle())
+    monkeypatch.setattr(media_mod, "DOWNLOAD_SECONDS", 0.3)
+    with pytest.raises(media_mod.FetchRefused, match="took longer than") as raised:
+        await asyncio.wait_for(media_mod.fetch(f"{CDN}/slow.png", max_bytes=10**9), 5)
+    assert raised.value.__cause__ is None and raised.value.__context__ is None

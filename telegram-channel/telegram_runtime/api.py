@@ -117,6 +117,11 @@ class TelegramAPI(ABC):
         return None
 
 
+#: The longest one file's download may take, start to end. The read timeout ends a download that
+#: stalls; this ends one that trickles, since the channel reads its messages one at a time and a
+#: file that never finished would hold every message behind it.
+DOWNLOAD_SECONDS = 120.0
+
 #: A ``file_path`` as ``getFile`` names one (``photos/file_0.jpg``): it rides in the download's
 #: path, so nothing else is taken.
 _FILE_PATH = re.compile(r"[A-Za-z0-9_-]+(?:/[A-Za-z0-9_.-]+)*")
@@ -264,27 +269,32 @@ class HTTPTelegramAPI(TelegramAPI):
         data = bytearray()
         failed = ""
         try:
-            async with http_client(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
-                async with client.stream("GET", f"{API_BASE}/file/bot{self._token}/{path}") as resp:
-                    if resp.status_code != 200:
-                        raise TelegramAPIError(
-                            f"Telegram answered {resp.status_code} for the file",
-                            error_code=resp.status_code, method="getFile",
-                        )
-                    async for chunk in resp.aiter_bytes():
-                        data += chunk
-                        if len(data) > max_bytes:
+            async with asyncio.timeout(DOWNLOAD_SECONDS):
+                async with http_client(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+                    url = f"{API_BASE}/file/bot{self._token}/{path}"
+                    async with client.stream("GET", url) as resp:
+                        if resp.status_code != 200:
                             raise TelegramAPIError(
-                                "the file is larger than a message may carry", method="getFile"
+                                f"Telegram answered {resp.status_code} for the file",
+                                error_code=resp.status_code, method="getFile",
                             )
+                        async for chunk in resp.aiter_bytes():
+                            data += chunk
+                            if len(data) > max_bytes:
+                                raise TelegramAPIError(
+                                    "the file is larger than a message may carry",
+                                    method="getFile",
+                                )
         except TelegramAPIError:
             raise
+        except TimeoutError:
+            failed = f"the file took longer than {DOWNLOAD_SECONDS:g} s to download"
         except Exception as exc:  # noqa: BLE001 — told in its own words, never the URL
-            failed = type(exc).__name__
+            failed = f"the file could not be downloaded ({type(exc).__name__})"
         if failed:
             # Raised past the except block, so no exception it keeps holds the client's error,
             # whose request names the token: ``from None`` hides that, yet keeps it as context.
-            raise TelegramAPIError(f"the file could not be downloaded ({failed})", method="getFile")
+            raise TelegramAPIError(failed, method="getFile")
         return bytes(data)
 
     async def get_me(self) -> dict[str, Any]:

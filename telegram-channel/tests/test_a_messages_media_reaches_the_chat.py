@@ -9,6 +9,7 @@ door with a line naming each attachment and nothing fetched. A sticker or a loca
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
@@ -306,6 +307,26 @@ async def test_a_download_past_its_cap_is_refused(downloads):
     state["handler"] = lambda request: httpx.Response(200, content=b"x" * 5000)
     with pytest.raises(TelegramAPIError, match="larger than a message may carry"):
         await _api_with(None).fetch_file("f", max_bytes=1024)
+
+
+async def _trickle():
+    """A download that never ends: a byte at a time, with a pause before each."""
+    while True:
+        await asyncio.sleep(0.05)
+        yield b"x"
+
+
+@pytest.mark.asyncio
+async def test_a_download_that_trickles_stops_at_its_deadline(downloads, monkeypatch):
+    """🔴 Red before: the read timeout bounds a stall, not a trickle, and the channel reads its
+    messages one at a time, so a file that never finished held every message behind it."""
+    _, state = downloads
+    state["handler"] = lambda request: httpx.Response(200, content=_trickle())
+    monkeypatch.setattr("telegram_runtime.api.DOWNLOAD_SECONDS", 0.3)
+    with pytest.raises(TelegramAPIError, match="took longer than") as raised:
+        await asyncio.wait_for(_api_with(None).fetch_file("f", max_bytes=10**9), 5)
+    assert TOKEN not in str(raised.value)
+    assert raised.value.__cause__ is None and raised.value.__context__ is None
 
 
 @pytest.mark.parametrize("path", ["../secret", "photos/../../x", "", "photos/a b.jpg"])
