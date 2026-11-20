@@ -46,6 +46,7 @@ from review import (
     ReviewBrief,
     blast_radius,
     build_briefs,
+    file_outcomes,
     parse_diff,
     parse_pr_ref,
     render_report,
@@ -261,8 +262,8 @@ class CodeReviewProvider(ToolProvider):
                 "A private repo needs a token with `repo` scope.",
             ])
 
-        files = blast_radius(parse_diff(diff))
-        if not files:
+        changed = blast_radius(parse_diff(diff))
+        if not changed:
             return ToolResult(
                 success=False,
                 error=f"{ref}: `gh` returned a diff with no changed files.",
@@ -270,23 +271,28 @@ class CodeReviewProvider(ToolProvider):
                     "Confirm the PR has commits: `gh pr view <number> --repo owner/repo`.",
                 ],
             )
-        dropped = max(0, len(files) - cap)
-        files = files[:cap]
+        dropped = max(0, len(changed) - cap)
+        files = changed[:cap]
 
         findings: list[Finding] = static_findings(files)
         briefs = build_briefs(files, fence=fence_untrusted)
         fanout_label = mode
+        ran = mode
+        failed: set[str] = set()
         if mode == "model":
-            model_findings, fanout_label = await self._fanout_model(briefs)
+            model_findings, fanout_label, model_failed = await self._fanout_model(briefs)
             findings.extend(model_findings)
+            if model_failed is None:
+                ran = "static"  # no model provider: only the deterministic pass ran
+            else:
+                failed = model_failed
+        outcomes = file_outcomes(changed, cap=cap, briefs=briefs, ran=ran, failed=failed)
 
         written = self._log.append(ref, findings)
         report = render_report(
-            ref, files, findings, fanout=fanout_label, log_path=self._log.path_for(ref),
+            ref, changed, findings, fanout=fanout_label, outcomes=outcomes,
+            log_path=self._log.path_for(ref),
         )
-        if dropped:
-            report += (f"\n\n{dropped} lower-weight file(s) were left out of the fan-out by "
-                       f"max_files={cap}.")
         if mode == "plan":
             report += (
                 f"\n\n## Fan-out plan — {len(briefs)} isolated per-file review(s)\n\n"
@@ -301,8 +307,11 @@ class CodeReviewProvider(ToolProvider):
             metadata={
                 "pr": str(ref),
                 "fanout": fanout_label,
+                "files_changed": len(changed),
                 "files_reviewed": len(files),
                 "files_dropped": dropped,
+                # What became of every changed file, as the report's table says it.
+                "outcomes": outcomes,
                 "findings": len(findings),
                 "findings_written": written,
                 "findings_path": str(self._log.path_for(ref)),
@@ -326,10 +335,12 @@ class CodeReviewProvider(ToolProvider):
         regex-validated ``PrRef``, so no part of the reference can become a flag or a
         second command (validate at the boundary, then pass structurally).
         """
+        # The pull request's combined diff against its base: each changed file once. Never
+        # `--patch`, which prints the PR commit by commit, so a file changed in three commits
+        # would be read, weighed and reviewed three times.
         argv = [
             "gh", "pr", "diff", str(ref.number),
             "--repo", f"{ref.owner}/{ref.repo}",
-            "--patch",
         ]
         proc = await asyncio.create_subprocess_exec(
             *argv,
@@ -349,8 +360,13 @@ class CodeReviewProvider(ToolProvider):
 
     # ── The model leg of the fan-out ────────────────────────────────────────
 
-    async def _fanout_model(self, briefs: list[ReviewBrief]) -> tuple[list[Finding], str]:
+    async def _fanout_model(
+        self, briefs: list[ReviewBrief]
+    ) -> tuple[list[Finding], str, set[str] | None]:
         """One model call per brief, bounded concurrency, a fresh provider each time.
+
+        Returns the findings, the label, and the briefs whose call failed, or ``None`` in
+        place of those when no model ran at all.
 
         Degrades rather than fails: with no model provider registered the review still
         returns its static findings and the label says so, because a review that reads as
@@ -358,9 +374,12 @@ class CodeReviewProvider(ToolProvider):
         """
         entry = self._resolve_entry()
         if entry is None:
-            return [], "static (no model provider is registered — bind one in Settings → Models)"
+            return (
+                [], "static (no model provider is registered — bind one in Settings → Models)",
+                None,
+            )
         if not briefs:
-            return [], f"model:{entry}"
+            return [], f"model:{entry}", set()
 
         sem = asyncio.Semaphore(self._concurrency)
 
@@ -370,10 +389,10 @@ class CodeReviewProvider(ToolProvider):
 
         results = await asyncio.gather(*(one(b) for b in briefs), return_exceptions=True)
         findings: list[Finding] = []
-        failed = 0
+        failed: set[str] = set()
         for brief, result in zip(briefs, results, strict=True):
             if isinstance(result, BaseException):
-                failed += 1
+                failed.add(brief.path)
                 logger.warning("per-file review failed for %s: %s", brief.path, result)
                 findings.append(Finding(
                     file=brief.path, severity="low", weight=brief.weight, source="model",
@@ -383,8 +402,8 @@ class CodeReviewProvider(ToolProvider):
                 continue
             findings.extend(result)
         label = f"model:{entry} ({len(briefs)} isolated per-file calls"
-        label += f", {failed} failed)" if failed else ")"
-        return findings, label
+        label += f", {len(failed)} failed)" if failed else ")"
+        return findings, label, failed
 
     def _resolve_entry(self) -> str | None:
         """Which registered model entry the per-file reviews run on.

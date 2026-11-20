@@ -75,7 +75,16 @@ def parse_pr_ref(raw: str) -> PrRef:
 # ── Diff parsing ────────────────────────────────────────────────────────────
 
 _DIFF_HEADER = re.compile(r"^diff --git a/(?P<a>.+?) b/(?P<b>.+)$")
+# Git quotes a path holding a non-ASCII byte (``core.quotepath``, on by default), a `"`, a
+# backslash or a control character: ``"a/caf\303\251.py"``, C escapes and octal bytes.
+_QUOTED_PATH = r'"(?:[^"\\]|\\.)*"'
+_QUOTED_HEADER = re.compile(
+    rf'^diff --git (?P<a>{_QUOTED_PATH}|a/\S+) (?P<b>{_QUOTED_PATH}|b/\S+)$'
+)
+_C_ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92}
 _BINARY = re.compile(r"^(GIT binary patch|Binary files .* differ)")
+# A hunk header's line counts; a count left out is 1 (``@@ -3 +3 @@``).
+_HUNK = re.compile(r"^@@ -\d+(?:,(?P<old>\d+))? \+\d+(?:,(?P<new>\d+))? @@")
 
 # Paths whose contents carry no reviewable semantics — generated, vendored or locked.
 # Matched on the whole path, case-insensitively.
@@ -85,6 +94,38 @@ _GENERATED = re.compile(
     r"Cargo\.lock|go\.sum|composer\.lock)$",
     re.IGNORECASE,
 )
+
+
+def _unquote(token: str) -> str:
+    """One path as git wrote it, quoted or not, without its ``a/`` or ``b/``."""
+    if token.startswith('"'):
+        raw = bytearray()
+        body = token[1:-1]
+        i = 0
+        while i < len(body):
+            ch = body[i]
+            if ch != "\\":
+                raw += ch.encode("utf-8")
+                i += 1
+            elif body[i + 1 : i + 4].isdigit() and len(body[i + 1 : i + 4]) == 3:
+                raw.append(int(body[i + 1 : i + 4], 8) & 0xFF)
+                i += 4
+            else:
+                raw.append(_C_ESCAPES.get(body[i + 1 : i + 2], ord("?")))
+                i += 2
+        token = raw.decode("utf-8", "replace")
+    return token[2:]
+
+
+def _header_paths(line: str) -> tuple[str, str] | None:
+    """The (old, new) paths a ``diff --git`` line names, or ``None`` when it can't be read."""
+    if '"' in line:
+        quoted = _QUOTED_HEADER.match(line)
+        if quoted:
+            return _unquote(quoted["a"]), _unquote(quoted["b"])
+        return None
+    plain = _DIFF_HEADER.match(line)
+    return (plain["a"], plain["b"]) if plain else None
 
 
 @dataclass
@@ -98,6 +139,8 @@ class ChangedFile:
     removed: int = 0
     binary: bool = False
     generated: bool = False
+    # Its `diff --git` line could not be read, so ``path`` is that line's own text.
+    unreadable: bool = False
     hunks: list[str] = field(default_factory=list)
     # Filled in by blast_radius().
     weight: int = 0
@@ -123,24 +166,64 @@ class ChangedFile:
 
 
 def parse_diff(diff: str) -> list[ChangedFile]:
-    """Split a unified diff into one ``ChangedFile`` per ``diff --git`` stanza.
+    """Split a unified diff into one ``ChangedFile`` per changed path.
+
+    A hunk takes exactly the lines its header counts, so nothing after it is read as the
+    file's change: in a series of patches (``git format-patch``, ``gh pr diff --patch``) the
+    next commit's mail headers, message and diffstat sit between two files, and a message's
+    ``- `` bullets would otherwise count as removed lines. A path changed in more than one
+    stanza is one record, its hunks and counts together, so no file is weighed or reviewed
+    twice.
 
     Tolerant by design: a stanza it cannot classify still yields a file record with its
     hunks, because a file silently dropped from the fan-out is the one failure mode that
     would make this app lie about coverage.
     """
     files: list[ChangedFile] = []
+    by_path: dict[str, ChangedFile] = {}
     cur: ChangedFile | None = None
+    old_left = new_left = 0  # lines the open hunk still holds, on each side
+    stanza_hunks = 0  # hunks this `diff --git` stanza has opened
     for line in (diff or "").splitlines():
-        header = _DIFF_HEADER.match(line)
-        if header:
-            cur = ChangedFile(path=header["b"], old_path=header["a"])
-            cur.generated = bool(_GENERATED.search(cur.path))
-            files.append(cur)
+        if line.startswith("diff --git "):
+            old_left = new_left = stanza_hunks = 0
+            paths = _header_paths(line)
+            # A header this can't read still opens a record, named by its own text and
+            # never counted as reviewed, so its hunks can't land on the file before it.
+            old, new = paths or ("", line[len("diff --git "):])
+            cur = by_path.get(new)
+            if cur is None:
+                cur = ChangedFile(path=new, old_path=old, unreadable=paths is None)
+                cur.generated = bool(_GENERATED.search(cur.path))
+                by_path[cur.path] = cur
+                files.append(cur)
             continue
         if cur is None:
             continue
-        if line.startswith("new file mode"):
+        if old_left or new_left:
+            cur.hunks[-1] += "\n" + line
+            if line.startswith("+"):
+                cur.added += 1
+                new_left -= 1
+            elif line.startswith("-"):
+                cur.removed += 1
+                old_left -= 1
+            elif not line.startswith("\\"):  # context: on both sides
+                old_left -= 1
+                new_left -= 1
+            old_left, new_left = max(0, old_left), max(0, new_left)
+            continue
+        hunk = _HUNK.match(line)
+        if hunk:
+            cur.hunks.append(line)
+            stanza_hunks += 1
+            old_left = int(hunk["old"] if hunk["old"] is not None else 1)
+            new_left = int(hunk["new"] if hunk["new"] is not None else 1)
+        elif line.startswith("\\") and stanza_hunks:
+            cur.hunks[-1] += "\n" + line  # "\ No newline at end of file", after a hunk
+        elif stanza_hunks:
+            continue  # past the stanza's last hunk: not the file's change
+        elif line.startswith("new file mode"):
             cur.status = "added"
         elif line.startswith("deleted file mode"):
             cur.status = "deleted"
@@ -148,16 +231,6 @@ def parse_diff(diff: str) -> list[ChangedFile]:
             cur.status = "renamed"
         elif _BINARY.match(line):
             cur.binary = True
-        elif line.startswith("@@"):
-            cur.hunks.append(line)
-        elif cur.hunks:
-            cur.hunks[-1] += "\n" + line
-            if line.startswith("+") and not line.startswith("+++"):
-                cur.added += 1
-            elif line.startswith("-") and not line.startswith("---"):
-                cur.removed += 1
-    if cur is not None and cur.old_path != cur.path and cur.status == "modified":
-        pass  # a rename without an explicit `rename from` line; status stays modified
     return files
 
 
@@ -323,7 +396,7 @@ def build_briefs(files: list[ChangedFile], *, fence: Any = None) -> list[ReviewB
     """
     briefs: list[ReviewBrief] = []
     for f in files:
-        if f.binary or f.generated or not f.hunks:
+        if f.binary or f.generated or f.unreadable or not f.hunks:
             continue
         budget = DEPTH_BUDGET[f.depth]
         body = f.diff_text()
@@ -356,6 +429,79 @@ def build_briefs(files: list[ChangedFile], *, fence: Any = None) -> list[ReviewB
             )
         )
     return briefs
+
+
+# ── What became of each changed file ────────────────────────────────────────
+#
+# The report's coverage words are built from these, so it never says more was reviewed
+# than was.
+
+REVIEWED = "reviewed"
+REVIEWED_TRUNCATED = "reviewed on a truncated diff"
+STATIC_ONLY = "checked statically only"
+PENDING = "pending"
+FAILED = "not reviewed: its review call failed"
+UNREADABLE = "not reviewed: its header could not be read"
+SKIPPED_BINARY = "skipped: binary"
+SKIPPED_GENERATED = "skipped: generated"
+SKIPPED_EMPTY = "skipped: no text change"
+# Files with nothing a review could read: they never count against full coverage.
+NOT_REVIEWABLE = (SKIPPED_BINARY, SKIPPED_GENERATED, SKIPPED_EMPTY)
+
+
+def skipped_by_cap(cap: int) -> str:
+    return f"skipped: dropped by max_files={cap}"
+
+
+def file_outcomes(files: list[ChangedFile], *, cap: int, briefs: list[ReviewBrief], ran: str,
+                  failed: set[str] | frozenset[str] = frozenset()) -> dict[str, str]:
+    """What became of each changed file, in the order given (heaviest first).
+
+    ``files`` is every changed file, the ones past ``cap`` included. ``ran`` is how far the
+    review went: ``"model"`` (each brief got its own model review), ``"static"`` (only the
+    deterministic pass) or ``"plan"`` (the briefs were handed out, nothing reviewed yet).
+    ``failed`` names the briefs whose model review call failed.
+    """
+    briefed = {b.path: b for b in briefs}
+    out: dict[str, str] = {}
+    for i, f in enumerate(files):
+        if f.unreadable:
+            out[f.path] = UNREADABLE
+        elif f.binary:
+            out[f.path] = SKIPPED_BINARY
+        elif f.generated:
+            out[f.path] = SKIPPED_GENERATED
+        elif i >= cap:
+            out[f.path] = skipped_by_cap(cap)
+        elif f.path not in briefed:
+            out[f.path] = SKIPPED_EMPTY
+        elif ran == "plan":
+            out[f.path] = PENDING
+        elif ran != "model":
+            out[f.path] = STATIC_ONLY
+        elif f.path in failed:
+            out[f.path] = FAILED
+        elif briefed[f.path].truncated:
+            out[f.path] = REVIEWED_TRUNCATED
+        else:
+            out[f.path] = REVIEWED
+    return out
+
+
+def coverage(outcomes: dict[str, str]) -> str:
+    """The outcomes counted, most reviewed first: "3 reviewed, 1 skipped: binary"."""
+    counts: dict[str, int] = {}
+    for outcome in outcomes.values():
+        counts[outcome] = counts.get(outcome, 0) + 1
+    order = [REVIEWED, REVIEWED_TRUNCATED, STATIC_ONLY, PENDING, FAILED, UNREADABLE]
+    order += sorted(k for k in counts if k not in order)
+    return ", ".join(f"{counts[k]} {k}" for k in order if counts.get(k))
+
+
+def fully_reviewed(outcomes: dict[str, str]) -> bool:
+    """Whether every file a review could read got a full model review."""
+    values = list(outcomes.values())
+    return REVIEWED in values and all(v == REVIEWED or v in NOT_REVIEWABLE for v in values)
 
 
 # ── The deterministic pass ──────────────────────────────────────────────────
@@ -509,30 +655,57 @@ class FindingsLog:
 
 # ── Rendering ───────────────────────────────────────────────────────────────
 
+def _md_path(path: str) -> str:
+    """A path as a code span that keeps to its own table cell or list line.
+
+    An author picks their paths, and git allows a backtick, a ``|`` and control characters in
+    one: shown raw they would end the code span, split the cell or the row, and could draw
+    an outcome the review never gave. Control characters are shown escaped, ``|`` is escaped
+    for the table, and a path holding a backtick gets a double-backtick span.
+    """
+    shown = "".join(ch if ch.isprintable() else repr(ch)[1:-1] for ch in path)
+    shown = shown.replace("|", "\\|")
+    return f"`` {shown} ``" if "`" in shown else f"`{shown}`"
+
+
 def render_report(ref: PrRef, files: list[ChangedFile], findings: list[Finding],
-                  *, fanout: str, log_path: Path | None = None) -> str:
-    """The model-facing summary. Weights first, so the reader sees where attention went."""
+                  *, fanout: str, outcomes: dict[str, str], log_path: Path | None = None) -> str:
+    """The model-facing summary. Weights first, so the reader sees where attention went.
+
+    ``files`` is every changed file and ``outcomes`` what became of each
+    (:func:`file_outcomes`): the table lists them all, and the report claims full coverage
+    only when every file a review could read got a full model review.
+    """
     lines = [f"# Review of {ref}", ""]
     lines.append(f"{len(files)} changed file(s), fan-out via {fanout}.")
     lines.append("")
     lines.append("## Blast radius")
     lines.append("")
-    lines.append("| weight | depth | file | change |")
-    lines.append("|---|---|---|---|")
+    lines.append("| weight | depth | file | change | outcome |")
+    lines.append("|---|---|---|---|---|")
     for f in files:
-        lines.append(f"| {f.weight} | {f.depth} | `{f.path}` | {f.status} +{f.added}/-{f.removed} |")
+        lines.append(f"| {f.weight} | {f.depth} | {_md_path(f.path)} | {f.status} "
+                     f"+{f.added}/-{f.removed} | {outcomes.get(f.path, 'not reviewed')} |")
+    lines.append("")
+    lines.append(f"Coverage: {coverage(outcomes)}.")
     lines.append("")
     if findings:
         lines.append(f"## Findings ({len(findings)})")
         lines.append("")
         for x in findings:
-            lines.append(f"- **{x.severity}** `{x.file}` — {x.summary}")
+            lines.append(f"- **{x.severity}** {_md_path(x.file)} — {x.summary}")
             if x.evidence:
                 lines.append(f"  - evidence: `{x.evidence}`")
     else:
         lines.append("## Findings")
         lines.append("")
-        lines.append("None. Every reviewable file was inspected and nothing was raised.")
+        if fully_reviewed(outcomes):
+            lines.append("None. Every reviewable file was inspected and nothing was raised.")
+        elif PENDING in outcomes.values():
+            lines.append("Nothing reviewed yet: run the briefs below.")
+        else:
+            lines.append("None raised, but not every changed file got a full review: see the "
+                         "coverage above.")
     if log_path is not None:
         lines.extend(["", f"Kept locally at `{log_path}` — nothing was posted to the PR."])
     return "\n".join(lines)

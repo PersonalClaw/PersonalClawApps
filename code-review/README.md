@@ -20,7 +20,7 @@ any other app. (Or [install it from a shell](../docs/third-party-install.md#inst
 
 | Tool | What it does |
 |---|---|
-| `review_pr` | Fetch the PR diff, weight every file, fan out one isolated review per file, keep the findings locally. |
+| `review_pr` | Fetch the PR's combined diff, weight every file, fan out one isolated review per file, keep the findings locally. The report lists every changed file with what became of it (reviewed, reviewed on a truncated diff, checked statically only, pending, not reviewed, or skipped and why), and says every reviewable file was inspected only when each one got a full review. |
 | `record_finding` | Append one finding for one file. The write end of the fan-out — how a per-file subagent reports back. |
 | `review_findings` | Read a PR's findings back off this machine, optionally filtered by severity. |
 
@@ -95,7 +95,8 @@ reviewer sees. A number with no explanation is not a judgment anyone can argue w
 one JSON object per line: `file`, `severity`, `summary`, `evidence`, `weight`, `source`
 (`static` / `model` / `subagent`), `ts`. There is no uploader, no reporter, no
 `gh pr review`, no `gh pr comment` — the app's entire GitHub surface is one read:
-`gh pr diff <n> --repo <owner>/<repo> --patch`. It opens no socket of its own either; the
+`gh pr diff <n> --repo <owner>/<repo>`, the pull request's combined diff, so a file changed in
+several commits is read once. It opens no socket of its own either; the
 manifest declares `network: true` because the `gh` it starts reaches GitHub. Findings
 accumulate; a second review of the same PR appends rather than overwrites, and
 `review_findings` reads them back.
@@ -122,7 +123,7 @@ text forge a log record) to the three untrusted edges:
 |---|---|---|
 | `fanout` | Per-file fan-out | `model` (default) / `plan` / `static`. See above. |
 | `concurrency` | Concurrent per-file reviews | 1–8, default 3. Advanced. |
-| `max_files` | Files per review | Cap the fan-out to the N heaviest, default 40. Dropped files still appear in the weight table, named as skipped. Advanced. |
+| `max_files` | Files per review | Cap the fan-out to the N heaviest, default 40. Dropped files still appear in the weight table, as `skipped: dropped by max_files=N`. Advanced. |
 | `model_entry` | Model entry | Which configured model runs the per-file reviews. Empty = the first chat-capable provider from Settings → Models. Advanced. |
 | `timeout_secs` | GitHub CLI Timeout | Seconds to wait for `gh pr diff`. Advanced. |
 
