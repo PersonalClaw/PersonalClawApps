@@ -18,7 +18,8 @@
 //     tab only: navigate / close here in the worker (tabs API), read-outline / click / type
 //     forwarded to the content script in that tab.
 //   • It opens NO listening socket. Every network action is an OUTBOUND loopback request, and the
-//     only inbound channel is intra-extension messaging (runtime.onMessage), not a port.
+//     only inbound channel is intra-extension messaging (runtime.onMessage), not a port, taken
+//     only from this extension's own page.
 //
 // Loopback is enforced by contract.js (which refuses a non-loopback gateway or endpoint) AND by
 // the manifest's loopback-only host_permissions — the extension cannot fetch anything else.
@@ -46,8 +47,14 @@ if (api.tabGroups) {
 api.windows.onRemoved.addListener((windowId) => settled(connector.onWindowRemoved(windowId)));
 api.windows.onFocusChanged.addListener((windowId) => settled(connector.onWindowFocused(windowId)));
 
+// Whether a message came from this extension's own page (its popup), never from a tab or another
+// extension. A content script runs in a page's tab, so one that ever passed a page's message on
+// could not pair this worker, point it at another gateway, or drive it.
+const fromOwnPage = (sender) => Boolean(sender) && sender.id === api.runtime.id && !sender.tab;
+
 // Intra-extension control only (the popup), NOT a network port.
-api.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!fromOwnPage(sender)) return false;
   const control = message && message.control;
   if (control === "pair") {
     connector.pairWith(message.code)

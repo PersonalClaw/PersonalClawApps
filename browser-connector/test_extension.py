@@ -46,6 +46,7 @@ CASES = (
     "the gateway's address stays on this computer, and changing it forgets the pairing",
     "the popup pairs and attaches this browser, then offers Detach",
     "the popup shows a refusal in the gateway's own words",
+    "a message from a tab or another extension controls nothing in the worker",
 )
 
 _RESULT = re.compile(r"^(ok|not ok) \d+ - (.+?)(?: # (SKIP|TODO).*)?$", re.M)

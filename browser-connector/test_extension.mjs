@@ -15,6 +15,8 @@ const DEBUG_PORT = 9222;
 const TOKEN = "connector-session";
 const PAIR = "connector-pair";
 const CODE = "ABCD-EFGH";
+// This extension's own id, as the browser gives its pages' messages.
+const EXTENSION_ID = "personalclaw-browser-connector";
 let loads = 0;
 
 function event() {
@@ -23,8 +25,11 @@ function event() {
     addListener(fn) {
       listeners.push(fn);
     },
+    // What each listener returned: a message listener's `true` keeps its answer coming.
     async fire(...args) {
-      for (const fn of listeners) await fn(...args);
+      const returned = [];
+      for (const fn of listeners) returned.push(await fn(...args));
+      return returned;
     },
     clear() {
       listeners.length = 0;
@@ -80,7 +85,7 @@ function makeBrowser({ tabGroups = true } = {}) {
   const debuggerOptions = { listsNewTabs: true };
 
   const api = {
-    runtime: { onMessage: event() },
+    runtime: { id: EXTENSION_ID, onMessage: event() },
     storage,
     tabs: {
       onActivated: event(),
@@ -751,8 +756,10 @@ function popupPage() {
 async function openPopup(env) {
   const page = popupPage();
   const { wirePopup } = await import(new URL(`popup.js?popup=${loads}`, EXTENSION).href);
+  // Sent as the popup's messages are: from this extension's own page, never a tab.
   const send = (message) =>
-    new Promise((resolve) => env.browser.api.runtime.onMessage.fire(message, {}, resolve));
+    new Promise((resolve) =>
+      env.browser.api.runtime.onMessage.fire(message, { id: EXTENSION_ID }, resolve));
   const popup = wirePopup({ doc: page.doc, send });
   await popup.refresh();
   return page;
@@ -791,4 +798,41 @@ test("the popup shows a refusal in the gateway's own words", async () => {
   page.el("gateway").value = "http://192.168.1.9:10000";
   await page.el("save-gateway").click();
   assert.match(page.el("said").textContent, /on this computer/);
+});
+
+test("a message from a tab or another extension controls nothing in the worker", async () => {
+  const env = setup({ paired: false });
+  const worker = await startWorker(env);
+  const before = structuredClone(env.browser.api.storage.local.data);
+  const answered = [];
+  const senders = [
+    { id: EXTENSION_ID, tab: { id: 1 }, url: "https://bank.example.com/accounts" },
+    { id: "another-extension" },
+    {},
+  ];
+  const messages = [
+    { control: "pair", code: CODE },
+    { control: "gateway", url: "http://localhost:10001" },
+    { control: "status" },
+    { control: "attach" },
+    { control: "detach" },
+    { control: "contract", request: { method: "tabs.list" } },
+  ];
+  try {
+    for (const sender of senders) {
+      for (const message of messages) {
+        const [kept] = await env.browser.api.runtime.onMessage.fire(
+          message, sender, (answer) => answered.push(answer));
+        assert.equal(kept, false, `${message.control} from ${JSON.stringify(sender)} was taken`);
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(answered, []);
+    assert.deepEqual(gatewayCalls(env), []);
+    assert.deepEqual(env.browser.api.storage.local.data, before);
+  } finally {
+    // A worker that took a tab's pair would be polling now: stopped, so the run still ends.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await worker.detach().catch(() => {});
+  }
 });
