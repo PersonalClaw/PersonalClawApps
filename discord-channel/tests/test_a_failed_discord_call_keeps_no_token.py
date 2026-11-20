@@ -86,3 +86,28 @@ async def test_a_network_error_is_still_retried_before_it_is_said():
     with pytest.raises(DiscordAPIError, match="network error after 3 retries"):
         await _api(refuse).get_user("1")
     assert len(calls) == 4
+
+
+INTERACTION_TOKEN = "aW50ZXJhY3Rpb246MTIzOnNlY3JldA-interaction-token"
+
+
+@pytest.mark.parametrize("answer", ["unknown", "unreachable"])
+@pytest.mark.asyncio
+async def test_a_failed_interaction_callback_keeps_no_interaction_token(answer):
+    """🔴 Red before: the callback's path holds the interaction's token, which can post and edit
+    that interaction's follow-ups as the bot, and the route every error starts with quoted the
+    path. So an expired interaction's 404, or a network error, said the token."""
+    def respond(request: httpx.Request) -> httpx.Response:
+        if answer == "unreachable":
+            raise httpx.ConnectError(f"cannot reach {request.url}", request=request)
+        return httpx.Response(404, json={"message": "Unknown interaction", "code": 10062})
+
+    api = _api(respond)
+    with pytest.raises(DiscordAPIError) as raised:
+        await api.create_interaction_response("123", INTERACTION_TOKEN)
+    assert INTERACTION_TOKEN not in str(raised.value)
+    assert INTERACTION_TOKEN not in raised.value.route
+    assert raised.value.__cause__ is None and raised.value.__context__ is None
+    assert raised.value.route == "POST /interactions/{id}/{token}/callback"
+    kept = " ".join([*api._routes, *api._routes.values(), *api._buckets])
+    assert INTERACTION_TOKEN not in kept

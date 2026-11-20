@@ -36,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
+import re
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Awaitable, Callable
@@ -83,6 +84,24 @@ COMPONENT_ACTION_ROW = 1
 COMPONENT_BUTTON = 2
 BUTTON_STYLE_SUCCESS = 3
 BUTTON_STYLE_DANGER = 4
+
+
+#: A request path that holds a credential: an interaction's token, which can post and edit that
+#: interaction's follow-ups as the bot for about fifteen minutes. Its route (what an error says,
+#: and the rate-limit bucket's key) names neither the token nor the one-off interaction id, so no
+#: error holds the token and the buckets keep one entry for every callback, not one apiece.
+_CREDENTIAL_PATHS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"/interactions/[^/]+/[^/]+/callback"), "/interactions/{id}/{token}/callback"),
+)
+
+
+def _route(method: str, path: str) -> str:
+    """The route a request is known by: its method and path, with any credential it holds
+    named rather than quoted (:data:`_CREDENTIAL_PATHS`)."""
+    for pattern, label in _CREDENTIAL_PATHS:
+        if pattern.fullmatch(path):
+            return f"{method} {label}"
+    return f"{method} {path}"
 
 
 class DiscordAPIError(Exception):
@@ -348,7 +367,7 @@ class HTTPDiscordAPI(DiscordAPI):
         channel never stalls another. A 429 is recorded (global vs bucket) and
         retried; 5xx get exponential backoff; any other 4xx is a caller error and
         raises immediately, since retrying just repeats it."""
-        route = f"{method} {path}"
+        route = _route(method, path)
         attempt = 0
         while True:
             attempt += 1
