@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,7 @@ from review import (
     PrRef,
     blast_radius,
     build_briefs,
+    file_outcomes,
     parse_diff,
     parse_pr_ref,
     render_report,
@@ -43,6 +45,9 @@ from review import (
 
 HERE = Path(__file__).parent
 FIXTURE = HERE / "fixtures" / "sample_pr.diff"
+# A pull request as `gh pr diff --patch` prints it: two commits, one file changed in both.
+SERIES = HERE / "fixtures" / "two_commit_series.patch"
+FULL_CLAIM = "Every reviewable file was inspected"
 REF = PrRef("acme", "widget", 42)
 
 
@@ -318,6 +323,35 @@ def test_an_empty_diff_yields_no_files() -> None:
     assert parse_diff("") == []
 
 
+def test_a_file_changed_in_two_commits_is_one_file_with_the_two_changes() -> None:
+    """🔴 Red before: each `diff --git` stanza was a file of its own, and the lines between
+    two patches (the next commit's mail headers, message and diffstat) were appended to the
+    last hunk, its `- ` bullets and `-- ` signature counted as removed lines."""
+    by = {f.path: f for f in parse_diff(SERIES.read_text(encoding="utf-8"))}
+    assert list(by) == ["src/shop/store.py", "src/shop/views.py"]
+    store = by["src/shop/store.py"]
+    assert (store.added, store.removed) == (4, 1)
+    assert len(store.hunks) == 2
+    assert (by["src/shop/views.py"].added, by["src/shop/views.py"].removed) == (1, 0)
+    text = "\n".join(f.diff_text() for f in by.values())
+    for mail in ("From 2222", "Subject:", "add a count", "2.47.0", "| 2 ++", "\n-- "):
+        assert mail not in text, mail
+
+
+def test_a_hunk_takes_only_the_lines_it_counts() -> None:
+    """Lines after a hunk's counted lines are not the file's change, and a removed line whose
+    own text starts with dashes is still a removed line."""
+    diff = (
+        "diff --git a/q.sql b/q.sql\n--- a/q.sql\n+++ b/q.sql\n"
+        "@@ -1,2 +1,2 @@\n--- the old note\n+-- the new note\n SELECT 1;\n"
+        "\\ No newline at end of file\n"
+        "trailing text that is no part of any hunk\n"
+    )
+    (f,) = parse_diff(diff)
+    assert (f.added, f.removed) == (1, 1)
+    assert f.diff_text().endswith("\\ No newline at end of file")
+
+
 # ── Blast radius ────────────────────────────────────────────────────────────
 
 def test_heaviest_file_first(files) -> None:
@@ -523,16 +557,21 @@ def test_reading_a_pr_with_no_findings_is_empty_not_an_error(tmp_path) -> None:
 
 # ── Rendering ───────────────────────────────────────────────────────────────
 
+def _static_outcomes(files):
+    return file_outcomes(files, cap=len(files), briefs=build_briefs(files), ran="static")
+
+
 def test_the_report_leads_with_the_weight_table(files) -> None:
     body = render_report(REF, files, static_findings(files), fanout="static",
-                         log_path=Path("/tmp/x.jsonl"))
+                         outcomes=_static_outcomes(files), log_path=Path("/tmp/x.jsonl"))
     assert body.index("## Blast radius") < body.index("## Findings")
     for f in files:
         assert f"`{f.path}`" in body
 
 
 def test_the_report_says_where_the_findings_went(files) -> None:
-    body = render_report(REF, files, [], fanout="static", log_path=Path("/tmp/x.jsonl"))
+    body = render_report(REF, files, [], fanout="static", outcomes=_static_outcomes(files),
+                         log_path=Path("/tmp/x.jsonl"))
     assert "nothing was posted to the PR" in body
     assert "/tmp/x.jsonl" in body
 
@@ -574,7 +613,10 @@ async def test_max_files_caps_the_fan_out_and_says_so(monkeypatch, provider, dif
     result = await provider.invoke("review_pr", {"pr": "acme/widget#42", "max_files": 2})
     assert result.metadata["files_reviewed"] == 2
     assert result.metadata["files_dropped"] == 5
-    assert "left out of the fan-out" in result.output
+    assert result.metadata["files_changed"] == 7
+    dropped = [p for p, o in result.metadata["outcomes"].items() if o == "skipped: dropped by max_files=2"]
+    assert len(dropped) == 3, result.metadata["outcomes"]  # the other two are binary/generated
+    assert "3 skipped: dropped by max_files=2" in result.output
 
 
 @pytest.mark.asyncio
@@ -881,3 +923,217 @@ async def test_an_unreviewed_pr_reads_as_empty_not_as_an_error(provider) -> None
 async def test_review_findings_validates_the_reference(provider) -> None:
     result = await provider.invoke("review_findings", {"pr": "../../etc/passwd"})
     assert not result.success
+
+
+# ── What the report says was reviewed ───────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_review_pr_asks_gh_for_the_combined_diff(monkeypatch, provider, diff) -> None:
+    """🔴 Red before: the argv carried `--patch`, which prints the PR commit by commit."""
+    started: list[list[str]] = []
+
+    async def _start(*argv, **_kwargs):
+        started.append(list(argv))
+        return _Exited(diff.encode())
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _start)
+    assert (await provider.invoke("review_pr", {"pr": "acme/widget#42"})).success
+    assert started == [["gh", "pr", "diff", "42", "--repo", "acme/widget"]]
+
+
+def _clean_diff(*paths: str, lines: int = 3, width: int = 1) -> str:
+    """A diff that raises no static finding: each path gains a few plain lines."""
+    out = []
+    for path in paths:
+        body = "".join(f"+value_{i} = {str(i) * width}\n" for i in range(lines))
+        out.append(f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"
+                   f"@@ -0,0 +1,{lines} @@\n{body}")
+    out.append("diff --git a/assets/mark.png b/assets/mark.png\n"
+               "Binary files a/assets/mark.png and b/assets/mark.png differ\n")
+    return "".join(out)
+
+
+CLEAN = _clean_diff("src/shop/store.py", "src/shop/views.py", "src/shop/cart.py")
+
+
+def _quiet_models(monkeypatch, fail: str = ""):
+    """A registry whose per-file reviews raise nothing, and whose review of *fail* fails."""
+    import personalclaw.sdk.model as sdk_model
+
+    registry = _FakeRegistry([ProviderEntry(name="fake", type="fake", model="m")])
+
+    def _build(name, **kwargs):
+        return _FakeModel(reply=" ")
+
+    registry.build = _build
+    monkeypatch.setattr(sdk_model, "get_default_registry", lambda: registry)
+    if fail:
+        real = CodeReviewProvider._review_one_file
+
+        async def _review(self, entry, brief):
+            if brief.path == fail:
+                raise RuntimeError("provider exploded")
+            return await real(self, entry, brief)
+
+        monkeypatch.setattr(CodeReviewProvider, "_review_one_file", _review)
+    return registry
+
+
+async def _review(monkeypatch, diff: str, **args):
+    p = create_provider({"fanout": args.pop("fanout", "model")})
+    monkeypatch.setattr(CodeReviewProvider, "_gh_diff", _fake_gh(diff))
+    result = await p.invoke("review_pr", {"pr": "acme/widget#42", **args})
+    assert result.success, result.error
+    return result
+
+
+def _row(report: str, path: str) -> str:
+    (row,) = [line for line in report.splitlines() if f"| `{path}` |" in line]
+    return row
+
+
+@pytest.mark.asyncio
+async def test_a_full_model_review_of_every_reviewable_file_claims_full_coverage(
+    monkeypatch, home
+) -> None:
+    """The positive control: a fix that never claims coverage fails here."""
+    _quiet_models(monkeypatch)
+    result = await _review(monkeypatch, CLEAN)
+    assert f"None. {FULL_CLAIM} and nothing was raised." in result.output
+    assert _row(result.output, "src/shop/store.py").endswith("| reviewed |")
+    assert _row(result.output, "assets/mark.png").endswith("| skipped: binary |")
+    assert "Coverage: 3 reviewed, 1 skipped: binary." in result.output
+
+
+@pytest.mark.asyncio
+async def test_files_past_max_files_are_listed_as_skipped_and_no_full_coverage_is_claimed(
+    monkeypatch, home
+) -> None:
+    """🔴 Red before: the cut files were missing from the table, and the report still said every
+    reviewable file was inspected."""
+    _quiet_models(monkeypatch)
+    result = await _review(monkeypatch, CLEAN, max_files=1)
+    assert FULL_CLAIM not in result.output
+    outcomes = result.metadata["outcomes"]
+    assert len(outcomes) == 4
+    assert sorted(outcomes.values()).count("skipped: dropped by max_files=1") == 2
+    for path, outcome in outcomes.items():
+        assert _row(result.output, path).endswith(f"| {outcome} |")
+    assert "not every changed file got a full review" in result.output
+
+
+@pytest.mark.asyncio
+async def test_a_static_review_says_the_files_were_checked_statically_only(
+    monkeypatch, home
+) -> None:
+    """🔴 Red before: a review with no model said every reviewable file was inspected."""
+    result = await _review(monkeypatch, CLEAN, fanout="static")
+    assert FULL_CLAIM not in result.output
+    assert _row(result.output, "src/shop/store.py").endswith("| checked statically only |")
+    assert "Coverage: 3 checked statically only, 1 skipped: binary." in result.output
+
+
+@pytest.mark.asyncio
+async def test_no_model_provider_reads_as_checked_statically_only(monkeypatch, home) -> None:
+    """🔴 Red before: the degrade to the static pass claimed full coverage too."""
+    import personalclaw.sdk.model as sdk_model
+
+    monkeypatch.setattr(sdk_model, "get_default_registry", lambda: _FakeRegistry([]))
+    result = await _review(monkeypatch, CLEAN)
+    assert FULL_CLAIM not in result.output
+    assert _row(result.output, "src/shop/views.py").endswith("| checked statically only |")
+
+
+@pytest.mark.asyncio
+async def test_a_plan_says_nothing_has_been_reviewed_yet(monkeypatch, home) -> None:
+    """🔴 Red before: handing out the briefs read as a clean, complete review."""
+    result = await _review(monkeypatch, CLEAN, fanout="plan")
+    assert FULL_CLAIM not in result.output
+    assert "Nothing reviewed yet: run the briefs below." in result.output
+    assert _row(result.output, "src/shop/cart.py").endswith("| pending |")
+
+
+@pytest.mark.asyncio
+async def test_a_file_over_its_depth_budget_is_marked_truncated(monkeypatch, home) -> None:
+    """🔴 Red before: a file reviewed on a cut diff counted as fully inspected."""
+    _quiet_models(monkeypatch)
+    big = _clean_diff("docs/guide.md", lines=300, width=60)
+    assert len(big) > max(DEPTH_BUDGET.values())
+    result = await _review(monkeypatch, big)
+    assert FULL_CLAIM not in result.output
+    assert _row(result.output, "docs/guide.md").endswith("| reviewed on a truncated diff |")
+
+
+@pytest.mark.asyncio
+async def test_a_file_whose_review_call_failed_is_marked_not_reviewed(monkeypatch, home) -> None:
+    _quiet_models(monkeypatch, fail="src/shop/views.py")
+    result = await _review(monkeypatch, CLEAN)
+    assert FULL_CLAIM not in result.output
+    assert _row(result.output, "src/shop/views.py").endswith(
+        "| not reviewed: its review call failed |"
+    )
+    assert _row(result.output, "src/shop/store.py").endswith("| reviewed |")
+
+
+# A diff as git writes it for a path holding a non-ASCII byte: the path quoted, its bytes octal.
+QUOTED = (
+    'diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-a2\n+a3\n'
+    'diff --git "a/caf\\303\\251.py" "b/caf\\303\\251.py"\n'
+    '--- "a/caf\\303\\251.py"\n+++ "b/caf\\303\\251.py"\n@@ -1 +1 @@\n-b2\n+b3\n'
+)
+
+
+def test_a_path_git_quotes_is_a_file_of_its_own() -> None:
+    """🔴 Red before (CORE F1): the quoted header opened no record, so café.py's hunk landed on
+    a.py, and café.py was in no row and no count."""
+    by = {f.path: f for f in parse_diff(QUOTED)}
+    assert list(by) == ["a.py", "café.py"]
+    assert [(f.added, f.removed, len(f.hunks)) for f in by.values()] == [(1, 1, 1), (1, 1, 1)]
+    assert not any(f.unreadable for f in by.values())
+
+
+@pytest.mark.parametrize(
+    ("header", "old", "new"),
+    [
+        ('diff --git a/plain.py "b/caf\\303\\251.py"', "plain.py", "café.py"),
+        ('diff --git "a/tab\\there.py" "b/tab\\there.py"', "tab\there.py", "tab\there.py"),
+        ('diff --git "a/say \\"hi\\".py" "b/say \\"hi\\".py"', 'say "hi".py', 'say "hi".py'),
+    ],
+)
+def test_each_quoted_form_names_its_own_path(header: str, old: str, new: str) -> None:
+    (f,) = parse_diff(f"{header}\n@@ -0,0 +1 @@\n+x = 1\n")
+    assert (f.old_path, f.path, f.unreadable) == (old, new, False)
+
+
+@pytest.mark.asyncio
+async def test_a_header_that_cannot_be_read_is_named_not_reviewed(monkeypatch, home) -> None:
+    """Fail closed: a `diff --git` line this can't read opens a record of its own, named by its
+    text, and the report never claims full coverage over it."""
+    _quiet_models(monkeypatch)
+    broken = 'diff --git "a/never closed\n@@ -0,0 +1 @@\n+x = 1\n'
+    result = await _review(monkeypatch, CLEAN + broken)
+    assert FULL_CLAIM not in result.output
+    outcomes = result.metadata["outcomes"]
+    assert outcomes['"a/never closed'] == "not reviewed: its header could not be read"
+    assert outcomes["src/shop/cart.py"] == "reviewed"
+    by = {f.path: f for f in parse_diff(CLEAN + broken)}
+    assert by["src/shop/cart.py"].added == 3, "the broken stanza's hunk landed on the file before"
+
+
+def _cells(row: str) -> list[str]:
+    """A table row's cells, split on the pipes that are not escaped."""
+    return [c.strip() for c in re.split(r"(?<!\\)\|", row)][1:-1]
+
+
+@pytest.mark.asyncio
+async def test_a_path_cannot_draw_a_cell_of_its_own(monkeypatch, home) -> None:
+    """CORE N1: an author picks their paths, and a `|` or a backtick in one must not end the
+    code span or split the cell, or a path could show an outcome the review never gave."""
+    result = await _review(monkeypatch, _clean_diff("src/x | reviewed |.py", "src/`tick`.py"),
+                           fanout="static")
+    rows = [line for line in result.output.splitlines() if line.startswith("| ") and ".py" in line]
+    assert len(rows) == 2
+    for row in rows:
+        cells = _cells(row)
+        assert len(cells) == 5, row
+        assert cells[4] == "checked statically only", row
