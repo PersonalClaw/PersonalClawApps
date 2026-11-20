@@ -295,9 +295,9 @@ async def test_a_messages_downloads_share_one_deadline(cdn, monkeypatch):
     given: list[float | None] = []
     fetch = media_mod.fetch
 
-    async def _fetch(url, *, max_bytes, seconds=None):
-        given.append(seconds)
-        return await fetch(url, max_bytes=max_bytes, seconds=seconds)
+    async def _fetch(url, *, max_bytes, deadline=None):
+        given.append(deadline)
+        return await fetch(url, max_bytes=max_bytes, deadline=deadline)
 
     monkeypatch.setattr(media_mod, "fetch", _fetch)
     t, door = _transport()
@@ -305,7 +305,7 @@ async def test_a_messages_downloads_share_one_deadline(cdn, monkeypatch):
     await asyncio.wait_for(t._on_message_create(_message(attachments=files)), 5)
     (msg,) = door.messages
     assert seen == [f"{CDN}/a.png", f"{CDN}/b.png"]
-    assert given[0] == 0.3 and given[1] is not None and given[1] < 0.25
+    assert given[0] is not None and given[0] == given[1]
     assert [f.name for f in msg.files] == ["a.png"]
     assert msg.text == "\n\n".join([
         "[image: b.png, which could not be fetched]",
@@ -319,3 +319,27 @@ def test_a_messages_downloads_end_inside_one_heartbeat():
     when the next is due closes the connection (``gateway._beat_once``). Discord's interval is
     about 41 s (41250 ms, the gateway's default before HELLO says)."""
     assert media_mod.DOWNLOAD_SECONDS < 41.25
+
+
+@pytest.mark.asyncio
+async def test_a_transcription_that_never_ends_stops_at_the_messages_deadline(cdn, monkeypatch):
+    """🔴 Red before: a voice message's transcription ran outside the deadline, on the gateway's
+    receive loop, for as long as it took. Now it gets what is left of the message's time, and past
+    it the file still arrives, said as not transcribed."""
+    async def _yes():
+        return True
+
+    async def _forever(path):
+        await asyncio.sleep(30)
+        return "never"
+
+    monkeypatch.setattr(media_mod, "stt_available", _yes)
+    monkeypatch.setattr(media_mod, "transcribe_audio", _forever)
+    monkeypatch.setattr(media_mod, "DOWNLOAD_SECONDS", 0.3)
+    t, door = _transport()
+    voice = _attachment("voice-message.ogg", "audio/ogg", url=f"{CDN}/v.ogg", duration_secs=4.2)
+    await asyncio.wait_for(
+        t._on_message_create(_message(flags=media_mod.VOICE_MESSAGE, attachments=[voice])), 5)
+    (msg,) = door.messages
+    assert len(msg.files) == 1
+    assert msg.text == "[voice message, 0:04, not transcribed]"

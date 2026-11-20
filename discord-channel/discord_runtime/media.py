@@ -49,8 +49,9 @@ MAX_FILES = 20
 #: The most one message's files take in all, so a message costs the gateway one file's worth
 #: (core's ``attachments.MAX_BYTES``) however many it carries: Discord allows ten a message.
 MAX_MESSAGE_BYTES = 25 * 1024 * 1024
-#: The longest one message's downloads may take in all, start to end. The read timeout ends a
-#: download that stalls; this ends one that trickles. Under one heartbeat interval (about 41 s):
+#: The longest one message's files may take in all, start to end: each download and each
+#: transcription. The read timeout ends a download that stalls; this ends one that trickles, and
+#: one transcription that runs on. Under one heartbeat interval (about 41 s):
 #: the gateway's receive loop waits on a message's files before it reads the next frame, a
 #: heartbeat's ACK included, and a beat still unacknowledged when the next is due closes the
 #: connection as a zombie (``gateway._beat_once``).
@@ -133,9 +134,10 @@ def lets_in(provider: str, sender: str) -> bool:
         return False
 
 
-async def fetch(url: str, *, max_bytes: int, seconds: float | None = None) -> bytes:
+async def fetch(url: str, *, max_bytes: int, deadline: float | None = None) -> bytes:
     """One attachment from Discord's CDN through the egress guard, refused past *max_bytes* or
-    *seconds* (all of :data:`DOWNLOAD_SECONDS` when not given)."""
+    *deadline* (the event loop's time it ends; :data:`DOWNLOAD_SECONDS` from now when not
+    given)."""
     parts = urlsplit(url)
     if parts.scheme != "https" or (parts.hostname or "").lower() not in CDN_HOSTS:
         raise FetchRefused("its address is not on Discord's CDN")
@@ -144,7 +146,8 @@ async def fetch(url: str, *, max_bytes: int, seconds: float | None = None) -> by
     data = bytearray()
     failed = ""
     try:
-        async with asyncio.timeout(DOWNLOAD_SECONDS if seconds is None else seconds):
+        async with (asyncio.timeout(DOWNLOAD_SECONDS) if deadline is None
+                    else asyncio.timeout_at(deadline)):
             async with http_client(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
                 async with client.stream("GET", url) as resp:
                     if resp.status_code != 200:
@@ -175,10 +178,11 @@ async def gather(provider: str, sender: str, message: dict[str, Any],
     attachments: list[Attachment] = []
     spoken: list[str] = []
     left = MAX_MESSAGE_BYTES
-    # A message's downloads share one deadline, as they share one byte budget.
+    # A message's downloads and transcriptions share one deadline, as its files share one byte
+    # budget: all of it holds the gateway's receive loop (see DOWNLOAD_SECONDS).
     budget = DOWNLOAD_SECONDS
     clock = asyncio.get_running_loop().time
-    spent = 0.0
+    ends = clock() + budget
     for media in found:
         if not trusted:
             lines.append(media.line())
@@ -193,23 +197,19 @@ async def gather(provider: str, sender: str, message: dict[str, Any],
             lines.append(media.line(f"past the {MAX_MESSAGE_BYTES // (1024 * 1024)} MB one "
                                     "message's files may take", with_size=True))
             continue
-        if spent >= budget:
+        if clock() >= ends:
             lines.append(media.line(f"past the {budget:g} s one message's files may take"))
             continue
-        started = clock()
         try:
-            data = await fetch(media.url, max_bytes=min(MAX_FILE_BYTES, left),
-                               seconds=budget - spent)
+            data = await fetch(media.url, max_bytes=min(MAX_FILE_BYTES, left), deadline=ends)
         except FetchRefused as exc:
             logger.warning("discord: an attachment was not fetched: %s", exc)
             lines.append(media.line("which could not be fetched"))
             continue
-        finally:
-            spent += clock() - started
         left -= len(data)
         attachments.append(Attachment(name=media.name, mimetype=media.mimetype, data=data))
         if media.voice or media.kind == "audio":
-            words = await _transcribed(media, data)
+            words = await _transcribed(media, data, deadline=ends)
             if words:
                 spoken.append(words)
             elif media.voice:
@@ -220,19 +220,23 @@ async def gather(provider: str, sender: str, message: dict[str, Any],
     return "\n\n".join(p for p in parts if p), attachments
 
 
-async def _transcribed(media: Media, data: bytes) -> str:
-    """A voice message's words inside the markers Slack's voice memos use, or ``""``."""
-    try:
-        if not await stt_available():
-            return ""
-    except Exception:  # noqa: BLE001
+async def _transcribed(media: Media, data: bytes, *, deadline: float) -> str:
+    """A voice message's words inside the markers Slack's voice memos use, or ``""`` when none
+    came by *deadline* (the event loop's time its message's files end)."""
+    if asyncio.get_running_loop().time() >= deadline:
         return ""
     path = ""
     try:
-        fd, path = tempfile.mkstemp(suffix=_suffix(media.name, ".ogg"))
-        with os.fdopen(fd, "wb") as out:
-            out.write(data)
-        words = await transcribe_audio(path)
+        async with asyncio.timeout_at(deadline):
+            if not await stt_available():
+                return ""
+            fd, path = tempfile.mkstemp(suffix=_suffix(media.name, ".ogg"))
+            with os.fdopen(fd, "wb") as out:
+                out.write(data)
+            words = await transcribe_audio(path)
+    except TimeoutError:
+        logger.warning("discord: a voice message ran past its message's time, not transcribed")
+        return ""
     except Exception:  # noqa: BLE001 — no transcript keeps the file and says so
         logger.warning("discord: a voice message could not be transcribed", exc_info=True)
         return ""

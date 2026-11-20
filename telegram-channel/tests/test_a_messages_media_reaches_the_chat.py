@@ -30,13 +30,13 @@ class _API(TelegramAPI):
 
     def __init__(self, fail: bool = False, takes: float = 0.0) -> None:
         self.fetched: list[str] = []
-        self.given: list[float] = []
+        self.given: list[float | None] = []
         self._fail = fail
         self._takes = takes
 
-    async def fetch_file(self, file_id, *, max_bytes, seconds=None):
+    async def fetch_file(self, file_id, *, max_bytes, deadline=None):
         self.fetched.append(file_id)
-        self.given.append(seconds)
+        self.given.append(deadline)
         await asyncio.sleep(self._takes)
         if self._fail:
             raise TelegramAPIError("the file could not be downloaded (ConnectError)", method="getFile")
@@ -347,8 +347,48 @@ async def test_a_messages_downloads_share_one_deadline(monkeypatch):
     ))
     (msg,) = door.messages
     assert api.fetched == ["large", "d1"]
-    assert api.given[0] == 0.3 and api.given[1] < 0.15
+    assert api.given[0] is not None and api.given[0] == api.given[1]
     assert msg.text.endswith("[video, past the 0.3 s one message's files may take]")
+
+
+@pytest.mark.asyncio
+async def test_a_stalled_getfile_stops_at_the_messages_deadline(downloads):
+    """🔴 Red before: getFile ran outside the deadline, so a stalled answer ran to its own read
+    timeout before the download's deadline began."""
+    async def stalled(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(30)
+        return httpx.Response(200, json={"ok": True, "result": {}})
+
+    api = HTTPTelegramAPI(TOKEN, client=httpx.AsyncClient(
+        base_url=f"{API_BASE}/bot{TOKEN}", transport=httpx.MockTransport(stalled)))
+    with pytest.raises(TelegramAPIError, match="ran past the") as raised:
+        ends = asyncio.get_running_loop().time() + 0.3
+        await asyncio.wait_for(api.fetch_file("f", max_bytes=1024, deadline=ends), 5)
+    assert TOKEN not in str(raised.value)
+    assert raised.value.__cause__ is None and raised.value.__context__ is None
+
+
+@pytest.mark.asyncio
+async def test_a_transcription_that_never_ends_stops_at_the_messages_deadline(monkeypatch):
+    """🔴 Red before: a voice note's transcription ran outside the deadline, holding the poll
+    loop for as long as it took. Now it ends with the message's time, and the file still arrives,
+    said as not transcribed."""
+    async def _yes():
+        return True
+
+    async def _forever(path):
+        await asyncio.sleep(30)
+        return "never"
+
+    monkeypatch.setattr(media_mod, "stt_available", _yes)
+    monkeypatch.setattr(media_mod, "transcribe_audio", _forever)
+    monkeypatch.setattr("telegram_runtime.api.DOWNLOAD_SECONDS", 0.3)
+    t, door = _transport(_API())
+    await asyncio.wait_for(
+        t._on_message(_message(voice={"file_id": "v1", "duration": 12})), 5)
+    (msg,) = door.messages
+    assert len(msg.files) == 1
+    assert msg.text == "[voice note, 0:12, not transcribed]"
 
 
 @pytest.mark.parametrize("path", ["../secret", "photos/../../x", "", "photos/a b.jpg"])
