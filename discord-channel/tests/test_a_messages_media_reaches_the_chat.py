@@ -182,3 +182,75 @@ async def test_an_embed_alone_reaches_no_door(cdn):
     t, door = _transport()
     await t._on_message_create(_message(embeds=[{"title": "x"}]))
     assert door.messages == []
+
+
+MB = 1024 * 1024
+
+
+def _sized(request: httpx.Request) -> httpx.Response:
+    """Each attachment answered with as many bytes as its address names: ``…/10mb-a.png``."""
+    megabytes = int(request.url.path.rsplit("/", 1)[1].split("mb")[0])
+    return httpx.Response(200, content=b"x" * (megabytes * MB))
+
+
+@pytest.mark.asyncio
+async def test_one_messages_files_take_at_most_25_mb_in_all(cdn):
+    """🔴 Red before: each file was capped, the message wasn't, so ten 20 MB files came in."""
+    seen, state = cdn
+    state["handler"] = _sized
+    t, door = _transport()
+    files = [_attachment(f"{n}.png", size=10 * MB, url=f"{CDN}/10mb-{n}.png") for n in "abc"]
+    await t._on_message_create(_message(attachments=files))
+    (msg,) = door.messages
+    assert seen == [f"{CDN}/10mb-a.png", f"{CDN}/10mb-b.png"]
+    assert [f.name for f in msg.files] == ["a.png", "b.png"]
+    assert msg.text == "[image: c.png, 10.0 MB, past the 25 MB one message's files may take]"
+
+
+@pytest.mark.asyncio
+async def test_a_message_whose_sizes_lie_still_takes_at_most_25_mb(cdn):
+    """The sizes are the sender's to write: the bytes are counted against what's left."""
+    seen, state = cdn
+    state["handler"] = _sized
+    t, door = _transport()
+    files = [_attachment(f"{n}.png", url=f"{CDN}/10mb-{n}.png") for n in "abc"]
+    await t._on_message_create(_message(attachments=files))
+    (msg,) = door.messages
+    assert len(seen) == 3
+    assert [f.name for f in msg.files] == ["a.png", "b.png"]
+    assert sum(len(f.data) for f in msg.files) == 20 * MB
+    assert msg.text == "[image: c.png, which could not be fetched]"
+
+
+@pytest.mark.asyncio
+async def test_an_audio_file_whose_name_holds_a_nul_still_reaches_the_door(cdn, monkeypatch):
+    """🔴 Red before: its name became the temp file's suffix, and the error dropped the message."""
+    async def _yes():
+        return True
+
+    async def _words(path):
+        return "hello"
+
+    monkeypatch.setattr(media_mod, "stt_available", _yes)
+    monkeypatch.setattr(media_mod, "transcribe_audio", _words)
+    t, door = _transport()
+    await t._on_message_create(_message(attachments=[
+        _attachment("song.mp\x003", "audio/mpeg", url=f"{CDN}/song.mp3")]))
+    (msg,) = door.messages
+    assert len(msg.files) == 1
+    assert msg.text == "[Voice memo transcription]\nhello\n[End of transcription]"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_download_keeps_no_exception_that_names_its_address(cdn):
+    """🔴 Red before: ``from None`` hid the client's error but kept it as the context."""
+    _, state = cdn
+
+    def refuse(request):
+        raise httpx.ConnectError(f"cannot reach {request.url}", request=request)
+
+    state["handler"] = refuse
+    with pytest.raises(media_mod.FetchRefused) as raised:
+        await media_mod.fetch(f"{CDN}/signed.png?ex=1&hm=SIGNATURE", max_bytes=1024)
+    assert raised.value.__cause__ is None and raised.value.__context__ is None
+    assert "SIGNATURE" not in str(raised.value)

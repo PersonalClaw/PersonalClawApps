@@ -262,6 +262,7 @@ class HTTPTelegramAPI(TelegramAPI):
         from personalclaw.sdk.net import http_client
 
         data = bytearray()
+        failed = ""
         try:
             async with http_client(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
                 async with client.stream("GET", f"{API_BASE}/file/bot{self._token}/{path}") as resp:
@@ -279,9 +280,11 @@ class HTTPTelegramAPI(TelegramAPI):
         except TelegramAPIError:
             raise
         except Exception as exc:  # noqa: BLE001 — told in its own words, never the URL
-            raise TelegramAPIError(
-                f"the file could not be downloaded ({type(exc).__name__})", method="getFile"
-            ) from None
+            failed = type(exc).__name__
+        if failed:
+            # Raised past the except block, so no exception it keeps holds the client's error,
+            # whose request names the token: ``from None`` hides that, yet keeps it as context.
+            raise TelegramAPIError(f"the file could not be downloaded ({failed})", method="getFile")
         return bytes(data)
 
     async def get_me(self) -> dict[str, Any]:

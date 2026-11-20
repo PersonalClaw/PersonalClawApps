@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from typing import Any
@@ -181,9 +182,10 @@ async def _transcribed(media: Media, data: bytes) -> str:
             return ""
     except Exception:  # noqa: BLE001
         return ""
-    suffix = ".ogg" if media.kind == "voice" else os.path.splitext(media.name)[1][:8] or ".audio"
-    fd, path = tempfile.mkstemp(suffix=suffix)
+    suffix = ".ogg" if media.kind == "voice" else _suffix(media.name, ".audio")
+    path = ""
     try:
+        fd, path = tempfile.mkstemp(suffix=suffix)
         with os.fdopen(fd, "wb") as out:
             out.write(data)
         words = await transcribe_audio(path)
@@ -191,13 +193,24 @@ async def _transcribed(media: Media, data: bytes) -> str:
         logger.warning("telegram: a voice note could not be transcribed", exc_info=True)
         return ""
     finally:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+        if path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
     words = (words or "").strip()
     if not words:
         return ""
     words, _ = redact_exfiltration_urls(words)
     words, _ = redact_credentials(words)
     return f"[Voice memo transcription]\n{words}\n[End of transcription]"
+
+
+#: An extension a temp file may take from a sender's file name: a dot and a few plain characters.
+_SUFFIX = re.compile(r"\.[A-Za-z0-9]{1,7}")
+
+
+def _suffix(name: str, default: str) -> str:
+    """*name*'s extension when it is a plain one, else *default*: the name is the sender's."""
+    ext = os.path.splitext(name)[1]
+    return ext if _SUFFIX.fullmatch(ext) else default

@@ -142,6 +142,24 @@ async def test_a_voice_note_with_no_speech_to_text_keeps_its_file_and_says_so(mo
 
 
 @pytest.mark.asyncio
+async def test_an_audio_file_whose_name_holds_a_nul_still_reaches_the_door(monkeypatch):
+    """🔴 Red before: its name became the temp file's suffix, and the error dropped the message."""
+    async def _yes():
+        return True
+
+    async def _words(path):
+        return "hello"
+
+    monkeypatch.setattr(media_mod, "stt_available", _yes)
+    monkeypatch.setattr(media_mod, "transcribe_audio", _words)
+    t, door = _transport(_API())
+    await t._on_message(_message(audio={"file_id": "a1", "file_name": "song.mp\x003"}))
+    (msg,) = door.messages
+    assert len(msg.files) == 1
+    assert msg.text.startswith("[Voice memo transcription]\nhello")
+
+
+@pytest.mark.asyncio
 async def test_a_captioned_photo_arrives_as_its_largest_size_beside_its_caption():
     """🔴 Red before: the caption came alone, and the agent never saw the picture."""
     api = _API()
@@ -266,6 +284,7 @@ async def test_the_client_fetches_a_file_through_the_guarded_client(downloads):
 
 @pytest.mark.asyncio
 async def test_a_failed_download_never_names_the_token(downloads, caplog):
+    """🔴 Red before: the client's error, with the token in its URL, was the context."""
     _, state = downloads
 
     def refuse(request):
@@ -275,7 +294,9 @@ async def test_a_failed_download_never_names_the_token(downloads, caplog):
     with pytest.raises(TelegramAPIError) as raised:
         await _api_with(None).fetch_file("f", max_bytes=1024)
     assert TOKEN not in str(raised.value)
-    assert raised.value.__cause__ is None and raised.value.__suppress_context__
+    # No exception it keeps holds the client's error, whose request names the address:
+    # ``from None`` would hide it, yet keep it as the context a crash reporter walks.
+    assert raised.value.__cause__ is None and raised.value.__context__ is None
     assert TOKEN not in caplog.text
 
 

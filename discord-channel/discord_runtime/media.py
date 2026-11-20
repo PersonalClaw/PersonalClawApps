@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from typing import Any
@@ -44,6 +45,9 @@ logger = logging.getLogger(__name__)
 MAX_FILE_BYTES = 20 * 1024 * 1024
 #: Core's cap on a message's attachments (``attachments.MAX_COUNT``).
 MAX_FILES = 20
+#: The most one message's files take in all, so a message costs the gateway one file's worth
+#: (core's ``attachments.MAX_BYTES``) however many it carries: Discord allows ten a message.
+MAX_MESSAGE_BYTES = 25 * 1024 * 1024
 #: The hosts Discord serves attachments from. A message names its attachments' addresses, so
 #: an address anywhere else is never fetched.
 CDN_HOSTS = frozenset({"cdn.discordapp.com", "media.discordapp.net"})
@@ -130,6 +134,7 @@ async def fetch(url: str, *, max_bytes: int) -> bytes:
     from personalclaw.sdk.net import http_client
 
     data = bytearray()
+    failed = ""
     try:
         async with http_client(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
             async with client.stream("GET", url) as resp:
@@ -142,7 +147,11 @@ async def fetch(url: str, *, max_bytes: int) -> bytes:
     except FetchRefused:
         raise
     except Exception as exc:  # noqa: BLE001 — told in its own words; the address is signed
-        raise FetchRefused(f"it could not be downloaded ({type(exc).__name__})") from None
+        failed = type(exc).__name__
+    if failed:
+        # Raised past the except block, so no exception it keeps holds the client's error, whose
+        # request names the signed address: ``from None`` hides that, yet keeps it as context.
+        raise FetchRefused(f"it could not be downloaded ({failed})")
     return bytes(data)
 
 
@@ -154,6 +163,7 @@ async def gather(provider: str, sender: str, message: dict[str, Any],
     trusted = lets_in(provider, sender)
     attachments: list[Attachment] = []
     spoken: list[str] = []
+    left = MAX_MESSAGE_BYTES
     for media in found:
         if not trusted:
             lines.append(media.line())
@@ -164,12 +174,17 @@ async def gather(provider: str, sender: str, message: dict[str, Any],
         if media.size > MAX_FILE_BYTES:
             lines.append(media.line("too large to read", with_size=True))
             continue
+        if left <= 0 or media.size > left:
+            lines.append(media.line(f"past the {MAX_MESSAGE_BYTES // (1024 * 1024)} MB one "
+                                    "message's files may take", with_size=True))
+            continue
         try:
-            data = await fetch(media.url, max_bytes=MAX_FILE_BYTES)
+            data = await fetch(media.url, max_bytes=min(MAX_FILE_BYTES, left))
         except FetchRefused as exc:
             logger.warning("discord: an attachment was not fetched: %s", exc)
             lines.append(media.line("which could not be fetched"))
             continue
+        left -= len(data)
         attachments.append(Attachment(name=media.name, mimetype=media.mimetype, data=data))
         if media.voice or media.kind == "audio":
             words = await _transcribed(media, data)
@@ -190,9 +205,9 @@ async def _transcribed(media: Media, data: bytes) -> str:
             return ""
     except Exception:  # noqa: BLE001
         return ""
-    suffix = os.path.splitext(media.name)[1][:8] or ".ogg"
-    fd, path = tempfile.mkstemp(suffix=suffix)
+    path = ""
     try:
+        fd, path = tempfile.mkstemp(suffix=_suffix(media.name, ".ogg"))
         with os.fdopen(fd, "wb") as out:
             out.write(data)
         words = await transcribe_audio(path)
@@ -200,13 +215,24 @@ async def _transcribed(media: Media, data: bytes) -> str:
         logger.warning("discord: a voice message could not be transcribed", exc_info=True)
         return ""
     finally:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+        if path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
     words = (words or "").strip()
     if not words:
         return ""
     words, _ = redact_exfiltration_urls(words)
     words, _ = redact_credentials(words)
     return f"[Voice memo transcription]\n{words}\n[End of transcription]"
+
+
+#: An extension a temp file may take from a sender's file name: a dot and a few plain characters.
+_SUFFIX = re.compile(r"\.[A-Za-z0-9]{1,7}")
+
+
+def _suffix(name: str, default: str) -> str:
+    """*name*'s extension when it is a plain one, else *default*: the name is the sender's."""
+    ext = os.path.splitext(name)[1]
+    return ext if _SUFFIX.fullmatch(ext) else default
