@@ -11,6 +11,12 @@ import { test } from "node:test";
 
 const EXTENSION = new URL("./extension/", import.meta.url);
 const DEBUG_PORT = 9222;
+// What the gateway hands a connector that pairs, and the code the owner made for it.
+const TOKEN = "connector-session";
+const PAIR = "connector-pair";
+const CODE = "ABCD-EFGH";
+// This extension's own id, as the browser gives its pages' messages.
+const EXTENSION_ID = "personalclaw-browser-connector";
 let loads = 0;
 
 function event() {
@@ -19,8 +25,11 @@ function event() {
     addListener(fn) {
       listeners.push(fn);
     },
+    // What each listener returned: a message listener's `true` keeps its answer coming.
     async fire(...args) {
-      for (const fn of listeners) await fn(...args);
+      const returned = [];
+      for (const fn of listeners) returned.push(await fn(...args));
+      return returned;
     },
     clear() {
       listeners.length = 0;
@@ -76,7 +85,7 @@ function makeBrowser({ tabGroups = true } = {}) {
   const debuggerOptions = { listsNewTabs: true };
 
   const api = {
-    runtime: { onMessage: event() },
+    runtime: { id: EXTENSION_ID, onMessage: event() },
     storage,
     tabs: {
       onActivated: event(),
@@ -233,13 +242,27 @@ function reply(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
 }
 
-// The gateway's connector routes, and the browser's own debugger list, on loopback.
+// The gateway's pairing and connector routes, and the browser's own debugger list, on loopback.
+// The connector routes take only the connector's own session: its token as a Bearer, with its pair.
 function makeGateway(browser) {
   const requests = [];
   let runs = [];
   let attached = true;
+  let attachedBy = "workstation";
   // What the tabs route answers a browser that is not the connector: null, or [status, code].
   let refusal = null;
+  const codes = new Set([CODE]);
+  // The session the gateway takes, or "" once the device is signed out.
+  let session = TOKEN;
+
+  function signedIn(init) {
+    const headers = init.headers || {};
+    return (
+      Boolean(session) &&
+      headers.Authorization === `Bearer ${session}` &&
+      headers["X-PersonalClaw-Pair"] === PAIR
+    );
+  }
 
   async function fetch(url, init = {}) {
     const u = new URL(url);
@@ -251,9 +274,40 @@ function makeGateway(browser) {
       return reply({}, 404);
     }
     const body = init.body === undefined ? undefined : JSON.parse(init.body);
-    requests.push({ method, path: u.pathname, body });
+    requests.push({
+      method,
+      path: u.pathname,
+      body,
+      headers: init.headers || {},
+      credentials: init.credentials,
+    });
+    if (u.pathname === "/api/devices/pair/complete" && method === "POST") {
+      if (!codes.has(body && body.code)) {
+        const message = "The pairing code did not verify.";
+        return reply({ error: { code: "device_pair_code_invalid", message } }, 401);
+      }
+      codes.delete(body.code);
+      session = TOKEN;
+      return reply({ ok: true, device_id: "workstation", kind: "connector", pair: PAIR, token: TOKEN });
+    }
+    if (u.pathname.startsWith("/api/browse/connector") && !signedIn(init)) {
+      return reply({ error: { code: "auth_required" } }, 401);
+    }
+    if (u.pathname === "/api/browse/connector" && method === "GET") {
+      return reply(
+        attached
+          ? { connected: true, device_id: attachedBy, reason: "", fix: "" }
+          : {
+              connected: false,
+              device_id: "",
+              reason: "No browser is attached.",
+              fix: "Attach one from its extension.",
+            },
+      );
+    }
     if (u.pathname === "/api/browse/connector") {
       attached = method !== "DELETE";
+      attachedBy = "workstation";
       refusal = null;
       return reply({ ok: true, device_id: "workstation" });
     }
@@ -289,6 +343,11 @@ function makeGateway(browser) {
     // Another browser attached in this one's place.
     replace() {
       refusal = [409, "browse_connector_replaced"];
+      attachedBy = "another-browser";
+    },
+    // The device's session ended: it expired, or the owner signed it out.
+    signOut() {
+      session = "";
     },
     // The owner revoked this browser's pairing.
     revoke() {
@@ -309,9 +368,16 @@ function makeGateway(browser) {
   };
 }
 
-function setup(options) {
+// A browser and its gateway. The connector has paired already unless `paired: false`.
+function setup({ paired = true, ...options } = {}) {
   const browser = makeBrowser(options);
+  if (paired) Object.assign(browser.api.storage.local.data, { token: TOKEN, pair: PAIR, deviceId: "workstation" });
   return { browser, gateway: makeGateway(browser) };
+}
+
+// The gateway calls the worker made, without the debugger's.
+function gatewayCalls(env) {
+  return env.gateway.requests;
 }
 
 // A fresh worker, as the browser starts it: the module's top level runs again.
@@ -579,4 +645,194 @@ test("a worker whose pairing was revoked stops asking", async () => {
   env.gateway.revoke();
   await worker.pollOnce();
   assert.equal(env.browser.api.storage.local.data.attached, false);
+});
+
+// ── pairing, the connector's own session, and the popup ───────────────────────────────────────
+
+test("pairing redeems the owner's code and keeps the session the gateway hands back", async () => {
+  const env = setup({ paired: false });
+  const worker = await startWorker(env);
+  await worker.pairWith(` ${CODE} `);
+  const [redeem] = gatewayCalls(env);
+  assert.equal(redeem.path, "/api/devices/pair/complete");
+  assert.deepEqual(redeem.body, { code: CODE, device_name: "Browser connector" });
+  assert.equal(redeem.credentials, "omit", "the pairing sent the browser's cookies");
+  assert.equal(redeem.headers.Authorization, undefined);
+  const kept = env.browser.api.storage.local.data;
+  assert.equal(kept.token, TOKEN);
+  assert.equal(kept.pair, PAIR);
+  assert.equal(kept.deviceId, "workstation");
+});
+
+test("every call to the gateway carries the connector's own session and none of the browser's cookies", async () => {
+  const env = setup();
+  const worker = await startWorker(env);
+  const tab = await grantRun(env, worker, "run-a1", "Check the lamp prices");
+  await env.browser.closeTab(tab.id);
+  await worker.status();
+  await worker.detach();
+  const calls = gatewayCalls(env);
+  assert.ok(calls.length >= 5, calls.map((c) => `${c.method} ${c.path}`).join(", "));
+  for (const call of calls) {
+    assert.equal(call.credentials, "omit", `${call.method} ${call.path} sent the browser's cookies`);
+    assert.equal(call.headers.Authorization, `Bearer ${TOKEN}`, `${call.method} ${call.path}`);
+    assert.equal(call.headers["X-PersonalClaw-Pair"], PAIR, `${call.method} ${call.path}`);
+  }
+});
+
+test("a browser that never paired attaches nothing and says to pair", async () => {
+  const env = setup({ paired: false });
+  const worker = await startWorker(env);
+  await assert.rejects(worker.attach(), /not paired yet: make a code in Settings → Devices & Access → Devices/);
+  assert.deepEqual(gatewayCalls(env), []);
+  assert.deepEqual(await worker.status(), {
+    gatewayBaseUrl: "http://127.0.0.1:10000",
+    paired: false,
+    attached: false,
+  });
+});
+
+test("a code the gateway refuses keeps nothing and says why", async () => {
+  const env = setup({ paired: false });
+  const worker = await startWorker(env);
+  await assert.rejects(worker.pairWith("WRNG-CODE"), /The pairing code did not verify\./);
+  await assert.rejects(worker.pairWith("  "), /enter the code from Settings → Devices & Access → Devices/);
+  assert.equal(env.browser.api.storage.local.data.token, undefined);
+});
+
+test("a session the gateway no longer takes is forgotten, and the worker stops asking", async () => {
+  const env = setup();
+  const worker = await startWorker(env);
+  await worker.attach();
+  env.gateway.signOut();
+  await worker.pollOnce();
+  const kept = env.browser.api.storage.local.data;
+  assert.equal(kept.attached, false);
+  assert.equal(kept.token, "");
+  assert.equal((await worker.status()).paired, false);
+});
+
+test("the gateway's address stays on this computer, and changing it forgets the pairing", async () => {
+  const env = setup();
+  const worker = await startWorker(env);
+  for (const bad of ["http://192.168.1.9:10000", "https://example.com", "file:///x", ""]) {
+    await assert.rejects(worker.setGateway(bad), /on this computer/);
+  }
+  assert.equal(env.browser.api.storage.local.data.token, TOKEN, "a refused address forgot the pairing");
+  await worker.setGateway("http://127.0.0.1:10000/");
+  assert.equal(env.browser.api.storage.local.data.token, TOKEN, "the same address forgot the pairing");
+  await worker.setGateway("http://localhost:10001");
+  const kept = env.browser.api.storage.local.data;
+  assert.equal(kept.gatewayBaseUrl, "http://localhost:10001");
+  assert.equal(kept.token, "");
+});
+
+// A popup page the double can drive: each element by its id, and a click that waits for its work.
+function popupPage() {
+  const elements = {};
+  const doc = {
+    getElementById(id) {
+      if (!elements[id]) {
+        const handlers = [];
+        elements[id] = {
+          value: "",
+          textContent: "",
+          hidden: false,
+          disabled: false,
+          addEventListener(type, fn) {
+            if (type === "click") handlers.push(fn);
+          },
+          async click() {
+            for (const fn of handlers) await fn();
+          },
+        };
+      }
+      return elements[id];
+    },
+  };
+  return { doc, el: (id) => doc.getElementById(id) };
+}
+
+async function openPopup(env) {
+  const page = popupPage();
+  const { wirePopup } = await import(new URL(`popup.js?popup=${loads}`, EXTENSION).href);
+  // Sent as the popup's messages are: from this extension's own page, never a tab.
+  const send = (message) =>
+    new Promise((resolve) =>
+      env.browser.api.runtime.onMessage.fire(message, { id: EXTENSION_ID }, resolve));
+  const popup = wirePopup({ doc: page.doc, send });
+  await popup.refresh();
+  return page;
+}
+
+test("the popup pairs and attaches this browser, then offers Detach", async () => {
+  const env = setup({ paired: false });
+  const worker = await startWorker(env);
+  const page = await openPopup(env);
+  assert.equal(page.el("state").textContent, "Not paired");
+  assert.equal(page.el("pairing").hidden, false);
+  assert.equal(page.el("where").textContent, "Make a code in Settings → Devices & Access → Devices.");
+  page.el("code").value = CODE;
+  await page.el("pair").click();
+  assert.equal(page.el("state").textContent, "Attached");
+  assert.equal(page.el("pairing").hidden, true);
+  assert.equal(page.el("code").value, "");
+  assert.equal(page.el("detach").hidden, false);
+  assert.equal(page.el("attach").hidden, true);
+  await page.el("detach").click();
+  assert.equal(page.el("state").textContent, "Paired, not attached");
+  assert.equal(page.el("said").textContent, "No browser is attached. Attach one from its extension.");
+  assert.equal(page.el("attach").hidden, false);
+  await worker.detach();
+});
+
+test("the popup shows a refusal in the gateway's own words", async () => {
+  const env = setup({ paired: false });
+  await startWorker(env);
+  const page = await openPopup(env);
+  page.el("code").value = "WRNG-CODE";
+  await page.el("pair").click();
+  assert.equal(page.el("state").textContent, "Not paired");
+  assert.equal(page.el("said").textContent, "The pairing code did not verify.");
+  assert.equal(page.el("pair").disabled, false);
+  page.el("gateway").value = "http://192.168.1.9:10000";
+  await page.el("save-gateway").click();
+  assert.match(page.el("said").textContent, /on this computer/);
+});
+
+test("a message from a tab or another extension controls nothing in the worker", async () => {
+  const env = setup({ paired: false });
+  const worker = await startWorker(env);
+  const before = structuredClone(env.browser.api.storage.local.data);
+  const answered = [];
+  const senders = [
+    { id: EXTENSION_ID, tab: { id: 1 }, url: "https://bank.example.com/accounts" },
+    { id: "another-extension" },
+    {},
+  ];
+  const messages = [
+    { control: "pair", code: CODE },
+    { control: "gateway", url: "http://localhost:10001" },
+    { control: "status" },
+    { control: "attach" },
+    { control: "detach" },
+    { control: "contract", request: { method: "tabs.list" } },
+  ];
+  try {
+    for (const sender of senders) {
+      for (const message of messages) {
+        const [kept] = await env.browser.api.runtime.onMessage.fire(
+          message, sender, (answer) => answered.push(answer));
+        assert.equal(kept, false, `${message.control} from ${JSON.stringify(sender)} was taken`);
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(answered, []);
+    assert.deepEqual(gatewayCalls(env), []);
+    assert.deepEqual(env.browser.api.storage.local.data, before);
+  } finally {
+    // A worker that took a tab's pair would be polling now: stopped, so the run still ends.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await worker.detach().catch(() => {});
+  }
 });

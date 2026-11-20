@@ -1,8 +1,12 @@
 {
   "manifest_version": 3,
   "name": "PersonalClaw Browser Connector",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Lets your PersonalClaw gateway run browse tasks in tabs they open for themselves. Loopback only; no listening socket.",
+  "action": {
+    "default_title": "PersonalClaw Browser Connector",
+    "default_popup": "popup.html"
+  },
   "background": {
     "service_worker": "background.js",
     "type": "module"

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>PersonalClaw Browser Connector</title>
+    <style>
+      body { font: 13px/1.4 system-ui, sans-serif; margin: 12px; width: 280px; }
+      h1 { font-size: 14px; margin: 0 0 8px; }
+      #state { font-weight: 600; margin: 0 0 4px; }
+      #said { margin: 0 0 8px; }
+      label { display: block; margin: 8px 0 2px; }
+      input { box-sizing: border-box; width: 100%; padding: 4px; }
+      button { margin-top: 8px; }
+      details { margin-top: 12px; }
+      .hint { color: GrayText; margin: 2px 0 0; }
+    </style>
+  </head>
+  <body>
+    <h1>PersonalClaw Browser Connector</h1>
+    <p id="state" role="status" aria-live="polite"></p>
+    <p id="said"></p>
+    <section id="pairing">
+      <label for="code">Pairing code</label>
+      <input id="code" autocomplete="off" spellcheck="false" />
+      <p id="where" class="hint"></p>
+      <button id="pair" type="button">Pair</button>
+    </section>
+    <button id="attach" type="button" hidden>Attach</button>
+    <button id="detach" type="button" hidden>Detach</button>
+    <details>
+      <summary>Gateway address</summary>
+      <label for="gateway">On this computer only</label>
+      <input id="gateway" inputmode="url" spellcheck="false" />
+      <button id="save-gateway" type="button">Save</button>
+    </details>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

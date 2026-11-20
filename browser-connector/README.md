@@ -30,12 +30,17 @@ When a run ends, its tab stays where it is, as yours, and nothing reaches it any
 
 ## How it connects
 
-1. **Pair once.** The extension redeems a pairing code from **Settings → Devices**, exactly
-   like a phone. That mints the ordinary session cookie of a paired device — the connector is
-   a normal paired device, listed in the same registry and revocable the same way. No second
-   credential type.
-2. **Attach.** The extension tells the gateway this browser is connected
-   (`POST /api/browse/connector`). Attaching announces no page.
+1. **Pair once.** Open the extension's popup and enter a pairing code from
+   **Settings → Devices & Access → Devices**. The gateway takes the code from the extension's
+   own origin and hands back a session that reaches the connector's routes and nothing else.
+   The extension keeps it in its storage and sends it as a Bearer, with its pair, on every
+   call. It never sends your browser's cookies, so your own dashboard sign-in in this browser
+   is left as it was. The connector is listed under Devices like any paired device, and
+   signing it out there ends its session; the popup then asks for a new code. Pairing from the
+   extension needs a PersonalClaw newer than 0.3.9: an older gateway refuses the extension's own
+   origin, and the popup shows its refusal.
+2. **Attach.** Pairing attaches this browser (`POST /api/browse/connector`), and the popup's
+   **Detach** and **Attach** take it off and put it back. Attaching announces no page.
 3. **Answer runs.** While attached, the extension asks the gateway once a second whether an
    allowed run needs a tab (`GET /api/browse/connector/tabs`), opens one when it does, and
    announces it or reports its end (`POST /api/browse/connector/tabs/<run>`). If the gateway
@@ -52,7 +57,7 @@ surface itself; it only *reports* the loopback URL of the run's tab.
 |---|---|
 | `tabs` | open the run's tab, and act on that tab by its id |
 | `tabGroups` | name the run's group after the task, and notice when you close it |
-| `storage` | the gateway URL and debugger port, and which tab belongs to which run |
+| `storage` | the gateway URL and debugger port, the connector's session, and which tab belongs to which run |
 
 Host permissions are loopback-only: `127.0.0.1` and `localhost`, over http and ws.
 
@@ -97,8 +102,10 @@ git -C "$DEST" sparse-checkout set browser-connector
 It goes into the PersonalClaw home: `$PERSONALCLAW_HOME` when you run PersonalClaw on a home of
 its own, else `~/.personalclaw`. Then, in your browser's extensions page (developer mode),
 **Load unpacked** → `$DEST/browser-connector/extension`. Start the browser with a loopback
-remote-debugging port, and pair the connector from **Settings → Devices**. (On Windows, use the
-equivalent `%USERPROFILE%` path.)
+remote-debugging port, open the extension's popup, and pair it with a code from
+**Settings → Devices & Access → Devices**. (On Windows, use the equivalent `%USERPROFILE%`
+path.) The popup's gateway address is `http://127.0.0.1:10000` until you change it, and it
+takes an address on this computer only.
 
 ## Security posture
 
@@ -118,4 +125,6 @@ the loopback rail (public endpoints and gateways refused), and the manifest's pe
 `test_extension.py` runs `test_extension.mjs` with Node's own test runner (Node.js 18 or
 newer; no npm install): it loads the real worker against a browser double and checks which tab
 the run opens, which page it announces, which tab each verb touches, and what it reports when
-the run's group closes or its tab is taken over.
+the run's group closes or its tab is taken over. It also checks the pairing: the code redeemed
+without the browser's cookies, the session sent as a Bearer on every call, a refused code or an
+ended session kept by nothing, and the popup's pair, attach and detach.
