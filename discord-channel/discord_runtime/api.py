@@ -353,6 +353,7 @@ class HTTPDiscordAPI(DiscordAPI):
         while True:
             attempt += 1
             await self._await_budget(route)
+            failed, transient = "", False
             try:
                 resp = await self._client.request(
                     method, path,
@@ -361,12 +362,21 @@ class HTTPDiscordAPI(DiscordAPI):
                     files=files,
                 )
             except (httpx.TransportError, httpx.TimeoutException) as exc:
-                if attempt > self._max_retries:
-                    raise DiscordAPIError(
-                        f"network error after {self._max_retries} retries: {exc}", route=route
-                    ) from exc
-                await self._sleep(min(2 ** (attempt - 1), MAX_RETRY_AFTER))
-                continue
+                failed, transient = type(exc).__name__, True
+            except httpx.RequestError as exc:
+                failed = type(exc).__name__
+            if failed:
+                if transient and attempt <= self._max_retries:
+                    await self._sleep(min(2 ** (attempt - 1), MAX_RETRY_AFTER))
+                    continue
+                # Raised past the except block, in words of its own: the client's error holds its
+                # request, whose headers hold the bot token, so it is kept as neither cause nor
+                # context, and its text is never quoted.
+                raise DiscordAPIError(
+                    f"network error after {self._max_retries} retries ({failed})" if transient
+                    else f"the request could not be made ({failed})",
+                    route=route,
+                )
 
             if resp.status_code == 429:
                 retry_after = self._record_429(route, resp)
@@ -401,13 +411,17 @@ class HTTPDiscordAPI(DiscordAPI):
 
     @staticmethod
     def _parse_body(resp: httpx.Response, route: str) -> Any:
+        parsed = True
         try:
-            return resp.json()
-        except ValueError as exc:
+            body = resp.json()
+        except ValueError:  # said in its own words below, with no cause
+            parsed = False
+        if not parsed:
             raise DiscordAPIError(
                 f"non-JSON response (status {resp.status_code})",
                 status=resp.status_code, route=route,
-            ) from exc
+            )
+        return body
 
     @staticmethod
     def _as_dict(body: Any) -> dict[str, Any]:
