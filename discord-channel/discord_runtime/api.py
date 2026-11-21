@@ -36,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
+import re
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Awaitable, Callable
@@ -83,6 +84,27 @@ COMPONENT_ACTION_ROW = 1
 COMPONENT_BUTTON = 2
 BUTTON_STYLE_SUCCESS = 3
 BUTTON_STYLE_DANGER = 4
+
+
+#: The starts of request paths that hold a credential: an interaction's token, which can post and
+#: edit that interaction's follow-ups as the bot for about fifteen minutes, and a webhook's. A
+#: route (what an error says, and the rate-limit bucket's key) names the id and the token rather
+#: than quoting them, whatever follows, so no error holds the token and the buckets keep one entry
+#: for every callback, not one apiece.
+_CREDENTIAL_PATHS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"/interactions/[^/?#]+/[^/?#]+"), "/interactions/{id}/{token}"),
+    (re.compile(r"/webhooks/[^/?#]+/[^/?#]+"), "/webhooks/{id}/{token}"),
+)
+
+
+def _route(method: str, path: str) -> str:
+    """The route a request is known by: its method and path, with any credential at its start
+    named rather than quoted (:data:`_CREDENTIAL_PATHS`), and what follows kept."""
+    for pattern, label in _CREDENTIAL_PATHS:
+        found = pattern.match(path)
+        if found:
+            return f"{method} {label}{path[found.end():]}"
+    return f"{method} {path}"
 
 
 class DiscordAPIError(Exception):
@@ -348,11 +370,12 @@ class HTTPDiscordAPI(DiscordAPI):
         channel never stalls another. A 429 is recorded (global vs bucket) and
         retried; 5xx get exponential backoff; any other 4xx is a caller error and
         raises immediately, since retrying just repeats it."""
-        route = f"{method} {path}"
+        route = _route(method, path)
         attempt = 0
         while True:
             attempt += 1
             await self._await_budget(route)
+            failed, transient = "", False
             try:
                 resp = await self._client.request(
                     method, path,
@@ -361,12 +384,21 @@ class HTTPDiscordAPI(DiscordAPI):
                     files=files,
                 )
             except (httpx.TransportError, httpx.TimeoutException) as exc:
-                if attempt > self._max_retries:
-                    raise DiscordAPIError(
-                        f"network error after {self._max_retries} retries: {exc}", route=route
-                    ) from exc
-                await self._sleep(min(2 ** (attempt - 1), MAX_RETRY_AFTER))
-                continue
+                failed, transient = type(exc).__name__, True
+            except httpx.RequestError as exc:
+                failed = type(exc).__name__
+            if failed:
+                if transient and attempt <= self._max_retries:
+                    await self._sleep(min(2 ** (attempt - 1), MAX_RETRY_AFTER))
+                    continue
+                # Raised past the except block, in words of its own: the client's error holds its
+                # request, whose headers hold the bot token, so it is kept as neither cause nor
+                # context, and its text is never quoted.
+                raise DiscordAPIError(
+                    f"network error after {self._max_retries} retries ({failed})" if transient
+                    else f"the request could not be made ({failed})",
+                    route=route,
+                )
 
             if resp.status_code == 429:
                 retry_after = self._record_429(route, resp)
@@ -401,13 +433,17 @@ class HTTPDiscordAPI(DiscordAPI):
 
     @staticmethod
     def _parse_body(resp: httpx.Response, route: str) -> Any:
+        parsed = True
         try:
-            return resp.json()
-        except ValueError as exc:
+            body = resp.json()
+        except ValueError:  # said in its own words below, with no cause
+            parsed = False
+        if not parsed:
             raise DiscordAPIError(
                 f"non-JSON response (status {resp.status_code})",
                 status=resp.status_code, route=route,
-            ) from exc
+            )
+        return body
 
     @staticmethod
     def _as_dict(body: Any) -> dict[str, Any]:

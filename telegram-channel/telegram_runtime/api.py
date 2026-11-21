@@ -176,6 +176,7 @@ class HTTPTelegramAPI(TelegramAPI):
         attempt = 0
         while True:
             attempt += 1
+            failed, transient = "", False
             try:
                 resp = await self._client.post(
                     f"/{method}",
@@ -185,13 +186,21 @@ class HTTPTelegramAPI(TelegramAPI):
                     timeout=read_timeout,
                 )
             except (httpx.TransportError, httpx.TimeoutException) as exc:
-                if attempt > self._max_retries:
-                    raise TelegramAPIError(
-                        f"network error after {self._max_retries} retries: {exc}",
-                        method=method,
-                    ) from exc
-                await self._sleep(min(2 ** (attempt - 1), MAX_RETRY_AFTER))
-                continue
+                failed, transient = type(exc).__name__, True
+            except httpx.RequestError as exc:
+                failed = type(exc).__name__
+            if failed:
+                if transient and attempt <= self._max_retries:
+                    await self._sleep(min(2 ** (attempt - 1), MAX_RETRY_AFTER))
+                    continue
+                # Raised past the except block, in words of its own: the client's error holds its
+                # request, whose URL holds the bot token, so it is kept as neither cause nor
+                # context, and its text (which can quote the URL) is never quoted.
+                raise TelegramAPIError(
+                    f"network error after {self._max_retries} retries ({failed})" if transient
+                    else f"the request could not be made ({failed})",
+                    method=method,
+                )
 
             if resp.status_code == 429:
                 retry_after = self._retry_after(resp)
@@ -243,12 +252,13 @@ class HTTPTelegramAPI(TelegramAPI):
 
     @staticmethod
     def _parse_body(resp: httpx.Response, method: str) -> dict[str, Any]:
+        parsed = True
         try:
             body = resp.json()
-        except Exception as exc:
-            raise TelegramAPIError(
-                f"non-JSON response (status {resp.status_code})", method=method,
-            ) from exc
+        except Exception:  # noqa: BLE001 — said in its own words below, with no cause
+            parsed = False
+        if not parsed:
+            raise TelegramAPIError(f"non-JSON response (status {resp.status_code})", method=method)
         if not isinstance(body, dict):
             raise TelegramAPIError("unexpected response shape", method=method)
         return body
