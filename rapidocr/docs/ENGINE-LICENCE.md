@@ -121,8 +121,10 @@ took `opencv-python` 5.1.0.95 the day it was published, which measures 301.0 MB 
 itself (326.1 MB in all, over the ceiling), and whose macOS wheel needs macOS 15. It is
 pinned at 4.14.0.94 instead:
 
-- it bundles FFmpeg 8.1.2, which fixes CVE-2026-8461; the 5.0.0.93 the lock held before
-  bundles an older FFmpeg;
+- its Linux wheel bundles FFmpeg 8.1.2, the release that fixes CVE-2026-8461; its macOS
+  wheel bundles FFmpeg 7.1.1 (both read from the wheels' own `libavutil`). RapidOCR calls
+  OpenCV's image functions only (`imread`, `imdecode`, `resize` and the like), never the video
+  I/O that FFmpeg serves;
 - its macOS wheel installs on macOS 13 and later;
 - the set fits the ceiling on both platforms, so the ceiling does not move.
 
