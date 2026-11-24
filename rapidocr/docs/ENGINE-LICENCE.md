@@ -121,10 +121,13 @@ took `opencv-python` 5.1.0.95 the day it was published, which measures 301.0 MB 
 itself (326.1 MB in all, over the ceiling), and whose macOS wheel needs macOS 15. It is
 pinned at 4.14.0.94 instead:
 
-- its Linux wheel bundles FFmpeg 8.1.2, the release that fixes CVE-2026-8461; its macOS
-  wheel bundles FFmpeg 7.1.1 (both read from the wheels' own `libavutil`). RapidOCR calls
-  OpenCV's image functions only (`imread`, `imdecode`, `resize` and the like), never the video
-  I/O that FFmpeg serves;
+- its Linux wheel bundles FFmpeg 8.1.2, the release that fixes CVE-2026-8461. Its macOS wheel
+  bundles FFmpeg 7.1.1, which is in CVE-2026-8461's affected range (before 8.1.2); the flaw is
+  in the MagicYUV video decoder, which only OpenCV's video I/O reaches, and RapidOCR never
+  calls it. It uses OpenCV's image functions only (`imread`, `imdecode`, `resize` and the
+  like), and those decode with OpenCV's own image codecs. Both versions are read from the
+  wheels' own `libavutil`. The macOS pin moves once a build for macOS 13 bundles FFmpeg 8.1.2
+  or later, or once the floor is macOS 15 and 5.1.0.95 fits the ceiling;
 - its macOS wheel installs on macOS 13 and later;
 - the set fits the ceiling on both platforms, so the ceiling does not move.
 
