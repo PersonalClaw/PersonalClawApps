@@ -15,7 +15,10 @@
   ],
   "dependencies": {
     "pythonDependencies": [
-      "rapidocr-onnxruntime==1.2.3"
+      "rapidocr-onnxruntime==1.2.3",
+      "opencv-python==4.14.0.94",
+      "shapely==2.2.0",
+      "pyclipper==1.4.0"
     ]
   },
   "provider": {

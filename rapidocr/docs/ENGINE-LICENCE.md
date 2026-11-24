@@ -57,8 +57,8 @@ have. Licences read from each installed distribution's own metadata:
 | distribution | version | licence |
 | --- | --- | --- |
 | `rapidocr-onnxruntime` | 1.2.3 | `Apache-2.0` |
-| `opencv-python` | 5.0.0.93 | `Apache-2.0` |
-| `shapely` | 2.1.2 | `BSD-3-Clause` |
+| `opencv-python` | 4.14.0.94 | `Apache-2.0` |
+| `shapely` | 2.2.0 | `BSD-3-Clause` |
 | `pyclipper` | 1.4.0 | `MIT` |
 
 `onnxruntime`, `Pillow`, `numpy`, `protobuf`, `flatbuffers`, `PyYAML`, `packaging` and
@@ -74,51 +74,57 @@ user who does have a distribution policy can read it rather than discover it.
 
 ## Footprint
 
-Measured as the on-disk size, in a PersonalClaw dev install's `site-packages`, of exactly
-the distributions the engine adds. **The delta is platform-dependent, so it is recorded per
-platform** — the per-distribution table below is macOS arm64; the ubuntu-24.04 x86_64
-number under it is what CI measures:
+Measured as the on-disk size of exactly the distributions the engine adds: the files each one
+installs, from the wheel the bundle lock names for that platform
+(`.github/bundle-lock/<platform>/uv.lock`). **The delta is platform-dependent, so it is
+recorded per platform.** `opencv-python`'s manylinux wheel carries far more shared-object
+payload than the macOS one.
 
-| distribution | on-disk |
-| --- | --- |
-| `opencv-python` (`cv2/`) | 124.9 MB |
-| `rapidocr-onnxruntime` (incl. 13.8 MB of weights) | 13.8 MB |
-| `shapely` | 6.9 MB |
-| `pyclipper` | 0.7 MB |
-| **delta** | **≈ 146.6 MB** |
+| distribution | macOS arm64 | ubuntu-24.04 x86_64 |
+| --- | --- | --- |
+| `opencv-python` 4.14.0.94 | 125.3 MB | 211.0 MB |
+| `rapidocr-onnxruntime` 1.2.3 (incl. 13.8 MB of weights) | 13.8 MB | 13.8 MB |
+| `shapely` 2.2.0 | 5.3 MB | 7.8 MB |
+| `pyclipper` 1.4.0 | 0.7 MB | 3.6 MB |
+| **delta** | **145.1 MB** | **236.2 MB** |
 
-Reference point: the dev install this was measured in is 1,556 MB of `site-packages`, so
-the app adds about 9% — and it adds nothing at all to a user who does not install it,
-which is the reason it is an app and not a core dependency.
+`test_footprint_under_ceiling` prints each installed distribution's own figure, so every CI
+run shows this table for the runner it ran on. The app adds nothing at all to a user who does
+not install it, which is the reason it is an app and not a core dependency.
 
-`opencv-python` is 85% of the delta and is a hard requirement of RapidOCR 1.2.x's
-preprocessing, not something this bundle chose. It cannot be swapped for
+`opencv-python` is most of the delta (86% on macOS, 89% on Linux) and is a hard requirement
+of RapidOCR 1.2.x's preprocessing, not something this bundle chose. It cannot be swapped for
 `opencv-python-headless`: the engine requires that exact distribution name, so declaring the
 headless build would install it *alongside*, not instead of, the one it asks for.
 
-On **ubuntu-24.04 x86_64** the same four distributions at the same pinned versions measure
-**224.0 MB** — 77 MB more than the macOS figure above — because `opencv-python`'s manylinux
-wheel carries far more shared-object payload than the macOS one. Measured on the CI runner
-(PersonalClawApps run 35454957517, 2026-09-19), not inferred.
-
 **Ceiling: 250 MB.** `test_provider.py::test_footprint_under_ceiling` measures the installed
 distributions and fails above it, so dependency growth has to be argued for in a PR rather
-than arriving unnoticed. The ceiling is set above the LARGEST measured platform, with 26 MB
-of headroom, and it was raised from 200 MB for exactly one reason, recorded here so it is
-not mistaken for a concession: the original 200 MB was set from the macOS measurement alone,
-and the same dependency set is 224.0 MB on the platform CI runs. That is a measurement
-correction, not dependency growth — the set, its versions and its licences are unchanged.
+than arriving unnoticed. It sits above the largest platform's delta with 13.8 MB of headroom.
+It was raised from 200 MB once, because the first figure was the macOS measurement alone and
+the same set measured 224.0 MB on the CI runner (PersonalClawApps run 35454957517,
+2026-09-19). That was a measurement correction, not dependency growth.
 
 ## Why the engine is pinned exactly
 
 `app.json` declares `rapidocr-onnxruntime==1.2.3`, not a range. Every value on this page —
-the engine id, the weight filenames, the transitive set and the 146.6 MB delta — was
+the engine id, the weight filenames, the transitive set and the per-platform deltas — was
 measured against that one resolution, and two tests read this page as the authority
 (`test_note_records_the_engine_id_licence_and_source`, `test_footprint_under_ceiling`). A
 floating `>=1.2.3,<2` therefore makes the note false the day upstream publishes: measured
 on a CI runner, `1.4.4` resolves to **226.6 MB** — over the ceiling — and records a version
 this page does not. Moving the pin is a deliberate PR that re-measures every table here,
 which is exactly the argument the ceiling exists to force.
+
+The engine's own requirements on `opencv-python`, `shapely` and `pyclipper` are open, so
+`app.json` pins those three too. Pinning the engine alone was not enough: a fresh resolution
+took `opencv-python` 5.1.0.95 the day it was published, which measures 301.0 MB on Linux by
+itself (326.1 MB in all, over the ceiling), and whose macOS wheel needs macOS 15. It is
+pinned at 4.14.0.94 instead:
+
+- it bundles FFmpeg 8.1.2, which fixes CVE-2026-8461; the 5.0.0.93 the lock held before
+  bundles an older FFmpeg;
+- its macOS wheel installs on macOS 13 and later;
+- the set fits the ceiling on both platforms, so the ceiling does not move.
 
 ## Candidates not chosen
 
