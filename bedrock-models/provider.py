@@ -38,6 +38,7 @@ from personalclaw.sdk.model import (
     EVENT_TOOL_CALL,
     CancelOutcome,
     LLMEvent,
+    InFlightRequests,
     ModelProvider,
     closing_stream,
     until_terminal,
@@ -208,6 +209,51 @@ _CACHE_WRITE_KEY = "cacheWriteInputTokens"
 
 # Sentinel pushed onto the bridge queue when the worker thread finishes.
 _STREAM_DONE = object()
+
+
+class _Reading:
+    """The boto stream one request reads in its worker thread, kept where a stop can close it.
+
+    ``converse_stream`` answers with a blocking ``EventStream`` the worker thread iterates, out of
+    the event loop's reach: cancelling the task that drains it leaves the thread reading, and the
+    turn waits for the model's answer to end. :meth:`cut` closes the stream, so the thread's read
+    returns and it leaves its loop; a request cut before its stream opened closes it on arrival.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._stream: Any = None
+        self._cut = False
+
+    @property
+    def was_cut(self) -> bool:
+        with self._lock:
+            return self._cut
+
+    def opened(self, stream: Any) -> Any:
+        """*stream*, the response's ``stream``, kept where :meth:`cut` reaches it (closed at once
+        for a request already cut)."""
+        with self._lock:
+            self._stream, cut = stream, self._cut
+        if cut:
+            _close_stream(stream)
+        return stream
+
+    def cut(self) -> None:
+        """Close the stream the worker thread reads, or the one it is about to open."""
+        with self._lock:
+            self._cut, stream = True, self._stream
+        if stream is not None:
+            _close_stream(stream)
+
+
+def _close_stream(stream: Any) -> None:
+    close = getattr(stream, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:  # noqa: BLE001 - a stream that will not close has ended its read anyway
+            logger.debug("bedrock: closing a cut stream raised", exc_info=True)
 
 #: Whose stream this provider reads, and the event its answer ends with, as a cut-off names them.
 _ADAPTER = "Bedrock"
@@ -1031,6 +1077,8 @@ class BedrockProvider(ModelProvider):
         #                           "content": [{"text": "..."}]}]
         self._history: list[dict[str, Any]] = []
         self._last_context_pct: float = 0.0
+        #: The requests this provider has open, so a stop (:meth:`cancel`) closes them where they are.
+        self._requests = InFlightRequests()
 
     @property
     def sampling_temperature(self) -> float | None:
@@ -1135,6 +1183,12 @@ class BedrockProvider(ModelProvider):
     # ── Streaming ─────────────────────────────────────────────────────
 
     async def stream(self, message: str) -> AsyncIterator[LLMEvent]:
+        """:meth:`_stream`, relayed so :meth:`cancel` can close it."""
+        async with closing_stream(self._requests.relay(self._stream(message))) as events:
+            async for event in events:
+                yield event
+
+    async def _stream(self, message: str) -> AsyncIterator[LLMEvent]:
         """Stream a Converse completion, bridging the sync boto stream.
 
         The blocking ``converse_stream`` call and its ``EventStream``
@@ -1161,12 +1215,15 @@ class BedrockProvider(ModelProvider):
 
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[Any] = asyncio.Queue()
+        reading = _Reading()
 
         def _pump() -> None:
             """Run in a worker thread: drive the sync boto stream onto the queue."""
             try:
                 response = self._client.converse_stream(**request)
-                for event in response.get("stream", []):
+                for event in reading.opened(response.get("stream", [])):
+                    if reading.was_cut:
+                        break
                     if "contentBlockDelta" in event:
                         delta = event["contentBlockDelta"].get("delta", {})
                         text = delta.get("text", "")
@@ -1179,7 +1236,8 @@ class BedrockProvider(ModelProvider):
                         usage = event["metadata"].get("usage", {})
                         loop.call_soon_threadsafe(queue.put_nowait, ("usage", usage))
             except Exception as exc:  # surface to the consumer, never crash the thread
-                loop.call_soon_threadsafe(queue.put_nowait, ("error", exc))
+                if not reading.was_cut:  # a stream a stop closed has nobody left to tell
+                    loop.call_soon_threadsafe(queue.put_nowait, ("error", exc))
             finally:
                 loop.call_soon_threadsafe(queue.put_nowait, _STREAM_DONE)
 
@@ -1204,6 +1262,7 @@ class BedrockProvider(ModelProvider):
             missing=_MESSAGE_STOP,
             model=model_id,
         )
+        read = False
         try:
             async with closing_stream(answer) as items:
                 async for kind, payload in items:
@@ -1218,7 +1277,12 @@ class BedrockProvider(ModelProvider):
                             payload.get("outputTokens", output_tokens) or output_tokens
                         )
                         cache_creation_tokens, cache_read_tokens = _read_cache_usage(payload)
+            read = True
         finally:
+            if not read:
+                # Stopped (a cancel, a caller that stopped reading) or failed: close the stream the
+                # thread reads, so the join below waits for nothing but its next read.
+                reading.cut()
             await worker  # ensure the thread is joined even on cancellation
 
         if input_tokens > 0:
@@ -1241,6 +1305,28 @@ class BedrockProvider(ModelProvider):
     # ── Stateless completion (native loop) ────────────────────────────
 
     async def complete(
+        self,
+        messages: list[dict],
+        *,
+        tools: list[dict] | None = None,
+        model: str | None = None,
+        reasoning_effort: str = "",
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[LLMEvent]:
+        """:meth:`_complete`, relayed so :meth:`cancel` can close it: a stop ends the turn with a
+        terminal event that says it was cancelled, and none of the cut answer's calls."""
+        answer = self._complete(
+            messages,
+            tools=tools,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            max_tokens=max_tokens,
+        )
+        async with closing_stream(self._requests.relay(answer)) as events:
+            async for event in events:
+                yield event
+
+    async def _complete(
         self,
         messages: list[dict],
         *,
@@ -1311,12 +1397,15 @@ class BedrockProvider(ModelProvider):
 
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[Any] = asyncio.Queue()
+        reading = _Reading()
 
         def _pump() -> None:
             """Run in a worker thread: drive the sync boto stream onto the queue."""
             try:
                 response = self._client.converse_stream(**request)
-                for event in response.get("stream", []):
+                for event in reading.opened(response.get("stream", [])):
+                    if reading.was_cut:
+                        break
                     if "contentBlockStart" in event:
                         start = event["contentBlockStart"]
                         block_index = start.get("contentBlockIndex", 0)
@@ -1346,7 +1435,8 @@ class BedrockProvider(ModelProvider):
                         usage = event["metadata"].get("usage", {})
                         loop.call_soon_threadsafe(queue.put_nowait, ("usage", usage))
             except Exception as exc:  # surface to the consumer, never crash the thread
-                loop.call_soon_threadsafe(queue.put_nowait, ("error", exc))
+                if not reading.was_cut:  # a stream a stop closed has nobody left to tell
+                    loop.call_soon_threadsafe(queue.put_nowait, ("error", exc))
             finally:
                 loop.call_soon_threadsafe(queue.put_nowait, _STREAM_DONE)
 
@@ -1372,6 +1462,7 @@ class BedrockProvider(ModelProvider):
             missing=_MESSAGE_STOP,
             model=model_id,
         )
+        read = False
         try:
             async with closing_stream(answer) as items:
                 async for kind, payload in items:
@@ -1397,7 +1488,12 @@ class BedrockProvider(ModelProvider):
                             payload.get("outputTokens", output_tokens) or output_tokens
                         )
                         cache_creation_tokens, cache_read_tokens = _read_cache_usage(payload)
+            read = True
         finally:
+            if not read:
+                # Stopped (a cancel, a caller that stopped reading) or failed: close the stream the
+                # thread reads, so the join below waits for nothing but its next read.
+                reading.cut()
             await worker  # ensure the thread is joined even on cancellation
 
         # The answer's calls, once its `messageStop` has said how it ended, in the order they
@@ -1447,8 +1543,10 @@ class BedrockProvider(ModelProvider):
         return self._last_context_pct
 
     async def cancel(self, *, wait_ack_timeout: float = 0.0) -> CancelOutcome:
-        """No turn-level abort wired yet; the worker is joined per-stream."""
-        return "no_turn"
+        """Close the request in flight, so a stop ends the turn now instead of when the model's
+        answer does: the worker thread's stream is closed (:class:`_Reading`) and the answer's
+        calls are never emitted. ``"acked"`` when one was open, ``"no_turn"`` when none was."""
+        return await self._requests.cancel(wait_ack_timeout=wait_ack_timeout)
 
 
 # ── Capability descriptor ────────────────────────────────────────────────
