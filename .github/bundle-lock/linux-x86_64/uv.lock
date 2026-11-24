@@ -186,7 +186,10 @@ piper-tts = [
     { name = "piper-tts" },
 ]
 rapidocr = [
+    { name = "opencv-python" },
+    { name = "pyclipper" },
     { name = "rapidocr-onnxruntime" },
+    { name = "shapely" },
 ]
 sentence-transformers = [
     { name = "faiss-cpu" },
@@ -231,16 +234,19 @@ requires-dist = [
     { name = "openai", marker = "extra == 'openrouter-models'", specifier = ">=1.0" },
     { name = "openai", marker = "extra == 'together-models'", specifier = ">=1.0" },
     { name = "openai", marker = "extra == 'vllm-models'", specifier = ">=1.0" },
+    { name = "opencv-python", marker = "extra == 'rapidocr'", specifier = "==4.14.0.94" },
     { name = "personalclaw", git = "https://github.com/PersonalClaw/PersonalClaw?rev=6c599ba9cb31d169d5fc9c7d34bd3ececc623d1b" },
     { name = "pillow", marker = "extra == 'design-critique'", specifier = ">=10,<14" },
     { name = "piper-tts", marker = "extra == 'piper-tts'", specifier = ">=1.2" },
     { name = "pyannote-audio", marker = "extra == 'diarization-pyannote'", specifier = ">=3.1" },
+    { name = "pyclipper", marker = "extra == 'rapidocr'", specifier = "==1.4.0" },
     { name = "pytest", specifier = "==9.1.1" },
     { name = "pytest-asyncio", specifier = "==1.4.0" },
     { name = "pytest-xdist", specifier = "==3.8.0" },
     { name = "qdrant-client", marker = "extra == 'vector-store-qdrant'", specifier = ">=1.9,<2" },
     { name = "rapidocr-onnxruntime", marker = "extra == 'rapidocr'", specifier = "==1.2.3" },
     { name = "sentence-transformers", marker = "extra == 'sentence-transformers'", specifier = ">=5.6" },
+    { name = "shapely", marker = "extra == 'rapidocr'", specifier = "==2.2.0" },
     { name = "sherpa-onnx", marker = "extra == 'diarization-onnx'", specifier = ">=1.10" },
     { name = "slack-sdk", marker = "extra == 'slack-channel'", specifier = ">=3.27,<4" },
     { name = "torch", marker = "extra == 'diarization-pyannote'", specifier = ">=2.0" },
@@ -1402,15 +1408,15 @@ wheels = [
 
 [[package]]
 name = "opencv-python"
-version = "5.0.0.93"
+version = "4.14.0.94"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/79/4c/a438d23e09ce2033c09f7b784ad2fbdb0adf529e434101ed28f142226f98/opencv_python-5.0.0.93.tar.gz", hash = "sha256:66aac3e5b5faa48d4025816592f3af19e4bfc2c68dec067bae2dbb4ca10aa9e2", size = 81802749, upload-time = "2026-07-02T06:59:53.815Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ed/e8/c2959c0f969ea4ae96b55ad10c108c0410de4e8b3550d9941a4cfdd52703/opencv_python-4.14.0.94.tar.gz", hash = "sha256:afadc76a38a07713a4c2b4702da917cf0ed489be57e2a40a34e670189731de7d", size = 96400225, upload-time = "2026-07-28T19:23:09.546Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/95/54/eb47866b94f2b5b42dde17644b78055ef1ee05aae59962c7290e55270803/opencv_python-5.0.0.93-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:f8b6d0a212253dd26ad338c812f1f23ca118fdf05a9c8c6b9444f161aa8c5881", size = 71064711, upload-time = "2026-07-02T06:54:13.148Z" },
-    { url = "https://files.pythonhosted.org/packages/cf/4c/c73f828fdbcd37eaf21d08fa852544a3ca7c2dbb3ea76873d64f2ea413d1/opencv_python-5.0.0.93-cp37-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:c8de2dec111122a02e8beb28e16c31904992dfd6186560b142a92c71403c1039", size = 73783032, upload-time = "2026-07-02T06:55:03.415Z" },
+    { url = "https://files.pythonhosted.org/packages/13/09/c05887c383caa9080ef612febffd08c5da1c283418687a3bea6ef7fb6faa/opencv_python-4.14.0.94-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:4ae0b5a2acbcfb9813035f1644cfba751edd02797fac994e32180813eeef8420", size = 72049625, upload-time = "2026-07-28T19:18:11.767Z" },
+    { url = "https://files.pythonhosted.org/packages/8f/96/97f176047c56726a61ddd02300b45b35d1451278c6182688a1fb27035e81/opencv_python-4.14.0.94-cp37-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:726a2b40c1120a0bbd0116394c6a5b2aa0a4dfa4e609a81ee10d12c6a34cd372", size = 77393698, upload-time = "2026-07-28T19:19:14.745Z" },
 ]
 
 [[package]]

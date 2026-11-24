@@ -38,7 +38,7 @@ GROUND_TRUTH = "KOCRTOKEN4711"
 #: must be Apache-2.0 or MIT, and widening this list would be the exact drift it guards.
 PERMISSIVE = {"Apache-2.0", "MIT"}
 
-#: Footprint ceiling from the note. Measured delta was 146.6 MB.
+#: Footprint ceiling from the note. The largest measured delta is 236.2 MB (ubuntu-24.04 x86_64).
 FOOTPRINT_CEILING_MB = 250
 
 #: The engine's own distributions — everything else it needs is already a core dependency.
@@ -291,19 +291,26 @@ def test_footprint_under_ceiling():
     """The measured on-disk delta of the engine's own distributions stays under the ceiling
     the note declares, so dependency growth has to be argued for in a PR."""
     total = 0
+    each: list[str] = []
     for dist in ENGINE_DISTS:
         try:
-            files = importlib.metadata.distribution(dist).files or []
+            found = importlib.metadata.distribution(dist)
         except importlib.metadata.PackageNotFoundError:  # pragma: no cover - guarded above
             pytest.fail(f"{dist} is declared in app.json but not installed")
-        base = importlib.metadata.distribution(dist).locate_file("")
-        for rel in files:
+        base = found.locate_file("")
+        size = 0
+        for rel in found.files or []:
             path = os.path.join(str(base), str(rel))
             if os.path.isfile(path):
-                total += os.path.getsize(path)
+                size += os.path.getsize(path)
+        total += size
+        each.append(f"{dist} {found.version}: {size / 1_000_000:.1f} MB")
     megabytes = total / 1_000_000
+    # Each distribution's own figure, so a red names what grew and a green can fill the note's
+    # table: a diagnostic, never part of the check.
+    print("engine footprint: " + "; ".join(each) + f"; total {megabytes:.1f} MB")
     assert megabytes <= FOOTPRINT_CEILING_MB, (
-        f"the engine's distributions measure {megabytes:.1f} MB, over the "
+        f"the engine's distributions measure {megabytes:.1f} MB ({'; '.join(each)}), over the "
         f"{FOOTPRINT_CEILING_MB} MB ceiling recorded in docs/ENGINE-LICENCE.md"
     )
     assert f"Ceiling: {FOOTPRINT_CEILING_MB} MB" in _note()
